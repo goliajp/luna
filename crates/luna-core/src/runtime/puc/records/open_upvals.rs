@@ -49,7 +49,7 @@ impl Heap {
     /// The marking is over: the open upvalues it left white are dead, off
     /// their lists, and kept (black) until their frees are counted.
     pub(in crate::runtime) fn doom_open_upvals(&mut self) {
-        let Some(lend) = self.open_dead.lend.take() else {
+        let Some(lend) = self.puc.open_dead.lend.take() else {
             return;
         };
         if !self.open_on_threads() {
@@ -70,7 +70,7 @@ impl Heap {
             // SAFETY: the lent lists are the VM's, alive for this call, and
             // a coroutine's is its own; nothing else holds them meanwhile
             let list = unsafe { &mut *list };
-            let start = self.open_dead.dead.len();
+            let start = self.puc.open_dead.dead.len();
             list.retain(|&(slot, uv)| {
                 let h = uv.as_ptr() as *mut GcHeader;
                 // SAFETY: a listed upvalue is allocated
@@ -84,10 +84,10 @@ impl Heap {
                     (*h).flags = (*h).with_slow((f & !COLOR_BITS) | BLACK);
                     (*uv.as_ptr()).state = UpvalState::Closed(Value::Nil);
                 }
-                self.open_dead.dead.push((owner, slot, uv));
+                self.puc.open_dead.dead.push((owner, slot, uv));
                 false
             });
-            self.open_dead.dead[start..].reverse();
+            self.puc.open_dead.dead[start..].reverse();
         }
     }
 
@@ -98,7 +98,7 @@ impl Heap {
     #[inline]
     pub(in crate::runtime) unsafe fn sweep_open_at(&mut self, cur: *mut GcHeader) {
         // SAFETY: the caller's contract
-        if !self.open_dead.dead.is_empty() && unsafe { (*cur).tag } == ObjTag::Coro {
+        if !self.puc.open_dead.dead.is_empty() && unsafe { (*cur).tag } == ObjTag::Coro {
             self.free_dead_open(|o, _| o == cur);
         }
     }
@@ -106,7 +106,7 @@ impl Heap {
     /// The sweep is over: the main thread's dead open upvalues are freed
     /// (and any whose thread it did not meet).
     pub(in crate::runtime) fn sweep_open_end(&mut self) {
-        if !self.open_dead.dead.is_empty() {
+        if !self.puc.open_dead.dead.is_empty() {
             self.free_dead_open(|o, _| o.is_null());
             self.free_dead_open(|_, _| true);
         }
@@ -115,14 +115,14 @@ impl Heap {
     /// Whether some dead open upvalue waits for the sweep.
     #[inline]
     pub(crate) fn has_dead_open(&self) -> bool {
-        !self.open_dead.dead.is_empty()
+        !self.puc.open_dead.dead.is_empty()
     }
 
     /// Thread `owner` closes its upvalues from `slot` up: the dead ones
     /// among them are freed now.
     #[inline]
     pub(crate) fn close_dead_open(&mut self, thread: Option<Gc<Coro>>, slot: u32) {
-        if !self.open_dead.dead.is_empty() {
+        if !self.puc.open_dead.dead.is_empty() {
             let owner = owner_of(thread);
             self.free_dead_open(|o, s| o == owner && s >= slot);
         }
@@ -135,16 +135,17 @@ impl Heap {
         thread: Option<Gc<Coro>>,
         slot: u32,
     ) -> Option<Gc<Upvalue>> {
-        if self.open_dead.dead.is_empty() {
+        if self.puc.open_dead.dead.is_empty() {
             return None;
         }
         let owner = owner_of(thread);
         let i = self
+            .puc
             .open_dead
             .dead
             .iter()
             .position(|&(o, s, _)| o == owner && s == slot)?;
-        let uv = self.open_dead.dead.remove(i).2;
+        let uv = self.puc.open_dead.dead.remove(i).2;
         // SAFETY: a dead open upvalue is kept until its free is counted
         unsafe { (*uv.as_ptr()).state = UpvalState::Open { slot, thread } };
         Some(uv)
@@ -153,16 +154,16 @@ impl Heap {
     #[cold]
     fn free_dead_open(&mut self, pick: impl Fn(*mut GcHeader, u32) -> bool) {
         let mut i = 0;
-        while i < self.open_dead.dead.len() {
-            let (o, s, uv) = self.open_dead.dead[i];
+        while i < self.puc.open_dead.dead.len() {
+            let (o, s, uv) = self.puc.open_dead.dead[i];
             if !pick(o, s) {
                 i += 1;
                 continue;
             }
-            self.open_dead.dead.remove(i);
+            self.puc.open_dead.dead.remove(i);
             let h = uv.as_ptr() as *mut GcHeader;
             if !is_uncounted(h) {
-                self.acct_part(self.sizes.upval, 0);
+                self.acct_part(self.puc.sizes.upval, 0);
                 crate::runtime::puc::set_uncounted(h, true);
             }
         }

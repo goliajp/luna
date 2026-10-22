@@ -164,7 +164,7 @@ impl PucBuffer {
         match self.d {
             Dialect::L52 => {
                 vm.api_check_before()?;
-                let size = vm.heap.sizes.userdata(0, newsize);
+                let size = vm.heap.puc.sizes.userdata(0, newsize);
                 vm.ghost(PucKind::Userdata, size)?;
             }
             _ if self.boxed => vm.heap.trace_raw(self.size, newsize),

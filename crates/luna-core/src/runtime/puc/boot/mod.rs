@@ -16,12 +16,12 @@ impl Heap {
         use crate::runtime::puc::boot::counts::{boot_sizes, reserved_words, tm_names};
         let d = self.table_dialect;
         let b = boot_sizes(d);
-        let s = self.sizes;
+        let s = self.puc.sizes;
         self.puc.silent = 0;
         self.acct_obj(PucKind::Thread, b.lg);
         // `lua_newstate`: no debt (5.1 sets its threshold when the state is
         // built)
-        self.pace.set_debt(d, self.bytes, 0);
+        self.puc.pace.set_debt(d, self.puc.bytes, 0);
         if b.ci_entries > 0 {
             self.acct_block(0, b.ci_entries * s.callinfo);
         }
@@ -62,7 +62,7 @@ impl Heap {
             self.strt_settle();
         }
         if d == Dialect::L51 {
-            self.pace.set_threshold(4 * self.bytes as i64);
+            self.puc.pace.set_threshold(4 * self.puc.bytes as i64);
         }
         Ok(())
     }
@@ -90,7 +90,7 @@ impl Heap {
     pub(crate) fn acct_stand_strt(&mut self, h: *mut GcHeader, len: usize) {
         self.acct_string(len);
         self.strt_settle();
-        let size = self.sizes.string(len, false);
+        let size = self.puc.sizes.string(len, false);
         self.stand_sizes_on(h, [size | STRT_STAND]);
     }
 

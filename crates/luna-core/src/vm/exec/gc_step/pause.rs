@@ -9,7 +9,7 @@ impl Vm {
     pub(crate) fn gc_full_pause(&mut self) {
         let d = self.heap.table_dialect;
         let bytes = self.heap.bytes() as i64;
-        let p = &mut self.heap.pace;
+        let p = &mut self.heap.puc.pace;
         p.state = St::Pause;
         p.fin_left = None;
         if d == Dialect::L51 {
@@ -29,7 +29,7 @@ impl Vm {
         let d = self.heap.table_dialect;
         let bytes = self.heap.bytes();
         let pause = self.gc_params.get(Param::Pause);
-        let p = &mut self.heap.pace;
+        let p = &mut self.heap.puc.pace;
         match d {
             Dialect::L51 => p.set_threshold(threshold_51(p.estimate, pause)),
             Dialect::L55 => {
@@ -59,13 +59,13 @@ impl Vm {
             Dialect::L54 => -((bytes as i64 / 100) * self.gc_params.get(Param::MinorMul)),
             Dialect::L55 => self
                 .gc_params
-                .apply(Param::MinorMul, self.heap.pace.estimate),
+                .apply(Param::MinorMul, self.heap.puc.pace.estimate),
             _ => return,
         };
-        self.heap.pace.set_debt(d, bytes, debt);
+        self.heap.puc.pace.set_debt(d, bytes, debt);
         if d == Dialect::L55 {
             // `GCmarked` counts the bytes that become old from here
-            self.heap.pace.estimate = 0;
+            self.heap.puc.pace.estimate = 0;
         }
         self.heap.refresh_gc_limit();
     }
@@ -76,12 +76,12 @@ impl Vm {
         if self.heap.table_dialect != Dialect::L55 || !self.heap.gc_phase_is_pause() {
             return;
         }
-        self.heap.pace.count_marked = false;
+        self.heap.puc.pace.count_marked = false;
         self.heap.gc_sweep_all_live();
-        self.heap.pace.state = St::SweepAll;
+        self.heap.puc.pace.state = St::SweepAll;
         let bytes = self.heap.bytes();
         let debt = self.gc_params.apply(Param::StepSize, 100);
-        self.heap.pace.set_debt(Dialect::L55, bytes, debt);
+        self.heap.puc.pace.set_debt(Dialect::L55, bytes, debt);
         self.heap.refresh_gc_limit();
     }
 }

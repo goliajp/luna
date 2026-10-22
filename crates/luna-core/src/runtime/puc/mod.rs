@@ -28,7 +28,7 @@ pub(crate) mod size;
 mod sizer;
 pub(crate) use sizer::Sizer;
 mod state;
-pub(crate) use state::PucState;
+pub(crate) use state::PucModel;
 mod thread;
 pub(crate) use thread::{BASIC_CI_51, Thread};
 #[cfg(test)]

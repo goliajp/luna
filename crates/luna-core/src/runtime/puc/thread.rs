@@ -32,7 +32,7 @@ impl Heap {
     }
 
     fn ci_blocks(&mut self, new: u32, freed: u32) {
-        let ci = self.sizes.callinfo;
+        let ci = self.puc.sizes.callinfo;
         for _ in 0..freed {
             self.acct_part(ci, 0);
         }
@@ -48,7 +48,7 @@ pub(crate) const BASIC_CI_51: u32 = 8;
 impl Heap {
     /// The bytes of a stack of `s` slots.
     pub(in crate::runtime) fn stack_bytes(&self, s: u32) -> usize {
-        crate::runtime::puc::work::stack_bytes(&self.sizes, self.table_dialect, s)
+        crate::runtime::puc::work::stack_bytes(&self.puc.sizes, self.table_dialect, s)
     }
 
     /// The stack of `t` resized from `old` to `new` slots
@@ -83,7 +83,7 @@ impl Heap {
 
     fn ci51_blocks(&mut self, old: u32, new: u32) {
         if old != new {
-            let ci = self.sizes.callinfo;
+            let ci = self.puc.sizes.callinfo;
             self.acct_part(old as usize * ci, new as usize * ci);
         }
     }
@@ -112,6 +112,6 @@ impl Heap {
             self.ci_blocks(0, ci);
         }
         self.stack_blocks(stack, 0);
-        self.acct_part(self.sizes.thread, 0);
+        self.acct_part(self.puc.sizes.thread, 0);
     }
 }

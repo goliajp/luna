@@ -14,7 +14,7 @@ pub(super) fn new_file(
 ) -> Result<Gc<Userdata>, LuaError> {
     // PUC's handle: 5.1 a `FILE *`, later a `luaL_Stream` (the file and
     // its close function), from 5.4 with no user value
-    let sz = vm.heap.sizes;
+    let sz = vm.heap.puc.sizes;
     let size = match vm.version() {
         LuaVersion::Lua51 => sz.userdata(1, sz.ptr),
         LuaVersion::Lua52 | LuaVersion::Lua53 => sz.userdata(1, 2 * sz.ptr),

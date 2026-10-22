@@ -9,7 +9,7 @@ impl Vm {
     /// A function opens: the main one in `luaY_parser`, a nested one in
     /// `addprototype` (5.1 `open_func`), then `open_func`'s own table.
     pub(super) fn replay_open(&mut self, r: &mut Replay) -> Result<(), SyntaxError> {
-        let s = self.heap.sizes;
+        let s = self.heap.puc.sizes;
         let d = r.d;
         let main = r.opened == 0;
         if !main
@@ -88,7 +88,7 @@ impl Vm {
     /// enclosing function's prototype array; 5.5 drops the function's
     /// table from the chunk's.
     pub(super) fn replay_close(&mut self, r: &mut Replay, tok: i64) -> Result<(), SyntaxError> {
-        let s = self.heap.sizes;
+        let s = self.heap.puc.sizes;
         let d = r.d;
         let line_elem = if matches!(d, Dialect::L54 | Dialect::L55) {
             1

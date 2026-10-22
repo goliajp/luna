@@ -122,12 +122,6 @@ pub(in crate::runtime) struct PropagateState {
 // compiler's own order moved them apart when unrelated fields changed
 #[repr(C)]
 pub struct Heap {
-    /// PUC's `totalbytes`: every object and block at the size PUC gives it
-    /// (`sizes`), not what luna's own objects take (see `runtime::puc`)
-    pub(crate) bytes: usize,
-    /// where the next collection step falls due (`pace`), or `usize::MAX`
-    /// while there is none: the one comparison a safe point makes
-    pub(in crate::runtime) gc_limit: usize,
     /// PUC `g->currentwhite`: the white of born / surviving objects; the
     /// other is the dead white the sweep frees. Flipped by `atomic`.
     pub(in crate::runtime) current_white: u8,
@@ -186,8 +180,6 @@ pub struct Heap {
     /// made since are in front of it and are not swept (PUC `sweepgc`)
     pub(in crate::runtime) sweep_prev: *mut GcHeader,
     pub(in crate::runtime) live: usize,
-    /// PUC's collector state and pace
-    pub(crate) pace: crate::runtime::puc::pace::Pace,
     pub(in crate::runtime) seed: u32,
     /// Embedding memory cap, soft: over `bytes` between dispatch turns, a full collect, then (still
     /// over) a catchable "memory cap exceeded"; one allocation can pass it.
@@ -197,8 +189,6 @@ pub struct Heap {
     pub(in crate::runtime) gray: mark::GrayStack,
     /// objects a back barrier sent to gray (PUC `grayagain`)
     pub(in crate::runtime) grayagain: mark::GrayStack,
-    /// 5.1, 5.2: the sweep of PUC's string table under way
-    pub(in crate::runtime) strt: strt::StrtSweep,
     /// objects registered for finalization (a live `__gc` metamethod was set);
     /// parallel-tracked — ownership stays on `all` (PUC `finobj`).
     pub(in crate::runtime) finalize: crate::runtime::mem::LVec<*mut GcHeader>,
@@ -215,8 +205,6 @@ pub struct Heap {
     pub(in crate::runtime) table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
     /// the blocks the fixed natives are made in
     pub(in crate::runtime) slab: slab::NativeSlab,
-    /// 5.1's environments luna has no objects for
-    pub(in crate::runtime) env51_box: Option<Box<env51::Env51>>,
     /// `io.stdin` as made, which the host reads lines through; null once freed
     pub(crate) stdin_ud: *mut GcHeader,
     /// The main functions of the chunks loaded while `track_chunk_roots`
@@ -230,14 +218,10 @@ pub struct Heap {
     pub(crate) weak_objs: Vec<(*const GcHeader, bool)>,
     /// the threads PUC's collector visits: since the last marking, the kept
     pub(crate) threads: Vec<Gc<crate::runtime::Coro>>,
-    /// the sizes of PUC's objects in this dialect, which `bytes` counts
-    pub(crate) sizes: crate::runtime::puc::size::PucSizes,
     /// PUC's own structures luna has none of (see `runtime::puc`)
-    pub(crate) puc: puc::PucState,
+    pub(crate) puc: puc::PucModel,
     #[cfg(feature = "gc-trace")]
     pub(crate) trace: crate::runtime::gc_trace::Trace,
-    /// 5.1 / 5.2: the dead open upvalues the sweep has not reached
-    pub(crate) open_dead: open_upvals::OpenDead,
     /// `gc-verify` — headers freed since the last collect began: O(1)
     /// read-time dangling probes (`Vm::op_index`) test membership here;
     /// exact only under quarantining allocators (no immediate reuse).

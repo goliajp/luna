@@ -57,9 +57,9 @@ impl Sizer {
 impl Heap {
     /// A sizer for a marker, when markings count `GCmarked`.
     pub(in crate::runtime) fn lend_sizer(&mut self) -> Option<Sizer> {
-        let run = self.pace.run.filter(|_| self.pace.count_marked)?;
+        let run = self.puc.pace.run.filter(|_| self.puc.pace.count_marked)?;
         Some(Sizer {
-            sizes: self.sizes,
+            sizes: self.puc.sizes,
             stand_ins: std::mem::take(&mut self.puc.stand_ins),
             keepers: std::mem::take(&mut self.puc.keepers),
             run,
@@ -70,7 +70,7 @@ impl Heap {
     /// The sizer `m` had back: what it counted, and what it held.
     pub(in crate::runtime) fn settle_sizer(&mut self, m: &mut Marker) {
         if let Some(s) = m.sizer.take() {
-            self.pace.estimate += s.marked;
+            self.puc.pace.estimate += s.marked;
             self.puc.stand_ins = s.stand_ins;
             self.puc.keepers = s.keepers;
         }
@@ -85,7 +85,7 @@ impl Heap {
         if let Some(s) = self.lend_sizer() {
             // SAFETY: the caller's contract
             let n = unsafe { s.size(h) };
-            self.pace.estimate += n;
+            self.puc.pace.estimate += n;
             self.puc.stand_ins = s.stand_ins;
             self.puc.keepers = s.keepers;
         }

@@ -37,7 +37,7 @@ impl Vm {
                 // 5.2 makes a closure of one upvalue first, and another
                 // when the function has a different number
                 UEv::Closure(_) if reclose => {
-                    let size = self.heap.sizes.lua_closure(1);
+                    let size = self.heap.puc.sizes.lua_closure(1);
                     self.heap.acct_ghost(PucKind::LuaClosure, size)?;
                 }
                 UEv::Closure(_) | UEv::Reclose(_) => {
@@ -49,7 +49,7 @@ impl Vm {
                 UEv::Proto => {
                     let p = protos.next().unwrap_or(cl.proto);
                     let hdr = p.as_ptr() as *mut crate::runtime::heap::GcHeader;
-                    let size = self.heap.sizes.proto;
+                    let size = self.heap.puc.sizes.proto;
                     self.heap.acct_promote_obj(hdr, PucKind::Proto, size);
                     // its arrays are kept as they are counted below
                     p.puc_arrays.set([0; 7]);
@@ -87,7 +87,7 @@ impl Vm {
         if d == Dialect::L51 {
             self.acct_main_closure(cl);
         } else {
-            let s = self.heap.sizes;
+            let s = self.heap.puc.sizes;
             for &uv in cl.upvals().iter().take(cl.proto.upvals.len()) {
                 let hdr = uv.as_ptr() as *mut crate::runtime::heap::GcHeader;
                 self.heap.acct_promote_obj(hdr, PucKind::Upval, s.upval);
@@ -103,7 +103,7 @@ impl Vm {
 
     /// The bytes of one element of a prototype's array `a`.
     fn elem(&self, a: Arr) -> usize {
-        let s = self.heap.sizes;
+        let s = self.heap.puc.sizes;
         match a {
             Arr::Code => 4,
             Arr::Protos => s.ptr,
@@ -148,6 +148,7 @@ impl Vm {
             None => {
                 let size = self
                     .heap
+                    .puc
                     .sizes
                     .string(b.len(), self.heap.table_dialect == Dialect::L55);
                 self.heap.acct_ghost(PucKind::LongStr, size)?;

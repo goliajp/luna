@@ -5,40 +5,41 @@ use super::*;
 impl Vm {
     pub(super) fn step_52(&mut self) -> Result<(), LuaError> {
         let d = Dialect::L52;
-        let s = self.heap.sizes;
+        let s = self.heap.puc.sizes;
         let stepmul = self.gc_params.get(Param::StepMul).max(40);
-        let mut debt = work_52(d, self.heap.pace.debt(d, self.heap.bytes()), stepmul);
+        let mut debt = work_52(d, self.heap.puc.pace.debt(d, self.heap.bytes()), stepmul);
         let floor = -stepsize_52(&s);
         let run = self.gc_running();
         loop {
-            if self.heap.pace.state == St::Propagate {
+            if self.heap.puc.pace.state == St::Propagate {
                 let before = debt;
                 let empty = self.gc_propagate(&mut debt, floor, run);
                 // what was traversed, for the estimate
-                self.heap.pace.trav += before - debt;
+                self.heap.puc.pace.trav += before - debt;
                 if empty {
                     debt -= self.atomic_52();
                 }
             } else {
                 debt -= self.singlestep_52();
             }
-            if !(debt > floor && self.heap.pace.state != St::Pause) {
+            if !(debt > floor && self.heap.puc.pace.state != St::Pause) {
                 break;
             }
         }
         let bytes = self.heap.bytes();
-        if self.heap.pace.state == St::Pause {
+        if self.heap.puc.pace.state == St::Pause {
             let pause = self.gc_params.get(Param::Pause);
-            let debt = pause_debt(d, bytes, self.heap.pace.estimate, pause);
-            self.heap.pace.set_debt(d, bytes, debt);
+            let debt = pause_debt(d, bytes, self.heap.puc.pace.estimate, pause);
+            self.heap.puc.pace.set_debt(d, bytes, debt);
         } else {
             self.heap
+                .puc
                 .pace
                 .set_debt(d, bytes, debt_after_52(debt, stepmul));
         }
         // `luaC_forcestep`: a few finalizers, all of them at a pause
         let mut i = 0;
-        while self.heap.has_tobefnz() && (i < 4 || self.heap.pace.state == St::Pause) {
+        while self.heap.has_tobefnz() && (i < 4 || self.heap.puc.pace.state == St::Pause) {
             self.gc_tm(true)?;
             i += 1;
         }
@@ -78,14 +79,14 @@ impl Vm {
             self.shrink_swept_52();
             self.sweep_main_52();
         }
-        self.heap.pace.state = St::Pause;
+        self.heap.puc.pace.state = St::Pause;
         self.singlestep_52();
         let run = self.gc_running();
         let mut work = i64::MAX;
         while !self.gc_propagate(&mut work, i64::MIN, run) {}
-        self.heap.pace.trav += i64::MAX - work;
+        self.heap.puc.pace.trav += i64::MAX - work;
         self.atomic_52();
-        while self.heap.pace.state != St::Pause {
+        while self.heap.puc.pace.state != St::Pause {
             self.singlestep_52();
         }
         before - self.heap.live_objects()
@@ -94,13 +95,13 @@ impl Vm {
     /// 5.2's step that finds no gray object: the atomic step, the
     /// estimate the memory traversed, and the sweep entered.
     pub(super) fn atomic_52(&mut self) -> i64 {
-        let s = self.heap.sizes;
+        let s = self.heap.puc.sizes;
         let (work, swept) = self.gc_atomic();
         self.shrink_swept_52();
         // `GCestimate`: what the cycle traversed, `atomic` included
-        self.heap.pace.estimate = self.heap.pace.trav + work;
-        self.heap.pace.state = St::SweepString;
-        self.heap.pace.strt_swept = 0;
+        self.heap.puc.pace.estimate = self.heap.puc.pace.trav + work;
+        self.heap.puc.pace.state = St::SweepString;
+        self.heap.puc.pace.strt_swept = 0;
         work + swept * sweepcost_52(&s)
     }
 
@@ -108,58 +109,58 @@ impl Vm {
     /// runs on to its propagation (`luaC_runtilstate`), and the estimate is
     /// what is in use.
     pub(crate) fn enter_generational_52(&mut self) {
-        while self.heap.pace.state != St::Propagate {
+        while self.heap.puc.pace.state != St::Propagate {
             self.singlestep_52();
         }
-        self.heap.pace.estimate = self.heap.bytes() as i64;
+        self.heap.puc.pace.estimate = self.heap.bytes() as i64;
     }
 
     /// 5.2's `luaC_changemode` back to incremental mode: `entersweep`, then
     /// the sweep to its end (`luaC_runtilstate(L, ~sweepphases)`).
     pub(crate) fn leave_generational_52(&mut self) {
-        if self.heap.gc_phase_is_pause() || self.heap.pace.state == St::Propagate {
+        if self.heap.gc_phase_is_pause() || self.heap.puc.pace.state == St::Propagate {
             self.heap.gc_sweep_unmarked_52();
-            self.heap.pace.state = St::SweepString;
-            self.heap.pace.strt_swept = 0;
+            self.heap.puc.pace.state = St::SweepString;
+            self.heap.puc.pace.strt_swept = 0;
         }
-        while self.heap.pace.state != St::Pause {
+        while self.heap.puc.pace.state != St::Pause {
             self.singlestep_52();
         }
     }
 
     pub(super) fn singlestep_52(&mut self) -> i64 {
-        let s = self.heap.sizes;
+        let s = self.heap.puc.sizes;
         let (max, cost) = (sweepmax_52(&s), sweepcost_52(&s));
-        match self.heap.pace.state {
+        match self.heap.puc.pace.state {
             St::Pause => {
                 self.gc_restart();
                 let w = (self.heap.puc.strt_size * s.ptr) as i64;
-                self.heap.pace.trav = w;
+                self.heap.puc.pace.trav = w;
                 w
             }
             St::Propagate => self.atomic_52(),
             St::SweepString => {
                 let size = self.heap.puc.strt_size as i64;
-                let i = max.min(size - self.heap.pace.strt_swept);
-                self.heap.pace.strt_swept += i;
-                self.heap.sweep_strings_upto(self.heap.pace.strt_swept);
-                if self.heap.pace.strt_swept >= size {
+                let i = max.min(size - self.heap.puc.pace.strt_swept);
+                self.heap.puc.pace.strt_swept += i;
+                self.heap.sweep_strings_upto(self.heap.puc.pace.strt_swept);
+                if self.heap.puc.pace.strt_swept >= size {
                     self.heap.end_string_sweep();
-                    self.heap.pace.state = St::SweepUdata;
+                    self.heap.puc.pace.state = St::SweepUdata;
                     // `entersweep`'s `sweeptolive` sweeps `finobj` up to
                     // its first live object: with no more after it there
                     // is no list left, and the next step moves on at no
                     // cost
                     let n = self.heap.finobj_count();
-                    self.heap.pace.fin_left = (n > 1).then_some(n - 1);
+                    self.heap.puc.pace.fin_left = (n > 1).then_some(n - 1);
                 }
                 i * cost
             }
             St::SweepUdata => {
-                if sweep_other(&mut self.heap.pace.fin_left, max) {
+                if sweep_other(&mut self.heap.puc.pace.fin_left, max) {
                     return max * cost;
                 }
-                self.heap.pace.state = St::SweepAll;
+                self.heap.puc.pace.state = St::SweepAll;
                 0
             }
             _ => match self.sweep_quota(max) {
@@ -171,7 +172,7 @@ impl Vm {
                     self.shrink_swept_52();
                     self.sweep_main_52();
                     self.heap.acct_check_sizes();
-                    self.heap.pace.state = St::Pause;
+                    self.heap.puc.pace.state = St::Pause;
                     cost
                 }
             },

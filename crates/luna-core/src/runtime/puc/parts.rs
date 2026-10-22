@@ -7,12 +7,12 @@ use crate::runtime::table::Dialect;
 impl Heap {
     /// The bytes of a table's array part of `n` slots.
     pub(in crate::runtime) fn array_bytes(&self, n: usize) -> usize {
-        crate::runtime::puc::work::array_bytes(&self.sizes, self.table_dialect, n)
+        crate::runtime::puc::work::array_bytes(&self.puc.sizes, self.table_dialect, n)
     }
 
     /// The bytes of a table's hash part of `h` nodes.
     pub(in crate::runtime) fn hash_bytes(&self, h: usize) -> usize {
-        crate::runtime::puc::work::hash_bytes(&self.sizes, self.table_dialect, h)
+        crate::runtime::puc::work::hash_bytes(&self.puc.sizes, self.table_dialect, h)
     }
 
     /// A table's parts going from `old_a` array slots and `old_h` nodes to
@@ -86,7 +86,7 @@ impl Heap {
             // is written
             unsafe { (*h).cls |= super::UNLISTED };
         } else {
-            self.acct_obj(PucKind::Table, self.sizes.table);
+            self.acct_obj(PucKind::Table, self.puc.sizes.table);
         }
     }
 
@@ -112,7 +112,7 @@ impl Heap {
         let (ab, hb) = (self.array_bytes(a), self.hash_bytes(h));
         self.acct_part(hb, 0);
         self.acct_part(ab, 0);
-        let t = self.sizes.table;
+        let t = self.puc.sizes.table;
         self.acct_part(t, 0);
     }
 }
@@ -127,13 +127,13 @@ impl Heap {
         if cfg!(not(feature = "gc-trace")) && self.counting() {
             if len > self.puc.short_max {
                 let l55 = self.table_dialect == Dialect::L55;
-                self.bytes += self.sizes.string(len, l55);
+                self.puc.bytes += self.puc.sizes.string(len, l55);
                 return;
             }
             if self.puc.strt_nuse >= self.puc.strt_size {
                 self.grow_strtab();
             }
-            self.bytes += self.sizes.string(len, false);
+            self.puc.bytes += self.puc.sizes.string(len, false);
             self.puc.strt_nuse += 1;
             return;
         }
@@ -144,7 +144,7 @@ impl Heap {
         } else {
             PucKind::ShortStr
         };
-        let size = self.sizes.string(len, long && d == Dialect::L55);
+        let size = self.puc.sizes.string(len, long && d == Dialect::L55);
         if long || !self.counting() {
             return self.acct_obj(kind, size);
         }
@@ -167,7 +167,7 @@ impl Heap {
     #[cold]
     fn grow_strtab(&mut self) {
         let (old, new) = (self.puc.strt_size, self.puc.strt_size * 2);
-        let p = self.sizes.ptr;
+        let p = self.puc.sizes.ptr;
         if self.table_dialect == Dialect::L51 {
             self.acct_part(0, new * p);
             self.acct_part(old * p, 0);
@@ -194,7 +194,7 @@ impl Heap {
         };
         if shrink {
             let (old, new) = (size, size / 2);
-            let p = self.sizes.ptr;
+            let p = self.puc.sizes.ptr;
             if d == Dialect::L51 {
                 self.acct_part(0, new * p);
                 self.acct_part(old * p, 0);
@@ -205,7 +205,7 @@ impl Heap {
             self.strt_resized(old);
             // 5.3 and 5.4 correct the estimate by what the shrink freed
             if matches!(d, Dialect::L53 | Dialect::L54) {
-                self.pace.estimate -= ((old - new) * p) as i64;
+                self.puc.pace.estimate -= ((old - new) * p) as i64;
             }
         }
         match d {
@@ -232,6 +232,7 @@ impl Heap {
             self.puc.strt_nuse -= 1;
         }
         let size = self
+            .puc
             .sizes
             .string(len, long && self.table_dialect == Dialect::L55);
         self.count_part(size, 0);

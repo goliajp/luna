@@ -53,7 +53,7 @@ impl Vm {
                 self.heap.acct_move_long(ss, cs);
             }
         }
-        let s = self.heap.sizes;
+        let s = self.heap.puc.sizes;
         // the constant's index, the value its key gets
         let index = r.fs.last().map_or(0, |f| f.k.n);
         let k_first = r.d == Dialect::L55;

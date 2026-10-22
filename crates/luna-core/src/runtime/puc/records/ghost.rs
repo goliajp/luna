@@ -88,7 +88,7 @@ impl Heap {
     pub(crate) fn acct_ghost_table(&mut self, a: usize, h: usize) -> Result<GhostRef, Oom> {
         // made while counting is set aside: an entry of no bytes, nothing
         // counted for it or freed
-        let size = [self.sizes.table as u32, 0][usize::from(!self.counting())];
+        let size = [self.puc.sizes.table as u32, 0][usize::from(!self.counting())];
         let (g, at) = self.ghost_push(size)?;
         // room for the two parts first: no half record is left behind
         // SAFETY: `ghost_push` just returned `g`, a live record of this heap
@@ -99,7 +99,7 @@ impl Heap {
         }
         self.ghost_push(PART)?;
         self.ghost_push(PART)?;
-        self.acct_obj(PucKind::Table, self.sizes.table);
+        self.acct_obj(PucKind::Table, self.puc.sizes.table);
         let t = GhostRef { g, at };
         self.ghost_table_resize(t, 0, 0, a, h);
         Ok(t)
@@ -139,7 +139,7 @@ impl Heap {
 
     /// PUC's bytes of a new table of `a` array slots and `h` nodes.
     pub(crate) fn puc_table_bytes(&self, a: usize, h: usize) -> usize {
-        self.sizes.table + self.array_bytes(a) + self.hash_bytes(h)
+        self.puc.sizes.table + self.array_bytes(a) + self.hash_bytes(h)
     }
 
     /// The object behind `h`, made without counting, stands for one of

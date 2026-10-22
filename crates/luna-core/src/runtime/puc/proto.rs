@@ -12,7 +12,7 @@ impl Heap {
     /// from luna's own: a text load counts them as PUC's parser grows them
     /// instead.
     fn proto_arrays(&self, p: &crate::runtime::function::Proto) -> [u32; 7] {
-        let s = self.sizes;
+        let s = self.puc.sizes;
         let n = p.code.len();
         let (lineinfo, abs) = match self.table_dialect {
             Dialect::L54 | Dialect::L55 => (n, abs_lines(p.line_defined, &p.lines)),
@@ -38,7 +38,7 @@ impl Heap {
     /// those counted here: none while nothing is.
     pub(crate) fn acct_proto(&mut self, p: Gc<crate::runtime::function::Proto>) {
         let h = p.as_ptr() as *mut GcHeader;
-        self.acct_new(h, PucKind::Proto, self.sizes.proto);
+        self.acct_new(h, PucKind::Proto, self.puc.sizes.proto);
         let arrays = match self.counting() {
             true => self.proto_arrays(&p),
             false => [0; 7],
@@ -61,14 +61,16 @@ impl Heap {
         for i in order {
             self.acct_part(a[i] as usize, 0);
         }
-        let s = self.sizes.proto;
+        let s = self.puc.sizes.proto;
         self.acct_part(s, 0);
     }
 
     /// PUC's size of a Lua closure of `proto` with luna's `n` upvalues
     /// (5.1's has no upvalue for the environment luna gives it).
     pub(crate) fn closure_size(&self, proto: &crate::runtime::function::Proto, n: usize) -> usize {
-        self.sizes.lua_closure(n - usize::from(self.env51(proto)))
+        self.puc
+            .sizes
+            .lua_closure(n - usize::from(self.env51(proto)))
     }
 
     /// Whether a closure of `proto` has 5.1's environment among its

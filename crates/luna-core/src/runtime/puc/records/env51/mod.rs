@@ -115,7 +115,7 @@ struct Anchor {
 impl Heap {
     /// The records of a new opening of the io library.
     fn env51_gen(&self) -> Box<Gen> {
-        let s = self.sizes;
+        let s = self.puc.sizes;
         let w = self.current_white;
         let rec = |size: usize, kid: usize, env: u8| {
             let mut hdr = GcHeader::new(ObjTag::Ghost);
@@ -157,9 +157,9 @@ impl Heap {
 
     /// 5.1's environment records, made the first time.
     fn env51_records(&mut self) -> &mut Env51 {
-        if self.env51_box.is_none() {
+        if self.puc.env51_box.is_none() {
             let g = self.env51_gen();
-            self.env51_box = Some(Box::new(Env51 {
+            self.puc.env51_box = Some(Box::new(Env51 {
                 gens: vec![g],
                 package: ptr::null_mut(),
                 owners: Vec::new(),
@@ -167,7 +167,7 @@ impl Heap {
                 close: ptr::null_mut(),
             }));
         }
-        self.env51_box.as_deref_mut().expect("made above")
+        self.puc.env51_box.as_deref_mut().expect("made above")
     }
 
     /// The records of the latest opening.
@@ -195,7 +195,7 @@ impl Heap {
 
     /// Which record `h` heads, if one does.
     pub(crate) fn env51_record_index(&self, h: *mut GcHeader) -> Option<usize> {
-        let e = self.env51_box.as_deref()?;
+        let e = self.puc.env51_box.as_deref()?;
         e.gens
             .iter()
             .find_map(|g| g.ph.iter().position(|p| std::ptr::eq(&p.hdr, h)))
@@ -208,7 +208,7 @@ impl Heap {
 
     /// The default input (0) or output (1) in the latest E1's array.
     pub(crate) fn env51_io(&self, i: usize) -> Option<Gc<Userdata>> {
-        let e = self.env51_box.as_deref()?;
+        let e = self.puc.env51_box.as_deref()?;
         let h = e.gens.last()?.io[i];
         // SAFETY: E1 holds its files: marking it marks them
         (!h.is_null()).then(|| unsafe { Gc::from_ptr(h as *mut Userdata) })
@@ -257,7 +257,7 @@ impl Heap {
                 (*h).flags &= !LEAF;
             }
         }
-        if let Some(e) = &mut self.env51_box
+        if let Some(e) = &mut self.puc.env51_box
             && e.gens.len() > 1
         {
             e.owners.retain(|o| o.0 != h);

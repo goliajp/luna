@@ -241,7 +241,7 @@ impl Vm {
             _ => std::ptr::null_mut(),
         };
         let running = std::ptr::addr_of_mut!(self.open_upvals);
-        self.heap.open_dead.lend = Some(OpenLend {
+        self.heap.puc.open_dead.lend = Some(OpenLend {
             running,
             running_co,
             main,

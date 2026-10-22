@@ -74,6 +74,7 @@ impl Vm {
         } else {
             let size = self
                 .heap
+                .puc
                 .sizes
                 .string(buf.len(), self.version >= LuaVersion::Lua55);
             let g = self

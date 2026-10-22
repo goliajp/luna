@@ -24,7 +24,7 @@ impl Vm {
     /// stand for it, with their lines, and the constants PUC adds for it
     /// (an instruction PUC has none for stands for none).
     fn replay_instruction(&mut self, r: &mut Replay, line: u32) {
-        let (d, sizes) = (r.d, &self.heap.sizes);
+        let (d, sizes) = (r.d, &self.heap.puc.sizes);
         let (abs, tvalue) = (sizes.abslineinfo, sizes.tvalue);
         let Replay { fs, shapes, .. } = r;
         let Some(f) = fs.last_mut() else {
@@ -49,7 +49,7 @@ impl Vm {
 
     /// An event other than an instruction.
     fn replay_other(&mut self, r: &mut Replay, tok: i64, ev: PEv) -> Result<(), SyntaxError> {
-        let s = self.heap.sizes;
+        let s = self.heap.puc.sizes;
         match ev {
             PEv::Open => self.replay_open(r)?,
             PEv::Prologue => {
@@ -131,7 +131,7 @@ impl Vm {
     /// One PUC instruction on `line` (`luaK_code`): the code array, then
     /// the line info (5.4+ `savelineinfo`, with its absolute entries).
     pub(super) fn replay_code(&mut self, r: &mut Replay, line: u32) {
-        let abs = self.heap.sizes.abslineinfo;
+        let abs = self.heap.puc.sizes.abslineinfo;
         if let Some(f) = r.fs.last_mut() {
             code_one(f, &mut self.heap, r.d, abs, line);
         }

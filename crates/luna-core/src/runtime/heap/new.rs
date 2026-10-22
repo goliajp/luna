@@ -43,13 +43,9 @@ impl Heap {
             strings,
             seed,
             live: 0,
-            bytes: 0,
-            pace: crate::runtime::puc::pace::Pace::new(),
-            gc_limit: usize::MAX,
             current_white: WHITE0,
             gray: mark::GrayStack::default(),
             grayagain: mark::GrayStack::default(),
-            strt: Default::default(),
             gray_overflow: false,
             young: ptr::null_mut(),
             rooted_young: ptr::null_mut(),
@@ -65,7 +61,6 @@ impl Heap {
             tobefnz_head: 0,
             no_ephemeron: false,
             refinalize: true,
-            sizes: crate::runtime::puc::size::PucSizes::of(crate::runtime::table::Dialect::L55),
             puc: Default::default(),
             #[cfg(feature = "gc-trace")]
             trace: Default::default(),
@@ -78,12 +73,10 @@ impl Heap {
             weak_watch: Vec::new(),
             weak_objs: Vec::new(),
             threads: Vec::new(),
-            open_dead: Default::default(),
             track_chunk_roots: false,
             mem_cap: None,
             table_pool: Vec::new(),
             slab: Default::default(),
-            env51_box: None,
             stdin_ud: ptr::null_mut(),
             #[cfg(feature = "gc-verify")]
             recently_freed: std::collections::HashSet::new(),
@@ -125,7 +118,7 @@ impl Drop for Heap {
                 }
             }
             // and the dead strings a string sweep held off `all`
-            for h in std::mem::take(&mut self.strt.held) {
+            for h in std::mem::take(&mut self.puc.strt.held) {
                 self.free_obj_closing(h);
             }
             // the pooled tables' interiors were freed when they were
@@ -164,7 +157,7 @@ impl Heap {
         globals: Gc<crate::runtime::Table>,
     ) -> Result<Gc<crate::runtime::Coro>, Oom> {
         let mem = self.mem();
-        let size = self.sizes.thread;
+        let size = self.puc.sizes.thread;
         let l51 = self.table_dialect == table::Dialect::L51;
         // `stack_init`: `BASIC_STACK_SIZE`, 5.1 with its extra slots
         let stack_size = if l51 { 45 } else { 40 };

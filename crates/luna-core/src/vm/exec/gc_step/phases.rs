@@ -52,16 +52,16 @@ impl Vm {
 
     /// The threads as the collector is about to find them.
     pub(crate) fn gc_hold_threads(&mut self) {
-        self.heap.pace.run = Some(self.gc_running());
+        self.heap.puc.pace.run = Some(self.gc_running());
     }
 
     /// A marking starts from the roots: 5.5's `GCmarked` counts from 0
     /// what it marks (`restartcollection`).
     pub(crate) fn gc_count_marked(&mut self) {
         let count = self.heap.table_dialect == Dialect::L55;
-        self.heap.pace.count_marked = count;
+        self.heap.puc.pace.count_marked = count;
         if count {
-            self.heap.pace.estimate = 0;
+            self.heap.puc.pace.estimate = 0;
         }
     }
 
@@ -120,7 +120,7 @@ impl Vm {
             self.heap.mark_tobefnz(&mut m);
         }
         self.heap.stash_marker(m);
-        self.heap.pace.state = St::Propagate;
+        self.heap.puc.pace.state = St::Propagate;
     }
 
     /// PUC `atomic` and `entersweep`; returns the work and how many
@@ -160,7 +160,7 @@ impl Vm {
         }
         self.forget_dead_errors();
         // there may be objects to be finalized
-        self.heap.pace.fin_num = 1;
+        self.heap.puc.pace.fin_num = 1;
         r
     }
 

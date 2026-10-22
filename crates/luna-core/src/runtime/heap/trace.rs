@@ -25,7 +25,7 @@ impl Heap {
                 cur = (*cur).next;
             }
         }
-        if let Some(e) = &self.env51_box {
+        if let Some(e) = &self.puc.env51_box {
             n += e.live();
         }
         self.trace.line(format_args!("n {n} {by:?}"));
@@ -91,7 +91,7 @@ impl Heap {
 
     /// `R38_REFUSE` refuses a new long string of `len` bytes.
     pub(crate) fn refuse_string(&mut self, len: usize) -> bool {
-        let size = self.sizes.string(
+        let size = self.puc.sizes.string(
             len,
             self.table_dialect == crate::runtime::table::Dialect::L55,
         );

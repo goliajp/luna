@@ -33,7 +33,7 @@ impl Heap {
             #[cfg(feature = "gc-trace")]
             if !waited && self.trace.refused() {
                 let (_, bytes) = self.trace.take_refused();
-                self.bytes = (self.bytes as i64 - bytes) as usize;
+                self.puc.bytes = (self.puc.bytes as i64 - bytes) as usize;
                 self.shrink_gbuff_to(old);
                 return Err(Oom(mem));
             }

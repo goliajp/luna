@@ -214,7 +214,7 @@ fn bytes_and_live_round_trip_to_zero() {
     );
     // the string table keeps the size it grew to (PUC shrinks it only in
     // a collection's `checkSizes`)
-    let strt_grown = (heap.puc.strt_size - strt0) * heap.sizes.ptr;
+    let strt_grown = (heap.puc.strt_size - strt0) * heap.puc.sizes.ptr;
     assert_eq!(
         heap.bytes(),
         bytes0 + strt_grown,

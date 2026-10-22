@@ -11,7 +11,7 @@ pub(crate) const UNCOUNTED: u8 = 0x80;
 pub(crate) const EXTERNAL: u8 = 0x40;
 /// in `cls`: PUC does not list the object, whatever its count and finalizer
 pub(crate) const UNLISTED: u8 = 1;
-/// in `cls`: objects of PUC's stand on it (`PucState::stand_ins`)
+/// in `cls`: objects of PUC's stand on it (`PucModel::stand_ins`)
 pub(crate) const STANDS: u8 = 2;
 /// in `cls`: a read-only table; one shift from SLOW
 pub(crate) const RO_CLS: u8 = SLOW >> 1;

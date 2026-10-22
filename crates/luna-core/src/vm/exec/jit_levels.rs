@@ -62,7 +62,7 @@ impl Vm {
         let grows = top + max >= self.g.stack_last;
         match self.version {
             LuaVersion::Lua52 => {
-                let s = &self.heap.sizes;
+                let s = &self.heap.puc.sizes;
                 let stack = if grows {
                     (2 * self.stack_size + max) as usize * s.tvalue
                 } else {
