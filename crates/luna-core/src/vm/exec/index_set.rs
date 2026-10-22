@@ -82,6 +82,10 @@ pub(super) unsafe fn table_raw_set_at(
 #[inline(never)]
 fn table_raw_set_cold(tb: &mut Table, heap: &mut Heap, key: Value, v: Value) -> bool {
     match tb.set_inlined(heap, key, v) {
+        // gc-trace: a growth refused by `R38_REFUSE` is answered by the
+        // slow path's store, which finds the key in place
+        #[cfg(feature = "gc-trace")]
+        Ok(()) if heap.trace.refused() => false,
         Ok(()) => true,
         Err(e) => {
             heap.store_failed = matches!(e, crate::runtime::table::TableError::Memory(_));

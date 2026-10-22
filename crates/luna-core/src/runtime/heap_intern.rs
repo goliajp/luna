@@ -30,6 +30,10 @@ impl Heap {
     /// [`Heap::intern`], failing when memory runs out.
     #[inline]
     pub fn try_intern(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
+        #[cfg(feature = "gc-trace")]
+        if self.refuse_string(bytes.len()) {
+            return Err(Oom(self.mem.mem()));
+        }
         match self.intern_or_none(bytes) {
             Some(s) => Ok(s),
             None => Err(Oom(self.mem.mem())),
@@ -154,6 +158,10 @@ impl Heap {
     /// the parts are copied into.
     pub(crate) fn try_intern_parts(&mut self, parts: &[&[u8]]) -> Result<Gc<LuaStr>, Oom> {
         let n: usize = parts.iter().map(|p| p.len()).sum();
+        #[cfg(feature = "gc-trace")]
+        if self.refuse_string(n) {
+            return Err(Oom(self.mem.mem()));
+        }
         if n <= string::MAX_SHORT_LEN {
             return self.try_intern(joined(parts, &mut [0u8; string::MAX_SHORT_LEN]));
         }

@@ -25,7 +25,18 @@ impl Heap {
             let size = n.max(32);
             let b = self.puc.gbuff.0.get_or_insert_with(|| LVec::new(mem));
             b.reserve_exact(size)?;
+            #[cfg(feature = "gc-trace")]
+            let waited = self.trace.refused();
             self.acct_block(old, size);
+            // gc-trace: `R38_REFUSE` refused this growth of PUC's, which is
+            // then as if the allocation failed
+            #[cfg(feature = "gc-trace")]
+            if !waited && self.trace.refused() {
+                let (_, bytes) = self.trace.take_refused();
+                self.bytes = (self.bytes as i64 - bytes) as usize;
+                self.shrink_gbuff_to(old);
+                return Err(Oom(mem));
+            }
         }
         Ok(())
     }
@@ -34,6 +45,12 @@ impl Heap {
     /// it, 5.2 frees it).
     pub(crate) fn shrink_gbuff(&mut self, size: usize) {
         let old = self.puc.gbuff.size();
+        self.shrink_gbuff_to(size);
+        self.acct_block(old, self.puc.gbuff.size());
+    }
+
+    /// The buffer's block made `size` bytes, smaller, uncounted.
+    fn shrink_gbuff_to(&mut self, size: usize) {
         let Some(b) = self.puc.gbuff.0.as_mut() else {
             return;
         };
@@ -46,6 +63,5 @@ impl Heap {
             b.shrink_to_fit();
             b.clear();
         }
-        self.acct_block(old, self.puc.gbuff.size());
     }
 }

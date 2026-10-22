@@ -54,6 +54,27 @@ impl Vm {
             .map(|&(_, u, _)| u)
     }
 
+    /// gc-trace: `R38_REFUSE` refuses the growth of a box's block (5.3
+    /// on) from `old` bytes (`None`: no box yet, which is made first):
+    /// the allocation function is asked directly, so the buffer's error.
+    #[cfg_attr(not(feature = "gc-trace"), allow(unused_variables))]
+    pub(crate) fn refuse_box(
+        &mut self,
+        ubox: &mut Option<Gc<Userdata>>,
+        d: Dialect,
+        old: Option<usize>,
+        new: usize,
+    ) -> Result<(), LuaError> {
+        #[cfg(feature = "gc-trace")]
+        if d >= Dialect::L53 && self.heap.trace.refuse_now(old.unwrap_or(0), new) {
+            if old.is_none() {
+                *ubox = Some(self.new_box()?);
+            }
+            return Err(self.buf_error());
+        }
+        Ok(())
+    }
+
     /// The block of box `u`, if any, is `size` bytes now.
     pub(crate) fn box_block(&mut self, u: Option<Gc<Userdata>>, size: usize) {
         let Some(u) = u else {

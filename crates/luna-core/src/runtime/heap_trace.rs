@@ -78,6 +78,26 @@ impl Heap {
         }
     }
 
+    /// `R38_REFUSE` refuses a table resize from `old_a` array slots to
+    /// `new_a` and `new_h` nodes: one of the parts PUC makes is refused.
+    pub(crate) fn refuse_table(&mut self, old_a: usize, new_a: usize, new_h: usize) -> bool {
+        let (oa, na, nh) = (
+            self.array_bytes(old_a),
+            self.array_bytes(new_a),
+            self.hash_bytes(new_h),
+        );
+        self.trace.refuse_now(oa, na) || self.trace.refuse_now(0, nh)
+    }
+
+    /// `R38_REFUSE` refuses a new long string of `len` bytes.
+    pub(crate) fn refuse_string(&mut self, len: usize) -> bool {
+        let size = self.sizes.string(
+            len,
+            self.table_dialect == crate::runtime::table::Dialect::L55,
+        );
+        len > crate::runtime::string::MAX_SHORT_LEN && self.trace.refuse_now(0, size)
+    }
+
     /// `R38_TRACE`: a thread of `stack` slots shrunk with `inuse` in use.
     pub(crate) fn trace_shrink(&mut self, stack: u32, inuse: u32) {
         self.trace.line(format_args!("sh {stack} {inuse}"));

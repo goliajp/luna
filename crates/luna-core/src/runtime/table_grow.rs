@@ -51,6 +51,10 @@ impl Table {
     fn grow_slab(&mut self, heap: &mut Heap, new_asize: usize) -> Result<(), TableError> {
         let old = self.asize as usize;
         debug_assert!(old as u64 > INLINE_ASIZE && new_asize > old);
+        #[cfg(feature = "gc-trace")]
+        if !heap.is_own_table(self) && heap.refuse_table(old, new_asize, 0) {
+            return Err(TableError::Memory(crate::runtime::mem::Oom(heap.mem())));
+        }
         let old_layout = Self::slab_layout(old);
         let new_layout = Self::slab_layout(new_asize);
         // SAFETY: `array_ptr` is the slab `alloc_slab(mem, old)` (or an

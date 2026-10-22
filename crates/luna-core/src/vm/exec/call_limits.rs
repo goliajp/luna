@@ -71,8 +71,9 @@ impl Vm {
         let grew = top + 1 + need >= stack_size::last(self.version, self.stack_size);
         match stack_size::check(self.version, self.stack_size, top + 1, need) {
             Grown::Fits(s) => {
+                let old = self.stack_size;
                 self.regrow_stack(grew, s);
-                Ok(())
+                self.refused_stack(old, top)
             }
             Grown::Overflow(s) => {
                 self.resize_stack(s);

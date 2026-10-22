@@ -45,6 +45,7 @@ mod frames_sync;
 mod open_upval;
 use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
 mod gc;
+mod gc_refuse;
 mod gc_step;
 #[cfg(feature = "gc-stress")]
 mod gc_stress;
