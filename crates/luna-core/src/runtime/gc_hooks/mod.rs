@@ -93,6 +93,12 @@ pub(crate) fn fixed_seed() -> Option<u32> {
 pub(crate) fn hook_step<H: crate::runtime::puc::step::StepHost + ?Sized>(h: &mut H, after: bool) {
     #[cfg(feature = "gc-trace")]
     crate::runtime::puc::trace::trace_step(h, after);
+    #[cfg(feature = "gc-verify")]
+    h.heap().verify_phase_pair(if after {
+        "after a step"
+    } else {
+        "before a step"
+    });
     let _ = (h, after);
 }
 
