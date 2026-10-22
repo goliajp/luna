@@ -74,9 +74,22 @@ impl Heap {
         }
     }
 
-    /// Set what a load makes before PUC does aside (`on`), or no more.
-    pub(crate) fn set_aside_loads(&mut self, on: bool) {
-        self.puc.unborn_on = on;
+    /// Set what a load makes before PUC does aside (`on`), or no more;
+    /// what was set before, for the caller to put back.
+    pub(crate) fn set_aside_loads(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.puc.unborn_on, on)
+    }
+
+    /// The objects set aside at `from..to` of the list of them that are
+    /// still aside go on the list, the others staying where they are.
+    pub(crate) fn born_range(&mut self, (from, to): (usize, usize)) {
+        let to = to.min(self.puc.unborn.len());
+        for i in from.min(to)..to {
+            let h = self.puc.unborn[i];
+            // SAFETY: an object set aside is allocated; `born` leaves one
+            // already on the list alone
+            unsafe { self.born(h) };
+        }
     }
 
     /// The objects set aside since `base` (a length of the list of them)

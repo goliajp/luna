@@ -25,9 +25,9 @@ impl Vm {
             return self.splices_stand(splices);
         };
         self.heap.puc.silent += 1;
-        self.heap.set_aside_loads(true);
+        let aside = self.heap.set_aside_loads(true);
         let cl = self.close_chunk(proto);
-        self.heap.set_aside_loads(false);
+        self.heap.set_aside_loads(aside);
         self.heap.puc.silent -= 1;
         let Ok(cl) = cl else {
             return self.splices_stand(splices);

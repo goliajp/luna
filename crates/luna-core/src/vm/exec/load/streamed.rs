@@ -122,9 +122,9 @@ impl Vm {
             // made without counting, then counted as PUC's parser makes it
             vm.heap.puc.silent += 1;
             let base = vm.heap.unborn_len();
-            vm.heap.set_aside_loads(true);
+            let aside = vm.heap.set_aside_loads(true);
             let made = vm.compile_streamed(&mut parsed, chunkname, name);
-            vm.heap.set_aside_loads(false);
+            vm.heap.set_aside_loads(aside);
             vm.heap.puc.silent -= 1;
             let cl = match made {
                 Ok(cl) => cl,
@@ -191,7 +191,7 @@ impl Vm {
         let (v, depth) = (self.version, self.g.nccalls);
         let base = self.heap.unborn_len();
         self.heap.puc.silent += 1;
-        self.heap.set_aside_loads(true);
+        let aside = self.heap.set_aside_loads(true);
         let source = self
             .heap
             .chunk_name(chunkname, name)
@@ -209,7 +209,7 @@ impl Vm {
             }
             Err(o) => o.clone(),
         };
-        self.heap.set_aside_loads(false);
+        self.heap.set_aside_loads(aside);
         self.heap.puc.silent -= 1;
         let counted = match source {
             Ok(source) if !e.is_memory() => self.acct_failed_load(src, &e, source, splices),

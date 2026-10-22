@@ -45,7 +45,7 @@ impl Vm {
         tree.record = true;
         tree.lenient(true);
         self.heap.puc.silent += 1;
-        self.heap.set_aside_loads(true);
+        let aside = self.heap.set_aside_loads(true);
         self.compile_scratch.replay.lenient = true;
         self.compile_scratch.replay.seal = true;
         let made = match parse_in_place(&fixed, v, depth, &mut tree) {
@@ -72,7 +72,7 @@ impl Vm {
             (opts.sealed, opts.at) = (None, None);
         }
         let built = proto.and_then(|p| self.close_chunk(p).ok());
-        self.heap.set_aside_loads(false);
+        self.heap.set_aside_loads(aside);
         self.heap.puc.silent -= 1;
         if let (Some(Err(_)), true, Some(rec)) = (&made, early, tree.recorded()) {
             // the token is shown as the source has it, not the completion
