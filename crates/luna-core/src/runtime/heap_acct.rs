@@ -137,6 +137,12 @@ impl Heap {
         if self.puc.silent > 0 {
             return;
         }
+        #[cfg(feature = "gc-verify")]
+        assert!(
+            self.bytes + new >= old,
+            "[gc-verify] a block of {old} bytes freed from a count of {}",
+            self.bytes
+        );
         self.bytes = self.bytes + new - old;
         #[cfg(feature = "gc-trace")]
         match (old, new) {
@@ -172,6 +178,12 @@ impl Heap {
         if self.puc.silent > 0 {
             return;
         }
+        #[cfg(feature = "gc-verify")]
+        assert!(
+            self.bytes >= size,
+            "[gc-verify] an object of {size} bytes freed from a count of {}",
+            self.bytes
+        );
         self.bytes -= size;
         #[cfg(feature = "gc-trace")]
         self.trace.line(format_args!("d {size}"));
