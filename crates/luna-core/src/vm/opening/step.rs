@@ -21,10 +21,19 @@ impl Opener {
                 self.getfield(vm, ix, self.str(r.u()).unwrap_or_default())
             }
             4 => {
-                let Ix::Slot(t) = self.ix(vm, r.z()) else {
-                    unreachable!("a stack index")
+                // `lua_settop`: the slot past index `idx`, which from the
+                // top may be the slot below the first (`lua_settop(L, -2)`
+                // with one value)
+                let idx = r.z();
+                let t = if idx < 0 {
+                    (i64::from(self.top(vm)) + idx + 1) as u32
+                } else {
+                    let Ix::Slot(t) = self.ix(vm, idx) else {
+                        unreachable!("a stack index")
+                    };
+                    t + 1
                 };
-                self.set_top(vm, t + 1);
+                self.set_top(vm, t);
                 Ok(())
             }
             5 => self.pushvalue(vm, r.z()),
