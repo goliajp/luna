@@ -178,7 +178,7 @@ impl Heap {
         let _ = (h, what);
     }
 
-    /// gc-trace (`R38_WHERE`): a string freed.
+    /// gc-trace (`LUNA_GC_WHERE`): a string freed.
     #[inline(always)]
     pub(crate) fn hook_string_freed(&mut self, s: *mut LuaStr) {
         #[cfg(feature = "gc-trace")]
@@ -186,7 +186,7 @@ impl Heap {
         let _ = s;
     }
 
-    /// gc-trace (`R38_WHERE`): a string made.
+    /// gc-trace (`LUNA_GC_WHERE`): a string made.
     #[inline(always)]
     pub(crate) fn hook_string_made(&mut self, s: *mut LuaStr) {
         #[cfg(feature = "gc-trace")]
@@ -226,7 +226,7 @@ impl Heap {
         }
     }
 
-    /// gc-trace (`R38_KEYS`): key `k` enters table `t`'s hash part.
+    /// gc-trace (`LUNA_GC_KEYS`): key `k` enters table `t`'s hash part.
     #[inline(always)]
     pub(crate) fn hook_new_key(&mut self, t: &Table, k: Value) {
         #[cfg(feature = "gc-trace")]
@@ -234,7 +234,7 @@ impl Heap {
         let _ = (t, k);
     }
 
-    /// gc-trace (`R38_PROP`): the object `h` traversed with work `w`.
+    /// gc-trace (`LUNA_GC_PROP`): the object `h` traversed with work `w`.
     ///
     /// # Safety
     /// `h` heads an allocated object.
@@ -248,7 +248,7 @@ impl Heap {
         let _ = (h, w, run);
     }
 
-    /// gc-trace (`R38_PROP`): how many objects PUC's list holds as the sweep
+    /// gc-trace (`LUNA_GC_PROP`): how many objects PUC's list holds as the sweep
     /// finds it.
     #[inline(always)]
     pub(crate) fn hook_listed(&mut self) {
@@ -256,7 +256,7 @@ impl Heap {
         self.trace_listed();
     }
 
-    /// The sweep goes over `h`, `dead` or not: gc-trace (`R38_SWEEP`)
+    /// The sweep goes over `h`, `dead` or not: gc-trace (`LUNA_GC_SWEEP`)
     /// writes it; gc-verify checks its class byte says whether PUC lists
     /// it (`strt`: the string table holds strings).
     ///
@@ -332,7 +332,7 @@ impl Heap {
         let _ = held;
     }
 
-    /// gc-trace (`R38_SWEEP`): the string sweep frees string `h`.
+    /// gc-trace (`LUNA_GC_SWEEP`): the string sweep frees string `h`.
     #[inline(always)]
     pub(crate) fn hook_string_swept(&mut self, h: *mut GcHeader) {
         #[cfg(feature = "gc-trace")]
@@ -408,13 +408,13 @@ impl Heap {
     }
 
     /// gc-trace: a mark named `name` where a test cuts the comparison with
-    /// PUC's (`R38_EXIT_AT=<name>` stops the program there).
+    /// PUC's (`LUNA_GC_EXIT_AT=<name>` stops the program there).
     #[inline(always)]
     pub(crate) fn hook_mark(&mut self, name: &str) {
         #[cfg(feature = "gc-trace")]
         {
             self.hooks.trace.line(format_args!("M {name}"));
-            if std::env::var("R38_EXIT_AT").is_ok_and(|at| at == name) {
+            if std::env::var("LUNA_GC_EXIT_AT").is_ok_and(|at| at == name) {
                 self.hooks.trace.flush();
                 std::process::exit(0);
             }
@@ -440,7 +440,7 @@ impl Heap {
         self.hooks.trace.flush();
     }
 
-    /// No automatic step runs (gc-trace with `R38_NOAUTO` set).
+    /// No automatic step runs (gc-trace with `LUNA_GC_NOAUTO` set).
     #[inline(always)]
     pub(crate) fn no_auto(&self) -> bool {
         #[cfg(feature = "gc-trace")]
@@ -449,7 +449,7 @@ impl Heap {
         false
     }
 
-    /// No collection runs (gc-trace with `R38_NOGC` set).
+    /// No collection runs (gc-trace with `LUNA_GC_NOGC` set).
     #[inline(always)]
     pub(crate) fn no_gc(&self) -> bool {
         #[cfg(feature = "gc-trace")]

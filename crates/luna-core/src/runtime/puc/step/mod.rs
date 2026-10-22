@@ -133,7 +133,7 @@ pub(crate) fn gc_steps_to_pause<H: StepHost + ?Sized>(h: &mut H) -> Result<(), L
 /// incremental mode: the debt it sets and the steps it runs, whether
 /// or not the collector is stopped; true when a cycle ended.
 pub(crate) fn gc_lua_step<H: StepHost + ?Sized>(h: &mut H, n: i64) -> Result<bool, LuaError> {
-    // the instrumented PUC that `R38_NOAUTO` compares with skips every
+    // the instrumented PUC that `LUNA_GC_NOAUTO` compares with skips every
     // `luaC_step`, the ones `lua_gc` asks for too
     if h.heap().no_auto() {
         return Ok(false);

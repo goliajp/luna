@@ -1,4 +1,4 @@
-//! The gc-trace build's `R38_REFUSE` (see `Trace::refuse`): a growth of
+//! The gc-trace build's `LUNA_GC_REFUSE` (see `Trace::refuse`): a growth of
 //! PUC's that the instrumented PUC's allocation function refuses is
 //! answered here as PUC answers it, once the operation that made it is
 //! back where the VM may collect.

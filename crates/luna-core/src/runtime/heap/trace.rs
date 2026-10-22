@@ -3,7 +3,7 @@
 use super::*;
 
 impl Heap {
-    /// `R38_PROP`: how many objects PUC's list holds as the sweep finds it.
+    /// `LUNA_GC_PROP`: how many objects PUC's list holds as the sweep finds it.
     pub(crate) fn trace_listed(&mut self) {
         if !self.hooks.trace.prop {
             return;
@@ -31,7 +31,7 @@ impl Heap {
         self.hooks.trace.line(format_args!("n {n} {by:?}"));
     }
 
-    /// `R38_KEYS`: key `k` enters table `t`'s hash part.
+    /// `LUNA_GC_KEYS`: key `k` enters table `t`'s hash part.
     pub(crate) fn trace_new_key(&mut self, t: &crate::runtime::Table, k: crate::runtime::Value) {
         use crate::runtime::Value;
         if !self.hooks.trace.keys {
@@ -51,7 +51,7 @@ impl Heap {
         ));
     }
 
-    /// `R38_SWEEP`: the sweep goes over `h`.
+    /// `LUNA_GC_SWEEP`: the sweep goes over `h`.
     ///
     /// # Safety
     /// `h` heads a live object of this heap.
@@ -78,7 +78,7 @@ impl Heap {
         }
     }
 
-    /// `R38_REFUSE` refuses a table resize from `old_a` array slots to
+    /// `LUNA_GC_REFUSE` refuses a table resize from `old_a` array slots to
     /// `new_a` and `new_h` nodes: one of the parts PUC makes is refused.
     pub(crate) fn refuse_table(&mut self, old_a: usize, new_a: usize, new_h: usize) -> bool {
         let (oa, na, nh) = (
@@ -89,7 +89,7 @@ impl Heap {
         self.hooks.trace.refuse_now(oa, na) || self.hooks.trace.refuse_now(0, nh)
     }
 
-    /// `R38_REFUSE` refuses a new long string of `len` bytes.
+    /// `LUNA_GC_REFUSE` refuses a new long string of `len` bytes.
     pub(crate) fn refuse_string(&mut self, len: usize) -> bool {
         let size = self
             .puc
@@ -98,12 +98,12 @@ impl Heap {
         len > crate::runtime::string::MAX_SHORT_LEN && self.hooks.trace.refuse_now(0, size)
     }
 
-    /// `R38_TRACE`: a thread of `stack` slots shrunk with `inuse` in use.
+    /// `LUNA_GC_TRACE`: a thread of `stack` slots shrunk with `inuse` in use.
     pub(crate) fn trace_shrink(&mut self, stack: u32, inuse: u32) {
         self.hooks.trace.line(format_args!("sh {stack} {inuse}"));
     }
 
-    /// `R38_PROP`: the object `h` traversed with work `w`.
+    /// `LUNA_GC_PROP`: the object `h` traversed with work `w`.
     pub(crate) unsafe fn trace_prop(&mut self, h: *mut GcHeader, w: i64, run: Running) {
         // SAFETY: the caller's contract: `h` heads an allocated object
         unsafe {
@@ -157,7 +157,7 @@ impl Heap {
         }
     }
 
-    /// `R38_WHERE`: a string `prefix`ed: `s` freed, `s+` made.
+    /// `LUNA_GC_WHERE`: a string `prefix`ed: `s` freed, `s+` made.
     pub(crate) fn trace_string(&mut self, prefix: &[u8], s: *mut LuaStr) {
         if self.hooks.trace.where_ {
             // SAFETY: the caller names an allocated string
@@ -167,7 +167,7 @@ impl Heap {
         }
     }
 
-    /// `R38_SWEEP`: the string sweep frees string `h`.
+    /// `LUNA_GC_SWEEP`: the string sweep frees string `h`.
     pub(crate) fn trace_string_swept(&mut self, h: *mut GcHeader) {
         if self.hooks.trace.sweep {
             // SAFETY: the caller names an allocated string

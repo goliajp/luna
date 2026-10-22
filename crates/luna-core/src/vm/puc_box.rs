@@ -49,7 +49,7 @@ impl Vm {
             .map(|&(_, u, _)| u)
     }
 
-    /// gc-trace: `R38_REFUSE` refuses the growth of a box's block (5.3
+    /// gc-trace: `LUNA_GC_REFUSE` refuses the growth of a box's block (5.3
     /// on) from `old` bytes (`None`: no box yet, which is made first):
     /// the allocation function is asked directly, so the buffer's error.
     pub(crate) fn refuse_box(

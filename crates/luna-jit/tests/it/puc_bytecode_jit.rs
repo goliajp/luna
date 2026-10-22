@@ -164,7 +164,7 @@ fn puc_bytecode_runs_the_same_with_the_jit() {
 
 /// `gc-trace`: one fixture's PUC bytecode run as the test above runs it,
 /// on the interpreter or (`LUNA_PBJ_JIT=1`) with the JIT, its accounting
-/// trace written to `R38_TRACE`: for comparing the two. Ignored: run by
+/// trace written to `LUNA_GC_TRACE`: for comparing the two. Ignored: run by
 /// hand with `LUNA_PBJ_FILE` (a `luac` output) and `LUNA_PBJ_VERSION`
 /// (51 to 55).
 #[test]

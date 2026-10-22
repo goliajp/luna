@@ -159,7 +159,7 @@ fn globals_point_back_at_the_libraries() {
 
 /// `gc-trace`: the accounting trace of a second `open_all_libs` between
 /// the marks `reopen` and `/reopen`, for comparing with PUC's
-/// from an instrumented host: `LUNA_REOPEN=5.x R38_TRACE=<file>`,
+/// from an instrumented host: `LUNA_REOPEN=5.x LUNA_GC_TRACE=<file>`,
 /// `LUNA_REOPEN_SETUP=<chunk>` run before, and with `LUNA_REOPEN_COLLECT`
 /// a full collection after, between the marks `collect` and `/collect`
 /// (`LUNA_REOPEN_SKIP`: no reopening between the marks).
