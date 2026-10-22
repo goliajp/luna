@@ -179,7 +179,7 @@ impl Vm {
             self.parse_scratch.record = counted;
             self.heap.puc.silent += 1;
             let base = self.heap.unborn_len();
-            self.heap.set_aside_loads(counted);
+            let aside = self.heap.set_aside_loads(counted);
             let source = self
                 .heap
                 .chunk_name(chunkname, name)
@@ -189,7 +189,7 @@ impl Vm {
                 .and_then(|source| self.compile_text_in_place(src, source))
                 .and_then(|p| self.hold_puc_names(p).map(|()| p))
                 .and_then(|p| Ok((p, self.close_chunk(p)?)));
-            self.heap.set_aside_loads(false);
+            self.heap.set_aside_loads(aside);
             self.heap.puc.silent -= 1;
             // what PUC made before the error is counted as it made it
             let failed = match (&made, source) {
@@ -235,6 +235,7 @@ impl Vm {
         f: impl FnOnce(&mut Vm) -> Result<R, SyntaxError>,
     ) -> Result<R, SyntaxError> {
         let (silent, frames) = (self.heap.puc.silent, self.heap.puc.parse.len());
+        let (aside, unborn) = (self.heap.puc.unborn_on, self.heap.unborn_len());
         match catch_load_oom(|| f(self)) {
             Ok(r) => r,
             Err(()) => {
@@ -242,8 +243,8 @@ impl Vm {
                 // and past a step's frame of the parser's objects
                 self.heap.puc.silent = silent;
                 self.heap.puc.parse.truncate(frames);
-                self.heap.set_aside_loads(false);
-                self.heap.flush_unborn(0);
+                self.heap.set_aside_loads(aside);
+                self.heap.flush_unborn(unborn);
                 self.compile_scratch = crate::compiler::CompileScratch::new(self.heap.mem());
                 Err(load_oom(&self.heap))
             }
