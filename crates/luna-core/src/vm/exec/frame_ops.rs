@@ -6,10 +6,7 @@ use super::*;
 
 mod closure;
 
-/// [`Vm::jit_gc_due`]'s op: the one before the pc compiled code resumes at.
-pub const JIT_GC_PREV: u32 = u32::MAX;
-/// [`Vm::jit_gc_due`]'s op: the call that entered the frame it resumes in.
-pub const JIT_GC_CALL: u32 = u32::MAX - 1;
+use crate::jit::{JIT_GC_CALL, JIT_GC_PREV};
 
 impl Vm {
     #[inline(never)]

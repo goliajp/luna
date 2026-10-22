@@ -176,7 +176,7 @@ pub struct JitState {
     pub levels_slot: u32,
     /// the frames of the compiled levels handed to the interpreter,
     /// deepest first
-    pub handoff: Vec<crate::vm::exec::HandoffFrame>,
+    pub(crate) handoff: Vec<crate::vm::exec::HandoffFrame>,
 }
 
 impl JitState {

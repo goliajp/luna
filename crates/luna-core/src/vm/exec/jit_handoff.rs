@@ -19,7 +19,7 @@ pub(super) enum JitRun {
 }
 
 /// A compiled level's frame, as the interpreter goes on with it.
-pub struct HandoffFrame {
+pub(crate) struct HandoffFrame {
     base: u32,
     pc: u32,
     vals: Vec<Value>,

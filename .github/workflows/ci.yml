@@ -96,6 +96,12 @@ jobs:
         env:
           CARGO_PROFILE_RELEASE_LTO: "false"
           CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: "true"
+      # the parser tables the debug library is shown have PUC's parts
+      - name: load_reader_stack (gc-verify)
+        run: cargo test -p luna-core --release --features gc-verify --test it -- load_reader_stack
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: "true"
 
   # ─────────────────────────────────────────────────────────────────
   # A Windows host with LLVM but without Visual Studio's C++ tools.

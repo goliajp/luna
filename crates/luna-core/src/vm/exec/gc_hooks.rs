@@ -67,6 +67,18 @@ impl Vm {
         let _ = key;
     }
 
+    /// gc-verify: a parser table the debug library is shown has the parts
+    /// PUC's has (`luna`'s, `puc`: array slots and nodes).
+    #[inline(always)]
+    pub(super) fn hook_reader_sizes(&self, luna: (u64, u64), puc: (u64, u64)) {
+        #[cfg(feature = "gc-verify")]
+        assert_eq!(
+            luna, puc,
+            "[gc-verify] a parser table shown with other parts than PUC's"
+        );
+        let _ = (luna, puc);
+    }
+
     /// gc-stress, gc-verify: a trace being recorded holds nothing the
     /// collection freed.
     #[inline(always)]

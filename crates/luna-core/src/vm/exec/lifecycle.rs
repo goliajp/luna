@@ -109,7 +109,6 @@ impl Vm {
                 host_ci_top: 0,
                 ci_hint: 0,
                 host_slots: 0,
-                reader_size_mismatch: 0,
                 meta_conts: 0,
                 host_conts: 0,
                 ci_alloc: [0, u32::MAX][usize::from(version == LuaVersion::Lua51)],
