@@ -27,7 +27,7 @@ impl Heap {
             b.reserve_exact(size)?;
             let waited = self.refusal_waits();
             self.acct_part(old, size);
-            // gc-trace: `R38_REFUSE` refused this growth of PUC's, which is
+            // gc-trace: `LUNA_GC_REFUSE` refused this growth of PUC's, which is
             // then as if the allocation failed
             if let Some(bytes) = self.take_new_refusal(waited) {
                 self.puc.bytes = (self.puc.bytes as i64 - bytes) as usize;

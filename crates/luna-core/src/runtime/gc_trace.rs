@@ -1,30 +1,30 @@
 //! A log of what the collector's accounting saw, for comparing luna with an
 //! instrumented PUC build line by line (`gc-trace` feature). The file is
-//! named by the `R38_TRACE` environment variable; the format is PUC's
+//! named by the `LUNA_GC_TRACE` environment variable; the format is PUC's
 //! instrumented allocation function's: `a <tag> <size>` for a new object or
 //! block, `r <old> <new>` for a resize, `d <size>` for a free.
 
 use std::io::Write;
 
-/// The log of one heap: nothing when `R38_TRACE` is unset.
+/// The log of one heap: nothing when `LUNA_GC_TRACE` is unset.
 pub(crate) struct Trace {
     out: Option<std::io::BufWriter<std::fs::File>>,
-    /// `R38_NOGC`: no collection runs, as in the instrumented PUC build
+    /// `LUNA_GC_NOGC`: no collection runs, as in the instrumented PUC build
     /// with the same variable set
     pub(crate) no_gc: bool,
-    /// `R38_NOAUTO`: no automatic step runs, a full collection does
+    /// `LUNA_GC_NOAUTO`: no automatic step runs, a full collection does
     pub(crate) no_auto: bool,
-    /// `R38_WHERE`: each line also names the luna functions that made it;
-    /// `R38_WHERE=<n>` only the allocation events within 30 of the n-th
+    /// `LUNA_GC_WHERE`: each line also names the luna functions that made it;
+    /// `LUNA_GC_WHERE=<n>` only the allocation events within 30 of the n-th
     /// (counted from 1, as `where.sh` counts PUC's)
     pub(crate) where_: bool,
-    /// `R38_KEYS`: each key a table's hash part gets for the first time
+    /// `LUNA_GC_KEYS`: each key a table's hash part gets for the first time
     /// (`K <table> <key>`, as `libshape_patch.py` logs PUC's)
     pub(crate) keys: bool,
-    /// `R38_PROP`: each object an incremental step traverses, with its
+    /// `LUNA_GC_PROP`: each object an incremental step traverses, with its
     /// type and the work counted for it (`p <tag> <work>`)
     pub(crate) prop: bool,
-    /// `R38_SWEEP`: each object of PUC's a step's sweep goes over (`w <tag>
+    /// `LUNA_GC_SWEEP`: each object of PUC's a step's sweep goes over (`w <tag>
     /// <dead>`; a record of PUC's objects `w g<n> <dead>`)
     pub(crate) sweep: bool,
     window: Option<(u64, u64)>,
@@ -37,9 +37,9 @@ pub(crate) struct Trace {
     /// a call hook runs: PUC counts the function as past its first
     /// instruction then (`luaD_hookcall`)
     pub(crate) call_hook: bool,
-    /// `R38_REFUSE=n`: the instrumented PUC's allocation function refuses
+    /// `LUNA_GC_REFUSE=n`: the instrumented PUC's allocation function refuses
     /// the first growth of a block to n bytes or more (every one with
-    /// `R38_REFUSE_EVERY`); here the growth is PUC's, as the trace has it,
+    /// `LUNA_GC_REFUSE_EVERY`); here the growth is PUC's, as the trace has it,
     /// and what follows it is held until the VM has done what PUC does then
     refuse: Option<usize>,
     pub(crate) refuse_every: bool,
@@ -60,18 +60,18 @@ pub(crate) struct Trace {
 
 impl Default for Trace {
     fn default() -> Trace {
-        let out = std::env::var_os("R38_TRACE")
+        let out = std::env::var_os("LUNA_GC_TRACE")
             .and_then(|p| std::fs::File::create(p).ok())
             .map(|f| std::io::BufWriter::with_capacity(1 << 16, f));
         Trace {
             out,
-            no_gc: std::env::var_os("R38_NOGC").is_some(),
-            no_auto: std::env::var_os("R38_NOAUTO").is_some(),
-            where_: std::env::var_os("R38_WHERE").is_some(),
-            prop: std::env::var_os("R38_PROP").is_some(),
-            sweep: std::env::var_os("R38_SWEEP").is_some(),
-            keys: std::env::var_os("R38_KEYS").is_some(),
-            window: std::env::var("R38_WHERE")
+            no_gc: std::env::var_os("LUNA_GC_NOGC").is_some(),
+            no_auto: std::env::var_os("LUNA_GC_NOAUTO").is_some(),
+            where_: std::env::var_os("LUNA_GC_WHERE").is_some(),
+            prop: std::env::var_os("LUNA_GC_PROP").is_some(),
+            sweep: std::env::var_os("LUNA_GC_SWEEP").is_some(),
+            keys: std::env::var_os("LUNA_GC_KEYS").is_some(),
+            window: std::env::var("LUNA_GC_WHERE")
                 .ok()
                 .and_then(|w| w.parse::<u64>().ok())
                 .map(|n| (n.saturating_sub(30), n + 30)),
@@ -79,10 +79,10 @@ impl Default for Trace {
             held: Vec::new(),
             in_c: false,
             call_hook: false,
-            refuse: std::env::var("R38_REFUSE")
+            refuse: std::env::var("LUNA_GC_REFUSE")
                 .ok()
                 .and_then(|n| n.parse().ok()),
-            refuse_every: std::env::var_os("R38_REFUSE_EVERY").is_some(),
+            refuse_every: std::env::var_os("LUNA_GC_REFUSE_EVERY").is_some(),
             refused: None,
             refused_bytes: 0,
             generational: false,
@@ -206,7 +206,7 @@ impl Trace {
     }
 
     /// A growth of PUC's from `old` to `new` bytes about to be made that
-    /// `R38_REFUSE` refuses: the allocation fails there instead.
+    /// `LUNA_GC_REFUSE` refuses: the allocation fails there instead.
     pub(crate) fn refuse_now(&mut self, old: usize, new: usize) -> bool {
         if self.out.is_none() || self.refused.is_some() {
             return false;
@@ -289,7 +289,9 @@ pub(crate) fn puc_tag(
     }
 }
 
-/// The seed the instrumented PUC build takes from `R38_SEED` too.
+/// The seed the instrumented PUC build takes from `LUNA_GC_SEED` too.
 pub(crate) fn fixed_seed() -> Option<u32> {
-    std::env::var("R38_SEED").ok().and_then(|s| s.parse().ok())
+    std::env::var("LUNA_GC_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
 }
