@@ -62,7 +62,7 @@ impl Vm {
         let chunk = tree.parsed().0;
         let d = self.heap.table_dialect;
         let mut r = Replay::new(
-            (d, self.heap.puc.sizes),
+            (d, self.heap.puc_sizes()),
             cl.proto,
             v,
             scanned,

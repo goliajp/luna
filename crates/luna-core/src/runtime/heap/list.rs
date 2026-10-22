@@ -23,6 +23,7 @@ impl Heap {
     }
 
     /// The first object never swept (`fixedgc`).
+    #[cfg(feature = "gc-verify")]
     #[inline]
     pub(in crate::runtime) fn fixed_head(&self) -> *mut GcHeader {
         self.fixed

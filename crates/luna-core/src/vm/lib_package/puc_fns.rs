@@ -198,9 +198,12 @@ fn push_default(
         && !kept(pkg)
     {
         let size = if v == LuaVersion::Lua55 {
-            vm.heap.puc.sizes.lngstr_hdr
+            vm.heap.puc_size(crate::runtime::puc::PucObj::LongStrHeader)
         } else {
-            vm.heap.puc.sizes.string(def.len(), true)
+            vm.heap.puc_size(crate::runtime::puc::PucObj::Str {
+                len: def.len(),
+                long: true,
+            })
         };
         // 5.1 keeps every string in its string table; later ones stand
         // PUC's string on luna's where that is a long string of its own,

@@ -50,7 +50,7 @@ fn luaopen_math(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// own; the state stands for PUC's).
 pub(crate) fn puc_setrandfunc(vm: &mut Vm, op: &mut Opener) -> Result<(), LuaError> {
     op.before(vm)?;
-    let size = vm.heap.puc.sizes.userdata(0, 32);
+    let size = vm.heap.puc_size(crate::runtime::puc::PucObj::RandState);
     let u = vm.lib_userdata(crate::runtime::UserdataPayload::Empty, false, size)?;
     op.push(vm, Value::Userdata(u))?;
     op.after(vm)?;

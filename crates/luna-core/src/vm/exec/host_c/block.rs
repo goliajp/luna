@@ -95,7 +95,9 @@ impl Vm {
         };
         // the block and the user values count as PUC's `luaS_newudata`
         // counts them
-        let puc = self.heap.puc.sizes.userdata(nuv, size);
+        let puc = self
+            .heap
+            .puc_size(crate::runtime::puc::PucObj::Udata { nuv, bytes: size });
         self.heap.try_new_userdata_sized(payload, true, puc)
     }
 

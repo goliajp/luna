@@ -18,9 +18,12 @@ impl Opener {
     /// numbers them), made and pushed (`lua_createtable(L, 0, 1)`).
     pub(crate) fn newfenv(&mut self, vm: &mut Vm, k: usize) -> Result<(), LuaError> {
         self.before(vm)?;
-        let s = vm.heap.puc.sizes;
-        vm.heap.acct_obj(PucKind::Table, s.table);
-        vm.heap.acct_block(0, s.node);
+        vm.heap.acct_obj(
+            PucKind::Table,
+            vm.heap.puc_size(crate::runtime::puc::PucObj::Table),
+        );
+        vm.heap
+            .acct_block(0, vm.heap.puc_size(crate::runtime::puc::PucObj::Nodes(1)));
         let h = vm.heap.env51_born(k);
         vm.heap.puc.phantoms = true;
         self.push(vm, Value::LightUserdata(h as *const ()))?;
@@ -30,8 +33,10 @@ impl Opener {
     /// The closure `k` (0 to 2: `io_fclose`, `io_noclose`, `io_pclose`)
     /// one of those tables holds, made.
     pub(crate) fn phantom_closure(&mut self, vm: &mut Vm, k: usize) -> Value {
-        let s = vm.heap.puc.sizes;
-        vm.heap.acct_obj(PucKind::CClosure, s.c_closure(0));
+        vm.heap.acct_obj(
+            PucKind::CClosure,
+            vm.heap.puc_size(crate::runtime::puc::PucObj::CClosure(0)),
+        );
         Value::LightUserdata(vm.heap.env51_born(3 + k) as *const ())
     }
 
