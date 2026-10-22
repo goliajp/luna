@@ -6,7 +6,7 @@ impl Table {
     /// Read-time probe: the query key and every node key a hash lookup
     /// compares must be live. All hash lookups meet in `find_node`, so a
     /// dangling string is named at its dereference site with its role.
-    pub(super) fn verify_find_node_keys(&self, k: Value) {
+    pub(crate) fn verify_find_node_keys(&self, k: Value) {
         let hdr = |v: Value| -> Option<usize> {
             match v {
                 Value::Str(s) => Some(s.as_ptr() as usize),

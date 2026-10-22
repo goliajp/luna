@@ -162,17 +162,6 @@ impl Table {
         }
     }
 
-    /// The first string key with a value, in node order (`gc-trace`'s
-    /// propagation probe names a table by it).
-    #[cfg(feature = "gc-trace")]
-    pub(crate) fn first_str_key(&self) -> Option<crate::runtime::Gc<crate::runtime::LuaStr>> {
-        self.nodes().iter().find_map(|n| match (n.key(), n.val) {
-            (_, v) if v.is_nil() => None,
-            (Value::Str(s), _) => Some(s),
-            _ => None,
-        })
-    }
-
     /// Ephemeron pass: mark the value of every hash entry whose key is alive
     /// (`alive` decides — strong/marked keys, plus strings/numbers which are
     /// never weakly collected). Returns true if any value was newly marked, so

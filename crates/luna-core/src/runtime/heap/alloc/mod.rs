@@ -101,12 +101,7 @@ impl Heap {
             let t = ptr.as_ptr();
             // gc-verify: the pointer is alive again — drop it from the
             // freed log so read-time probes don't flag the recycled table.
-            #[cfg(feature = "gc-verify")]
-            {
-                self.recently_freed.remove(&(t as usize));
-                crate::runtime::gc_verify_probe::FREED
-                    .with(|f| f.borrow_mut().remove(&(t as usize)));
-            }
+            self.hook_reborn(t as *mut GcHeader);
             // SAFETY: `t` came off `table_pool`, which holds only tables `free_obj` unlinked from every list and emptied of their interior allocations; the pool's pointer was the only one, and these writes restore the fields left behind
             unsafe {
                 (*t).hdr = GcHeader::new(ObjTag::Table);
@@ -260,8 +255,7 @@ impl Heap {
         upvals: &[Gc<Upvalue>],
     ) -> Result<Gc<LuaClosure>, Oom> {
         use crate::runtime::function::INLINE_UPVALS_N;
-        #[cfg(feature = "gc-verify")]
-        self.verify_not_dying(
+        self.check_not_dying(
             proto.as_ptr() as *const GcHeader,
             "a new closure's prototype",
         );

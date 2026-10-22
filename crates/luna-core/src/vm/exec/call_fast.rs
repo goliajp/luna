@@ -32,11 +32,8 @@ impl Vm {
         }
         // 5.2 checks for a collection on every call: one due is
         // `begin_call`'s to make (and to log, in the trace)
-        if self.heap.rules().check_on_call() {
-            if self.heap.gc_due() || cfg!(any(feature = "gc-stress", feature = "gc-trace")) {
-                return None;
-            }
-            self.heap.safe_point();
+        if self.heap.rules().check_on_call() && !self.checkpoint_idle() {
+            return None;
         }
         // as `push_frame`: missing parameters are nil, and 5.1 clears the
         // whole window

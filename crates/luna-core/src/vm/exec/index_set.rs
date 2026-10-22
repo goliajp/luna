@@ -1,8 +1,5 @@
 //! The in-place table writes the dispatch loop finishes itself.
 
-// gc-verify builds take every write through the probed paths
-#![cfg_attr(feature = "gc-verify", allow(dead_code))]
-
 use super::*;
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
@@ -84,8 +81,7 @@ fn table_raw_set_cold(tb: &mut Table, heap: &mut Heap, key: Value, v: Value) -> 
     match tb.set_inlined(heap, key, v) {
         // gc-trace: a growth refused by `R38_REFUSE` is answered by the
         // slow path's store, which finds the key in place
-        #[cfg(feature = "gc-trace")]
-        Ok(()) if heap.trace.refused() => false,
+        Ok(()) if heap.refusal_waits() => false,
         Ok(()) => true,
         Err(e) => {
             heap.set_store_failed(matches!(e, crate::runtime::table::TableError::Memory(_)));

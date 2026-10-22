@@ -21,16 +21,15 @@ pub(crate) struct Deferred {
     bytes: isize,
     /// where the objects made meanwhile are in the list of those set aside
     objs: (usize, usize),
-    #[cfg(feature = "gc-trace")]
-    lines: Vec<String>,
+    /// gc-trace: the lines held back meanwhile
+    lines: crate::runtime::gc_hooks::HeldLines,
 }
 
 impl Heap {
     /// Set what is counted from now on aside, and the objects made with
     /// it; [`Heap::defer_end`] with the returned mark takes it back out.
     pub(crate) fn defer_begin(&mut self) -> DeferMark {
-        #[cfg(feature = "gc-trace")]
-        self.trace.hold();
+        self.hook_hold_lines();
         DeferMark {
             bytes: self.puc.bytes,
             objs: self.unborn_len(),
@@ -48,8 +47,7 @@ impl Heap {
         Deferred {
             bytes,
             objs: (mark.objs, self.unborn_len()),
-            #[cfg(feature = "gc-trace")]
-            lines: self.trace.release(),
+            lines: self.hook_release_lines(),
         }
     }
 
@@ -58,8 +56,7 @@ impl Heap {
         self.puc.bytes = (self.puc.bytes as isize + d.bytes) as usize;
         self.puc.set_aside -= d.bytes;
         self.born_range(d.objs);
-        #[cfg(feature = "gc-trace")]
-        self.trace.put(d.lines);
+        self.hook_put_lines(d.lines);
     }
 
     /// Where the loads' set aside count and objects stand now, for

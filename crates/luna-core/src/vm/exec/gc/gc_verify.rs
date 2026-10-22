@@ -10,7 +10,6 @@ impl Vm {
     /// a use-after-free waiting to happen. (Slots ABOVE the bound may hold
     /// stale dead values legitimately; the interpreter's contract is
     /// that it writes them before reading.)
-    #[cfg(feature = "gc-verify")]
     pub(crate) fn verify_frame_regs_live(&self, ctx: &str) {
         let live = self.heap.debug_live_set();
         let header = |v: Value| -> Option<usize> {
@@ -68,6 +67,23 @@ impl Vm {
                     }
                 }
             }
+        }
+    }
+
+    /// The live top of a checkpoint never cuts into a Lua frame that is
+    /// running.
+    pub(in crate::vm::exec) fn verify_live_top(&self, live_top: u32) {
+        if let Some(CallFrame::Lua(f)) = self
+            .frames
+            .iter()
+            .rev()
+            .find(|f| matches!(f, CallFrame::Lua(_)))
+            && live_top < f.base
+        {
+            panic!(
+                "[gc-verify] checkpoint with live top {live_top} below the running Lua frame's base {}",
+                f.base
+            );
         }
     }
 }

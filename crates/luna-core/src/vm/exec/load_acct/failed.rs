@@ -97,8 +97,7 @@ impl Vm {
         let mut r = Replay::new((d, self.heap.puc_sizes()), cl.proto, v, scanned, names, src);
         r.splice(splices);
         let log = self.compile_scratch.puc_log.take();
-        #[cfg(feature = "gc-trace")]
-        self.heap.trace.line(format_args!(
+        self.heap.trace_line(format_args!(
             "F at {} scanning {} log {}",
             failed.at,
             failed.scanning,

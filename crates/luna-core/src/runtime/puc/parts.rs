@@ -45,7 +45,7 @@ impl Heap {
         let (oh, nh) = (self.hash_bytes(old_h), self.hash_bytes(new_h));
         let (oa, na) = (self.array_bytes(old_a), self.array_bytes(new_a));
         // with no trace to write, only the sum is seen
-        if cfg!(not(feature = "gc-trace")) {
+        if !crate::runtime::gc_hooks::TRACE {
             return part(self, oh + oa, nh + na);
         }
         match self.puc.dialect {
@@ -124,7 +124,7 @@ impl Heap {
         // a short string with no trace to write: only the sum is seen
         // (the table grows on the same condition either side of the
         // string's own count)
-        if cfg!(not(feature = "gc-trace")) && self.counting() {
+        if !crate::runtime::gc_hooks::TRACE && self.counting() {
             if len > self.puc.short_max {
                 let l55 = self.puc.dialect == Dialect::L55;
                 self.puc.bytes += self.puc.sizes.string(len, l55);

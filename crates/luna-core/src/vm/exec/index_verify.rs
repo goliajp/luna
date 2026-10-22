@@ -12,7 +12,7 @@ impl Vm {
                 Value::Str(s) => s.as_ptr() as usize,
                 _ => unreachable!(),
             };
-            if self.heap.recently_freed.contains(&h) {
+            if self.heap.hooks.recently_freed.contains(&h) {
                 let (pc, reg_info) = match self.frames.last() {
                     Some(CallFrame::Lua(f)) => {
                         let pc = f.pc as usize;
@@ -42,10 +42,10 @@ impl Vm {
                         );
                         format!(
                             "closure {c:#x} freed {} {}, proto {p:#x} freed {} defined at {}; frames {}",
-                            self.heap.recently_freed.contains(&c),
+                            self.heap.hooks.recently_freed.contains(&c),
                             self.heap
                                 .describe(c as *const crate::runtime::heap::GcHeader),
-                            self.heap.recently_freed.contains(&p),
+                            self.heap.hooks.recently_freed.contains(&p),
                             f.closure.proto.line_defined,
                             self.frames.len()
                         )
@@ -60,6 +60,39 @@ impl Vm {
                     self.top,
                 );
             }
+        }
+    }
+
+    /// A dead key at a write site, attributed to the instruction that made
+    /// it.
+    pub(super) fn verify_written_key(&self, key: Value) {
+        if let Some(p) = match key {
+            Value::Str(s) => Some(s.as_ptr() as usize),
+            Value::Table(t2) => Some(t2.as_ptr() as usize),
+            _ => None,
+        } && crate::runtime::gc_verify_probe::is_freed(p)
+        {
+            let detail = match self.frames.last() {
+                Some(CallFrame::Lua(f)) => {
+                    let pc = f.pc as usize;
+                    let mut w = String::new();
+                    for q in pc.saturating_sub(6)..(pc + 2) {
+                        if let Some(inst) = f.closure.proto.code.get(q) {
+                            w.push_str(&format!(
+                                "\n  [{q}] {:?} a={} b={} c={} k={}",
+                                inst.op(),
+                                inst.a(),
+                                inst.b(),
+                                inst.c(),
+                                inst.k()
+                            ));
+                        }
+                    }
+                    format!("pc={pc} base={} gc_top={} window:{w}", f.base, self.gc_top)
+                }
+                _ => "non-Lua frame".into(),
+            };
+            panic!("[gc-verify] newindex_step QUERY key {p:#x} freed. {detail}");
         }
     }
 }

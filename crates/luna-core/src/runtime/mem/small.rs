@@ -39,7 +39,6 @@ fn class(size: usize) -> usize {
 
 /// What the bytes of a kept block past its link hold in builds that check
 /// for a write after free.
-#[cfg(any(debug_assertions, feature = "gc-verify"))]
 const POISON: u8 = 0xA5;
 
 pub(super) struct Small {
@@ -86,11 +85,11 @@ impl Small {
         // least a word, whose first word links the list
         unsafe {
             // nothing wrote past the link after the block was freed
-            #[cfg(any(debug_assertions, feature = "gc-verify"))]
             assert!(
-                std::slice::from_raw_parts(p.as_ptr().add(8), size - 8)
-                    .iter()
-                    .all(|&b| b == POISON),
+                !crate::runtime::gc_hooks::DEBUG_CHECKS
+                    || std::slice::from_raw_parts(p.as_ptr().add(8), size - 8)
+                        .iter()
+                        .all(|&b| b == POISON),
                 "a freed block of {size} bytes at {p:p} was written after its free"
             );
             self.heads[c] = p.as_ptr().cast::<*mut u8>().read();
@@ -115,8 +114,9 @@ impl Small {
         // SAFETY: the caller's contract: `p` is a block of `size` bytes, at
         // least a word, that nothing uses
         unsafe {
-            #[cfg(any(debug_assertions, feature = "gc-verify"))]
-            p.as_ptr().add(8).write_bytes(POISON, size - 8);
+            if crate::runtime::gc_hooks::DEBUG_CHECKS {
+                p.as_ptr().add(8).write_bytes(POISON, size - 8);
+            }
             p.as_ptr().cast::<*mut u8>().write(self.heads[c]);
         }
         self.heads[c] = p.as_ptr();

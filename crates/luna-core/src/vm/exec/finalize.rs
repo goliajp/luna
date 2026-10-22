@@ -76,8 +76,7 @@ impl Vm {
         let Some(obj) = self.heap.take_one_tobefnz() else {
             return Ok(());
         };
-        #[cfg(feature = "gc-trace")]
-        self.heap.trace.line(format_args!("f"));
+        self.heap.trace_line(format_args!("f"));
         let d = self.version;
         let in_hook = std::mem::replace(&mut self.in_hook, true);
         let finalizing = std::mem::replace(&mut self.gc_finalizing, true);

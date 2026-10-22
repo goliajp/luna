@@ -24,32 +24,6 @@ pub(crate) enum PucKind {
     Upval,
 }
 
-impl PucKind {
-    /// The tag PUC passes its allocation function for a new object (5.1
-    /// passes none).
-    #[cfg(feature = "gc-trace")]
-    fn tag(self, d: Dialect) -> usize {
-        use PucKind::*;
-        match (d, self) {
-            (Dialect::L51, _) => 0,
-            (_, ShortStr) => 4,
-            // PUC passes the base type, not the variant
-            (_, LongStr) => 4,
-            (_, Table) => 5,
-            (_, LuaClosure) => 6,
-            (_, CClosure) => 6,
-            (_, Userdata) => 7,
-            (_, Thread) => 8,
-            // 5.3's upvalues are plain blocks
-            (Dialect::L53, Upval) => 0,
-            (Dialect::L52 | Dialect::L53, Proto) => 9,
-            (Dialect::L52, Upval) => 10,
-            (_, Upval) => 9,
-            (_, Proto) => 10,
-        }
-    }
-}
-
 impl Heap {
     /// The model takes on `version`: PUC's sizes and dialect, and 5.1's
     /// string table holding every string.
@@ -70,13 +44,7 @@ impl Heap {
             return;
         }
         self.puc.bytes += size;
-        #[cfg(feature = "gc-trace")]
-        {
-            let tag = kind.tag(self.puc.dialect);
-            self.trace.line(format_args!("a {tag} {size}"));
-        }
-        #[cfg(not(feature = "gc-trace"))]
-        let _ = kind;
+        self.hook_alloc(kind, size);
     }
 
     /// A new object (not a table, not a string) `h` of `size` bytes:
@@ -107,20 +75,8 @@ impl Heap {
         if !self.counting() {
             return;
         }
-        #[cfg(feature = "gc-verify")]
-        assert!(
-            self.puc.bytes + new >= old,
-            "[gc-verify] a block of {old} bytes freed from a count of {}",
-            self.puc.bytes
-        );
+        self.hook_block(old, new);
         self.puc.bytes = self.puc.bytes + new - old;
-        #[cfg(feature = "gc-trace")]
-        match (old, new) {
-            (0, 0) => {}
-            (0, n) => self.trace.line(format_args!("a 0 {n}")),
-            (o, 0) => self.trace.line(format_args!("d {o}")),
-            (o, n) => self.trace.line(format_args!("r {o} {n}")),
-        }
     }
 
     /// A block of an object PUC counts going from `old` to `new` bytes (a
@@ -139,39 +95,8 @@ impl Heap {
     /// being dropped.
     #[inline]
     pub(in crate::runtime) fn count_part(&mut self, old: usize, new: usize) {
-        #[cfg(feature = "gc-verify")]
-        assert!(
-            self.puc.bytes + new >= old,
-            "[gc-verify] a block of {old} bytes freed from a count of {}",
-            self.puc.bytes
-        );
+        self.hook_block(old, new);
         self.puc.bytes = self.puc.bytes + new - old;
-        #[cfg(feature = "gc-trace")]
-        match (old, new) {
-            (0, 0) => {}
-            (0, n) => self.trace.line(format_args!("a 0 {n}")),
-            (o, 0) => self.trace.line(format_args!("d {o}")),
-            (o, n) => self.trace.line(format_args!("r {o} {n}")),
-        }
-    }
-
-    /// A block PUC allocates through the allocation function but leaves out of
-    /// `totalbytes` (a `luaL_Buffer` box's contents): only the trace sees it.
-    #[inline]
-    pub(crate) fn trace_raw(&mut self, old: usize, new: usize) {
-        #[cfg(feature = "gc-trace")]
-        if self.counting() {
-            self.trace.raw = true;
-            match (old, new) {
-                (0, 0) => {}
-                (0, n) => self.trace.line(format_args!("a 0 {n}")),
-                (o, 0) => self.trace.line(format_args!("d {o}")),
-                (o, n) => self.trace.line(format_args!("r {o} {n}")),
-            }
-            self.trace.raw = false;
-        }
-        #[cfg(not(feature = "gc-trace"))]
-        let _ = (old, new);
     }
 }
 

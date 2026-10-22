@@ -38,6 +38,7 @@ mod debug_info;
 mod fnv;
 pub mod function;
 pub(crate) mod function_close;
+pub(crate) mod gc_hooks;
 #[cfg(feature = "gc-trace")]
 pub(crate) mod gc_trace;
 pub mod heap;

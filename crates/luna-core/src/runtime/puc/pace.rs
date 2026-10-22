@@ -32,52 +32,6 @@ pub(crate) enum St {
     Finalize,
 }
 
-impl St {
-    /// The state's number in the dialect's `lgc.h`.
-    #[cfg(feature = "gc-trace")]
-    pub(crate) fn number(self, d: Dialect) -> u8 {
-        use St::*;
-        match d {
-            Dialect::L51 => match self {
-                Pause => 0,
-                Propagate => 1,
-                SweepString => 2,
-                SweepAll => 3,
-                _ => 4,
-            },
-            Dialect::L52 => match self {
-                Propagate => 0,
-                Atomic => 1,
-                SweepString => 2,
-                SweepUdata => 3,
-                SweepAll => 4,
-                _ => 5,
-            },
-            Dialect::L53 => match self {
-                Propagate => 0,
-                Atomic => 1,
-                SweepAll => 2,
-                SweepFinobj => 3,
-                SweepTobefnz => 4,
-                SweepEnd => 5,
-                CallFin => 6,
-                _ => 7,
-            },
-            _ => match self {
-                Propagate => 0,
-                EnterAtomic => 1,
-                Atomic => 2,
-                SweepAll => 3,
-                SweepFinobj => 4,
-                SweepTobefnz => 5,
-                SweepEnd => 6,
-                CallFin => 7,
-                _ => 8,
-            },
-        }
-    }
-}
-
 /// The collector's pace: PUC's own fields, kept against luna's count
 /// (`Heap::bytes`, PUC's `totalbytes` as `gettotalbytes` reads it).
 #[derive(Clone, Copy, Debug)]

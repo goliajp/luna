@@ -2,9 +2,6 @@
 //! finish: the `__index` / `__newindex` chains, entered with the operands
 //! worked out again from the instruction.
 
-// gc-verify builds take every read and write through the probed paths
-#![cfg_attr(feature = "gc-verify", allow(dead_code, unused_imports))]
-
 use super::*;
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
@@ -81,8 +78,8 @@ impl Vm {
     ) -> Result<(), LuaError> {
         // SAFETY: the caller's contract
         unsafe {
-            #[cfg(not(feature = "gc-verify"))]
-            if raw_tag(pk) == tag::STR {
+            // gc-verify builds take every read through the probed path
+            if !crate::runtime::gc_hooks::VERIFY && raw_tag(pk) == tag::STR {
                 let key = Gc::from_ptr_unchecked(raw_gc(pk) as *mut LuaStr);
                 return self.index_str_miss(pt, key, dst);
             }
@@ -137,16 +134,14 @@ impl Vm {
     /// `__index` chain without repeating the raw probe.
     #[inline(always)]
     fn index_miss(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
-        #[cfg(not(feature = "gc-verify"))]
-        {
-            if let Value::Str(s) = key {
-                // SAFETY: a local value
-                return unsafe { self.index_str_miss(&t, s, dst) };
-            }
-            self.op_index_from(t, key, dst, matches!(t, Value::Table(_)))
+        if crate::runtime::gc_hooks::VERIFY {
+            return self.op_index_from(t, key, dst, false);
         }
-        #[cfg(feature = "gc-verify")]
-        self.op_index(t, key, dst)
+        if let Value::Str(s) = key {
+            // SAFETY: a local value
+            return unsafe { self.index_str_miss(&t, s, dst) };
+        }
+        self.op_index_from(t, key, dst, matches!(t, Value::Table(_)))
     }
 
     /// A write opcode that [`Self::newindex_raw_at`] could not finish: runs the
@@ -155,12 +150,11 @@ impl Vm {
     fn newindex_miss(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
         // the fast path's raw set ran out of memory: that was the first
         // attempt, so what is left is the emergency collection and one more
-        #[cfg(not(feature = "gc-verify"))]
         let failed = self.heap.take_store_failed();
         // with no `__newindex` to call the write is a raw set (PUC
         // `luaV_finishset`)
-        #[cfg(not(feature = "gc-verify"))]
-        if let Value::Table(tb) = t
+        if !crate::runtime::gc_hooks::VERIFY
+            && let Value::Table(tb) = t
             && tb
                 .metatable()
                 .is_none_or(|mt| self.fast_tm(mt, Mm::NewIndex).is_nil())
@@ -173,7 +167,7 @@ impl Vm {
         }
         // the fast path tried the existing key unless the table's flags
         // sent it here (`plain_store`): a black table still has it to do
-        let probed = cfg!(not(feature = "gc-verify"))
+        let probed = !crate::runtime::gc_hooks::VERIFY
             && matches!(t, Value::Table(tb) if tb.hdr.plain_store());
         self.op_newindex_from(t, key, v, probed)
     }
@@ -188,7 +182,6 @@ impl Vm {
     ///
     /// # Safety
     /// `pt` points at an initialised value.
-    #[cfg(not(feature = "gc-verify"))]
     #[inline(never)]
     pub(super) unsafe fn index_str_miss(
         &mut self,
@@ -261,7 +254,6 @@ impl Vm {
     /// [`Self::fast_tm`] as the slot holding the metamethod, `None` when it
     /// is absent (nil).
     #[inline]
-    #[cfg_attr(feature = "gc-verify", allow(dead_code))]
     pub(crate) fn fast_tm_slot(&self, mt: Gc<Table>, mm: Mm) -> Option<*const Value> {
         let bit = 1u32 << mm as u32;
         if mt.absent_mm() & bit != 0 {

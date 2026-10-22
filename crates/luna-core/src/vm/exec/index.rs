@@ -4,12 +4,6 @@
 use super::*;
 
 impl Vm {
-    /// `R[dst] := t[key]` for a VM read opcode, resolving `__index` yieldably.
-    #[cfg(feature = "gc-verify")]
-    pub(super) fn op_index(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
-        self.op_index_from(t, key, dst, false)
-    }
-
     /// [`Self::op_index`]; `probed` = `t` is a table whose raw `t[key]` the
     /// caller already found nil.
     pub(super) fn op_index_from(
@@ -19,8 +13,7 @@ impl Vm {
         dst: u32,
         probed: bool,
     ) -> Result<(), LuaError> {
-        #[cfg(feature = "gc-verify")]
-        self.verify_index_key(key);
+        self.hook_index_key(key);
         match self.index_step_from(t, key, probed)? {
             MmOut::Done(v) => self.stack[dst as usize] = v,
             MmOut::Mm { func, recv } => {
@@ -180,37 +173,7 @@ impl Vm {
         v: Value,
         probed: bool,
     ) -> Result<MmOut, LuaError> {
-        // Read-time probe (gc-verify): a dead query key at a
-        // WRITE site, attributed to the instruction that produced it.
-        #[cfg(feature = "gc-verify")]
-        if let Some(p) = match key {
-            Value::Str(s) => Some(s.as_ptr() as usize),
-            Value::Table(t2) => Some(t2.as_ptr() as usize),
-            _ => None,
-        } && crate::runtime::gc_verify_probe::is_freed(p)
-        {
-            let detail = match self.frames.last() {
-                Some(CallFrame::Lua(f)) => {
-                    let pc = f.pc as usize;
-                    let mut w = String::new();
-                    for q in pc.saturating_sub(6)..(pc + 2) {
-                        if let Some(inst) = f.closure.proto.code.get(q) {
-                            w.push_str(&format!(
-                                "\n  [{q}] {:?} a={} b={} c={} k={}",
-                                inst.op(),
-                                inst.a(),
-                                inst.b(),
-                                inst.c(),
-                                inst.k()
-                            ));
-                        }
-                    }
-                    format!("pc={pc} base={} gc_top={} window:{w}", f.base, self.gc_top)
-                }
-                _ => "non-Lua frame".into(),
-            };
-            panic!("[gc-verify] newindex_step QUERY key {p:#x} freed. {detail}");
-        }
+        self.hook_written_key(key);
         let mut cur = t;
         let mut skip = probed;
         for _ in 0..self.tag_loop_limit() {

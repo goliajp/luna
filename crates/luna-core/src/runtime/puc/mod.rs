@@ -35,6 +35,10 @@ mod sizer;
 pub(crate) use sizer::Sizer;
 mod state;
 pub(crate) mod step;
+#[cfg(feature = "gc-trace")]
+pub(crate) mod trace;
+#[cfg(feature = "gc-verify")]
+pub(crate) mod verify;
 pub(crate) use state::PucModel;
 mod thread;
 pub(crate) use thread::{BASIC_CI_51, Thread};

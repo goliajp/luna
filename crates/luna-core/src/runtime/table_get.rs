@@ -106,8 +106,7 @@ impl Table {
     /// (the common one) does not pay for the general walk's saved registers.
     #[inline]
     pub(super) fn find_node(&self, k: Value) -> Option<usize> {
-        #[cfg(feature = "gc-verify")]
-        self.verify_find_node_keys(k);
+        self.hook_find_node(k);
         if self.nodes().is_empty() {
             return None;
         }

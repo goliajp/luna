@@ -104,10 +104,7 @@ impl Marker {
     /// object but 5.5's sizes, a white one turns black and readable only
     /// through the slow path, as `header` leaves it.
     pub(crate) fn mark_strings<'a>(&mut self, strs: impl Iterator<Item = &'a Gc<LuaStr>>) {
-        #[cfg(feature = "gc-verify")]
-        let plain = self.verify.is_none();
-        #[cfg(not(feature = "gc-verify"))]
-        let plain = true;
+        let plain = !self.verify.active();
         if !plain || self.leaf_hdr != 0 {
             for &s in strs {
                 self.mark(s);

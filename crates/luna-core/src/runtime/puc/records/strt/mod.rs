@@ -107,7 +107,7 @@ impl Heap {
         }
         self.puc.strt.sort_dead(size.max(1));
         // each bucket's from the head of its chain (the trace's order)
-        if !cfg!(feature = "gc-trace") {
+        if !crate::runtime::gc_hooks::TRACE {
             return;
         }
         let dead = &mut self.puc.strt.dead;
@@ -177,14 +177,7 @@ impl Heap {
                     continue;
                 }
                 (*h).sub |= SWEPT;
-                #[cfg(feature = "gc-trace")]
-                if self.trace.sweep {
-                    let b = string::bytes_of(h as *const LuaStr);
-                    let b = String::from_utf8_lossy(&b[..b.len().min(24)])
-                        .escape_debug()
-                        .to_string();
-                    self.trace.line(format_args!("w 4 1 {b}"));
-                }
+                self.hook_string_swept(h);
                 self.acct_string_free((*(h as *const LuaStr)).len());
             }
         }
@@ -208,43 +201,7 @@ fn hash_52(bytes: &[u8], seed: u32) -> u32 {
     h
 }
 
-impl Heap {
-    /// `gc-verify`, once marking is done (the last sweep over): PUC's
-    /// string table holds a place for each counted short string luna has
-    /// and each one a record holds. Panics when the count went astray.
-    #[cfg(feature = "gc-verify")]
-    pub(in crate::runtime) fn verify_string_count(&self, ctx: &str) {
-        // and "not enough memory", which PUC makes at the start and luna
-        // does not
-        let mut n = self.ghost_short_strings() + 1;
-        // and 5.1's strings luna's stand for
-        let strt = crate::runtime::puc::STRT_STAND;
-        n += self
-            .puc
-            .stand_ins
-            .iter()
-            .filter(|s| s.1 & strt != 0)
-            .count();
-        for mut cur in [self.list_head(), self.fixed_head()] {
-            // SAFETY: the lists link this heap's live objects
-            unsafe {
-                while !cur.is_null() {
-                    if (*cur).tag == ObjTag::Str
-                        && (*(cur as *const LuaStr)).len() <= self.puc.short_max
-                        && (*cur).sub & (UNCOUNTED | EXTERNAL | SWEPT) == 0
-                    {
-                        n += 1;
-                    }
-                    cur = (*cur).next;
-                }
-            }
-        }
-        assert_eq!(
-            n, self.puc.strt_nuse,
-            "{ctx}: counted short strings against PUC's string table"
-        );
-    }
-}
+impl Heap {}
 
 #[cfg(test)]
 mod tests {

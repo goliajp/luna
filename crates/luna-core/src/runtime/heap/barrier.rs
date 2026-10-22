@@ -143,31 +143,6 @@ impl Heap {
             self.gray_overflow = true;
         }
     }
-
-    /// Every object's SLOW bit agrees with its BLACK bit and read-only mark
-    /// (`GcHeader::with_slow`), which every colour change keeps: a missed
-    /// one would let an interpreter store skip the write barrier or write
-    /// into a read-only table. Checked in debug builds after each atomic
-    /// step and at the end of each sweep and full collection.
-    #[cfg(any(debug_assertions, feature = "gc-verify"))]
-    pub(super) fn verify_slow_bits(&self, ctx: &str) {
-        let check = |h: *mut GcHeader| {
-            // SAFETY: `h` is on one of the heap's own lists, all of whose
-            // elements are live allocations; only the header is read
-            let (ok, flags) = unsafe { ((*h).slow_consistent(), (*h).flags) };
-            assert!(ok, "[slow-bit] {ctx}: object {h:p} flags {flags:#x}");
-        };
-        for mut cur in [self.all, self.fixed] {
-            while !cur.is_null() {
-                check(cur);
-                // SAFETY: as above
-                cur = unsafe { (*cur).next };
-            }
-        }
-        for &h in self.finalize.iter().chain(self.tobefnz_live()) {
-            check(h);
-        }
-    }
 }
 
 /// Whether `v` is an object marking has not reached (PUC `iswhite`).

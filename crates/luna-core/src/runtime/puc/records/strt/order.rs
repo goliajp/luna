@@ -193,7 +193,9 @@ impl Heap {
     /// grown on the way (`grow_from`): 5.1 puts it in, then resizes, 5.2
     /// resizes first.
     pub(crate) fn strt_enter(&mut self, h: *mut GcHeader) {
-        if !cfg!(feature = "gc-trace") || !matches!(self.puc.dialect, Dialect::L51 | Dialect::L52) {
+        if !crate::runtime::gc_hooks::TRACE
+            || !matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
+        {
             return;
         }
         let p = h as *mut LuaStr;
@@ -220,7 +222,9 @@ impl Heap {
     /// PUC's string table resized from `from` buckets with no new string
     /// on the way (a shrink, or a string luna has no object for).
     pub(crate) fn strt_resized(&mut self, from: usize) {
-        if cfg!(feature = "gc-trace") && matches!(self.puc.dialect, Dialect::L51 | Dialect::L52) {
+        if crate::runtime::gc_hooks::TRACE
+            && matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
+        {
             self.puc.strt.grow_from = None;
             self.strt_reorder(from, self.puc.strt_size, std::ptr::null_mut());
         }
@@ -228,7 +232,7 @@ impl Heap {
 
     /// The table grew from `from` buckets for a string about to enter.
     pub(crate) fn strt_grew(&mut self, from: usize) {
-        if cfg!(feature = "gc-trace") {
+        if crate::runtime::gc_hooks::TRACE {
             self.puc.strt.grow_from = Some(from);
         }
     }

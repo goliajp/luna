@@ -17,6 +17,10 @@ use super::*;
 
 mod mark;
 mod sweep;
+#[cfg(feature = "gc-trace")]
+mod trace;
+#[cfg(feature = "gc-trace")]
+pub(in crate::runtime) use trace::phantom_is_table;
 
 /// The class bits naming a 5.1 environment (`ENV_*`); none, the globals.
 const ENV_SHIFT: u8 = 5;
@@ -86,13 +90,6 @@ pub(crate) struct Env51 {
 }
 
 impl Env51 {
-    /// How many of the records a sweep has not freed.
-    #[cfg(feature = "gc-trace")]
-    pub(in crate::runtime) fn live(&self) -> i64 {
-        let live = |g: &Gen| g.ph.iter().filter(|p| !p.dead).count() as i64;
-        self.gens.iter().map(|g| live(g)).sum()
-    }
-
     /// The opening the io environment of the object behind `h` is from.
     fn gen_of(&self, h: *mut GcHeader) -> &Gen {
         let i = self
@@ -275,16 +272,6 @@ impl Heap {
 pub(in crate::runtime) unsafe fn is_phantom(h: *mut GcHeader) -> bool {
     // SAFETY: the caller's contract
     unsafe { (*h).tag == ObjTag::Ghost && (*h).sub == PHANTOM }
-}
-
-/// Whether the record `h` stands for a table (else a closure).
-///
-/// # Safety
-/// `h` heads a record.
-#[cfg(feature = "gc-trace")]
-pub(in crate::runtime) unsafe fn phantom_is_table(h: *mut GcHeader) -> bool {
-    // SAFETY: the caller's contract
-    unsafe { (*(h as *const Phantom)).kids[0] != NONE }
 }
 
 /// The work of traversing the record `h`.

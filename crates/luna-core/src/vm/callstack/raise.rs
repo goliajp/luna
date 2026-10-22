@@ -285,8 +285,7 @@ impl Vm {
         self.errored_natives
             .retain(|_| !dead.next().unwrap_or(false));
         self.forget_dead_recording();
-        #[cfg(any(feature = "gc-stress", feature = "gc-verify"))]
-        self.check_recording_live();
+        self.hook_recording_live();
     }
 }
 

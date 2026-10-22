@@ -47,8 +47,7 @@ impl Heap {
                 unsafe {
                     if !is_white((*h).flags) {
                         let w = self.object_work(h, run);
-                        #[cfg(feature = "gc-trace")]
-                        self.trace_prop(h, w, run);
+                        self.hook_prop(h, w, run);
                         work += if again_free { 0 } else { w };
                     }
                 }
@@ -58,11 +57,8 @@ impl Heap {
                 // SAFETY: the running thread is allocated
                 // SAFETY: as above
                 let w = unsafe { self.object_work(run.h, run) };
-                #[cfg(feature = "gc-trace")]
                 // SAFETY: as above
-                unsafe {
-                    self.trace_prop(run.h, w, run)
-                };
+                unsafe { self.hook_prop(run.h, w, run) };
                 work += if again_free { 0 } else { w };
             }
         }
@@ -86,8 +82,7 @@ impl Heap {
             self.color_fixed_strings(0);
         }
         self.settle_sizer(&mut m);
-        #[cfg(feature = "gc-trace")]
-        self.trace_listed();
+        self.hook_listed();
         if run.is_some() {
             self.collect_dead_strings();
         } else {
@@ -128,8 +123,7 @@ impl Heap {
             unsafe {
                 blacken(h, m);
                 let w = self.object_work(h, run) + m.leaf_bytes;
-                #[cfg(feature = "gc-trace")]
-                self.trace_prop(h, w, run);
+                self.hook_prop(h, w, run);
                 work += w;
             }
         }
