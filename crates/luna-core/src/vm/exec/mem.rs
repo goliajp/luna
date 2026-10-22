@@ -44,11 +44,8 @@ impl Vm {
         }
         #[cfg(feature = "gc-trace")]
         self.heap.trace.line(format_args!("X"));
-        // PUC's `L->top` where the allocation was asked for: the running
-        // native's top, else the running Lua function's whole frame (the
-        // last safe point's live top may lie below its registers); what
-        // is above is dead, as for any collection
-        let top = self.native_top().unwrap_or_else(|| self.lua_window_end());
+        // what is above PUC's `L->top` at the allocation is dead
+        let top = self.alloc_top();
         let live_top = std::mem::replace(&mut self.gc_top, top);
         let lo = (top as usize).min(self.stack.len());
         self.stack[lo..].fill(Value::Nil);
