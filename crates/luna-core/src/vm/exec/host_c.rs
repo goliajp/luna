@@ -134,7 +134,7 @@ impl Vm {
 
     /// The function the C API made for the light C function `key`, made
     /// with `make` the first time (5.2+'s functions without upvalues, which
-    /// PUC compares by their C pointer). It lives as long as the Vm.
+    /// PUC compares by their C pointer), uncounted. It lives as long as the Vm.
     pub fn host_light_fn(
         &mut self,
         key: usize,
@@ -143,7 +143,7 @@ impl Vm {
         if let Some(&v) = self.host_light.get(&key) {
             return Ok(v);
         }
-        let v = make(self)?;
+        let v = self.uncounted(make)?;
         self.host_light.insert(key, v);
         Ok(v)
     }
