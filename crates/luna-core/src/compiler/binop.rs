@@ -88,21 +88,8 @@ impl Compiler<'_> {
             Exp::Float(f) if f == 0.0 && self.version == LuaVersion::Lua51 => Some(f),
             _ => None,
         };
-        // A numeral on the left stays out of a register until the right
-        // operand is known: it may become the instruction's own operand, and
-        // otherwise it is loaded after the right one (PUC `luaK_infix`); an
-        // order comparison keeps only one that fits an immediate
-        // (`isSCnumber`), and loads any other now.
         let order = matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge);
-        let left_numeral = deferred.is_none()
-            && match le {
-                Exp::Int(i) if order => (MIN_SC as i64..=MAX_SC as i64).contains(&i),
-                Exp::Float(f) if order => {
-                    f.fract() == 0.0 && (MIN_SC as f64..=MAX_SC as f64).contains(&f)
-                }
-                Exp::Int(_) | Exp::Float(_) => true,
-                _ => false,
-            };
+        let left_numeral = deferred.is_none() && waits_as_numeral(order, &le);
         let mut l = if left_numeral {
             None
         } else {
@@ -257,5 +244,20 @@ impl Compiler<'_> {
         };
         self.force_line = saved_force_arith;
         r_op
+    }
+}
+
+/// Whether the left operand `le` of a 5.4+ binary operator (`order`: a
+/// comparison of order) stays out of a register until the right operand is
+/// known: a numeral may become the instruction's own operand, and is
+/// otherwise loaded after the right one (PUC `luaK_infix`); an order
+/// comparison keeps only one that fits an immediate (`isSCnumber`), and
+/// loads any other now.
+fn waits_as_numeral(order: bool, le: &Exp) -> bool {
+    match *le {
+        Exp::Int(i) if order => (MIN_SC as i64..=MAX_SC as i64).contains(&i),
+        Exp::Float(f) if order => f.fract() == 0.0 && (MIN_SC as f64..=MAX_SC as f64).contains(&f),
+        Exp::Int(_) | Exp::Float(_) => true,
+        _ => false,
     }
 }

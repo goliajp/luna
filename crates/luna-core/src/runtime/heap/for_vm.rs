@@ -8,7 +8,44 @@ use super::*;
 #[must_use = "natives stay fixed until the token goes back to `Heap::stop_fixing_natives`"]
 pub(crate) struct FixingNatives(());
 
+/// The collector's run at some point (see [`Heap::gc_run_mark`]).
+#[must_use]
+pub(crate) struct RunMark {
+    stopped: bool,
+    fin_stop: bool,
+}
+
 impl Heap {
+    /// Whether the collector runs as it does now (stopped, and stopped for
+    /// a 5.4 or 5.5 finalizer), to return to with [`Heap::gc_restore_run`].
+    #[inline]
+    pub(crate) fn gc_run_mark(&self) -> RunMark {
+        RunMark {
+            stopped: self.gc_stopped,
+            fin_stop: self.gc_fin_stop,
+        }
+    }
+
+    /// Back to the collector's run at `m`.
+    #[inline]
+    pub(crate) fn gc_restore_run(&mut self, m: RunMark) {
+        self.gc_fin_stop = m.fin_stop;
+        self.gc_restore_stopped(m.stopped);
+    }
+
+    /// Whether a 5.4 or 5.5 finalizer runs, which no step may interrupt.
+    #[inline]
+    pub(crate) fn gc_fin_stop(&self) -> bool {
+        self.gc_fin_stop
+    }
+
+    /// A 5.4 or 5.5 finalizer runs (`on`), and no step may run, or none
+    /// does any more.
+    #[inline]
+    pub(crate) fn gc_set_fin_stop(&mut self, on: bool) {
+        self.gc_fin_stop = on;
+    }
+
     /// Before a collection's atomic phase: `vals` watched, each found
     /// alive until the marking finds it dead.
     pub(crate) fn watch_values(&mut self, vals: impl IntoIterator<Item = Value>) {

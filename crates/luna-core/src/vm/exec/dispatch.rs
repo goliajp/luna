@@ -203,34 +203,7 @@ impl Vm {
                 heads,
             };
             let watch = !stay || heads[0] != crate::runtime::function::TRACE_HEADS_NONE;
-            // 5.1/5.2 (`dbl`) are pre-5.3 too
-            let out = match (watch, trace_on, dbl, pre53) {
-                (true, _, true, _) => self.run_fast::<true, true, true, true>(fx, inst, pc + 1)?,
-                (false, true, true, _) => {
-                    self.run_fast::<false, true, true, true>(fx, inst, pc + 1)?
-                }
-                (false, false, true, _) => {
-                    self.run_fast::<false, false, true, true>(fx, inst, pc + 1)?
-                }
-                (true, _, false, true) => {
-                    self.run_fast::<true, true, false, true>(fx, inst, pc + 1)?
-                }
-                (false, true, false, true) => {
-                    self.run_fast::<false, true, false, true>(fx, inst, pc + 1)?
-                }
-                (false, false, false, true) => {
-                    self.run_fast::<false, false, false, true>(fx, inst, pc + 1)?
-                }
-                (true, _, false, false) => {
-                    self.run_fast::<true, true, false, false>(fx, inst, pc + 1)?
-                }
-                (false, true, false, false) => {
-                    self.run_fast::<false, true, false, false>(fx, inst, pc + 1)?
-                }
-                (false, false, false, false) => {
-                    self.run_fast::<false, false, false, false>(fx, inst, pc + 1)?
-                }
-            };
+            let out = self.run_fast_for(fx, inst, pc + 1, (watch, trace_on, dbl, pre53))?;
             let inst = match out {
                 fast::FastExit::Reload => continue,
                 fast::FastExit::Slow(inst) => inst,
@@ -239,6 +212,35 @@ impl Vm {
                 return Ok(vals);
             }
             // the loop head reloads everything from the frame
+        }
+    }
+
+    /// The fast loop instantiated for the loop's `(watch, trace_on, dbl,
+    /// pre53)`: 5.1/5.2 (`dbl`) are pre-5.3 too.
+    #[inline(always)]
+    fn run_fast_for(
+        &mut self,
+        fx: fast::Fast,
+        inst: Inst,
+        next: u32,
+        modes: (bool, bool, bool, bool),
+    ) -> Result<fast::FastExit, LuaError> {
+        match modes {
+            (true, _, true, _) => self.run_fast::<true, true, true, true>(fx, inst, next),
+            (false, true, true, _) => self.run_fast::<false, true, true, true>(fx, inst, next),
+            (false, false, true, _) => self.run_fast::<false, false, true, true>(fx, inst, next),
+            (true, _, false, true) => self.run_fast::<true, true, false, true>(fx, inst, next),
+            (false, true, false, true) => self.run_fast::<false, true, false, true>(fx, inst, next),
+            (false, false, false, true) => {
+                self.run_fast::<false, false, false, true>(fx, inst, next)
+            }
+            (true, _, false, false) => self.run_fast::<true, true, false, false>(fx, inst, next),
+            (false, true, false, false) => {
+                self.run_fast::<false, true, false, false>(fx, inst, next)
+            }
+            (false, false, false, false) => {
+                self.run_fast::<false, false, false, false>(fx, inst, next)
+            }
         }
     }
 }

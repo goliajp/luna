@@ -47,6 +47,37 @@ fn call_operands(api: &mut Api, n: usize) -> (usize, Value, Vec<Value>) {
     }
 }
 
+/// The continuation `k` of the running C function set for a call that may
+/// yield; what the call is told of it.
+fn with_cont(api: &mut Api, k: KFn, ctx: isize, wait: Wait) -> Option<HostContSpec> {
+    set_cont(
+        api,
+        Some(Cont {
+            k: Some(k),
+            ctx,
+            wait,
+        }),
+    );
+    cont_spec(api)
+}
+
+/// Call `f` with `args` in the place of its operands at `at`, as PUC's
+/// runs where they are (a tail call there leaves nothing of `f`).
+fn run_call(
+    api: &mut Api,
+    at: usize,
+    f: Value,
+    args: &[Value],
+    spec: Option<HostContSpec>,
+) -> Result<Vec<Value>, LuaError> {
+    api.truncate(at);
+    let hooked = super::hooks::calling_from_hook(api);
+    api.vm.host_mark_hook_call(hooked);
+    let r = api.vm.host_call(f, args, spec);
+    api.vm.host_mark_hook_call(false);
+    r
+}
+
 /// PUC `lua_callk`: call the function below the top `nargs` values,
 /// leaving `nresults` results (-1: all). With `k` and a thread that can
 /// yield, a yield inside the call leaves the C function; the resume runs
@@ -54,27 +85,8 @@ fn call_operands(api: &mut Api, n: usize) -> (usize, Value, Vec<Value>) {
 pub(super) fn callk(api: &mut Api, nargs: c_int, nresults: c_int, k: Option<KFn>, ctx: isize) {
     let n = usize::try_from(nargs).unwrap_or(0);
     let (at, f, args) = call_operands(api, n);
-    let spec = match k {
-        Some(k) => {
-            set_cont(
-                api,
-                Some(Cont {
-                    k: Some(k),
-                    ctx,
-                    wait: Wait::Call { nresults, at },
-                }),
-            );
-            cont_spec(api)
-        }
-        None => None,
-    };
-    // the call takes its operands' place, as PUC's runs where they are:
-    // a tail call there leaves nothing of the function called
-    api.truncate(at);
-    let hooked = super::hooks::calling_from_hook(api);
-    api.vm.host_mark_hook_call(hooked);
-    let r = api.vm.host_call(f, &args, spec);
-    api.vm.host_mark_hook_call(false);
+    let spec = k.and_then(|k| with_cont(api, k, ctx, Wait::Call { nresults, at }));
+    let r = run_call(api, at, f, &args, spec);
     match r {
         Ok(vals) => {
             if spec.is_some() {
@@ -126,30 +138,13 @@ pub(super) fn pcallk(
         }
     };
     let errerr_before = api.vm.special_errors();
-    let spec = match k {
-        Some(k) => {
-            let wait = Wait::PCall {
-                nresults,
-                at,
-                errerr_before,
-            };
-            set_cont(
-                api,
-                Some(Cont {
-                    k: Some(k),
-                    ctx,
-                    wait,
-                }),
-            );
-            cont_spec(api)
-        }
-        None => None,
+    let wait = Wait::PCall {
+        nresults,
+        at,
+        errerr_before,
     };
-    api.truncate(at);
-    let hooked = super::hooks::calling_from_hook(api);
-    api.vm.host_mark_hook_call(hooked);
-    let r = api.vm.host_call(pf, &pargs, spec);
-    api.vm.host_mark_hook_call(false);
+    let spec = k.and_then(|k| with_cont(api, k, ctx, wait));
+    let r = run_call(api, at, pf, &pargs, spec);
     let co = api.thread();
     let status = match r {
         Ok(vals) => {

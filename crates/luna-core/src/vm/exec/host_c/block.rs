@@ -97,7 +97,7 @@ impl Vm {
         // counts them
         let puc = self
             .heap
-            .puc_size(crate::runtime::puc::PucObj::Udata { nuv, bytes: size });
+            .puc_size(crate::runtime::puc::PucObj::udata(nuv, size));
         self.heap.try_new_userdata_sized(payload, true, puc)
     }
 

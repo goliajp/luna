@@ -15,11 +15,7 @@ pub(super) fn emit_sequence_op<E: Emit>(
         op_concat_id,
         ..
     } = lw.h.op;
-    let RuntimeHelpers {
-        update_raw_id,
-        len_checked_id,
-        ..
-    } = lw.h.rt;
+    let update_raw_id = lw.h.rt.update_raw_id;
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
@@ -100,51 +96,7 @@ pub(super) fn emit_sequence_op<E: Emit>(
                 let _ = emit_table_set(&mut lw.bcx, &set_ids, t, key, RegKind::Int, val, src_kind);
             }
         }
-        Op::Len => {
-            // R[A] := #R[B] — call luna_jit_table_len(t) -> i64.
-            // the helpers read the operand as a table. A number,
-            // string or closure (entry-guarded or computed here) leaves
-            // the op to the interpreter; Nil can be a lookahead guess
-            // for a value the recording indexed, so it stays
-            match k_op(&lw.current_kinds, off as u32 + ins.b()) {
-                RegKind::Table | RegKind::Nil => {}
-                RegKind::Unset | RegKind::Unknown => {
-                    lw.dispatchable = false;
-                    lw.dispatch_off_reason =
-                        lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
-                }
-                _ => return None,
-            }
-            let t = lw.bcx.use_var(regs[ins.b() as usize]);
-            let hit = lw.bcx.create_block();
-            lw.bcx.append_block_param(hit, types::I64);
-            let miss = lw.bcx.create_block();
-            let merge = lw.bcx.create_block();
-            lw.bcx.append_block_param(merge, types::I64);
-            let rules = array_slot::TableRules::of(pl.opts.dialect);
-            array_slot::emit_len_check(&mut lw.bcx, rules, t, hit, miss);
-            lw.bcx.switch_to_block(hit);
-            lw.bcx.seal_block(hit);
-            let fast = lw.bcx.block_params(hit)[0];
-            lw.bcx.ins().jump(merge, &[fast.into()]);
-            lw.bcx.switch_to_block(miss);
-            lw.bcx.seal_block(miss);
-            let func_ref = lw.bcx.import_func(len_checked_id);
-            let call = lw.bcx.ins().call(func_ref, &[t]);
-            let v = lw.bcx.inst_results(call)[0];
-            // -1: the table has a metatable
-            let ok = lw
-                .bcx
-                .ins()
-                .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, v, 0);
-            guard!(lw, pl, ok, i, rop.pc);
-            lw.bcx.ins().jump(merge, &[v.into()]);
-            lw.bcx.switch_to_block(merge);
-            lw.bcx.seal_block(merge);
-            let v = lw.bcx.block_params(merge)[0];
-            lw.bcx.def_var(regs[ins.a() as usize], v);
-            lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
-        }
+        Op::Len => emit_len(lw, pl, oc)?,
         // N-operand concat via helper.
         Op::Concat => {
             // 5.1–5.3 name their destination: the operands from C fold
@@ -200,5 +152,58 @@ pub(super) fn emit_sequence_op<E: Emit>(
         }
         _ => unreachable!("routed by emit_op"),
     }
+    Some(())
+}
+
+/// `R[A] := #R[B]`: the array part's border inline, else
+/// `luna_jit_table_len_checked`.
+fn emit_len<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<()> {
+    let len_checked_id = lw.h.rt.len_checked_id;
+    let OpCx {
+        i, rop, off, ins, ..
+    } = *oc;
+    let regs: &[Variable] = oc.regs;
+    // R[A] := #R[B] — call luna_jit_table_len(t) -> i64.
+    // the helpers read the operand as a table. A number,
+    // string or closure (entry-guarded or computed here) leaves
+    // the op to the interpreter; Nil can be a lookahead guess
+    // for a value the recording indexed, so it stays
+    match k_op(&lw.current_kinds, off as u32 + ins.b()) {
+        RegKind::Table | RegKind::Nil => {}
+        RegKind::Unset | RegKind::Unknown => {
+            lw.dispatchable = false;
+            lw.dispatch_off_reason = lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));
+        }
+        _ => return None,
+    }
+    let t = lw.bcx.use_var(regs[ins.b() as usize]);
+    let hit = lw.bcx.create_block();
+    lw.bcx.append_block_param(hit, types::I64);
+    let miss = lw.bcx.create_block();
+    let merge = lw.bcx.create_block();
+    lw.bcx.append_block_param(merge, types::I64);
+    let rules = array_slot::TableRules::of(pl.opts.dialect);
+    array_slot::emit_len_check(&mut lw.bcx, rules, t, hit, miss);
+    lw.bcx.switch_to_block(hit);
+    lw.bcx.seal_block(hit);
+    let fast = lw.bcx.block_params(hit)[0];
+    lw.bcx.ins().jump(merge, &[fast.into()]);
+    lw.bcx.switch_to_block(miss);
+    lw.bcx.seal_block(miss);
+    let func_ref = lw.bcx.import_func(len_checked_id);
+    let call = lw.bcx.ins().call(func_ref, &[t]);
+    let v = lw.bcx.inst_results(call)[0];
+    // -1: the table has a metatable
+    let ok = lw
+        .bcx
+        .ins()
+        .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, v, 0);
+    guard!(lw, pl, ok, i, rop.pc);
+    lw.bcx.ins().jump(merge, &[v.into()]);
+    lw.bcx.switch_to_block(merge);
+    lw.bcx.seal_block(merge);
+    let v = lw.bcx.block_params(merge)[0];
+    lw.bcx.def_var(regs[ins.a() as usize], v);
+    lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
     Some(())
 }

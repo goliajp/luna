@@ -72,20 +72,8 @@ fn parse_format(vm: &mut Vm, fmt: Value, argno: u32) -> Result<Fmt, LuaError> {
         Value::Str(s) => s.as_bytes().to_vec(),
         _ if v <= LuaVersion::Lua52 => return Err(arg_error(vm, argno, "invalid option")),
         _ => {
-            // `luaL_checkstring`'s type error: a `__name` it found, then
-            // the message, pushed
-            let tn = argcheck::typename_of(vm, fmt);
-            vm.metafield_check(fmt, b"__name")?;
-            let named = !vm.get_mm(fmt, crate::vm::exec::Mm::Name).is_nil();
-            vm.native_push(u32::from(named));
-            use crate::runtime::puc::fmt::FmtArg::S;
-            let fmt = b"%s expected, got %s";
-            return Err(
-                match argcheck::pushed_extra(vm, 2, fmt, &[S(b"string"), S(tn.as_bytes())]) {
-                    Ok(m) => arg_error(vm, argno, &m),
-                    Err(e) => e,
-                },
-            );
+            // `luaL_checkstring`'s type error
+            return Err(argcheck::value_type_error(vm, fmt, argno, "string"));
         }
     };
     // ≤5.2 require the '*'; 5.3 made it optional
