@@ -6,76 +6,76 @@ use super::*;
 pub(crate) struct PucModel {
     /// PUC's `totalbytes`: every object and block at the size PUC gives it
     /// (`sizes`), not what luna's own objects take (see `runtime::puc`)
-    pub(in crate::runtime) bytes: usize,
+    pub(super) bytes: usize,
     /// where the next collection step falls due (`pace`), or `usize::MAX`
     /// while there is none: the one comparison a safe point makes
-    pub(in crate::runtime) gc_limit: usize,
+    pub(super) gc_limit: usize,
     /// the dialect PUC's sizes, pace and steps are those of
-    pub(in crate::runtime) dialect: crate::runtime::dialect::Dialect,
+    pub(super) dialect: crate::runtime::dialect::Dialect,
     /// `collectgarbage`'s pacing parameters
-    pub(in crate::runtime) params: super::GcParams,
+    pub(super) params: super::GcParams,
     /// the sizes of PUC's objects in this dialect, which `bytes` counts
-    pub(in crate::runtime) sizes: super::size::PucSizes,
+    pub(super) sizes: super::size::PucSizes,
     /// PUC's collector state and pace
-    pub(in crate::runtime) pace: super::pace::Pace,
+    pub(super) pace: super::pace::Pace,
     /// 5.1, 5.2: the sweep of PUC's string table under way
-    pub(in crate::runtime) strt: super::records::strt::StrtSweep,
+    pub(super) strt: super::records::strt::StrtSweep,
     /// 5.1's environments luna has no objects for
-    pub(in crate::runtime) env51_box: Option<Box<super::records::env51::Env51>>,
+    pub(super) env51_box: Option<Box<super::records::env51::Env51>>,
     /// 5.1 / 5.2: the dead open upvalues the sweep has not reached
-    pub(in crate::runtime) open_dead: super::records::open_upvals::OpenDead,
+    pub(super) open_dead: super::records::open_upvals::OpenDead,
     /// above 0, nothing is counted (objects PUC made elsewhere, or not at
     /// all, are being built): changed only through [`CountingOff`] and
     /// [`CountingMark`]
-    pub(in crate::runtime) silent: u32,
+    pub(super) silent: u32,
     /// the string table's size and its number of strings
-    pub(in crate::runtime) strt_size: usize,
-    pub(in crate::runtime) strt_nuse: usize,
+    pub(super) strt_size: usize,
+    pub(super) strt_nuse: usize,
     /// the longest string PUC keeps in that table (5.1: all of them)
-    pub(in crate::runtime) short_max: usize,
+    pub(super) short_max: usize,
     /// strings PUC's libraries keep and luna's may not: kept alive
-    pub(in crate::runtime) pins: Vec<Gc<crate::runtime::LuaStr>>,
+    pub(super) pins: Vec<Gc<crate::runtime::LuaStr>>,
     /// 5.1 and 5.2: the size of the buffer concatenations are made in
     /// (`G(L)->buff`)
-    pub(in crate::runtime) gbuff: fmt::Gbuff,
+    pub(super) gbuff: fmt::Gbuff,
     /// 5.1: what the last atomic step found to finalize (`udsize`)
-    pub(in crate::runtime) udsize: i64,
+    pub(super) udsize: i64,
     /// uncounted objects of luna's standing for objects of PUC's of the
     /// given size, one entry for each object of PUC's (see
     /// `Heap::stand_sizes_on`)
-    pub(in crate::runtime) stand_ins: Vec<(*mut GcHeader, usize)>,
+    pub(super) stand_ins: Vec<(*mut GcHeader, usize)>,
     /// keepers (`puc::records::keeper`) and their hosts
-    pub(in crate::runtime) keepers: Vec<(*mut GcHeader, *mut GcHeader)>,
+    pub(super) keepers: Vec<(*mut GcHeader, *mut GcHeader)>,
     /// 5.3: the threads this cycle's propagation has shrunk; 5.2: the ones
     /// the sweep kept, for the VM to shrink
-    pub(in crate::runtime) shrunk: Vec<*mut GcHeader>,
+    pub(super) shrunk: Vec<*mut GcHeader>,
     /// the message of the last load that failed, made as PUC makes it,
     /// until the load's caller takes it
-    pub(in crate::runtime) load_msg: Option<Gc<crate::runtime::LuaStr>>,
+    pub(super) load_msg: Option<Gc<crate::runtime::LuaStr>>,
     /// the number the last table, function, thread or userdata made got
     /// (`Heap::take_id`): its hash as a key, where PUC's is its address
-    pub(in crate::runtime) next_id: u32,
+    pub(super) next_id: u32,
     /// the load about to run was checked for a collection already (5.4+
     /// `lua_load`, before its reader read)
-    pub(in crate::runtime) load_checked: bool,
+    pub(super) load_checked: bool,
     /// a load that must not collect is running (`Vm::load`)
-    pub(in crate::runtime) load_holds: bool,
+    pub(super) load_holds: bool,
     /// the loads a collection step runs in the middle of
-    pub(in crate::runtime) parse: Vec<parse::ParseFrame>,
+    pub(super) parse: Vec<parse::ParseFrame>,
     /// what loads made before PUC does, off the list (`Heap::set_aside`)
-    pub(in crate::runtime) unborn: Vec<*mut GcHeader>,
-    pub(in crate::runtime) unborn_on: bool,
+    pub(super) unborn: Vec<*mut GcHeader>,
+    pub(super) unborn_on: bool,
     /// 5.1's io library opening: records of its environments are on the
     /// stack (see `vm/opening/fenv51.rs`)
-    pub(in crate::runtime) phantoms: bool,
+    pub(super) phantoms: bool,
     /// what loads' readers counted that is set aside and not counted back
     /// yet (`Heap::defer_begin`)
-    pub(in crate::runtime) set_aside: isize,
+    pub(super) set_aside: isize,
     /// the library functions made as PUC's light C functions, by their
     /// number in the opening's tables: one value however often pushed
-    pub(in crate::runtime) lights: Vec<Option<Gc<crate::runtime::NativeClosure>>>,
+    pub(super) lights: Vec<Option<Gc<crate::runtime::NativeClosure>>>,
     /// 5.3 on, `luaS_new`'s cache (see `strcache`)
-    pub(in crate::runtime) strcache: strcache::StrCache,
+    pub(super) strcache: strcache::StrCache,
 }
 
 impl Default for PucModel {

@@ -41,6 +41,14 @@ pub(crate) enum PucObj {
     },
     /// a long string's header alone (a 5.5 external string)
     LongStrHeader,
+    /// 5.5 `lua_pushexternalstring`'s string: a long string's header with
+    /// its free function and that function's argument, the bytes outside
+    ExternalStr,
+    /// a string's header alone, what 5.2 and 5.3 count as the work of
+    /// marking a string or a userdata
+    StrHeader,
+    /// a thread without its stack and CallInfos
+    Thread,
 }
 
 impl PucObj {
@@ -74,6 +82,9 @@ impl PucObj {
             PucObj::Slots(n) => s.tvalue * n,
             PucObj::Str { len, long } => s.string(len, long && d == Dialect::L55),
             PucObj::LongStrHeader => s.lngstr_hdr,
+            PucObj::ExternalStr => s.lngstr_hdr + 2 * s.ptr,
+            PucObj::StrHeader => s.str_hdr,
+            PucObj::Thread => s.thread,
         }
     }
 }

@@ -67,7 +67,7 @@ impl Table {
         if self.dialect() == Dialect::L51 {
             // 5.1 has no ephemerons: a weak table is cleared after marking
             if wk || wv {
-                m.weak.push(this);
+                m.note_weak(this);
             }
             if !wv {
                 self.mark_array_rev(m);
@@ -87,15 +87,15 @@ impl Table {
     }
 
     fn trace_weak(&self, this: *mut Table, wk: bool, wv: bool, m: &mut Marker) {
-        m.weak.push(this);
+        m.note_weak(this);
         // weak keys + strong values = an ephemeron table: its hash values are
         // marked only if the key proves reachable (deferred to the convergence
         // pass), not here. PUC 5.1 predates ephemerons — under `no_ephemeron`
         // a weak-key table marks its values strongly during this pass, which
         // is what gc.lua's "weak tables" section requires.
-        let ephemeron = wk && !wv && !m.no_ephemeron;
+        let ephemeron = wk && !wv && m.ephemerons();
         if ephemeron {
-            m.ephemeron.push(this);
+            m.note_ephemeron(this);
         }
         // array keys are integers (never weakly collected); skip values only
         // when the table has weak values

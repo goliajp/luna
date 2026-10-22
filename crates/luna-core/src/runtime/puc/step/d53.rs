@@ -60,7 +60,7 @@ pub(super) fn singlestep_53<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, LuaE
     Ok(match h.heap().puc.pace.state() {
         St::Pause => {
             restart(h);
-            (h.heap().puc.strt_size * s.ptr) as i64
+            h.heap().strt_bytes() as i64
         }
         St::Propagate => {
             h.heap().puc.pace.enter(St::Atomic);

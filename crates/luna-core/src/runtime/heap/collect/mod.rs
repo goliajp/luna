@@ -246,7 +246,7 @@ impl Heap {
             w.1 = unsafe { is_white((*w.0).flags) };
         }
         // PUC `luaS_clearcache`
-        self.puc.strcache.clear_dead();
+        self.puc_clear_string_cache();
         self.chunk_roots.retain(|p| {
             // SAFETY: a root still listed was not freed (dead ones leave the
             // list first) and this cycle's sweep has not run
@@ -329,7 +329,7 @@ impl Heap {
             quiet_mode: false,
             env51: self.env51_ptr(),
             parse: self.parse_ptr(),
-            stands: &self.puc.stand_ins,
+            stands: self.stand_ins_ptr(),
             verify: Default::default(),
         }
     }

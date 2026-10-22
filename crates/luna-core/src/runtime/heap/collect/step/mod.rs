@@ -139,7 +139,7 @@ impl Heap {
     pub(super) fn leaf_hdr(&self) -> usize {
         match self.dialect() {
             crate::runtime::dialect::Dialect::L52 | crate::runtime::dialect::Dialect::L53 => {
-                self.puc.sizes.str_hdr
+                self.puc_size(crate::runtime::puc::PucObj::StrHeader)
             }
             _ => 0,
         }
@@ -148,7 +148,9 @@ impl Heap {
     /// 5.2 counts a closed upvalue a traversal marks.
     pub(super) fn leaf_upval(&self) -> usize {
         match self.dialect() {
-            crate::runtime::dialect::Dialect::L52 => self.puc.sizes.upval,
+            crate::runtime::dialect::Dialect::L52 => {
+                self.puc_size(crate::runtime::puc::PucObj::Upval)
+            }
             _ => 0,
         }
     }
@@ -175,9 +177,8 @@ impl Heap {
             let coro = unsafe { (*h).tag } == ObjTag::Coro;
             if self.dialect() == crate::runtime::dialect::Dialect::L53
                 && coro
-                && !self.puc.shrunk.contains(&h)
+                && self.puc_shrinks_now(h)
             {
-                self.puc.shrunk.push(h);
                 m.push_gray(h);
                 out = Propagated::Shrink(h);
                 break;

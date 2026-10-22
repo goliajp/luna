@@ -76,16 +76,6 @@ impl Heap {
         Ok(unsafe { Gc::from_ptr(p) })
     }
 
-    /// The number a new table, function, thread or userdata gets: its hash
-    /// as a table key. PUC hashes these by address, which varies from run
-    /// to run; numbers in creation order give one of the layouts PUC can
-    /// have, the same every run.
-    #[inline(always)]
-    pub(crate) fn take_id(&mut self) -> u32 {
-        self.puc.next_id = self.puc.next_id.wrapping_add(16);
-        self.puc.next_id
-    }
-
     /// Allocate and adopt a fresh empty [`Table`].
     pub fn new_table(&mut self) -> Gc<Table> {
         self.try_new_table()

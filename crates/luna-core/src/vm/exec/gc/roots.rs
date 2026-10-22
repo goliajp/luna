@@ -219,7 +219,7 @@ impl Vm {
             m.value(Value::Table(r));
         }
         // 5.1 and 5.2 mark an open upvalue only through its closures
-        if !matches!(m.dialect, Dialect::L51 | Dialect::L52) {
+        if !matches!(m.dialect(), Dialect::L51 | Dialect::L52) {
             for &(_, uv) in self.open_upvals.iter() {
                 m.mark(uv);
             }
@@ -274,7 +274,7 @@ impl Vm {
             }
         }
         if let Some(mc) = &self.main_ctx
-            && !matches!(m.dialect, Dialect::L51 | Dialect::L52)
+            && !matches!(m.dialect(), Dialect::L51 | Dialect::L52)
         {
             for &(_, uv) in mc.open_upvals.iter() {
                 m.mark(uv);

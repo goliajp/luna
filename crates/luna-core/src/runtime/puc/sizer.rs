@@ -69,7 +69,7 @@ impl Heap {
 
     /// The sizer `m` had back: what it counted, and what it held.
     pub(in crate::runtime) fn settle_sizer(&mut self, m: &mut Marker) {
-        if let Some(s) = m.sizer.take() {
+        if let Some(s) = m.take_sizer() {
             self.puc.pace.estimate += s.marked;
             self.puc.stand_ins = s.stand_ins;
             self.puc.keepers = s.keepers;

@@ -110,7 +110,7 @@ pub(super) fn singlestep_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
     match h.heap().puc.pace.state() {
         St::Pause => {
             restart(h);
-            let w = (h.heap().puc.strt_size * s.ptr) as i64;
+            let w = h.heap().strt_bytes() as i64;
             h.heap().puc.pace.trav = w;
             w
         }

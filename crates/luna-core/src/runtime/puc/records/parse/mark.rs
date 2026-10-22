@@ -19,25 +19,14 @@ impl Marker {
         }
     }
 
-    /// The loads in progress (none while marking quietly, which keeps all
-    /// luna's objects).
-    fn frames(&self) -> &[ParseFrame] {
-        if self.quiet_mode || self.parse.is_null() {
-            return &[];
-        }
-        // SAFETY: the frames live in the heap the marker marks for, and a
-        // load changes them only between steps
-        unsafe { &*self.parse }
-    }
-
     /// Traverse `p` as PUC traverses the prototype it is building
     /// (`traverseproto`): its source, its constants, upvalue names,
     /// prototypes and local variable names so far. False when `p` is no
     /// prototype being built.
     pub(crate) fn trace_parsing_proto(&mut self, p: &crate::runtime::Proto) -> bool {
         let me = p as *const crate::runtime::Proto as *mut GcHeader;
-        let frames = self.frames() as *const [ParseFrame];
-        // SAFETY: as in `frames`; marking does not change them
+        let frames = self.load_frames() as *const [ParseFrame];
+        // SAFETY: the frames live in the heap; marking does not change them
         for f in unsafe { &*frames }.iter().rev() {
             let Some(v) = f.open.iter().find(|v| v.proto == me) else {
                 continue;
@@ -68,7 +57,7 @@ impl Marker {
     /// closure.
     pub(crate) fn trace_parsing_closure(&mut self, c: &crate::runtime::LuaClosure) -> bool {
         let me = c as *const crate::runtime::LuaClosure as *mut GcHeader;
-        if !self.frames().iter().any(|f| f.closure == me) {
+        if !self.load_frames().iter().any(|f| f.closure == me) {
             return false;
         }
         self.mark(c.proto);
@@ -82,14 +71,13 @@ impl Marker {
     /// PUC's no object of PUC's holds is left white, [`KEPT`]: PUC frees
     /// it. False, with nothing done, when no load is in progress.
     pub(in crate::runtime) fn quiet_parse_trees(&mut self) -> bool {
-        // SAFETY: as in `frames`
-        if self.parse.is_null() || unsafe { (*self.parse).is_empty() } {
+        if self.all_load_frames().is_empty() {
             return false;
         }
-        self.quiet_mode = true;
-        // SAFETY: as in `frames`
-        let frames = unsafe { &*self.parse };
-        for f in frames {
+        self.set_quiet(true);
+        let frames = self.all_load_frames() as *const [ParseFrame];
+        // SAFETY: the frames live in the heap; marking does not change them
+        for f in unsafe { &*frames } {
             if f.closure.is_null() {
                 continue;
             }

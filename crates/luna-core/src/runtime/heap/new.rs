@@ -127,8 +127,8 @@ impl Heap {
 impl Drop for Heap {
     fn drop(&mut self) {
         self.dropping = true;
-        // nothing is counted any more
-        self.puc.silent += 1;
+        // nothing is counted any more: the token never goes back
+        let _ = self.counting_off();
         // every block goes straight back to the system
         self.mem().ctx().close_pools();
         // free everything regardless of reachability, including any list still
@@ -143,7 +143,7 @@ impl Drop for Heap {
                 }
             }
             // and the dead strings a string sweep held off `all`
-            for h in std::mem::take(&mut self.puc.strt.held) {
+            for h in self.take_held_strings() {
                 self.free_obj_closing(h);
             }
             // the pooled tables' interiors were freed when they were
@@ -182,7 +182,7 @@ impl Heap {
         globals: Gc<crate::runtime::Table>,
     ) -> Result<Gc<crate::runtime::Coro>, Oom> {
         let mem = self.mem();
-        let size = self.puc.sizes.thread;
+        let size = self.puc_size(PucObj::Thread);
         let l51 = self.dialect() == crate::runtime::dialect::Dialect::L51;
         // `stack_init`: `BASIC_STACK_SIZE`, 5.1 with its extra slots
         let stack_size = if l51 { 45 } else { 40 };
