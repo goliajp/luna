@@ -159,6 +159,8 @@ impl PucBuffer {
             Dialect::L54 => (self.size / 2 * 3).max(self.n + sz),
             _ => (self.size + self.size / 2).max(self.n + sz + 1),
         };
+        let old = self.boxed.then_some(self.size);
+        vm.refuse_box(&mut self.ubox, self.d, old, newsize)?;
         match self.d {
             Dialect::L52 => {
                 vm.api_check_before()?;

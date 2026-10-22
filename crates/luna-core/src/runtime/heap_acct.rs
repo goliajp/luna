@@ -214,8 +214,7 @@ impl Heap {
         }
     }
 
-    /// A block (an array, a buffer) going from `old` to `new` bytes; either
-    /// may be 0.
+    /// A block (an array, a buffer) going from `old` to `new` bytes; either may be 0.
     #[inline]
     pub(crate) fn acct_block(&mut self, old: usize, new: usize) {
         if self.puc.silent > 0 {
@@ -231,19 +230,20 @@ impl Heap {
         }
     }
 
-    /// A block PUC allocates through the allocation function but leaves
-    /// out of `totalbytes` (the contents of a `luaL_Buffer` box): only the
-    /// accounting trace sees it.
+    /// A block PUC allocates through the allocation function but leaves out of
+    /// `totalbytes` (a `luaL_Buffer` box's contents): only the trace sees it.
     #[inline]
     pub(crate) fn trace_raw(&mut self, old: usize, new: usize) {
         #[cfg(feature = "gc-trace")]
         if self.puc.silent == 0 {
+            self.trace.raw = true;
             match (old, new) {
                 (0, 0) => {}
                 (0, n) => self.trace.line(format_args!("a 0 {n}")),
                 (o, 0) => self.trace.line(format_args!("d {o}")),
                 (o, n) => self.trace.line(format_args!("r {o} {n}")),
             }
+            self.trace.raw = false;
         }
         #[cfg(not(feature = "gc-trace"))]
         let _ = (old, new);

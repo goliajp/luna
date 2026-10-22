@@ -104,7 +104,7 @@ impl Vm {
         mut f: impl FnMut(&mut Vm) -> Result<T, Oom>,
     ) -> Result<T, LuaError> {
         match f(self) {
-            Ok(v) => Ok(v),
+            Ok(v) => self.refused_growth().map(|()| v),
             Err(o) => self.retry_oom_slow(o, f),
         }
     }
@@ -285,6 +285,7 @@ impl Vm {
     ) -> Result<T, TableError> {
         match f(self) {
             Err(TableError::Memory(_)) if self.emergency_collect() => f(self),
+            Ok(v) => self.refused_table().map(|()| v),
             r => r,
         }
     }

@@ -63,6 +63,7 @@ impl Vm {
     #[inline(always)]
     #[cfg_attr(feature = "gc-trace", track_caller)]
     pub(crate) fn checkpoint(&mut self, live_top: u32) -> Result<(), LuaError> {
+        self.refused_growth()?;
         #[cfg(feature = "gc-trace")]
         self.trace_checkpoint();
         // gc-verify: the live top never cuts into a Lua frame that is running

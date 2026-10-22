@@ -37,6 +37,23 @@ pub(crate) struct Trace {
     /// a call hook runs: PUC counts the function as past its first
     /// instruction then (`luaD_hookcall`)
     pub(crate) call_hook: bool,
+    /// `R38_REFUSE=n`: the instrumented PUC's allocation function refuses
+    /// the first growth of a block to n bytes or more (every one with
+    /// `R38_REFUSE_EVERY`); here the growth is PUC's, as the trace has it,
+    /// and what follows it is held until the VM has done what PUC does then
+    refuse: Option<usize>,
+    pub(crate) refuse_every: bool,
+    /// a refused growth waits: the hold that begins with it
+    refused: Option<usize>,
+    /// the bytes counted since it, itself included
+    refused_bytes: i64,
+    /// the line being written is a block PUC leaves out of its count
+    pub(crate) raw: bool,
+    /// the refused growth was a block PUC leaves out of its count
+    pub(crate) refused_raw: bool,
+    /// PUC's `L->top` for an emergency collection that answers a refusal
+    /// where the VM cannot tell it (a stack growth)
+    pub(crate) alloc_top: Option<u32>,
 }
 
 impl Default for Trace {
@@ -60,6 +77,15 @@ impl Default for Trace {
             held: Vec::new(),
             in_c: false,
             call_hook: false,
+            refuse: std::env::var("R38_REFUSE")
+                .ok()
+                .and_then(|n| n.parse().ok()),
+            refuse_every: std::env::var_os("R38_REFUSE_EVERY").is_some(),
+            refused: None,
+            refused_bytes: 0,
+            raw: false,
+            refused_raw: false,
+            alloc_top: None,
         }
     }
 }
@@ -78,6 +104,14 @@ impl Trace {
 
     /// The lines held back since the matching [`Trace::hold`].
     pub(crate) fn release(&mut self) -> Vec<String> {
+        // a refused growth's hold stays: the one below it is released
+        if let Some(at) = self.refused
+            && at > 0
+            && at + 1 == self.held.len()
+        {
+            self.refused = Some(at - 1);
+            return self.held.remove(at - 1);
+        }
         self.held.pop().unwrap_or_default()
     }
 
@@ -91,6 +125,9 @@ impl Trace {
     pub(crate) fn line(&mut self, args: std::fmt::Arguments<'_>) {
         if self.out.is_none() {
             return;
+        }
+        if self.refuse.is_some() || self.refused.is_some() {
+            self.watch_refusal(&std::fmt::format(args));
         }
         if let Some(h) = self.held.last_mut() {
             h.push(std::fmt::format(args));
@@ -119,6 +156,70 @@ impl Trace {
             let _ = write!(o, "  {}", callers());
         }
         let _ = o.write_all(b"\n");
+    }
+}
+
+impl Trace {
+    /// `text`, about to be written: a growth the refusal takes, or one
+    /// counted while it waits
+    fn watch_refusal(&mut self, text: &str) {
+        let nums: Vec<i64> = text
+            .split(' ')
+            .skip(1)
+            .filter_map(|w| w.parse().ok())
+            .collect();
+        let (old, new) = match (text.as_bytes().first(), nums.as_slice()) {
+            (Some(b'a'), [_, n]) => (0, *n),
+            (Some(b'r'), [o, n]) => (*o, *n),
+            (Some(b'd'), [o]) => (*o, 0),
+            _ => return,
+        };
+        if self.refused.is_none()
+            && let Some(limit) = self.refuse
+            && new >= limit as i64
+            && new > old
+        {
+            if !self.refuse_every {
+                self.refuse = None;
+            }
+            self.held.push(Vec::new());
+            self.refused = Some(self.held.len() - 1);
+            self.refused_raw = self.raw;
+        }
+        if self.refused.is_some() && !self.raw {
+            self.refused_bytes += new - old;
+        }
+    }
+
+    /// A growth of PUC's from `old` to `new` bytes about to be made that
+    /// `R38_REFUSE` refuses: the allocation fails there instead.
+    pub(crate) fn refuse_now(&mut self, old: usize, new: usize) -> bool {
+        if self.out.is_none() || self.refused.is_some() {
+            return false;
+        }
+        match self.refuse {
+            Some(n) if new >= n && new > old => {
+                if !self.refuse_every {
+                    self.refuse = None;
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a refused growth waits.
+    pub(crate) fn refused(&self) -> bool {
+        self.refused.is_some()
+    }
+
+    /// The lines held since the refused growth and the bytes they count.
+    pub(crate) fn take_refused(&mut self) -> (Vec<String>, i64) {
+        let at = self.refused.take().expect("a refusal waits");
+        (
+            self.held.remove(at),
+            std::mem::take(&mut self.refused_bytes),
+        )
     }
 }
 
