@@ -68,6 +68,9 @@ pub(super) fn callk(api: &mut Api, nargs: c_int, nresults: c_int, k: Option<KFn>
         }
         None => None,
     };
+    // the call takes its operands' place, as PUC's runs where they are:
+    // a tail call there leaves nothing of the function called
+    api.truncate(at);
     let hooked = super::hooks::calling_from_hook(api);
     api.vm.host_mark_hook_call(hooked);
     let r = api.vm.host_call(f, &args, spec);
@@ -142,6 +145,7 @@ pub(super) fn pcallk(
         }
         None => None,
     };
+    api.truncate(at);
     let hooked = super::hooks::calling_from_hook(api);
     api.vm.host_mark_hook_call(hooked);
     let r = api.vm.host_call(pf, &pargs, spec);
