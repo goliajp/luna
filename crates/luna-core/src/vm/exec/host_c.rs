@@ -344,7 +344,7 @@ impl Vm {
             _ => (2, 0),
         };
         let reg = self.alloc_table_sized(a, h)?;
-        self.registry = Some(reg);
+        self.registry = Some(Heap::boot_table(reg));
         let main = Value::Coro(self.host_main_thread());
         let globals = Value::Table(self.globals);
         let entries: &[(i64, Value)] = match self.version {

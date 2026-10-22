@@ -31,7 +31,8 @@ impl Vm {
     /// The running thread's stack resized by PUC to `s` slots
     /// (`luaD_reallocstack`), as opposed to a switch of threads.
     pub(crate) fn resize_stack(&mut self, s: u32) {
-        self.heap.acct_stack(self.stack_size, s);
+        self.heap
+            .acct_stack(self.running_counted(), self.stack_size, s);
         self.set_stack_size(s);
     }
 
@@ -39,7 +40,7 @@ impl Vm {
     /// even to the size the stack has (`luaD_growstack` at the limit).
     pub(crate) fn regrow_stack(&mut self, grew: bool, s: u32) {
         if grew && s == self.stack_size {
-            self.heap.acct_stack_same(s);
+            self.heap.acct_stack_same(self.running_counted(), s);
         }
         self.resize_stack(s);
     }
@@ -47,7 +48,8 @@ impl Vm {
     /// The running thread's 5.1 `CallInfo` array resized to `n` entries
     /// (`luaD_reallocCI`).
     pub(super) fn resize_frames_51(&mut self, n: u32) {
-        self.heap.acct_ci51(self.g.frame_size, n);
+        self.heap
+            .acct_ci51(self.running_counted(), self.g.frame_size, n);
         self.g.frame_size = n;
     }
 

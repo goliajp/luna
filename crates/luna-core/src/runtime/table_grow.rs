@@ -86,7 +86,7 @@ impl Table {
         // part, as the full resize's catch-up scan finds
         self.aprefix = old as u32;
         if !heap.is_own_table(self) {
-            heap.acct_table_resize(old, 0, new_asize, 0);
+            heap.acct_counted_table_resize((old, 0), (new_asize, 0));
         }
         Ok(())
     }

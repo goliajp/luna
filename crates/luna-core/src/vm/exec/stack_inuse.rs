@@ -34,6 +34,8 @@ pub(super) struct ThreadSizes {
     pub(super) stack: u32,
     pub(super) frames51: u32,
     pub(super) ci: u32,
+    /// the thread is counted (its blocks too), not one of luna's own
+    pub(super) counted: bool,
 }
 
 /// Where a thread is shrunk: PUC's collector visiting it, or
@@ -65,7 +67,7 @@ pub(super) fn shrink_thread(
         let unused = sz.ci - ci_used;
         // `luaE_shrinkCI` frees every other one of the unused
         let n = if all { unused } else { unused / 2 };
-        heap.acct_ci(0, n);
+        heap.acct_ci(sz.counted, 0, n);
         sz.ci -= n;
     };
     if at == Shrink::Emergency {
@@ -78,7 +80,7 @@ pub(super) fn shrink_thread(
     heap.trace_shrink(sz.stack, inuse);
     let stack = |heap: &mut crate::runtime::heap::Heap, sz: &mut ThreadSizes| {
         let s = stack_size::shrink(v, sz.stack, inuse);
-        heap.acct_stack(sz.stack, s);
+        heap.acct_stack(sz.counted, sz.stack, s);
         sz.stack = s;
     };
     match v {
@@ -90,8 +92,8 @@ pub(super) fn shrink_thread(
                     break;
                 }
                 let (s, calls) = halve_51(sz.stack, inuse, sz.frames51, levels.saturating_sub(1));
-                heap.acct_ci51(sz.frames51, calls);
-                heap.acct_stack(sz.stack, s);
+                heap.acct_ci51(sz.counted, sz.frames51, calls);
+                heap.acct_stack(sz.counted, sz.stack, s);
                 (sz.stack, sz.frames51) = (s, calls);
             }
         }
@@ -147,6 +149,7 @@ impl Vm {
             stack: self.stack_size,
             frames51: self.g.frame_size,
             ci: self.g.ci_alloc,
+            counted: self.running_counted(),
         };
         let (levels, ci_used) = (self.frames_in_use() + extra, self.ci_in_use() + extra);
         shrink_thread(
@@ -203,6 +206,7 @@ impl Vm {
                 stack: m.stack_size,
                 frames51: m.frame_size,
                 ci: m.ci_alloc,
+                counted: true,
             };
             shrink_thread(&mut self.heap, v, at, inuse, n, n - m.host_conts, &mut sz);
             (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
@@ -251,6 +255,7 @@ impl Vm {
             stack: m.stack_size,
             frames51: m.frame_size,
             ci: m.ci_alloc,
+            counted: !crate::runtime::heap::is_uncounted(co.as_ptr() as *mut _),
         };
         shrink_thread(&mut self.heap, v, at, inuse, n, n - 1, &mut sz);
         (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);

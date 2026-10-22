@@ -49,7 +49,7 @@ impl Heap {
 
     /// A record of an object PUC made whose allocation was counted
     /// already.
-    pub(crate) fn ghost_record(&mut self, kind: PucKind, size: usize) -> Result<(), Oom> {
+    fn ghost_record(&mut self, kind: PucKind, size: usize) -> Result<(), Oom> {
         let size = size as u32 | if kind == PucKind::ShortStr { SHORT } else { 0 };
         self.ghost_push(size).map(drop)
     }
@@ -86,7 +86,10 @@ impl Heap {
     /// (yet): counted now, freed by the next sweep unless luna makes it
     /// after all ([`Heap::ghost_table_taken`]).
     pub(crate) fn acct_ghost_table(&mut self, a: usize, h: usize) -> Result<GhostRef, Oom> {
-        let (g, at) = self.ghost_push(self.sizes.table as u32)?;
+        // made while counting is set aside: an entry of no bytes, nothing
+        // counted for it or freed
+        let size = [self.sizes.table as u32, 0][usize::from(self.puc.silent > 0)];
+        let (g, at) = self.ghost_push(size)?;
         // room for the two parts first: no half record is left behind
         // SAFETY: `ghost_push` just returned `g`, a live record of this heap
         let sizes = unsafe { &mut (*g).sizes };
@@ -112,7 +115,11 @@ impl Heap {
         new_a: usize,
         new_h: usize,
     ) {
-        self.acct_table_resize(old_a, old_h, new_a, new_h);
+        // counted as the table is (an entry of no bytes is not)
+        if self.record(t)[t.at] & !FLAGS == 0 {
+            return;
+        }
+        self.acct_counted_table_resize((old_a, old_h), (new_a, new_h));
         let (ab, hb) = (
             self.array_bytes(new_a) as u32,
             self.hash_bytes(new_h) as u32,
@@ -144,6 +151,8 @@ impl Heap {
     /// An object of `kind` and `size` bytes PUC makes and luna does not
     /// (yet), as [`Heap::acct_ghost`]: where its record is.
     pub(crate) fn acct_ghost_ref(&mut self, kind: PucKind, size: usize) -> Result<GhostRef, Oom> {
+        // made while counting is set aside: an entry of no bytes
+        let size = size * usize::from(self.puc.silent == 0);
         let size32 = size as u32 | if kind == PucKind::ShortStr { SHORT } else { 0 };
         let (g, at) = self.ghost_push(size32)?;
         self.acct_obj(kind, size);
@@ -178,7 +187,7 @@ impl Heap {
         if s & SHORT != 0 {
             self.puc.strt_nuse -= 1;
         }
-        self.acct_free((s & !FLAGS) as usize);
+        self.acct_part((s & !FLAGS) as usize, 0);
     }
 
     /// Free up to `quota` of the newest objects the dead record `g` holds

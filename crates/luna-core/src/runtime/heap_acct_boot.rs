@@ -32,7 +32,7 @@ impl Heap {
             }
         } else {
             self.acct_obj(PucKind::Table, s.table);
-            self.acct_table_resize(0, 0, b.registry_array, 0);
+            self.acct_table_resize((0, 0), (b.registry_array, 0));
             self.acct_obj(PucKind::Table, s.table);
         }
         self.acct_block(0, b.strtab * s.ptr);

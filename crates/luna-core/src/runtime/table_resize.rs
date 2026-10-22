@@ -176,7 +176,7 @@ impl Table {
         self.set_hash_part(new_nodes, hsize);
         self.lastfree = hsize as u32;
         if !heap.is_own_table(self) {
-            heap.acct_table_resize(old_asize, old_nodes_len, new_asize, hsize);
+            heap.acct_counted_table_resize((old_asize, old_nodes_len), (new_asize, hsize));
         }
         if grow {
             // SAFETY: both backings use the `[avals: n×8][atags: n]` layout;

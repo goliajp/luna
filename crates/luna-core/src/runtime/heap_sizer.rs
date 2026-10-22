@@ -3,11 +3,10 @@
 use super::*;
 
 /// What a 5.5 marking needs to count the objects it marks (`GCmarked`):
-/// the sizes, luna's own tables (lent by the heap meanwhile) and the
-/// threads the VM holds.
+/// the sizes, the stand-ins and keepers (lent by the heap meanwhile) and
+/// the threads the VM holds.
 pub(crate) struct Sizer {
     sizes: crate::runtime::puc_size::PucSizes,
-    own: Vec<*const Table>,
     stand_ins: Vec<(*mut GcHeader, usize)>,
     keepers: Vec<(*mut GcHeader, *mut GcHeader)>,
     run: Running,
@@ -39,7 +38,7 @@ impl Sizer {
                 if uncounted {
                     return stands;
                 }
-                return pace::objsize(&self.sizes, d, &self.own, h) as i64 + stands;
+                return pace::objsize(&self.sizes, d, h) as i64 + stands;
             }
             let r = &self.run;
             let (size, ci) = if h == r.h {
@@ -61,7 +60,6 @@ impl Heap {
         let run = self.pace.run.filter(|_| self.pace.count_marked)?;
         Some(Sizer {
             sizes: self.sizes,
-            own: std::mem::take(&mut self.puc.own_tables),
             stand_ins: std::mem::take(&mut self.puc.stand_ins),
             keepers: std::mem::take(&mut self.puc.keepers),
             run,
@@ -69,11 +67,10 @@ impl Heap {
         })
     }
 
-    /// The sizer `m` had back: what it counted, and the tables it held.
+    /// The sizer `m` had back: what it counted, and what it held.
     pub(in crate::runtime::heap) fn settle_sizer(&mut self, m: &mut Marker) {
         if let Some(s) = m.sizer.take() {
             self.pace.estimate += s.marked;
-            self.puc.own_tables = s.own;
             self.puc.stand_ins = s.stand_ins;
             self.puc.keepers = s.keepers;
         }
@@ -89,7 +86,6 @@ impl Heap {
             // SAFETY: the caller's contract
             let n = unsafe { s.size(h) };
             self.pace.estimate += n;
-            self.puc.own_tables = s.own;
             self.puc.stand_ins = s.stand_ins;
             self.puc.keepers = s.keepers;
         }

@@ -48,13 +48,13 @@ impl Heap {
                 if is_white(f) && f & w == 0 {
                     p.dead = true;
                     p.hdr.flags = BLACK;
-                    each[k] = Some(r);
+                    each[k] = Some((r, p.counted));
                 } else {
                     p.hdr.flags = w;
                 }
             }
-            for r in each.into_iter().flatten() {
-                freed += self.env51_free_record(r);
+            for (r, counted) in each.into_iter().flatten() {
+                freed += self.env51_free_record(r, counted);
             }
         }
         if !found {
@@ -69,8 +69,8 @@ impl Heap {
 
     /// Record `r` freed, its blocks one by one as PUC frees them (a
     /// table's: `luaH_free` frees the node, then the array, then the
-    /// table). Returns the bytes.
-    fn env51_free_record(&mut self, r: usize) -> usize {
+    /// table), counted if it was when made. Returns the bytes.
+    fn env51_free_record(&mut self, r: usize, counted: bool) -> usize {
         let s = self.sizes;
         let parts: &[usize] = match r {
             super::env51::E1 => &[s.node, 2 * s.tvalue, s.table],
@@ -78,7 +78,7 @@ impl Heap {
             _ => &[s.c_closure(0)],
         };
         for &b in parts {
-            self.acct_free(b);
+            self.acct_part(b * usize::from(counted), 0);
         }
         parts.iter().sum()
     }
