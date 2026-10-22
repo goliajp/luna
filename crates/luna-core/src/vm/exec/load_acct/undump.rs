@@ -24,7 +24,7 @@ impl Vm {
         let (mut protos, mut closing) = (Vec::new(), Vec::new());
         walk(cl.proto, &mut protos, &mut closing);
         let mut protos = protos.into_iter();
-        let mut open: Vec<(Gc<Proto>, [u32; 7])> = Vec::new();
+        let mut open: Vec<Gc<Proto>> = Vec::new();
         let reclose = evs.iter().any(|e| matches!(e, UEv::Reclose(_)));
         // 5.5's `f_parser` anchors what the load makes in a table
         let mut h = match d {
@@ -51,18 +51,20 @@ impl Vm {
                     let hdr = p.as_ptr() as *mut crate::runtime::heap::GcHeader;
                     let size = self.heap.sizes.proto;
                     self.heap.acct_promote_obj(hdr, PucKind::Proto, size);
-                    open.push((p, [0; 7]));
+                    // its arrays are kept as they are counted below
+                    p.puc_arrays.set([0; 7]);
+                    open.push(p);
                 }
                 UEv::End => {
-                    if let Some((p, arrays)) = open.pop() {
-                        p.puc_arrays.set(arrays);
-                    }
+                    open.pop();
                 }
                 UEv::Vec(a, n) => {
                     let b = n as usize * self.elem(a);
                     self.heap.acct_block(0, b);
-                    if let Some((_, arrays)) = open.last_mut() {
+                    if let Some(p) = open.last() {
+                        let mut arrays = p.puc_arrays.get();
                         arrays[a as usize] = b as u32;
+                        p.puc_arrays.set(arrays);
                     }
                 }
                 UEv::Buff(n) if n as usize > buff => {
@@ -72,7 +74,7 @@ impl Vm {
                 }
                 UEv::Buff(_) => {}
                 UEv::Str(s) => {
-                    self.undump_string(s, open.last().map(|o| o.0))?;
+                    self.undump_string(s, open.last().copied())?;
                     if let Some(h) = h.as_mut() {
                         saved += 1;
                         h.insert(&mut self.heap, d, PKey::Int(saved), None)?;

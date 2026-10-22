@@ -215,12 +215,16 @@ impl Heap {
     /// While luna compiles a text chunk nothing is counted: the load's
     /// replay counts the prototype (and its arrays as PUC grows them), and
     /// one the replay never reaches (a chunk that failed to compile) is not
-    /// counted when freed either.
+    /// counted when freed either. The arrays it keeps for its free are
+    /// those counted here: none while nothing is.
     pub(crate) fn acct_proto(&mut self, p: Gc<crate::runtime::function::Proto>) {
-        let arrays = self.proto_arrays(&p);
-        p.puc_arrays.set(arrays);
         let h = p.as_ptr() as *mut GcHeader;
         self.acct_new(h, PucKind::Proto, self.sizes.proto);
+        let arrays = match self.puc.silent {
+            0 => self.proto_arrays(&p),
+            _ => [0; 7],
+        };
+        p.puc_arrays.set(arrays);
         for b in arrays {
             self.acct_block(0, b as usize);
         }

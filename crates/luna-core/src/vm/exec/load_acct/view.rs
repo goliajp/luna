@@ -64,7 +64,14 @@ impl Vm {
         let (marks, scanned) = tree.recorded()?;
         let chunk = tree.parsed().0;
         let d = self.heap.table_dialect;
-        let mut r = Replay::new(d, cl.proto, v, scanned, &chunk.names, &text);
+        let mut r = Replay::new(
+            (d, self.heap.sizes),
+            cl.proto,
+            v,
+            scanned,
+            &chunk.names,
+            &text,
+        );
         r.rec = Some(Vec::new());
         let cut = Cut {
             events: i64::from(done),
