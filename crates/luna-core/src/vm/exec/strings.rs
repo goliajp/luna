@@ -141,7 +141,7 @@ impl Vm {
             _ => out + 1,
         };
         // the result is in its register
-        self.heap.rooted_next = true;
+        self.heap.rooted_safe_point();
         self.checkpoint(top)
     }
 

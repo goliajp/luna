@@ -180,10 +180,9 @@ pub struct Heap {
     fixed: *mut GcHeader,
     /// the head of `all` at the last safe point; objects before it are newer
     young: *mut GcHeader,
-    /// `young` may be held only by a native, so an emergency collection keeps it
-    young_held: bool,
-    /// the next safe point is one where the stack holds every live value
-    pub(crate) rooted_next: bool,
+    /// `young` as a check where the stack held every live value left it
+    /// (`CONCAT`'s): an emergency collection does not keep it for its own sake
+    rooted_young: *mut GcHeader,
     /// during `GcPhase::Sweep`: the last object swept and kept, whose
     /// `next` is the next one to sweep (null: the head of `all`). Objects
     /// made since are in front of it and are not swept (PUC `sweepgc`)
