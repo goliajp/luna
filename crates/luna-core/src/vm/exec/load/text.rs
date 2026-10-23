@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// A text chunk being loaded from a reader (see [`Vm::text_load`]).
+/// A text chunk being loaded from a reader (see `Vm::text_load`).
 #[doc(hidden)]
 pub struct TextLoad {
     pub(super) version: crate::version::LuaVersion,

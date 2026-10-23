@@ -8,7 +8,7 @@
 
 use super::*;
 
-/// Why [`Vm::host_open_lib`] failed.
+/// Why `Vm::host_open_lib` failed.
 #[doc(hidden)]
 pub enum HostOpenError {
     /// 5.1's "name conflict for module": the global of this name holds a
@@ -24,11 +24,10 @@ impl From<LuaError> for HostOpenError {
     }
 }
 
-#[doc(hidden)]
 impl Vm {
     /// Open the standard library `name` (`_G` for the base library) as the
     /// dialect's `luaopen_*` does, and return what that function returns.
-    pub fn host_open_lib(&mut self, name: &str) -> Result<Vec<Value>, HostOpenError> {
+    pub(crate) fn host_open_lib(&mut self, name: &str) -> Result<Vec<Value>, HostOpenError> {
         Ok(self.run_open_body(name)?)
     }
 }

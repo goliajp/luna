@@ -25,7 +25,7 @@ impl Vm {
         self.g.host_slots += slots;
     }
 
-    /// The host's own C function ([`Vm::host_entry_layout`], `lua.c`'s
+    /// The host's own C function (`Vm::host_entry_layout`, `lua.c`'s
     /// `pmain`) has returned: the state closes on the thread's base level,
     /// the call's result (5.2 on, `lua_pcall`'s one) all that is left.
     pub(crate) fn leave_host_entry(&mut self) {
@@ -37,7 +37,7 @@ impl Vm {
     }
 
     /// The arguments of the host's C function in the slots
-    /// [`Vm::host_entry_layout`] made, above the function's own: `lua.c`'s
+    /// `Vm::host_entry_layout` made, above the function's own: `lua.c`'s
     /// `pmain` gets `argc` and `argv` (5.1 its light userdata).
     pub(crate) fn host_entry_args(&mut self, args: &[Value]) {
         for (i, &v) in args.iter().enumerate() {

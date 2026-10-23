@@ -7,6 +7,7 @@ use luna_jit::version::LuaVersion;
 use luna_jit::vm::{Standalone, StandaloneOptions, Vm};
 
 use crate::LunaOpts;
+use luna_core::__private::VmCApiLoad;
 
 /// The state the interpreter runs in: lua.c's, or the sandbox's (no
 /// lua.c around it).

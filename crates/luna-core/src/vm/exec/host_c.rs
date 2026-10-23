@@ -19,7 +19,9 @@ mod cont;
 mod debug;
 mod libs;
 mod load;
+mod registry;
 mod threads;
+mod upvals;
 mod values;
 pub use block::HostBlock;
 pub use debug::{HostAr, HostHookFn, HostLevel};
@@ -52,7 +54,7 @@ pub struct HostContHooks {
 pub type HostWarn = Box<dyn FnMut(&mut Vm, &[u8], bool) -> Result<(), LuaError>>;
 
 /// The continuation a C function keeps while it calls a function or
-/// yields: see [`Vm::host_call`].
+/// yields: see `Vm::host_call`.
 #[derive(Clone, Copy)]
 pub struct HostContSpec {
     /// stack slot of the running C function
@@ -63,37 +65,36 @@ pub struct HostContSpec {
     pub token: u32,
 }
 
-#[doc(hidden)]
 impl Vm {
     /// Install the C API's continuation hooks.
-    pub fn set_host_cont_hooks(&mut self, hooks: HostContHooks) {
+    pub(crate) fn set_host_cont_hooks(&mut self, hooks: HostContHooks) {
         self.host_cont_hooks = Some(hooks);
     }
 
     /// Install a warning function, or put the default back (`None`).
-    pub fn set_host_warn(&mut self, warn: Option<HostWarn>) {
+    pub(crate) fn set_host_warn(&mut self, warn: Option<HostWarn>) {
         self.host_warn = warn;
     }
 
     /// The running thread: a coroutine, or the main thread's identity.
-    pub fn host_thread(&self) -> Gc<Coro> {
+    pub(crate) fn host_thread(&self) -> Gc<Coro> {
         self.current
             .unwrap_or_else(|| self.main_coro.expect("main thread"))
     }
 
     /// The main thread's identity object.
-    pub fn host_main_thread(&self) -> Gc<Coro> {
+    pub(crate) fn host_main_thread(&self) -> Gc<Coro> {
         self.main_coro.expect("main thread")
     }
 
     /// Whether `co` is the thread that is running.
-    pub fn host_is_running(&self, co: Gc<Coro>) -> bool {
+    pub(crate) fn host_is_running(&self, co: Gc<Coro>) -> bool {
         self.host_thread().ptr_eq(co)
     }
 
     /// A new thread with no function yet (PUC `lua_newthread`): the first
     /// resume takes the function from the thread's C stack.
-    pub fn host_new_thread(&mut self) -> Result<Gc<Coro>, LuaError> {
+    pub(crate) fn host_new_thread(&mut self) -> Result<Gc<Coro>, LuaError> {
         self.native_checkpoint()?;
         let globals = self.globals;
         let co = self.retry_oom(|vm| vm.heap.try_new_coro(Value::Nil, globals))?;
@@ -110,13 +111,13 @@ impl Vm {
 
     /// A value's text without metamethods, as `lua_tolstring` converts a
     /// number (`tostring` of other values).
-    pub fn host_basic_text(&mut self, v: Value) -> Vec<u8> {
+    pub(crate) fn host_basic_text(&mut self, v: Value) -> Vec<u8> {
         self.tostring_basic(v)
     }
 
     /// The number a string converts to, as the dialect converts it (PUC
     /// `cvt2num` / `lua_stringtonumber`).
-    pub fn host_str_to_number(&self, s: &[u8]) -> Option<Value> {
+    pub(crate) fn host_str_to_number(&self, s: &[u8]) -> Option<Value> {
         Some(match str_to_num(s, self.version)? {
             numeric::Num::Int(i) => Value::Int(i),
             numeric::Num::Float(f) => Value::Float(f),
@@ -126,7 +127,7 @@ impl Vm {
     /// The function the C API made for the light C function `key`, made
     /// with `make` the first time (5.2+'s functions without upvalues, which
     /// PUC compares by their C pointer), uncounted. It lives as long as the Vm.
-    pub fn host_light_fn(
+    pub(crate) fn host_light_fn(
         &mut self,
         key: usize,
         make: impl FnOnce(&mut Vm) -> Result<Value, LuaError>,
@@ -140,12 +141,12 @@ impl Vm {
     }
 
     /// The native running on top of the dispatch chain.
-    pub fn host_running_native(&self) -> Option<Gc<crate::runtime::NativeClosure>> {
+    pub(crate) fn host_running_native(&self) -> Option<Gc<crate::runtime::NativeClosure>> {
         self.running_natives.last().map(|a| a.nc)
     }
 
     /// The globals of thread `co` (5.1 `LUA_GLOBALSINDEX`).
-    pub fn host_thread_globals(&self, co: Gc<Coro>) -> Gc<Table> {
+    pub(crate) fn host_thread_globals(&self, co: Gc<Coro>) -> Gc<Table> {
         if self.host_is_running(co) {
             self.globals
         } else if self.is_main_coro(co) {
@@ -157,7 +158,7 @@ impl Vm {
 
     /// Replace the globals of thread `co` (5.1 `lua_replace` into
     /// `LUA_GLOBALSINDEX`).
-    pub fn host_set_thread_globals(&mut self, co: Gc<Coro>, t: Gc<Table>) {
+    pub(crate) fn host_set_thread_globals(&mut self, co: Gc<Coro>, t: Gc<Table>) {
         if self.host_is_running(co) {
             self.set_globals(t);
         } else if self.is_main_coro(co) {
@@ -176,17 +177,17 @@ impl Vm {
 
     /// Results the call of the running native wants (-1 for all), as its
     /// caller set them; read at the native's entry.
-    pub fn host_native_nresults(&self) -> i32 {
+    pub(crate) fn host_native_nresults(&self) -> i32 {
         self.native_nresults
     }
 
     /// Why the running thread cannot yield now, as PUC words it, or `None`.
-    pub fn host_yield_refusal(&self) -> Option<&'static str> {
+    pub(crate) fn host_yield_refusal(&self) -> Option<&'static str> {
         self.yield_barrier()
     }
 
     /// PUC `lua_isyieldable` of `co` (the running thread when `None`).
-    pub fn host_is_yieldable(&self, co: Option<Gc<Coro>>) -> bool {
+    pub(crate) fn host_is_yieldable(&self, co: Option<Gc<Coro>>) -> bool {
         match co {
             Some(c) if !self.host_is_running(c) => self.is_yieldable(Some(c)),
             _ => self.is_yieldable(None),
@@ -195,16 +196,16 @@ impl Vm {
 
     /// Whether a yield is on its way out (the `Err` a call returned is the
     /// yield, not an error).
-    pub fn host_yielding(&self) -> bool {
+    pub(crate) fn host_yielding(&self) -> bool {
         self.yielding.is_some()
     }
 
     /// Call `f(args)` from a C function (PUC `lua_callk`). With `cont` and
     /// a thread that can yield, a yield inside `f` suspends the coroutine
     /// with the continuation on the frame stack: the `Err` that comes back
-    /// is then the yield ([`Vm::host_yielding`]), and the C function must
+    /// is then the yield (`Vm::host_yielding`), and the C function must
     /// leave. Without `cont` the call cannot yield.
-    pub fn host_call(
+    pub(crate) fn host_call(
         &mut self,
         f: Value,
         args: &[Value],
@@ -226,8 +227,8 @@ impl Vm {
     /// Suspend the running coroutine from the C function at `func_slot`
     /// (PUC `lua_yieldk`), yielding `vals`. With `cont`, the resume runs
     /// the continuation; without, the resume's values are the C function's
-    /// results. The caller has checked [`Vm::host_yield_refusal`].
-    pub fn host_yield(
+    /// results. The caller has checked `Vm::host_yield_refusal`.
+    pub(crate) fn host_yield(
         &mut self,
         func_slot: u32,
         nresults: i32,
@@ -256,7 +257,11 @@ impl Vm {
     /// Resume `co` with `args` (PUC `lua_resume`). `Ok` carries what it
     /// yielded or returned (its status tells which); `Err` the error that
     /// killed it.
-    pub fn host_resume(&mut self, co: Gc<Coro>, args: Vec<Value>) -> Result<Vec<Value>, LuaError> {
+    pub(crate) fn host_resume(
+        &mut self,
+        co: Gc<Coro>,
+        args: Vec<Value>,
+    ) -> Result<Vec<Value>, LuaError> {
         self.resume_coro(co, args)
     }
 
@@ -264,7 +269,7 @@ impl Vm {
     /// not a level of the stack: with a handler it takes `(f, msgh,
     /// args...)`, without `(f, args...)`; it returns `true, results...` or
     /// `false, error`.
-    pub fn host_protected_fn(&mut self, handler: bool) -> Result<Value, LuaError> {
+    pub(crate) fn host_protected_fn(&mut self, handler: bool) -> Result<Value, LuaError> {
         use crate::{runtime::Builtin, vm::builtins::*};
         if handler {
             self.builtin(nat_host_xpcall, &[], Builtin::HostXpcall)
@@ -277,7 +282,7 @@ impl Vm {
     /// stack still holds its arguments, what it pushed and its `n` results,
     /// the first of them at transfer index `ftransfer` (PUC `rethook` runs
     /// before the results move); its return then skips the hook.
-    pub fn host_c_return_hook(&mut self, ftransfer: u32, n: u32) -> Result<(), LuaError> {
+    pub(crate) fn host_c_return_hook(&mut self, ftransfer: u32, n: u32) -> Result<(), LuaError> {
         let armed = |vm: &Vm| {
             vm.hook.ret && !vm.in_hook && (vm.hook.func.is_some() || vm.hook.rust_func.is_some())
         };
@@ -288,69 +293,6 @@ impl Vm {
         // a hook that turned itself off leaves nothing to skip
         self.native_ret_hooked = armed(self);
         Ok(())
-    }
-
-    /// The status `co` died with, when it died by an error and was not
-    /// closed since.
-    pub fn host_thread_error(&self, co: Gc<Coro>) -> Option<crate::runtime::ErrorStatus> {
-        (co.status == CoroStatus::Dead && co.error_value.is_some()).then_some(co.error_status)
-    }
-
-    /// Close `co` (PUC `lua_closethread`): run its pending `__close`
-    /// handlers and mark it dead. `Ok(Some(e))`: it had died with `e`.
-    pub fn host_close_thread(&mut self, co: Gc<Coro>) -> Result<Option<Value>, LuaError> {
-        self.close_coro(co)
-    }
-
-    /// PUC `lua_close` before the state is freed: close the main thread's
-    /// pending to-be-closed variables and run every finalizer, dropping
-    /// their errors.
-    pub fn host_close_state(&mut self) {
-        self.leave_host_entry();
-        self.close_state();
-    }
-
-    /// PUC's registry (`LUA_REGISTRYINDEX`), made now if it was not
-    /// ([`Vm::host_make_registry`]), ending the process if it cannot be.
-    pub fn host_registry(&mut self) -> Gc<Table> {
-        match self.registry {
-            Some(r) => r,
-            None => self.host_make_registry().unwrap_or_else(|_| {
-                crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Table>())
-            }),
-        }
-    }
-
-    /// Make the registry (PUC `init_registry`) with the entries
-    /// `lua_newstate` puts in it: from 5.2 on the main thread and the
-    /// globals (5.5 also `false` at index 1, for `luaL_ref`).
-    pub fn host_make_registry(&mut self) -> Result<Gc<Table>, LuaError> {
-        if let Some(r) = self.registry {
-            return Ok(r);
-        }
-        // 5.1 `luaH_new(L, 0, 2)`; later `luaH_resize` to `LUA_RIDX_LAST`
-        let (a, h) = match self.version {
-            LuaVersion::Lua51 => (0, 2),
-            LuaVersion::Lua55 => (3, 0),
-            _ => (2, 0),
-        };
-        let reg = self.alloc_table_sized(a, h)?;
-        self.registry = Some(Heap::boot_table(reg));
-        let main = Value::Coro(self.host_main_thread());
-        let globals = Value::Table(self.globals);
-        let entries: &[(i64, Value)] = match self.version {
-            LuaVersion::Lua51 => &[],
-            LuaVersion::Lua55 => &[(1, Value::Bool(false)), (3, main), (2, globals)],
-            _ => &[(1, main), (2, globals)],
-        };
-        for &(k, v) in entries {
-            // SAFETY: `reg` is rooted through `self.registry`; the borrow
-            // covers one store into its array part, which does not collect
-            let r = unsafe { reg.as_mut() }.set_int_raw(&mut self.heap, k, v);
-            debug_assert!(r.is_ok(), "a slot of the array part");
-        }
-        self.heap.barrier_back(reg);
-        Ok(reg)
     }
 
     /// Hand one piece of a warning to the C API's warning function, if it

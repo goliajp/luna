@@ -2,7 +2,6 @@
 //! the thread.
 
 use super::*;
-use luna_core::__private::GcInternals;
 
 /// PUC `LUA_EXTRASPACE`: raw memory just below the `lua_State` pointer,
 /// for the host (`lua_getextraspace`).

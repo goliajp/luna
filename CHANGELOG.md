@@ -23,6 +23,8 @@ optimization.
 
 ### Breaking
 
+- The C API's host interface on `Vm` (the `host_*` methods and the hooks
+  it installs), hidden from the docs, moved to `luna_core::__private`.
 - The C API's host helpers nothing called (`Vm::host_set_body`,
   `host_retry`, `host_new_native`, `host_hook_yield_clear`,
   `host_level_of_slot`) are gone.

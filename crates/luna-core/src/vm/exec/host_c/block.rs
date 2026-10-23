@@ -56,12 +56,11 @@ fn trace_block(any: &crate::runtime::mem::LAny, m: &mut crate::vm::UserdataMarke
     }
 }
 
-#[doc(hidden)]
 impl Vm {
     /// A new full userdata of `size` bytes, zeroed, with `nuv` nil user
     /// values and no metatable; a memory error when it cannot be made, after
     /// an emergency collection.
-    pub fn host_new_block(
+    pub(crate) fn host_new_block(
         &mut self,
         size: usize,
         nuv: usize,
@@ -69,7 +68,7 @@ impl Vm {
         self.retry_oom(|vm| vm.try_new_block(size, nuv))
     }
 
-    /// [`Vm::host_new_block`]'s allocations; what was allocated before a
+    /// `Vm::host_new_block`'s allocations; what was allocated before a
     /// failure is freed again.
     fn try_new_block(
         &mut self,
@@ -102,7 +101,7 @@ impl Vm {
     }
 
     /// The C API block of userdata `u`, if the C API made it.
-    pub fn host_block(&self, u: Gc<crate::runtime::Userdata>) -> Option<&HostBlock> {
+    pub(crate) fn host_block(&self, u: Gc<crate::runtime::Userdata>) -> Option<&HostBlock> {
         // SAFETY: the caller holds `u`, and nothing can collect it while
         // `&self` is borrowed; the reference only reads the payload
         let ud: &crate::runtime::Userdata = unsafe { &*u.as_ptr() };
@@ -114,7 +113,7 @@ impl Vm {
 
     /// The address C sees for userdata `u` (`lua_touserdata`): its block,
     /// or the object itself for a userdata the C API did not make.
-    pub fn host_userdata_ptr(&self, u: Gc<crate::runtime::Userdata>) -> *mut u8 {
+    pub(crate) fn host_userdata_ptr(&self, u: Gc<crate::runtime::Userdata>) -> *mut u8 {
         match self.host_block(u) {
             Some(b) => b.ptr(),
             None => u.as_ptr().cast(),
@@ -124,7 +123,11 @@ impl Vm {
     /// User value `n` (from 1) of `u`; `None` when it has no such value.
     /// A userdata the C API did not make has the one 5.2/5.3 slot, and none
     /// from 5.4 on (PUC's library userdata are made with no user values).
-    pub fn host_uservalue(&self, u: Gc<crate::runtime::Userdata>, n: usize) -> Option<Value> {
+    pub(crate) fn host_uservalue(
+        &self,
+        u: Gc<crate::runtime::Userdata>,
+        n: usize,
+    ) -> Option<Value> {
         match self.host_block(u) {
             Some(b) => b.uservalues.get(n.checked_sub(1)?).copied(),
             None => (n == 1 && self.version <= LuaVersion::Lua53).then_some(u.user_value),
@@ -133,7 +136,7 @@ impl Vm {
 
     /// Set user value `n` (from 1) of `u`; `false` when it has no such
     /// value.
-    pub fn host_set_uservalue(
+    pub(crate) fn host_set_uservalue(
         &mut self,
         u: Gc<crate::runtime::Userdata>,
         n: usize,

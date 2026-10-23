@@ -45,7 +45,7 @@ impl Vm {
         checked
     }
 
-    /// The parse of the `lua_load` [`Vm::host_load_begin`] began has ended.
+    /// The parse of the `lua_load` `Vm::host_load_begin` began has ended.
     pub(crate) fn host_load_end(&mut self) {
         self.heap.set_load_checked(false);
         if self.version >= LuaVersion::Lua52 {

@@ -8,12 +8,20 @@
 //! safety or the collector's invariants when misused are `unsafe fn`,
 //! with their conditions under `# Safety`.
 
+mod capi_debug;
+mod capi_load;
+mod capi_state;
+mod capi_values;
 mod free;
 mod runtime;
 mod vm_alloc;
 mod vm_host;
 mod vm_jit;
 
+pub use capi_debug::VmCApiDebug;
+pub use capi_load::VmCApiLoad;
+pub use capi_state::VmCApiState;
+pub use capi_values::VmCApiValues;
 pub use free::*;
 pub use runtime::*;
 pub use vm_alloc::VmJitAlloc;
