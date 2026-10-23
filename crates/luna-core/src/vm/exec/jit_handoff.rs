@@ -30,8 +30,7 @@ impl Vm {
     /// for a collection would find a step due: then the interpreter runs
     /// it. A `gc-trace` build has the interpreter run every such op, so
     /// that its checks are traced.
-    #[doc(hidden)]
-    pub fn jit_due_after(&self, bytes: usize) -> bool {
+    pub(crate) fn jit_due_after(&self, bytes: usize) -> bool {
         if crate::runtime::gc_hooks::TRACE {
             return true;
         }

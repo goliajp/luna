@@ -77,27 +77,6 @@ impl Vm {
         }
     }
 
-    /// [`Vm::call_value_with_handler`] that also says how it failed: `true`
-    /// when the handler itself failed and the error is "error in error
-    /// handling" (PUC's LUA_ERRERR), `false` for any other error
-    /// (LUA_ERRRUN). For the C API's `lua_pcall`.
-    #[doc(hidden)]
-    pub fn call_value_with_handler_status(
-        &mut self,
-        f: Value,
-        args: &[Value],
-        msgh: Value,
-    ) -> Result<Vec<Value>, (LuaError, bool)> {
-        let before = self.errerr_raised;
-        self.call_value_with_handler(f, args, msgh).map_err(|e| {
-            // a handler may return the same text itself; only an error the
-            // vm turned into it during this call is LUA_ERRERR
-            let errerr = self.errerr_raised != before
-                && matches!(e.0, Value::Str(s) if s.as_bytes() == b"error in error handling");
-            (e, errerr)
-        })
-    }
-
     /// Call `level`, the native standing in for a protected call PUC's
     /// host makes from C, which takes no level of PUC's (on the main
     /// thread, the only one a host's call runs on).

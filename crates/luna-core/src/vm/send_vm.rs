@@ -252,8 +252,7 @@ impl SendVm {
 
     /// Number of `SendVm` handles sharing the wrapped Vm (the inner
     /// `Arc`'s strong count).
-    #[doc(hidden)]
-    pub fn __j_e_handle_arc_count(&self) -> usize {
+    pub(crate) fn __j_e_handle_arc_count(&self) -> usize {
         Arc::strong_count(&self.inner)
     }
 

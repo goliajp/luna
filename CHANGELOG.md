@@ -23,6 +23,14 @@ optimization.
 
 ### Breaking
 
+- Functions hidden from the docs that only luna itself used are private
+  now or gone: `numeric::c_fmod`, `Heap::new_table_presized`,
+  `Heap::try_create_table`, `Vm::call_value_with_handler_status`,
+  `Vm::read_slot`, `Value::as_closure_unchecked`,
+  `Value::as_int_unchecked`, `vm::builtins::ipairs_iter`, and the
+  deprecated `Vm::set_p16_self_link_enabled` /
+  `Vm::p16_self_link_enabled` (use `set_self_link_enabled` /
+  `self_link_enabled`), among others.
 - The hidden `Vm` methods that set a state up as PUC's standalone
   interpreter does (`open_lua_c_libs`, `host_entry_layout`,
   `host_entry_args`, `host_set_arg`, `gc_enter_generational`) are gone;

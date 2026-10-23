@@ -59,8 +59,7 @@ impl Vm {
     /// [`Vm::find_or_create_upval`] for a helper of compiled code: no
     /// emergency collection (the compiled code may hold new objects only
     /// in registers), `None` when the upvalue cannot be made or listed.
-    #[doc(hidden)]
-    pub fn jit_find_or_create_upval(&mut self, slot: u32) -> Option<Gc<Upvalue>> {
+    pub(crate) fn jit_find_or_create_upval(&mut self, slot: u32) -> Option<Gc<Upvalue>> {
         let i = match self.open_upval(slot) {
             Ok(uv) => return Some(uv),
             Err(i) => i,
@@ -76,8 +75,7 @@ impl Vm {
 
     /// [`Vm::closure_from_proto`] for a helper of compiled code: no
     /// emergency collection, `None` when the closure cannot be made.
-    #[doc(hidden)]
-    pub fn jit_closure_from_proto(
+    pub(crate) fn jit_closure_from_proto(
         &mut self,
         proto: Gc<crate::runtime::function::Proto>,
         ups: &[Gc<Upvalue>],

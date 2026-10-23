@@ -82,8 +82,7 @@ fn bad_key(vm: &mut Vm, nargs: u32) -> LuaError {
 /// `pub(crate)` so the trace JIT (`Vm::jit_op_tforcall`) can
 /// fn-pointer-compare against it for the v3 fast path (skip
 /// `begin_call` + `nat_arg` and call `Table::get_int` directly).
-#[doc(hidden)]
-pub fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(crate) fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let i = match vm.nat_arg(fs, nargs, 1) {
         Value::Int(i) if vm.version() >= LuaVersion::Lua53 => i,
         _ if vm.version() <= LuaVersion::Lua52 => return ipairs_iter_raw(vm, fs, nargs),

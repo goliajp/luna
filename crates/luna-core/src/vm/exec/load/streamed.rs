@@ -58,8 +58,7 @@ impl Vm {
 
     /// Compile what [`TextLoad::parse`] read as the chunk `chunkname` and
     /// close it over the globals, as [`Vm::load`] does.
-    #[doc(hidden)]
-    pub fn load_parsed(
+    pub(crate) fn load_parsed(
         &mut self,
         parsed: ParsedText,
         chunkname: &[u8],

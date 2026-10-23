@@ -44,8 +44,7 @@ impl Vm {
 
     /// Read an open-upvalue slot from its owning thread's stack (the live VM
     /// stack if that thread is current, else its saved context).
-    #[doc(hidden)]
-    pub fn read_slot(&self, slot: u32, thread: Option<Gc<Coro>>) -> Value {
+    pub(crate) fn read_slot(&self, slot: u32, thread: Option<Gc<Coro>>) -> Value {
         let s = slot as usize;
         if self.is_current_thread(thread) {
             self.stack[s]

@@ -213,8 +213,7 @@ impl Vm {
 
     /// "stack overflow" raised for a self call of compiled `cl`,
     /// positioned, as the interpreter would raise it, at that call in `cl`.
-    #[doc(hidden)]
-    pub fn jit_depth_error(
+    pub(crate) fn jit_depth_error(
         &mut self,
         cl: crate::runtime::Gc<crate::runtime::LuaClosure>,
     ) -> LuaError {

@@ -26,7 +26,7 @@ pub(crate) use errors::nat_error;
 pub(crate) use errors::{
     arg_error, concat2, lual_where, raise_bytes, raise_fmt, raise_lib, raise_str,
 };
-pub use iter::ipairs_iter;
+pub(crate) use iter::ipairs_iter;
 use iter::{nat_ipairs, nat_next};
 pub(crate) use iter::{nat_pairs, pairs_mm_results};
 pub(crate) use load::nat_load;
