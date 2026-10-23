@@ -183,18 +183,6 @@ impl Vm {
         self.heap.track_chunk_roots();
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "3.2.0", note = "renamed to `set_self_link_enabled`")]
-    pub fn set_p16_self_link_enabled(&mut self, enabled: bool) {
-        self.set_self_link_enabled(enabled);
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.2.0", note = "renamed to `self_link_enabled`")]
-    pub fn p16_self_link_enabled(&self) -> bool {
-        self.self_link_enabled()
-    }
-
     /// Current trace-JIT enable state.
     pub fn trace_jit_enabled(&self) -> bool {
         self.jit.trace_enabled

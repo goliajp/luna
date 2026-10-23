@@ -159,8 +159,7 @@ impl Heap {
     }
 
     /// A table sized as `lua_createtable(narr, nrec)` sizes it.
-    #[doc(hidden)]
-    pub fn try_create_table(
+    pub(crate) fn try_create_table(
         &mut self,
         narr: usize,
         nrec: usize,
@@ -174,16 +173,9 @@ impl Heap {
         Ok(g)
     }
 
-    /// A table sized by `NewTable`'s operands, as the interpreter makes
-    /// it (see `table::new_table_sizes`); `None` for sizes past a table's
-    /// limit. Public for the JIT crates.
-    #[doc(hidden)]
-    pub fn new_table_presized(&mut self, b: u32, c: u32, k: bool) -> Option<Gc<Table>> {
-        self.try_new_table_presized(b, c, k)
-            .unwrap_or_else(|_| oom_abort(Layout::new::<Table>()))
-    }
-
-    /// [`Heap::new_table_presized`], failing when memory runs out.
+    /// A table sized by `NewTable`'s operands, as the interpreter makes it
+    /// (see `table::new_table_sizes`); `Ok(None)` for sizes past a table's
+    /// limit, an error when memory runs out.
     #[doc(hidden)]
     pub fn try_new_table_presized(
         &mut self,

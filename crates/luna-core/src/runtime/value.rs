@@ -172,9 +172,8 @@ impl Value {
     /// `#[doc(hidden)]`: JIT hot-path use; embedders should
     /// use the safe `match value { Value::Closure(c) => ..., _ => ... }`
     /// instead.
-    #[doc(hidden)]
     #[inline(always)]
-    pub unsafe fn as_closure_unchecked(self) -> Gc<crate::runtime::LuaClosure> {
+    pub(crate) unsafe fn as_closure_unchecked(self) -> Gc<crate::runtime::LuaClosure> {
         debug_assert_eq!(self.tag_byte(), tag::CLOSURE);
         // SAFETY: `#[repr(C, u8)]` Value with Closure discriminant has
         // payload `Gc<LuaClosure>` at offset 8 (after 7 bytes of
@@ -195,9 +194,8 @@ impl Value {
     /// `#[doc(hidden)]`: JIT hot-path use; embedders should
     /// use the safe `match value { Value::Int(i) => ..., _ => ... }`
     /// instead.
-    #[doc(hidden)]
     #[inline(always)]
-    pub unsafe fn as_int_unchecked(self) -> i64 {
+    pub(crate) unsafe fn as_int_unchecked(self) -> i64 {
         debug_assert_eq!(self.tag_byte(), tag::INT);
         // SAFETY: the caller's contract: `self` is a `Value::Int`, whose
         // payload is the `i64` at offset 8 (`#[repr(C, u8)]`)

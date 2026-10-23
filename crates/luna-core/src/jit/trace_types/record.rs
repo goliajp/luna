@@ -345,8 +345,7 @@ impl TraceRecord {
 
     /// The recording up to op `n` (exclusive): the ops after it, and what
     /// was noted about them, dropped.
-    #[doc(hidden)]
-    pub fn truncated(&self, n: usize) -> TraceRecord {
+    pub(crate) fn truncated(&self, n: usize) -> TraceRecord {
         let mut r = self.clone();
         r.closed_at_head &= n == r.ops.len();
         r.ops.truncate(n);

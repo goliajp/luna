@@ -337,7 +337,7 @@ programs compiled against PUC and luna; one site came back in
 written in C. That is 1269. Unit tests that drive the C API's Rust half from Rust (`capi/unit_tests.rs`) added 21. That is 1290.
 
 Sizing tables as each PUC version does, so that `#t` finds the same
-border, added 4. In `luna-core` 1: `Heap::new_table_presized`, which
+border, added 4. In `luna-core` 1: `Heap::try_new_table_presized`, which
 sizes the table it just made through its handle. In `luna-jit-helpers`
 3: `luna_jit_table_reserve_list`, the `extern "C"` helper that grows a
 constructor table's array part before compiled code stores its list
