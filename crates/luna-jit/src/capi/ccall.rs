@@ -138,7 +138,7 @@ pub(super) fn cstack<'a>(co: Gc<Coro>) -> &'a mut LVec<Value> {
     // SAFETY: the thread is live while its state is; the C stack is only
     // reached through short-lived borrows like this one, none of which
     // overlaps a call that could reach C
-    unsafe { &mut (*co.as_ptr()).host_stack }
+    unsafe { &mut *co.as_ptr() }.host_stack_mut()
 }
 
 /// The state record behind `l`.

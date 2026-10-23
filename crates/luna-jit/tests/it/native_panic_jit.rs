@@ -5,6 +5,7 @@
 //! generic-for iterator the trace calls through its helper, an `__index`
 //! function), and the log must equal the interpreter's.
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::vm::Vm;
 
@@ -34,8 +35,8 @@ fn vm(v: luna_jit::version::LuaVersion, mode: Mode) -> Vm {
         }
         Mode::MethodAndTrace => {}
     }
-    vm.jit.trace_hot_threshold = 2;
-    vm.jit.call_hot_threshold = 2;
+    vm.jit_mut().trace_hot_threshold = 2;
+    vm.jit_mut().call_hot_threshold = 2;
     vm
 }
 

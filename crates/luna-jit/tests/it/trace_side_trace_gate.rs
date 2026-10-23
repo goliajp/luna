@@ -6,6 +6,7 @@
 //! one-shot, and then a loop edge they recorded is straight-line code: such
 //! a side trace compiles and runs (`side_trace_through_an_inner_loop`).
 
+use luna_core::__private::VmJitState;
 use luna_jit::__private::raw;
 use luna_jit::__private::{CompileOptions, RecordedOp, TraceRecord};
 use luna_jit::jit::trace::{
@@ -88,7 +89,9 @@ fn short_backward_jump_with_a_table_write_is_declined() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     let p = proto_of(&mut vm, WHILE_WRITE);
     let rec = side_record(p, &while_body(p), None);
-    assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, looping()).is_none());
+    assert!(
+        try_compile_trace_with_options(vm.jit_mut().storage.as_mut(), &rec, looping()).is_none()
+    );
     assert_eq!(last_compile_checkpoint(), IMPURE_BACK_EDGE);
 }
 
@@ -97,7 +100,9 @@ fn long_backward_jump_with_a_table_write_is_declined() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     let p = proto_of(&mut vm, WHILE_WRITE);
     let rec = side_record(p, &while_body(p), Some(Inst::isj(Op::Jmp, -300)));
-    assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, looping()).is_none());
+    assert!(
+        try_compile_trace_with_options(vm.jit_mut().storage.as_mut(), &rec, looping()).is_none()
+    );
     assert_eq!(last_compile_checkpoint(), IMPURE_BACK_EDGE);
 }
 
@@ -107,7 +112,7 @@ fn forward_jump_with_a_table_write_passes_the_gate() {
     let p = proto_of(&mut vm, WHILE_WRITE);
     for sj in [0, 1, 200] {
         let rec = side_record(p, &while_body(p), Some(Inst::isj(Op::Jmp, sj)));
-        let _ = try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, looping());
+        let _ = try_compile_trace_with_options(vm.jit_mut().storage.as_mut(), &rec, looping());
         assert_ne!(last_compile_checkpoint(), IMPURE_BACK_EDGE, "sJ {sj}");
     }
 }
@@ -117,7 +122,7 @@ fn one_shot_side_trace_takes_its_recorded_loop_edge() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     let p = proto_of(&mut vm, WHILE_WRITE);
     let rec = side_record(p, &while_body(p), None);
-    let _ = try_compile_trace(vm.jit.storage.as_mut(), &rec);
+    let _ = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec);
     assert_ne!(last_compile_checkpoint(), IMPURE_BACK_EDGE);
 }
 
@@ -189,7 +194,7 @@ fn side_trace_through_an_inner_loop() {
         let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
         vm.set_jit_enabled(false);
         vm.install_jit_backend(luna_jit::jit::CraneliftBackend, NoInnerLoopTrace);
-        vm.jit.trace_hot_threshold = 8;
+        vm.jit_mut().trace_hot_threshold = 8;
         vm.set_trace_tier(tier);
         let r = vm.eval(src).expect("run");
         assert!(

@@ -168,10 +168,6 @@ impl Value {
     /// have verified `tag_byte() == tag::CLOSURE` first.
     ///
     /// SAFETY: the value's discriminant MUST be Closure. UB otherwise.
-    ///
-    /// `#[doc(hidden)]`: JIT hot-path use; embedders should
-    /// use the safe `match value { Value::Closure(c) => ..., _ => ... }`
-    /// instead.
     #[inline(always)]
     pub(crate) unsafe fn as_closure_unchecked(self) -> Gc<crate::runtime::LuaClosure> {
         debug_assert_eq!(self.tag_byte(), tag::CLOSURE);
@@ -190,10 +186,6 @@ impl Value {
     /// have verified `tag_byte() == tag::INT` first.
     ///
     /// SAFETY: the value's discriminant MUST be Int. UB otherwise.
-    ///
-    /// `#[doc(hidden)]`: JIT hot-path use; embedders should
-    /// use the safe `match value { Value::Int(i) => ..., _ => ... }`
-    /// instead.
     #[inline(always)]
     pub(crate) unsafe fn as_int_unchecked(self) -> i64 {
         debug_assert_eq!(self.tag_byte(), tag::INT);

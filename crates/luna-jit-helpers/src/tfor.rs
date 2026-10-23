@@ -2,6 +2,7 @@
 
 use crate::{current_jit_vm, push_ssa_roots};
 use luna_core::__private::VmJitFrames;
+use luna_core::__private::VmJitState;
 
 /// Trace JIT helper for a generic `TForCall A 0 C` of any layout; `nvars`
 /// packs C with the layout's registers (`ForLayout::pack_call`).
@@ -47,6 +48,6 @@ pub unsafe extern "C" fn luna_jit_op_tforcall(
         (vm, &mut *ctrl_out, &mut *key_out, &mut *val_out, mark)
     };
     let r = vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl, key, val);
-    vm.jit.ssa_roots.truncate(mark);
+    vm.jit_mut().ssa_roots.truncate(mark);
     r
 }

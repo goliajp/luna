@@ -3,6 +3,7 @@
 //! `TraceRecord`s with depth>0 ops to verify the inline emit
 //! paths in isolation.
 use super::*;
+use luna_core::__private::VmJitState;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 use luna_core::vm::isa::{Inst, Op};
@@ -68,7 +69,7 @@ fn cmp_at_depth_one_no_longer_aborts_via_inline_abort() {
         var_count: None,
     });
     rec.closed = true;
-    let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec)
         .expect("cmp@d>0 now compiles via inline-cmp emit");
     // One cmp@d>0 site → one per-exit-metas entry.
     assert_eq!(ct.per_exit_inline.len(), 1);
@@ -102,7 +103,7 @@ fn first_op_at_depth_gt_zero_bails() {
         var_count: None,
     });
     rec.closed = true;
-    assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
 }
 
 /// First op on a different proto than the trace head also bails
@@ -127,5 +128,5 @@ fn first_op_on_cross_proto_bails() {
         var_count: None,
     });
     rec.closed = true;
-    assert!(try_compile_trace(vm1.jit.storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm1.jit_mut().storage.as_mut(), &rec).is_none());
 }

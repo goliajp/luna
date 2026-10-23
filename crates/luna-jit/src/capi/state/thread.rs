@@ -16,10 +16,7 @@ pub(super) struct ThreadBox {
 
 /// The `LuaState` of `co` if C has asked for it before.
 pub(super) fn existing(co: Gc<Coro>) -> Option<*mut LuaState> {
-    // SAFETY: `co` is a live thread the caller holds; the shared borrow
-    // reads one field and ends here
-    let c: &Coro = unsafe { &*co.as_ptr() };
-    let h = c.host_state.as_ref()?;
+    let h = co.host_state()?;
     if !h.is::<ThreadBox>() {
         return None;
     }
@@ -70,11 +67,14 @@ pub(super) fn new_thread_state(
     .ok()?;
     // SAFETY: `co` is a live thread the caller holds and the Vm is not
     // touching it now; the borrow covers the reservation
-    unsafe { co.as_mut() }.host_stack.reserve(MINSTACK).ok()?;
+    unsafe { co.as_mut() }
+        .host_stack_mut()
+        .reserve(MINSTACK)
+        .ok()?;
     let p = b.as_ptr().cast::<ThreadBox>();
     // SAFETY: `co` is a live thread the caller holds and the Vm is not
     // touching it now; the borrow covers one store
-    unsafe { co.as_mut() }.host_state = Some(b);
+    unsafe { co.as_mut() }.set_host_state(b);
     // SAFETY: `p` is the live block just stored in the thread
     Some(unsafe { &raw mut (*p).st })
 }
@@ -108,7 +108,9 @@ pub(in crate::capi) fn try_state_of(vm: &mut Vm, co: Gc<Coro>) -> Option<*mut Lu
         // SAFETY: `co` is held by the caller and has not started, so no
         // context is loaded from it; the borrow covers one push, into the
         // room `new_thread_state` reserved
-        unsafe { co.as_mut() }.host_stack.push_or_abort(co.body);
+        unsafe { co.as_mut() }
+            .host_stack_mut()
+            .push_or_abort(co.body);
         vm.heap.barrier_back(co);
     }
     Some(l)

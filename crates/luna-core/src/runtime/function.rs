@@ -15,8 +15,7 @@ pub use crate::runtime::debug_info::{DebugName, LocVar, UpvalDesc};
 pub use crate::runtime::upvalue::{UpvalState, Upvalue};
 
 /// An unused slot of [`Proto::trace_heads`].
-#[doc(hidden)]
-pub const TRACE_HEADS_NONE: u32 = u32::MAX;
+pub(crate) const TRACE_HEADS_NONE: u32 = u32::MAX;
 /// [`Proto::trace_heads`] once more traces can be entered than it holds.
 pub(crate) const TRACE_HEADS_MANY: u32 = u32::MAX - 1;
 /// Slots in [`Proto::trace_heads`].
@@ -158,19 +157,16 @@ pub struct Proto {
     /// interpreter checks this before scanning `traces` on every
     /// instruction. Traces are never removed, so it only goes from
     /// `false` to `true`.
-    #[doc(hidden)]
-    pub has_dispatchable_trace: std::cell::Cell<bool>,
+    pub(crate) has_dispatchable_trace: std::cell::Cell<bool>,
     /// Head pcs of the traces that set `has_dispatchable_trace`, so the
     /// interpreter looks traces up only where one can start: up to
     /// `TRACE_HEADS_CAP`, the rest `TRACE_HEADS_NONE`; `TRACE_HEADS_MANY`
     /// in all once there are more.
-    #[doc(hidden)]
-    pub trace_heads: std::cell::Cell<[u32; TRACE_HEADS_CAP]>,
+    pub(crate) trace_heads: std::cell::Cell<[u32; TRACE_HEADS_CAP]>,
     /// Whether the call trigger is done with this Proto's entry (`pc = 0`):
     /// a trace is cached there or recording it was abandoned. Set once,
     /// it spares every later call the scan of `traces`.
-    #[doc(hidden)]
-    pub trace_call_head_settled: std::cell::Cell<bool>,
+    pub(crate) trace_call_head_settled: std::cell::Cell<bool>,
     /// The bytes PUC's prototype holds in each of its arrays (code,
     /// prototypes, constants, line info, absolute line info, local
     /// variables, upvalue descriptors), counted when it was made and

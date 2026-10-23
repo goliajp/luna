@@ -88,12 +88,6 @@ pub trait GcInternals<T> {
     /// The object is still allocated (reachable from the roots, or not yet
     /// past a collect), no other reference to it is live while the returned
     /// borrow is, and no collect runs while the borrow is held.
-    ///
-    /// `#[doc(hidden)]` so the documented public surface needs no `unsafe`:
-    /// embedders should not see this in rustdoc. The safe path for mutating
-    /// freshly-allocated tables is the `TableBuilder` / `vm.table_of(...)` API.
-    /// Cross-crate access from `luna` (e.g. `jit_backend`, `capi`) keeps
-    /// working — `#[doc(hidden)] pub` doesn't demote visibility, just docs.
     // a `Gc` is a copied handle, as a raw pointer is
     #[allow(clippy::wrong_self_convention)]
     unsafe fn as_mut<'a>(self) -> &'a mut T;

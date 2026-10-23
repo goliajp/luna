@@ -8,6 +8,7 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
+use luna_core::__private::VmJitState;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
@@ -51,8 +52,8 @@ fn vm_for(mode: Mode, version: LuaVersion) -> Vm {
         #[cfg(feature = "llvm-jit")]
         Mode::Llvm => luna_jit::install_llvm_backend(&mut vm),
     }
-    vm.jit.trace_hot_threshold = 2;
-    vm.jit.call_hot_threshold = 2;
+    vm.jit_mut().trace_hot_threshold = 2;
+    vm.jit_mut().call_hot_threshold = 2;
     vm
 }
 

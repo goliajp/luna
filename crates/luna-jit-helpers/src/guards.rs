@@ -1,6 +1,7 @@
 //! Deopt parking and guard checks.
 
 use crate::{current_jit_closure, current_jit_vm, str_arg};
+use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, VmHostInternals, VmJitAlloc};
 
 /// 1 while no deopt is parked and no error is waiting to be raised. A
@@ -16,7 +17,7 @@ use luna_core::__private::{GcInternals, VmHostInternals, VmJitAlloc};
 pub unsafe extern "C" fn luna_jit_no_deopt_parked() -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    i64::from(vm.jit.pending_err.is_none() && vm.jit.pending_raise.is_none())
+    i64::from(vm.jit().pending_err.is_none() && vm.jit().pending_raise.is_none())
 }
 
 /// A trace side exit that resumes at the trace's own head: the op there
@@ -32,7 +33,7 @@ pub unsafe extern "C" fn luna_jit_no_deopt_parked() -> i64 {
 pub unsafe extern "C" fn luna_jit_suppress_trace_admit() {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    vm.jit.suppress_downrec_admit_once = true;
+    vm.jit_mut().suppress_downrec_admit_once = true;
 }
 
 /// 1 when a collection step is due after the allocation compiled code just
@@ -64,8 +65,8 @@ pub unsafe extern "C" fn luna_jit_gc_due(op_pc: i64) -> i64 {
 pub unsafe extern "C" fn luna_jit_park_deopt() {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_none() {
-        vm.jit.pending_err =
+    if vm.jit().pending_err.is_none() {
+        vm.jit_mut().pending_err =
             Some(vm.runtime_error("JIT deopt: compiled code cannot run this call"));
     }
 }

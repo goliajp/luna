@@ -5,6 +5,7 @@
 //! (`for _, b in ipairs(arr) do o = o end`) met a value of another type
 //! and handed the same pc back and forth forever.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 
@@ -12,8 +13,8 @@ fn run(version: LuaVersion, src: &str, hot: Option<u32>) -> String {
     let mut vm = luna_jit::new_with_jit(version);
     match hot {
         Some(h) => {
-            vm.jit.trace_hot_threshold = h;
-            vm.jit.call_hot_threshold = h;
+            vm.jit_mut().trace_hot_threshold = h;
+            vm.jit_mut().call_hot_threshold = h;
         }
         None => {
             vm.set_jit_enabled(false);

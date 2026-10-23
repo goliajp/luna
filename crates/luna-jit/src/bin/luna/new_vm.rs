@@ -8,6 +8,7 @@ use luna_jit::vm::{Standalone, StandaloneOptions, Vm};
 
 use crate::LunaOpts;
 use luna_core::__private::VmCApiLoad;
+use luna_core::__private::VmJitState;
 
 /// The state the interpreter runs in: lua.c's, or the sandbox's (no
 /// lua.c around it).
@@ -140,8 +141,8 @@ pub(crate) fn new_vm(
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
     {
-        vm.jit.trace_hot_threshold = n;
-        vm.jit.call_hot_threshold = n;
+        vm.jit_mut().trace_hot_threshold = n;
+        vm.jit_mut().call_hot_threshold = n;
     }
     // Test knob, also left out of --help: with the LLVM backend, how long a
     // hot trace runs Cranelift's code before LLVM compiles it (0: at once)

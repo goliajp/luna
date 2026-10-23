@@ -104,7 +104,7 @@ fn background_code_becomes_the_entry() {
     let entry = |vm: &mut luna_jit::vm::Vm| {
         let r = vm.call_value(Value::Closure(run), &[]).expect("run");
         assert!(matches!(r[0], Value::Int(610)), "{r:?}");
-        match fib.proto.jit.get() {
+        match fib.proto.jit().get() {
             JitProtoState::Compiled { entry, .. } => entry,
             s => panic!("{s:?}"),
         }
@@ -150,7 +150,7 @@ fn background_code_turned_down_keeps_the_entry() {
     let call = |vm: &mut luna_jit::vm::Vm| {
         let r = vm.call_value(Value::Closure(run), &[]).expect("run");
         assert!(matches!(r[0], Value::Int(55)), "{r:?}");
-        match f.proto.jit.get() {
+        match f.proto.jit().get() {
             JitProtoState::Compiled { entry, .. } => entry,
             s => panic!("{s:?}"),
         }

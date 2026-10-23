@@ -3,6 +3,7 @@
 //! overflows; the result is 0). Run through a Vm with the LLVM backend
 //! installed, against the interpreter.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
@@ -13,8 +14,8 @@ fn eval(src: &str, jit: bool) -> String {
     vm.install_jit_storage(LlvmJitStorage::default());
     vm.set_jit_enabled(jit);
     vm.set_trace_jit_enabled(jit);
-    vm.jit.trace_hot_threshold = 1;
-    vm.jit.call_hot_threshold = 1;
+    vm.jit_mut().trace_hot_threshold = 1;
+    vm.jit_mut().call_hot_threshold = 1;
     let r = vm.eval(src).map_err(|e| vm.error_text(&e)).expect("eval");
     match r.first() {
         Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),

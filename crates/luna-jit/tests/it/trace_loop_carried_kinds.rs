@@ -13,6 +13,7 @@
 //!   an integer on one branch and a float on the other), so the next
 //!   iteration's exits restored that register with the entry kind.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 
@@ -22,8 +23,8 @@ fn run(version: LuaVersion, src: &str, jit: Option<(bool, u32)>) -> (String, u64
         Some((method, hot)) => {
             vm.set_jit_enabled(method);
             vm.set_trace_jit_enabled(true);
-            vm.jit.trace_hot_threshold = hot;
-            vm.jit.call_hot_threshold = hot;
+            vm.jit_mut().trace_hot_threshold = hot;
+            vm.jit_mut().call_hot_threshold = hot;
         }
         None => {
             vm.set_jit_enabled(false);

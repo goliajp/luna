@@ -3,6 +3,7 @@
 
 use crate::current_jit_vm;
 use crate::table_new::unpack_table_ops;
+use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, HeapInternals, ValueInternals, VmJitAlloc};
 
 /// A trace's sunk site makes its table this round (`ops` its `NewTable`'s
@@ -79,7 +80,7 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to
     // this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     let cap_u = if cap > 0 { cap as usize } else { 0 };
@@ -116,7 +117,7 @@ unsafe fn materialize(
     let g = match vm.heap.try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g,
         Ok(None) => {
-            vm.jit.pending_err = Some(vm.runtime_error("table overflow"));
+            vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));
             return None;
         }
         Err(_) => {

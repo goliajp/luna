@@ -4,6 +4,7 @@
 //! `while` loop's exit then returned from the function instead of going
 //! on with the next round of the `for` loop.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 
@@ -11,8 +12,8 @@ fn run(version: LuaVersion, src: &str, hot: Option<u32>) -> (String, u64) {
     let mut vm = luna_jit::new_with_jit(version);
     match hot {
         Some(h) => {
-            vm.jit.trace_hot_threshold = h;
-            vm.jit.call_hot_threshold = h;
+            vm.jit_mut().trace_hot_threshold = h;
+            vm.jit_mut().call_hot_threshold = h;
         }
         None => {
             vm.set_jit_enabled(false);

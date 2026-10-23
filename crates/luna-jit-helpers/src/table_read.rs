@@ -1,7 +1,7 @@
 //! Table read and length helpers.
 
 use crate::{current_jit_closure, current_jit_vm, payload_bits, raw_bits, str_arg, table_arg};
-use luna_core::__private::{ValueInternals, VmHostInternals, VmJitFrames};
+use luna_core::__private::{ValueInternals, VmHostInternals, VmJitFrames, VmJitState};
 
 /// Read `t[key_ptr_as_str]` and return raw payload bits.
 /// String key is a `Gc<LuaStr>` raw pointer baked into IR. Caller
@@ -17,13 +17,13 @@ use luna_core::__private::{ValueInternals, VmHostInternals, VmJitFrames};
 pub unsafe extern "C" fn luna_jit_table_get_field(t: i64, key_ptr: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
+        vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
         return 0;
     }
     // SAFETY: `key_ptr` is an interned string (# Safety)
@@ -53,19 +53,20 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     let env = vm.upval_get(cl, upval_idx as u32);
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> = match env {
         luna_core::runtime::Value::Table(t) => t,
         _ => {
-            vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: GetTabUp upval not Table"));
+            vm.jit_mut().pending_err =
+                Some(vm.runtime_error("JIT deopt: GetTabUp upval not Table"));
             return 0;
         }
     };
     if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: GetTabUp env has metatable"));
+        vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: GetTabUp env has metatable"));
         return 0;
     }
     // SAFETY: `key_ptr` is an interned string (# Safety)
@@ -217,7 +218,7 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up_checked(
 pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
@@ -228,7 +229,7 @@ pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
     // the interpreter, which walks __index correctly (including the
     // infinite-loop error events.lua relies on).
     if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
+        vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
         return 0;
     }
     // Return the raw 8-byte payload of the stored
@@ -258,13 +259,13 @@ pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
 pub unsafe extern "C" fn luna_jit_table_get_float(t: i64, key_bits: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
+        vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
         return 0;
     }
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
@@ -281,7 +282,7 @@ pub unsafe extern "C" fn luna_jit_table_get_float(t: i64, key_bits: i64) -> i64 
 pub unsafe extern "C" fn luna_jit_table_len(t: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
@@ -289,7 +290,7 @@ pub unsafe extern "C" fn luna_jit_table_len(t: i64) -> i64 {
     // 5.4+ honours __len on tables; the helper bypasses it.
     // Park a deopt request and let the interpreter compute the length.
     if g.metatable().is_some() {
-        vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
+        vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
         return 0;
     }
     g.len()
@@ -308,9 +309,8 @@ pub unsafe extern "C" fn luna_jit_table_len_checked(t: i64) -> i64 {
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
-        // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent
-        // to this call
-        unsafe { current_jit_vm() }.jit.counters.deopt += 1;
+        // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
+        unsafe { current_jit_vm() }.jit_mut().counters.deopt += 1;
         return -1;
     }
     g.len()

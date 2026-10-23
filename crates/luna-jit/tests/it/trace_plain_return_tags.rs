@@ -4,6 +4,7 @@
 //! the tail left them (here `r`, set in the pass), not as the guard's
 //! snapshot has them (`r` still nil), which dropped the write.
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
@@ -51,8 +52,8 @@ fn run(v: LuaVersion, src: &str, jit: Option<(TraceTier, Option<u32>)>) -> Strin
         Some((tier, hot)) => {
             vm.set_trace_tier(tier);
             if let Some(h) = hot {
-                vm.jit.trace_hot_threshold = h;
-                vm.jit.call_hot_threshold = h;
+                vm.jit_mut().trace_hot_threshold = h;
+                vm.jit_mut().call_hot_threshold = h;
             }
         }
     }

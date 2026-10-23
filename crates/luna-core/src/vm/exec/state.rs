@@ -77,12 +77,7 @@ pub struct Vm {
     /// JIT sidecar. Always present (never `Option`); inert
     /// when `chunk_compiler` / `trace_compiler` are
     /// `crate::jit::NullJitBackend`. See `crate::vm::jit_state`.
-    ///
-    /// `#[doc(hidden)] pub` so the `luna` crate's
-    /// `extern "C"` JIT helpers can write `vm.jit.pending_err`
-    /// directly. Not part of the embedder-facing API surface.
-    #[doc(hidden)]
-    pub jit: crate::vm::jit_state::JitState,
+    pub(crate) jit: crate::vm::jit_state::JitState,
 
     /// Host roots — a `Vec<Value>` traced as an extra GC root set. `Lua` facade
     /// handles (`LuaFunction`, `LuaTable`, `LuaRoot`) hold indices into this

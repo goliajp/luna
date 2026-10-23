@@ -16,6 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
+use luna_core::__private::VmJitState;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -136,8 +137,8 @@ fn corpus_runs_the_same_with_the_jit_engaged_early() {
             let interp = masked(run(&mut interp_vm, &source));
             for &hot in HOT {
                 let mut vm = super::trace_corpus::seeded(version, 1);
-                vm.jit.trace_hot_threshold = hot;
-                vm.jit.call_hot_threshold = hot;
+                vm.jit_mut().trace_hot_threshold = hot;
+                vm.jit_mut().call_hot_threshold = hot;
                 let jit = masked(run(&mut vm, &source));
                 dispatched += vm.trace_dispatched_count();
                 compiled_chunks += luna_jit::jit::cache_entry_count(&vm);

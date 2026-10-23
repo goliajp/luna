@@ -182,7 +182,7 @@ fn take_luna_opts(argv: Vec<Vec<u8>>) -> (LunaOpts, Vec<Vec<u8>>) {
 
 use args::{LuaArgs, collectargs, print_usage};
 use interp::{Interp, lua_tostring, show};
-use luna_core::__private::{VmCApiState, VmCApiValues, VmHostInternals};
+use luna_core::__private::{VmCApiState, VmCApiValues, VmHostInternals, VmJitState};
 /// `lua.c`'s `print_version`, with luna's name: 5.1 writes it to stderr,
 /// later versions to stdout.
 fn print_version(v: LuaVersion) {
@@ -200,21 +200,21 @@ fn print_profile(vm: &Vm) {
     // Pull JIT counters from the JitState sidecar (A2).
     eprintln!("---");
     eprintln!("profile (trace JIT counters):");
-    eprintln!("  trace_closed_count: {}", vm.jit.counters.closed);
-    eprintln!("  trace_compiled_count: {}", vm.jit.counters.compiled);
+    eprintln!("  trace_closed_count: {}", vm.jit().counters.closed);
+    eprintln!("  trace_compiled_count: {}", vm.jit().counters.compiled);
     eprintln!(
         "  trace_compile_failed_count: {}",
-        vm.jit.counters.compile_failed
+        vm.jit().counters.compile_failed
     );
-    eprintln!("  trace_dispatched_count: {}", vm.jit.counters.dispatched);
-    eprintln!("  trace_deopt_count: {}", vm.jit.counters.deopt);
+    eprintln!("  trace_dispatched_count: {}", vm.jit().counters.dispatched);
+    eprintln!("  trace_deopt_count: {}", vm.jit().counters.deopt);
     eprintln!(
         "  trace_side_trace_started_count: {}",
-        vm.jit.counters.side_trace_started
+        vm.jit().counters.side_trace_started
     );
     eprintln!(
         "  trace_side_trace_compiled_count: {}",
-        vm.jit.counters.side_trace_compiled
+        vm.jit().counters.side_trace_compiled
     );
 }
 

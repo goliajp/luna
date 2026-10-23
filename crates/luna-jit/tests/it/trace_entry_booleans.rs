@@ -4,6 +4,7 @@
 //! with (a coroutine here) still keeps the trace from being compiled and
 //! leaves its head free for a later recording.
 
+use luna_core::__private::VmJitState;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
@@ -13,8 +14,8 @@ fn vm() -> Vm {
     // the method JIT would run these functions instead of the interpreter
     // the trace recorder watches
     vm.set_jit_enabled(false);
-    vm.jit.call_hot_threshold = 2;
-    vm.jit.trace_hot_threshold = 2;
+    vm.jit_mut().call_hot_threshold = 2;
+    vm.jit_mut().trace_hot_threshold = 2;
     vm
 }
 

@@ -1,6 +1,7 @@
 //! Frame materialization for inline side exits.
 
 use crate::current_jit_vm;
+use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, VmJitAlloc, VmJitFrames};
 
 /// Runtime fire counter for the inline-chain reloc path. Every call to
@@ -64,7 +65,7 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     // Honour the existing deopt protocol: if any earlier helper in
     // this JIT entry parked a deopt, don't push frames — the
     // dispatcher will unwind via the deopt path.
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return -1;
     }
     let head_frame = match vm.jit_last_lua_frame() {

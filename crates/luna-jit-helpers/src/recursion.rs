@@ -20,6 +20,7 @@ use luna_core::runtime::Value;
 
 use crate::{current_jit_closure, current_jit_vm, table_arg};
 use luna_core::__private::VmJitFrames;
+use luna_core::__private::VmJitState;
 
 /// The kind of a self-recursive call's result, in a [`self_call_desc`].
 pub const SELF_CALL_RET_NONE: i64 = 0;
@@ -74,7 +75,7 @@ pub unsafe extern "C" fn luna_jit_enter_ctx(ctx: *mut i64) {
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    let base = vm.jit.levels_slot;
+    let base = vm.jit().levels_slot;
     let lim = vm.jit_limits(cl, base);
     // SAFETY: `ctx` points to SELF_CTX_WORDS writable words (# Safety)
     unsafe {
@@ -109,7 +110,7 @@ pub unsafe extern "C" fn luna_jit_self_level(
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
     // a call below already failed: the callers are only unwinding
-    let r = if vm.jit.pending_raise.is_some() || vm.jit.pending_err.is_some() {
+    let r = if vm.jit().pending_raise.is_some() || vm.jit().pending_err.is_some() {
         Err(SELF_FAILED)
     } else {
         let tail = desc & SELF_LEVEL_TAIL != 0;
@@ -117,7 +118,7 @@ pub unsafe extern "C" fn luna_jit_self_level(
             Ok(Some(lim)) => Ok(lim),
             Ok(None) => Err(SELF_NOT_STARTED),
             Err(e) => {
-                vm.jit.pending_raise = Some(e);
+                vm.jit_mut().pending_raise = Some(e);
                 Err(SELF_FAILED)
             }
         }

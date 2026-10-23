@@ -3,6 +3,7 @@
 //! as a float. `q` is only copied into a local, so the parameter's kind
 //! comes from the local's.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 
@@ -10,8 +11,8 @@ fn run(src: &str, method: bool, trace: bool, trace_hot: u32, call_hot: u32) -> S
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(method);
     vm.set_trace_jit_enabled(trace);
-    vm.jit.trace_hot_threshold = trace_hot;
-    vm.jit.call_hot_threshold = call_hot;
+    vm.jit_mut().trace_hot_threshold = trace_hot;
+    vm.jit_mut().call_hot_threshold = call_hot;
     match vm.eval(src).expect("eval").first() {
         Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
         other => panic!("{other:?}"),

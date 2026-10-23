@@ -4,6 +4,7 @@
 //! argument error. The trace never loaded the function into the call's
 //! register, so it has to leave at the lookup, not at the argument.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
@@ -47,9 +48,9 @@ fn run(v: LuaVersion, src: &str, jit: Option<(TraceTier, u32, u32)>) -> String {
     vm.set_jit_enabled(jit.is_some());
     vm.set_trace_jit_enabled(jit.is_some());
     if let Some((tier, trace, call)) = jit {
-        vm.jit.trace_tier = tier;
-        vm.jit.trace_hot_threshold = trace;
-        vm.jit.call_hot_threshold = call;
+        vm.jit_mut().trace_tier = tier;
+        vm.jit_mut().trace_hot_threshold = trace;
+        vm.jit_mut().call_hot_threshold = call;
     }
     match vm.eval(src).expect("eval").first() {
         Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),

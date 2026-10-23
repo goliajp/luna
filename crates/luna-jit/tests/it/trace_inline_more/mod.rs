@@ -5,6 +5,7 @@
 //! tiers (and the move from one to the other); the results must agree, and
 //! the counters show the new paths ran in traces.
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
@@ -26,8 +27,8 @@ pub(super) fn traced(version: LuaVersion, tier: TraceTier, tier_up_at: u32) -> V
     // the method JIT would run whole functions instead of the interpreter
     // the trace recorder watches
     vm.set_jit_enabled(false);
-    vm.jit.trace_hot_threshold = 8;
-    vm.jit.call_hot_threshold = 8;
+    vm.jit_mut().trace_hot_threshold = 8;
+    vm.jit_mut().call_hot_threshold = 8;
     vm.set_trace_tier(tier);
     vm.set_trace_tier_up_at(tier_up_at);
     vm

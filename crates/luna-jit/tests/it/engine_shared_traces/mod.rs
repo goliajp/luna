@@ -3,11 +3,11 @@
 //! and compiling, and gets the same results as the interpreter with its
 //! own globals, upvalues and strings.
 
-use luna_jit::Engine;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
+use luna_jit::{__private::VmJitState, Engine};
 
 /// A table read and written through string keys in a loop, with a branch
 /// and a folded `math.min` (the token bucket of the benchmarks).
@@ -95,8 +95,8 @@ fn interp(v: LuaVersion) -> Vm {
 fn shared(engine: &Engine, v: LuaVersion) -> Vm {
     let mut vm = engine.new_vm(v);
     vm.set_jit_enabled(false);
-    vm.jit.trace_hot_threshold = 8;
-    vm.jit.call_hot_threshold = 8;
+    vm.jit_mut().trace_hot_threshold = 8;
+    vm.jit_mut().call_hot_threshold = 8;
     vm
 }
 
@@ -406,7 +406,7 @@ fn vms_without_an_engine_share_nothing() {
     for _ in 0..2 {
         let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
         vm.set_jit_enabled(false);
-        vm.jit.trace_hot_threshold = 8;
+        vm.jit_mut().trace_hot_threshold = 8;
         let r = run(&mut vm, TOKEN, 2);
         assert!(r.compiled > 0);
         assert_eq!(r.adopted, 0);

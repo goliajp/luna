@@ -67,12 +67,6 @@ impl<T> Gc<T> {
     /// The object is still allocated (reachable from the roots, or not yet
     /// past a collect), no other reference to it is live while the returned
     /// borrow is, and no collect runs while the borrow is held.
-    ///
-    /// `#[doc(hidden)]` so the documented public surface needs no `unsafe`:
-    /// embedders should not see this in rustdoc. The safe path for mutating
-    /// freshly-allocated tables is the `TableBuilder` / `vm.table_of(...)` API.
-    /// Cross-crate access from `luna` (e.g. `jit_backend`, `capi`) keeps
-    /// working — `#[doc(hidden)] pub` doesn't demote visibility, just docs.
     pub(crate) unsafe fn as_mut<'a>(self) -> &'a mut T {
         // SAFETY: `ptr` is non-null and points at an object of the heap that allocated it; the caller's contract above keeps that object unfreed and unaliased for as long as the returned borrow lives
         unsafe { &mut *self.ptr.as_ptr() }

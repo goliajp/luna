@@ -5,6 +5,7 @@
 //! inner loop (here the `w = 0` that restarts it), so the inner loop
 //! stopped running and the outer loop finished early.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 
@@ -12,8 +13,8 @@ fn run(version: LuaVersion, src: &str, hot: Option<u32>) -> (String, u64) {
     let mut vm = luna_jit::new_with_jit(version);
     match hot {
         Some(h) => {
-            vm.jit.trace_hot_threshold = h;
-            vm.jit.call_hot_threshold = h;
+            vm.jit_mut().trace_hot_threshold = h;
+            vm.jit_mut().call_hot_threshold = h;
         }
         None => {
             vm.set_jit_enabled(false);

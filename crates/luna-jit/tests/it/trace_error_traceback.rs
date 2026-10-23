@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
@@ -62,8 +63,8 @@ fn vm(v: LuaVersion, mode: Mode) -> Vm {
         }
         Mode::MethodAndTrace => {}
     }
-    vm.jit.trace_hot_threshold = 2;
-    vm.jit.call_hot_threshold = 2;
+    vm.jit_mut().trace_hot_threshold = 2;
+    vm.jit_mut().call_hot_threshold = 2;
     vm
 }
 
@@ -124,7 +125,7 @@ fn snapshots_match_puc_in_compiled_code() {
                         "{mode:?} {name} {dialect}\n--- puc\n{want}\n--- luna\n{got}"
                     ));
                 }
-                let entered = vm.jit.counters.dispatched > 0;
+                let entered = vm.jit().counters.dispatched > 0;
                 if RUN_IN_TRACES.contains(&name.as_str()) && !entered {
                     failures.push(format!("{mode:?} {name} {dialect}: no trace ran"));
                 }
@@ -162,7 +163,7 @@ fn debug_traceback_in_a_handler_matches_the_interpreter() {
                 let got = run(&mut jit, name);
                 assert_eq!(got, want, "{mode:?} {name} {dialect}");
                 assert!(
-                    jit.jit.counters.dispatched > 0,
+                    jit.jit().counters.dispatched > 0,
                     "{mode:?} {name} {dialect}: no trace ran"
                 );
             }

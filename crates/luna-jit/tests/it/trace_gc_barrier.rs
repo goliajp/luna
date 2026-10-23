@@ -7,6 +7,7 @@
 //! atomic phase that no black table holds a dead-white object, so it
 //! fails there; without the feature the test compares the results.
 
+use luna_core::__private::VmJitState;
 use luna_jit::version::LuaVersion;
 
 /// The results as text, from a Vm on a thread of its own: `gc-verify`
@@ -17,7 +18,7 @@ fn run(src: &'static str, trace: bool) -> String {
         let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
         vm.set_jit_enabled(false);
         vm.set_trace_jit_enabled(trace);
-        vm.jit.trace_hot_threshold = 1;
+        vm.jit_mut().trace_hot_threshold = 1;
         let r = vm.eval(src).expect("runs");
         if trace {
             assert!(vm.trace_dispatched_count() > 0, "no trace ran");
