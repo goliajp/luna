@@ -108,15 +108,6 @@ impl Vm {
         Ok(co)
     }
 
-    /// Set the function a thread made by [`Vm::host_new_thread`] runs.
-    pub fn host_set_body(&mut self, co: Gc<Coro>, body: Value) {
-        // SAFETY: `co` is held by the caller and has not started, so no
-        // context is loaded from it and no other reference into it is live;
-        // the borrow covers one store
-        unsafe { co.as_mut() }.body = body;
-        self.heap.barrier_back(co);
-    }
-
     /// A value's text without metamethods, as `lua_tolstring` converts a
     /// number (`tostring` of other values).
     pub fn host_basic_text(&mut self, v: Value) -> Vec<u8> {

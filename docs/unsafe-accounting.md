@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1786** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1785** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 250 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; eight more in `luna_core::__private`, which is not public API, see §5 |
 | **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
@@ -38,7 +38,7 @@ quotes the pattern counts too.
 |---|---|---:|---|
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`, `num_words.rs`) | 84 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch; a numeric `for`'s control values read a word pair at a time (aarch64) |
 | | `vm/exec/index_*` | 40 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
-| | `vm/exec` (other) | 109 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
+| | `vm/exec` (other) | 108 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `gc_ptr.rs`, `gc_hooks` | 183 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit; the collector checks of the test-only builds (`gc-verify`: the freed-address probes, the tricolour and string-count checks) |
 | | `runtime/puc` | 113 | the model of PUC's allocations: the records it keeps over raw object headers (the parser's tables and frames a collection step marks, 5.1's environment records, the objects PUC makes and luna does not yet, the strings a load sets aside), its marking and sweeping of them, the 5.5 sizer |
 | | `private` (`luna_core::__private`) | 20 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, and the four JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
@@ -64,7 +64,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1786** | |
+| **Total** | | **1785** | |
 
 ## 3. Pattern catalog
 

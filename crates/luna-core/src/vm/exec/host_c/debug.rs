@@ -303,23 +303,9 @@ impl Vm {
         self.hook_yield = true;
     }
 
-    /// Drop a hook yield nothing acts on: one asked for in a call or return
-    /// hook.
-    pub fn host_hook_yield_clear(&mut self) {
-        self.hook_yield = false;
-    }
-
     /// The next Lua function called is called by a hook (PUC
     /// `CIST_HOOKED` on its caller): its name reads "hook" (5.3+).
     pub fn host_mark_hook_call(&mut self, on: bool) {
         self.pending_is_hook = on;
-    }
-
-    /// The level of `co` a C function of the C API runs at, by the Lua stack
-    /// slot it was called at.
-    pub fn host_level_of_slot(&self, co: Gc<Coro>, func_slot: u32) -> Option<usize> {
-        let ts = self.host_levels(co);
-        (0..ts.levels.len())
-            .find(|&i| matches!(ts.levels[i], DbgKind::C(_)) && ts.func_slot(i) == Some(func_slot))
     }
 }

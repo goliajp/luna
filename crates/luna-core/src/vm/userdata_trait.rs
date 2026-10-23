@@ -85,7 +85,6 @@ pub struct UserdataMarker<'a> {
 impl<'a> UserdataMarker<'a> {
     /// Crate-internal constructor. Not part of the public API — only
     /// the collector (`Userdata::trace`) builds one.
-    #[doc(hidden)]
     pub(crate) fn __new_internal(inner: &'a mut crate::runtime::heap::Marker) -> Self {
         UserdataMarker { inner }
     }
