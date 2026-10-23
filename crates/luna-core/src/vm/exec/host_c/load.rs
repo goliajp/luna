@@ -14,12 +14,11 @@ pub enum HostLoadError {
     Syntax(Value),
 }
 
-#[doc(hidden)]
 impl Vm {
     /// Whether `prefix`, the start of a binary chunk a `lua_load` reader
     /// delivered, already holds every byte PUC's undumper reads: PUC stops
     /// calling the reader there.
-    pub fn host_binary_chunk_complete(&mut self, prefix: &[u8]) -> bool {
+    pub(crate) fn host_binary_chunk_complete(&mut self, prefix: &[u8]) -> bool {
         !crate::vm::dump::truncated(
             prefix,
             &mut self.heap,
@@ -31,7 +30,7 @@ impl Vm {
     /// Compile or undump `src` as the chunk `chunkname` (PUC `f_parser`):
     /// the function and the number of upvalues its prototype declares, or
     /// the error.
-    pub fn host_load_chunk(
+    pub(crate) fn host_load_chunk(
         &mut self,
         src: &[u8],
         chunkname: &[u8],
@@ -59,9 +58,9 @@ impl Vm {
         }
     }
 
-    /// [`Vm::host_load_chunk`] for a text chunk a reader handed over
-    /// while it was parsed (see [`Vm::text_load`]).
-    pub fn host_load_parsed(
+    /// `Vm::host_load_chunk` for a text chunk a reader handed over
+    /// while it was parsed (see `Vm::text_load`).
+    pub(crate) fn host_load_parsed(
         &mut self,
         parsed: crate::vm::exec::ParsedText,
         chunkname: &[u8],
@@ -78,7 +77,11 @@ impl Vm {
     /// Set the first upvalue of a function `lua_load` just made, which no
     /// other code holds yet, to `v` (PUC `lua_load`: the globals), in the
     /// upvalue the load made. Never fails.
-    pub fn host_set_first_upvalue(&mut self, cl: Gc<LuaClosure>, v: Value) -> Result<(), LuaError> {
+    pub(crate) fn host_set_first_upvalue(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        v: Value,
+    ) -> Result<(), LuaError> {
         if let Some(&uv) = cl.upvals().first() {
             // SAFETY: a load makes each upvalue of its function closed and
             // its own, and only the caller holds the function; the borrow
@@ -94,7 +97,7 @@ impl Vm {
     /// function the dialect's instruction set cannot hold (as one block),
     /// with the size of each block PUC's dumper writes on its own; `None`
     /// for a value that is not a Lua function.
-    pub fn host_dump(&self, f: Value, strip: bool) -> Option<(Vec<u8>, Vec<usize>)> {
+    pub(crate) fn host_dump(&self, f: Value, strip: bool) -> Option<(Vec<u8>, Vec<usize>)> {
         let Value::Closure(cl) = f else {
             return None;
         };
@@ -112,17 +115,17 @@ impl Vm {
     /// Start the collector in incremental mode, as a state made by
     /// `lua_newstate` is (the stand-alone interpreter switches 5.4 and 5.5
     /// to generational mode, which is a fresh Vm's mode).
-    pub fn host_gc_start_incremental(&mut self) {
+    pub(crate) fn host_gc_start_incremental(&mut self) {
         self.gc_switch_mode("incremental");
     }
 
     /// Turn the default warning function on (5.5's `luaL_newstate`).
-    pub fn host_warn_on(&mut self) {
+    pub(crate) fn host_warn_on(&mut self) {
         self.warn_state = WarnState::On;
     }
 
     /// PUC `lua_warning`: one piece of a warning, to the warning function.
-    pub fn host_warning(&mut self, msg: &[u8], to_cont: bool) -> Result<(), LuaError> {
+    pub(crate) fn host_warning(&mut self, msg: &[u8], to_cont: bool) -> Result<(), LuaError> {
         self.emit_warn(msg, to_cont)
     }
 
@@ -130,7 +133,7 @@ impl Vm {
     /// its arguments (`args`: those the option takes, in order, the rest
     /// zero), mapped onto luna's collector the way `collectgarbage` is.
     /// 5.1 to 5.3 raise a finalizer's error from a full collection.
-    pub fn host_gc(&mut self, what: i32, args: [i64; 3]) -> Result<i32, LuaError> {
+    pub(crate) fn host_gc(&mut self, what: i32, args: [i64; 3]) -> Result<i32, LuaError> {
         use LuaVersion::*;
         let v = self.version;
         // 5.4+ refuse every option while a finalizer runs

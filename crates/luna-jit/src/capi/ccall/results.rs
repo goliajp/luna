@@ -2,7 +2,6 @@
 //! error.
 
 use super::*;
-use luna_core::__private::VmHostInternals;
 
 /// Put a call's results on the stack from index `at`, where its function
 /// was, adjusted to `nresults` (-1: all). The results may be held by

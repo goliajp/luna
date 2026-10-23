@@ -3,7 +3,6 @@
 
 use super::ccall::{take_error, with_c};
 use super::*;
-use luna_core::__private::VmHostInternals;
 use luna_core::runtime::LuaClosure;
 use luna_core::vm::exec::host_c::HostLoadError;
 
@@ -215,9 +214,9 @@ fn finish(
         _ => (n >= 1).then(|| api.vm.host_registry().get_int(2)),
     };
     if let Some(g) = globals {
-        api.vm
-            .host_set_first_upvalue(cl, g)
-            .map_err(|e| (LUA_ERRMEM, e.0))?;
+        // SAFETY: `cl` is the function the load just made (`r`), which
+        // nothing else holds yet
+        unsafe { api.vm.host_set_first_upvalue(cl, g) }.map_err(|e| (LUA_ERRMEM, e.0))?;
     }
     Ok(Value::Closure(cl))
 }

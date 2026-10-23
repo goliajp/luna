@@ -1,7 +1,6 @@
 //! Closing a thread: `lua_closethread` and `lua_resetthread`.
 
 use super::*;
-use luna_core::__private::VmHostInternals;
 
 /// Close `api`'s thread (PUC `luaE_resetthread`): run its pending `__close`
 /// handlers and clear its stack, leaving the error object there if it died

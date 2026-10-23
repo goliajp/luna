@@ -12,6 +12,7 @@ use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaError, Vm};
 
 use super::load_memory_errors::source;
+use luna_core::__private::VmCApiValues;
 
 /// While armed, refuses every growth from the `n`th on.
 #[derive(Default)]

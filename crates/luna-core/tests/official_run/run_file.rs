@@ -185,9 +185,9 @@ fn new_vm(version: LuaVersion, label: &str) -> Vm {
     vm
 }
 
-/// lua.c from 5.4: `lua_gc(L, LUA_GCRESTART)` and `lua_gc(L, LUA_GCGEN)`
-/// before it runs anything.
+/// lua.c from 5.4: `lua_gc(L, LUA_GCRESTART)`, `lua_gc(L, LUA_GCGEN)`.
 fn generational_as_lua_c(vm: &mut Vm, version: LuaVersion) {
+    use luna_core::__private::VmCApiLoad;
     let op = match version {
         LuaVersion::Lua55 => 7,
         v if v >= LuaVersion::Lua54 => 10,

@@ -4,7 +4,7 @@ use super::*;
 
 #[path = "interp/msgh.rs"]
 mod msgh;
-use luna_core::__private::VmHostInternals;
+use luna_core::__private::{VmCApiLoad, VmHostInternals};
 use msgh::msghandler;
 
 /// The interpreter: the state `lua.c` keeps around its `lua_State`.

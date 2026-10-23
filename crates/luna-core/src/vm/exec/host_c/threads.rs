@@ -9,31 +9,30 @@
 
 use super::*;
 
-#[doc(hidden)]
 impl Vm {
     /// Whether `co` sits at its base level with its next body on its C
     /// stack: a thread the C API has seen that has not started, returned,
     /// or was closed.
-    pub fn host_restartable(&self, co: Gc<Coro>) -> bool {
+    pub(crate) fn host_restartable(&self, co: Gc<Coro>) -> bool {
         co.host_state.is_some()
             && !self.is_main_coro(co)
             && (!co.started || (co.status == CoroStatus::Dead && co.error_value.is_none()))
     }
 
     /// The status of `co` as `coroutine.status` reports it.
-    pub fn host_coro_status(&self, co: Gc<Coro>) -> CoroStatus {
+    pub(crate) fn host_coro_status(&self, co: Gc<Coro>) -> CoroStatus {
         self.effective_coro_status(co)
     }
 
     /// Whether a resume now would overflow PUC's C stack
     /// (`LUAI_MAXCCALLS`).
-    pub fn host_c_stack_full(&self) -> bool {
+    pub(crate) fn host_c_stack_full(&self) -> bool {
         self.g.nccalls >= MAX_C_DEPTH
     }
 
     /// Whether the running coroutine is closing itself (the `Err` a call
     /// returned is that, not an error).
-    pub fn host_terminating(&self) -> bool {
+    pub(crate) fn host_terminating(&self) -> bool {
         self.terminating.is_some()
     }
 
@@ -41,7 +40,7 @@ impl Vm {
     /// `lua_closethread(L, L)`): run its pending `__close` handlers; the
     /// returned value is what the C function leaves with, and the resume
     /// that runs the coroutine then ends it.
-    pub fn host_close_running(&mut self) -> LuaError {
+    pub(crate) fn host_close_running(&mut self) -> LuaError {
         self.close_running()
     }
 
@@ -107,5 +106,27 @@ impl Vm {
         let mut all = unsafe { co.as_mut() }.host_stack.take().to_vec();
         all.extend(vals);
         Ok(all)
+    }
+}
+
+impl Vm {
+    /// The status `co` died with, when it died by an error and was not
+    /// closed since.
+    pub(crate) fn host_thread_error(&self, co: Gc<Coro>) -> Option<crate::runtime::ErrorStatus> {
+        (co.status == CoroStatus::Dead && co.error_value.is_some()).then_some(co.error_status)
+    }
+
+    /// Close `co` (PUC `lua_closethread`): run its pending `__close`
+    /// handlers and mark it dead. `Ok(Some(e))`: it had died with `e`.
+    pub(crate) fn host_close_thread(&mut self, co: Gc<Coro>) -> Result<Option<Value>, LuaError> {
+        self.close_coro(co)
+    }
+
+    /// PUC `lua_close` before the state is freed: close the main thread's
+    /// pending to-be-closed variables and run every finalizer, dropping
+    /// their errors.
+    pub(crate) fn host_close_state(&mut self) {
+        self.leave_host_entry();
+        self.close_state();
     }
 }

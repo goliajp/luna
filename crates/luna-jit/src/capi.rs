@@ -21,7 +21,10 @@
 //! surface reads like `lua.h`.
 #![allow(non_snake_case)]
 
-use luna_core::__private::UserdataInternals;
+use luna_core::__private::{
+    GcInternals, MemCtxInternals, UserdataInternals, VmCApiDebug, VmCApiLoad, VmCApiState,
+    VmCApiValues, VmHostInternals,
+};
 use luna_core::runtime::mem::LVec;
 use luna_core::runtime::{Coro, Gc, Value};
 use luna_core::version::LuaVersion;

@@ -5,7 +5,6 @@
 
 use super::ccall::{Cont, KFn, LUNA_RECOVER, PendingYield, Wait, pcall_outcome, push_results};
 use super::*;
-use luna_core::__private::VmHostInternals;
 use luna_core::runtime::ErrorStatus;
 use luna_core::vm::exec::host_c::HostContSpec;
 

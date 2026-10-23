@@ -407,7 +407,7 @@ pub struct Vm {
 
     /// When `true`, `instr_budget` exhaustion in
     /// the dispatcher hot loop yields cooperatively (sets
-    /// [`Vm::host_yield_pending`] + returns a sentinel `Err` walked up
+    /// `Vm::host_yield_pending` + returns a sentinel `Err` walked up
     /// to `EvalFuture::poll`) instead of returning a real
     /// "instruction budget exceeded" error. Set by [`Vm::eval_async`]
     /// for the duration of the future; restored to `false` on

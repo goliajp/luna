@@ -3,7 +3,6 @@
 
 use super::ccall::{take_error, with_c};
 use super::*;
-use luna_core::__private::MemCtxInternals;
 
 /// PUC 5.4+ `lua_WarnFunction`.
 pub type LuaWarnFunction = unsafe extern "C" fn(ud: *mut c_void, msg: *const c_char, tocont: c_int);

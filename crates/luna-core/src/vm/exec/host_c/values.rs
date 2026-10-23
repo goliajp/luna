@@ -31,7 +31,6 @@ pub const HOST_OP_UNM: u8 = 12;
 /// 5.3+ `LUA_OPBNOT`.
 pub const HOST_OP_BNOT: u8 = 13;
 
-#[doc(hidden)]
 impl Vm {
     fn host_noyield<R>(&mut self, f: impl FnOnce(&mut Vm) -> R) -> R {
         self.nny += 1;
@@ -41,31 +40,40 @@ impl Vm {
     }
 
     /// `t[k]` with metamethods (PUC `lua_gettable`).
-    pub fn host_index(&mut self, t: Value, k: Value) -> Result<Value, LuaError> {
+    pub(crate) fn host_index(&mut self, t: Value, k: Value) -> Result<Value, LuaError> {
         self.host_noyield(|vm| vm.index_value(t, k))
     }
 
     /// `t[k] = v` with metamethods (PUC `lua_settable`).
-    pub fn host_set_index(&mut self, t: Value, k: Value, v: Value) -> Result<(), LuaError> {
+    pub(crate) fn host_set_index(&mut self, t: Value, k: Value, v: Value) -> Result<(), LuaError> {
         self.host_noyield(|vm| vm.newindex_value(t, k, v))
     }
 
     /// `t[k] = v` without metamethods (PUC `lua_rawset`): a nil or NaN key
     /// and a read-only table raise.
-    pub fn host_raw_set(&mut self, t: Gc<Table>, k: Value, v: Value) -> Result<(), LuaError> {
+    pub(crate) fn host_raw_set(
+        &mut self,
+        t: Gc<Table>,
+        k: Value,
+        v: Value,
+    ) -> Result<(), LuaError> {
         self.raw_set(t, k, v)
     }
 
     /// A new table with room for `narr` array items and `nrec` others
     /// (PUC `lua_createtable`).
-    pub fn host_new_table(&mut self, narr: usize, nrec: usize) -> Result<Gc<Table>, LuaError> {
+    pub(crate) fn host_new_table(
+        &mut self,
+        narr: usize,
+        nrec: usize,
+    ) -> Result<Gc<Table>, LuaError> {
         self.alloc_table_sized(narr, nrec)
     }
 
     /// The table 5.5's `lua_load` anchors the parser's work in, on the
     /// stack under what the reader pushes: luna's own, uncounted, as the
     /// load counts PUC's in its place.
-    pub fn host_load_anchor(&mut self) -> Result<Gc<Table>, LuaError> {
+    pub(crate) fn host_load_anchor(&mut self) -> Result<Gc<Table>, LuaError> {
         let t = self.uncounted(|vm| vm.alloc_table())?;
         Ok(t)
     }
@@ -80,7 +88,7 @@ impl Vm {
 
     /// The entry of `t` after key `k` (PUC `lua_next`); an absent key
     /// raises "invalid key to 'next'".
-    pub fn host_next(
+    pub(crate) fn host_next(
         &mut self,
         t: Gc<Table>,
         k: Value,
@@ -90,7 +98,7 @@ impl Vm {
 
     /// The metatable of `v` (PUC `lua_getmetatable`): its own, or its
     /// type's.
-    pub fn host_metatable(&self, v: Value) -> Option<Gc<Table>> {
+    pub(crate) fn host_metatable(&self, v: Value) -> Option<Gc<Table>> {
         self.metatable_of(v)
     }
 
@@ -100,7 +108,11 @@ impl Vm {
     /// marks every userdata with a metatable, and looks for `__gc` when it
     /// collects it. A read-only table refuses, as Redis's
     /// `lua_setmetatable` does.
-    pub fn host_set_metatable(&mut self, v: Value, mt: Option<Gc<Table>>) -> Result<(), LuaError> {
+    pub(crate) fn host_set_metatable(
+        &mut self,
+        v: Value,
+        mt: Option<Gc<Table>>,
+    ) -> Result<(), LuaError> {
         match v {
             Value::Table(t) => {
                 self.refuse_readonly(t)?;
@@ -132,7 +144,7 @@ impl Vm {
 
     /// PUC `lua_arith` with the 5.3+ operation `op` (0 to 13): `r` is the
     /// second operand, and the operand itself again for the unary ones.
-    pub fn host_arith(&mut self, op: u8, l: Value, r: Value) -> Result<Value, LuaError> {
+    pub(crate) fn host_arith(&mut self, op: u8, l: Value, r: Value) -> Result<Value, LuaError> {
         match op {
             HOST_OP_UNM => self.host_unm(l),
             HOST_OP_BNOT => self.host_bnot(l),
@@ -180,24 +192,24 @@ impl Vm {
 
     /// `l == r` with `__eq` (PUC `lua_compare` with `LUA_OPEQ`, 5.1
     /// `lua_equal`).
-    pub fn host_equal(&mut self, l: Value, r: Value) -> Result<bool, LuaError> {
+    pub(crate) fn host_equal(&mut self, l: Value, r: Value) -> Result<bool, LuaError> {
         self.host_noyield(|vm| vm.equal(l, r))
     }
 
     /// `l < r`, or `l <= r` with `or_eq`, with metamethods (PUC
     /// `lua_compare`, 5.1 `lua_lessthan`).
-    pub fn host_less(&mut self, l: Value, r: Value, or_eq: bool) -> Result<bool, LuaError> {
+    pub(crate) fn host_less(&mut self, l: Value, r: Value, or_eq: bool) -> Result<bool, LuaError> {
         self.host_noyield(|vm| vm.less_than(l, r, or_eq))
     }
 
     /// `#v` with `__len` (PUC `lua_len`).
-    pub fn host_len(&mut self, v: Value) -> Result<Value, LuaError> {
+    pub(crate) fn host_len(&mut self, v: Value) -> Result<Value, LuaError> {
         self.host_noyield(|vm| vm.len_value(v))
     }
 
     /// The concatenation of `vals`, at least two, right to left with
     /// `__concat` (PUC `luaV_concat`).
-    pub fn host_concat(&mut self, vals: &[Value]) -> Result<Value, LuaError> {
+    pub(crate) fn host_concat(&mut self, vals: &[Value]) -> Result<Value, LuaError> {
         let mut acc = *vals.last().expect("lua_concat of at least two values");
         for &x in vals[..vals.len() - 1].iter().rev() {
             acc = match self.concat_pair(x, acc)? {
@@ -225,14 +237,14 @@ impl Vm {
 
     /// A step of the collector if one is due (PUC `luaC_checkGC`): every
     /// value the C API holds is on a C stack, which the collector marks.
-    pub fn host_check_gc(&mut self) -> Result<(), LuaError> {
+    pub(crate) fn host_check_gc(&mut self) -> Result<(), LuaError> {
         let top = self.stack.len() as u32;
         self.checkpoint(top)
     }
 
     /// The check of an API call that allocates, made before it in 5.1 and
     /// 5.2 (`before`) and after it pushed from 5.3 on (`!before`).
-    pub fn host_api_check(&mut self, before: bool) -> Result<(), LuaError> {
+    pub(crate) fn host_api_check(&mut self, before: bool) -> Result<(), LuaError> {
         if before == (self.version <= LuaVersion::Lua52) {
             return self.host_check_gc();
         }
@@ -241,7 +253,7 @@ impl Vm {
 
     /// The 5.1 environment of the Lua function `cl`: its `_ENV` cell, or the
     /// globals when it has none.
-    pub fn host_closure_env(&self, cl: Gc<LuaClosure>) -> Value {
+    pub(crate) fn host_closure_env(&self, cl: Gc<LuaClosure>) -> Value {
         match cl.proto.upvals.iter().position(|d| &*d.name == "_ENV") {
             Some(i) => match cl.upvals()[i].state() {
                 UpvalState::Closed(v) => v,
@@ -255,7 +267,7 @@ impl Vm {
     /// `lua_setfenv`); `false` when it has no `_ENV` cell, as luna keeps
     /// a 5.1 environment only in that cell, or when there is no memory for
     /// the new cell.
-    pub fn host_set_closure_env(&mut self, cl: Gc<LuaClosure>, env: Gc<Table>) -> bool {
+    pub(crate) fn host_set_closure_env(&mut self, cl: Gc<LuaClosure>, env: Gc<Table>) -> bool {
         match cl.proto.upvals.iter().position(|d| &*d.name == "_ENV") {
             // a new cell that cannot be made leaves the environment as it was,
             // and the call reports it was not set
@@ -265,7 +277,7 @@ impl Vm {
     }
 
     /// Store `v` in upvalue `i` of the native `nc`.
-    pub fn host_set_native_upvalue(&mut self, nc: Gc<NativeClosure>, i: usize, v: Value) {
+    pub(crate) fn host_set_native_upvalue(&mut self, nc: Gc<NativeClosure>, i: usize, v: Value) {
         // SAFETY: `nc` is held by the caller; no other reference into it is
         // live, and the borrow covers one store
         unsafe { nc.as_mut() }.upvals[i] = v;
