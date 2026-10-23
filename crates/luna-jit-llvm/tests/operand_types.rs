@@ -6,8 +6,8 @@
 //! held the running function still went to the running function.
 
 use luna_core::jit::{CompileResult, IntChunkCompiler};
-use luna_core::runtime::Value;
 use luna_core::vm::isa::Op;
+use luna_core::{__private::VmJitState, runtime::Value};
 use luna_jit::LuaVersion;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
 
@@ -84,7 +84,7 @@ fn chunk_upvalue_of_another_type_deopts() {
     unsafe { support::call_chunk(entry, &[]) };
     drop(_guard);
     assert!(
-        vm.jit.pending_err.is_some(),
+        vm.jit().pending_err.is_some(),
         "a float upvalue was read as an integer"
     );
 }
@@ -108,7 +108,7 @@ fn chunk_call_through_a_reassigned_upvalue_deopts() {
     let r = unsafe { support::call_chunk(entry, &[3]) };
     drop(_guard);
     assert!(
-        vm.jit.pending_err.is_some(),
+        vm.jit().pending_err.is_some(),
         "the call through `b` ran `a` itself (returned {r})"
     );
 }

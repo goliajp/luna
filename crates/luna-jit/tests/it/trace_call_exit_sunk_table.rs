@@ -4,6 +4,7 @@
 //! `s[#s + 1] = {f()}` the constructor's `SetList` runs after the call,
 //! and it was handed a register that never held the table.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 
@@ -11,8 +12,8 @@ fn run(version: LuaVersion, src: &str, jit: bool) -> (String, u64) {
     let mut vm = luna_jit::new_with_jit(version);
     vm.set_jit_enabled(jit);
     vm.set_trace_jit_enabled(jit);
-    vm.jit.trace_hot_threshold = 1;
-    vm.jit.call_hot_threshold = 1;
+    vm.jit_mut().trace_hot_threshold = 1;
+    vm.jit_mut().call_hot_threshold = 1;
     let out = match vm.eval(src) {
         Ok(r) => match r.first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),

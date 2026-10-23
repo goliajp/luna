@@ -6,6 +6,7 @@
 //! that writes such a register must not leave a stale value to an exit
 //! that the interpreter then reads.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 
@@ -23,8 +24,8 @@ fn run(version: LuaVersion, src: &str, jit: Option<(bool, u32)>) -> (String, u64
         Some((method, hot)) => {
             vm.set_jit_enabled(method);
             vm.set_trace_jit_enabled(true);
-            vm.jit.trace_hot_threshold = hot;
-            vm.jit.call_hot_threshold = hot;
+            vm.jit_mut().trace_hot_threshold = hot;
+            vm.jit_mut().call_hot_threshold = hot;
         }
         None => {
             vm.set_jit_enabled(false);
@@ -113,10 +114,10 @@ fn traces_enter_whatever_dead_registers_hold() {
         assert!(
             dispatched >= 30,
             "{v:?}: only {dispatched} trace entries (closed {} compiled {} off {:?} fail {:?})",
-            vm.jit.counters.closed,
-            vm.jit.counters.compiled,
-            vm.jit.counters.dispatch_off_reasons,
-            vm.jit.counters.compile_failed_reasons
+            vm.jit().counters.closed,
+            vm.jit().counters.compiled,
+            vm.jit().counters.dispatch_off_reasons,
+            vm.jit().counters.compile_failed_reasons
         );
     }
 }

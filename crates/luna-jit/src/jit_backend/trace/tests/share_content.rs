@@ -2,6 +2,7 @@
 //! not just whose content hash is.
 
 use crate::Engine;
+use luna_core::__private::VmJitState;
 use luna_core::version::LuaVersion;
 
 const SRC: &str = r#"
@@ -13,7 +14,7 @@ return t.n
 fn vm(engine: &Engine) -> luna_core::vm::Vm {
     let mut vm = engine.new_vm(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
-    vm.jit.trace_hot_threshold = 8;
+    vm.jit_mut().trace_hot_threshold = 8;
     vm
 }
 

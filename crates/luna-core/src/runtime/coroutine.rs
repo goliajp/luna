@@ -115,12 +115,10 @@ pub struct Coro {
     /// The thread's stack as the C API sees it (PUC `lua_State`'s stack):
     /// what `lua_push*` pushes on this thread and where C functions running
     /// on it find their arguments.
-    #[doc(hidden)]
-    pub host_stack: LVec<Value>,
+    pub(crate) host_stack: LVec<Value>,
     /// The C API's `lua_State` for this thread, made the first time C asks
     /// for one; it lives as long as the thread.
-    #[doc(hidden)]
-    pub host_state: Option<crate::runtime::mem::LAny>,
+    pub(crate) host_state: Option<crate::runtime::mem::LAny>,
 }
 
 impl Coro {

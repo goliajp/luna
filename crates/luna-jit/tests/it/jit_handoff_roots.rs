@@ -7,6 +7,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit_backend::__jit_tls_ptrs;
 use luna_jit::runtime::Value;
 use luna_jit::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
@@ -54,7 +55,7 @@ fn run(from: usize) -> (String, usize, usize) {
     let mut vm = Vm::new_with_mem(LuaVersion::Lua54, MemOwner::policy(Box::new(policy)));
     luna_jit::install_default_jit(&mut vm);
     vm.set_trace_jit_enabled(false);
-    vm.jit.call_hot_threshold = 1;
+    vm.jit_mut().call_hot_threshold = 1;
     let out = match vm.eval(WALK) {
         Ok(r) => match r.first() {
             Some(Value::Int(i)) => i.to_string(),

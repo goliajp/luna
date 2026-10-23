@@ -4,6 +4,7 @@
 //! it resumes the frame where it was recorded, which skipped the outer
 //! body (here the reset of the inner counter) on later outer iterations.
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
@@ -76,8 +77,8 @@ fn a_side_trace_runs_only_on_the_exit_it_was_recorded_from() {
                     let mut vm = luna_jit::new_with_jit(v);
                     vm.set_trace_tier(tier);
                     if let Some(h) = hot {
-                        vm.jit.trace_hot_threshold = h;
-                        vm.jit.call_hot_threshold = h;
+                        vm.jit_mut().trace_hot_threshold = h;
+                        vm.jit_mut().call_hot_threshold = h;
                     }
                     let r = vm.eval(src).unwrap();
                     assert_eq!(number(&r[0]), want, "{v:?} {tier:?} hot {hot:?}\n{src}");

@@ -4,6 +4,7 @@
 //!   - the helper returns -1 when there is no live Lua frame
 use super::*;
 use luna_core::__private::VmJitFrames;
+use luna_core::__private::VmJitState;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 use luna_core::vm::isa::{Inst, Op};
@@ -43,7 +44,7 @@ fn compiled_traces_have_empty_per_exit_metas_when_no_inline_cmp() {
         var_count: None,
     });
     rec.closed = true;
-    let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("simple add compiles");
+    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).expect("simple add compiles");
     assert!(
         ct.per_exit_inline.is_empty(),
         "no cmp@d>0 site → per_exit_inline empty"
@@ -193,7 +194,8 @@ fn per_exit_metas_populated_for_cmp_at_depth_one() {
         var_count: None,
     });
     rec.closed = true;
-    let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compiles via inline-cmp");
+    let ct =
+        try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).expect("compiles via inline-cmp");
     assert_eq!(
         ct.per_exit_inline.len(),
         1,
@@ -241,7 +243,7 @@ fn a_call_wanting_two_results_ends_the_trace() {
         var_count: None,
     });
     rec.closed = true;
-    let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec);
+    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec);
     assert!(
         ct.is_none_or(|ct| ct.per_exit_inline.is_empty()),
         "the call was inlined"

@@ -17,6 +17,7 @@
 //! correct semantics across base case (cmp side-exits) and recursive
 //! paths.
 
+use luna_core::__private::VmJitState;
 use luna_jit::version::LuaVersion;
 
 /// fib(12) under trace_jit_enabled compiles the GetUpval-touching
@@ -123,8 +124,8 @@ fn upvalue_call_target_that_is_not_a_closure_keeps_its_type() {
     ] {
         for src in cases {
             let mut vm = luna_jit::new_with_jit(v);
-            vm.jit.trace_hot_threshold = 7;
-            vm.jit.call_hot_threshold = 7;
+            vm.jit_mut().trace_hot_threshold = 7;
+            vm.jit_mut().call_hot_threshold = 7;
             let r = vm.eval(src).unwrap();
             let hits = match r[0] {
                 luna_jit::runtime::Value::Int(i) => i as f64,

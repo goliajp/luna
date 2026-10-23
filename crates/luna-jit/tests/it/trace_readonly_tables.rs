@@ -17,7 +17,7 @@ use luna_jit::jit::trace::TraceTier;
 use luna_jit::jit_backend::trace::baseline_codegen_count;
 use luna_jit::runtime::{Gc, Table, Value};
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
+use luna_jit::{__private::VmJitState, vm::Vm};
 
 const DIALECTS: [LuaVersion; 5] = [
     LuaVersion::Lua51,
@@ -120,8 +120,8 @@ fn vm(v: LuaVersion, tier: TraceTier, method: bool) -> Vm {
     let mut vm = luna_jit::new_with_jit(v);
     vm.set_jit_enabled(method);
     vm.set_trace_jit_enabled(true);
-    vm.jit.trace_hot_threshold = 1;
-    vm.jit.call_hot_threshold = 1;
+    vm.jit_mut().trace_hot_threshold = 1;
+    vm.jit_mut().call_hot_threshold = 1;
     vm.set_trace_tier(tier);
     let f = vm.native(iter);
     vm.set_global("ITER", f).expect("ITER");
@@ -281,7 +281,7 @@ T = {0, 0, 0}
         let mut vm = luna_jit::new_with_jit(v);
         vm.set_jit_enabled(true);
         vm.set_trace_jit_enabled(false);
-        vm.jit.call_hot_threshold = 1;
+        vm.jit_mut().call_hot_threshold = 1;
         let main = vm.load(src.as_bytes(), b"=user_script").expect("load");
         vm.call_value(Value::Closure(main), &[]).expect("chunk");
         let t = Value::Table(table(&mut vm, "T"));

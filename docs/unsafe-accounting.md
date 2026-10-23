@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1788** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1787** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 250 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; nine more in `luna_core::__private`, which is not public API, see §5 |
 | **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
@@ -52,7 +52,7 @@ quotes the pattern counts too.
 | | `jit`, `frontend` | 12 | trace metadata handed to the backend; the `isb` that lets a thread run code another thread wrote (aarch64); interned-name text |
 | | unit-test files under `src/` | 23 | tests that inspect raw layouts; a test `lua_Alloc` |
 | | `tests/` | 70 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc`, the environment variables of the Windows file-name test |
-| `luna-jit` | `capi*` | 387 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
+| `luna-jit` | `capi*` | 386 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
 | | `jit_backend` | 67 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, `Send` and `Sync` for the record a baseline trace keeps to be lowered again for the optimizing tier, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
 | | other | 1 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 66 | tests that call compiled code or the `extern "C"` helpers directly |
@@ -64,7 +64,7 @@ quotes the pattern counts too.
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1788** | |
+| **Total** | | **1787** | |
 
 ## 3. Pattern catalog
 

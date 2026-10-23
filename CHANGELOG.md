@@ -33,6 +33,11 @@ optimization.
 - `TraceCompiler` and `JitStorage`, the traits a trace JIT backend
   implements, moved to `luna_core::__private` with the methods that were
   hidden from their docs.
+- The fields hidden from the docs became private: `Vm::jit`,
+  `Coro::host_stack`, `Coro::host_state`, and `Proto`'s
+  `has_dispatchable_trace`, `trace_heads` and `trace_call_head_settled`
+  (with `TRACE_HEADS_NONE`). luna's other crates reach them through
+  accessor traits in `luna_core::__private`.
 - The C API's host interface on `Vm` (the `host_*` methods and the hooks
   it installs), hidden from the docs, moved to `luna_core::__private`.
 - The C API's host helpers nothing called (`Vm::host_set_body`,

@@ -2,6 +2,7 @@
 //! growth, and sunk tables materialised at a side exit.
 
 use crate::{current_jit_vm, table_arg};
+use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, HeapInternals, TableInternals, VmJitAlloc};
 
 /// Allocate an empty `Gc<Table>` on the active Vm's heap.
@@ -24,7 +25,7 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
     // Returning a NULL ptr is safe because subsequent helpers also
     // early-return on `jit_pending_err`, and the dispatcher will deopt
     // to the interpreter as soon as the JIT entry returns.
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     match vm.heap.try_new_table() {
@@ -53,14 +54,14 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
 pub unsafe extern "C" fn luna_jit_new_table_sized(ops: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     let (b, c, k) = unpack_table_ops(ops);
     match vm.heap.try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g.as_ptr() as i64,
         Ok(None) => {
-            vm.jit.pending_err = Some(vm.runtime_error("table overflow"));
+            vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));
             0
         }
         // the interpreter runs the `NewTable` again and allocates
@@ -87,7 +88,7 @@ pub unsafe extern "C" fn luna_jit_chunk_new_table(ops: i64, presized: i64) -> i6
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     let (b, c, k) = unpack_table_ops(ops);
-    if vm.jit.pending_err.is_some() || vm.jit_table_due(b, c, k) {
+    if vm.jit().pending_err.is_some() || vm.jit_table_due(b, c, k) {
         return 0;
     }
     let (b, c, k) = unpack_table_ops(presized);
@@ -119,7 +120,7 @@ pub(crate) fn unpack_table_ops(ops: i64) -> (u32, u32, bool) {
 pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return;
     }
     // SAFETY: `t` is a live table (# Safety); `reserve_list` never runs the
@@ -128,7 +129,7 @@ pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) {
     match table.reserve_list(&mut vm.heap, last.max(0) as u64) {
         Ok(()) => {}
         Err(luna_core::runtime::table::TableError::Overflow) => {
-            vm.jit.pending_err = Some(vm.runtime_error("table overflow"));
+            vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));
         }
         // the interpreter runs the `SetList` again and grows the table
         Err(_) => vm.jit_park_oom(),

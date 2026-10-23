@@ -96,7 +96,7 @@ fn run_c_hook(vm: &mut Vm, cf: *const (), event: &[u8], line: Option<i64>) -> Re
         vm.host_level(co, 0),
         Some(luna_core::__private::HostLevel::Lua)
     );
-    let top = co.host_stack.len();
+    let top = co.host_stack().len();
     // SAFETY: `l` is the running thread's live state; the borrow ends here
     let s = unsafe { &mut *l };
     let outer_base = std::mem::replace(&mut s.base, top);
@@ -122,7 +122,7 @@ fn run_c_hook(vm: &mut Vm, cf: *const (), event: &[u8], line: Option<i64>) -> Re
     s.base = outer_base;
     // SAFETY: the thread is live while its state is; nothing else borrows
     // its C stack now
-    unsafe { &mut (*co.as_ptr()).host_stack }.truncate(top);
+    unsafe { &mut *co.as_ptr() }.host_stack_mut().truncate(top);
     if r.is_ok() && run.is_some_and(|h| h.yielded) && (code == 2 || code == 3) {
         vm.host_hook_yield();
     }

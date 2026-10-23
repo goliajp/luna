@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
@@ -138,8 +139,8 @@ pub(super) fn tiered_seeded(
 ) -> Vm {
     let mut vm = seeded(version, seed);
     vm.set_jit_enabled(false);
-    vm.jit.trace_hot_threshold = hot;
-    vm.jit.call_hot_threshold = hot;
+    vm.jit_mut().trace_hot_threshold = hot;
+    vm.jit_mut().call_hot_threshold = hot;
     vm.set_trace_tier(tier);
     vm.set_trace_tier_up_at(tier_up_at);
     vm

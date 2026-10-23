@@ -1,6 +1,7 @@
 //! Stack-slot access and the opcode helpers that work on the frame (close, concat, tforcall, closure).
 
 use crate::{current_jit_closure, current_jit_vm, payload_bits, push_ssa_roots};
+use luna_core::__private::VmJitState;
 use luna_core::__private::{ValueInternals, VmJitAlloc, VmJitFrames};
 
 /// Trace JIT helper for `Op::Close A`. Wraps
@@ -37,7 +38,7 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
 pub unsafe extern "C" fn luna_jit_stack_update_raw(slot_offset: i64, raw_bits: i64) {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return;
     }
     if let Some(slot) = vm.jit_stack_slot_mut(slot_offset as u32) {
@@ -80,7 +81,7 @@ pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64, roots: i64
         (vm, mark)
     };
     let r = vm.jit_op_concat(slot_offset as u32, n as i32);
-    vm.jit.ssa_roots.truncate(mark);
+    vm.jit_mut().ssa_roots.truncate(mark);
     r
 }
 
@@ -143,7 +144,7 @@ pub unsafe extern "C" fn luna_jit_stack_tag(slot_offset: i64) -> i64 {
 pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw_bits: i64) {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return;
     }
     let raw = luna_core::__private::RawVal {
@@ -185,7 +186,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     // the trace head's frame is the topmost Lua frame while the trace runs
@@ -193,7 +194,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     let base = match vm.jit_last_lua_frame() {
         Some(f) => f.base,
         None => {
-            vm.jit.pending_err = Some(vm.runtime_error("JIT op_closure: no Lua frame"));
+            vm.jit_mut().pending_err = Some(vm.runtime_error("JIT op_closure: no Lua frame"));
             return 0;
         }
     };

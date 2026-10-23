@@ -5,6 +5,7 @@
 //! interned, so two objects) differed, `__eq` was never called for two
 //! tables, and strings were ordered by address.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 
@@ -21,8 +22,8 @@ fn run(version: LuaVersion, src: &str, jit: Option<(Tiers, u32)>) -> (String, u6
         Some((tiers, hot)) => {
             vm.set_jit_enabled(!matches!(tiers, Tiers::TraceOnly));
             vm.set_trace_jit_enabled(!matches!(tiers, Tiers::MethodOnly));
-            vm.jit.trace_hot_threshold = hot;
-            vm.jit.call_hot_threshold = hot;
+            vm.jit_mut().trace_hot_threshold = hot;
+            vm.jit_mut().call_hot_threshold = hot;
         }
         None => {
             vm.set_jit_enabled(false);

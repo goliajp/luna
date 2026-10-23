@@ -8,7 +8,7 @@
 
 use luna_jit::runtime::{Gc, LuaClosure, Value};
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
+use luna_jit::{__private::VmJitState, vm::Vm};
 
 /// A Vm with the trace JIT only: the method JIT would take some of these
 /// functions whole.
@@ -275,7 +275,7 @@ fn a_generic_for_trace_hands_back_the_next_loop_variables() {
     for v in [LuaVersion::Lua54, LuaVersion::Lua55] {
         let mut vm = luna_jit::new_with_jit(v);
         vm.set_jit_enabled(false);
-        vm.jit.trace_hot_threshold = 1;
+        vm.jit_mut().trace_hot_threshold = 1;
         let r = vm.eval(src).expect("runs");
         assert_eq!(
             show(&r),

@@ -4,8 +4,8 @@
 //! and the JIT run must have dispatched a trace (so a snippet that stops
 //! compiling fails here instead of passing on the interpreter).
 
-use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
+use luna_jit::{__private::VmJitState, LuaVersion};
 
 fn run(version: LuaVersion, src: &str, jit: bool) -> (String, u64) {
     let mut vm = luna_jit::new_with_jit(version);
@@ -292,8 +292,8 @@ fn pairs_loop_meeting_other_key_kinds() {
     for v in INT_DIALECTS {
         let (interp, _) = run(v, src, false);
         let mut vm = luna_jit::new_with_jit(v);
-        vm.jit.trace_hot_threshold = 1;
-        vm.jit.call_hot_threshold = 1;
+        vm.jit_mut().trace_hot_threshold = 1;
+        vm.jit_mut().call_hot_threshold = 1;
         let jit = match vm.eval(src).expect("eval").first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             other => panic!("{other:?}"),
@@ -326,7 +326,7 @@ fn generic_for_recorded_at_its_first_back_edge() {
         let (interp, _) = run(v, src, false);
         assert_eq!(interp, "70", "{v:?}");
         let mut vm = luna_jit::new_with_jit(v);
-        vm.jit.trace_hot_threshold = 0;
+        vm.jit_mut().trace_hot_threshold = 0;
         let jit = match vm.eval(src).expect("eval").first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             other => panic!("{other:?}"),
@@ -352,7 +352,7 @@ fn string_operand_in_arithmetic() {
     for v in INT_DIALECTS {
         let (interp, _) = run(v, src, false);
         let mut vm = luna_jit::new_with_jit(v);
-        vm.jit.trace_hot_threshold = 1;
+        vm.jit_mut().trace_hot_threshold = 1;
         let jit = match vm.eval(src).expect("eval").first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             other => panic!("{other:?}"),
@@ -407,7 +407,7 @@ fn a_failing_trace_is_not_recompiled_on_every_call() {
             other => panic!("{other:?}"),
         };
         assert_eq!(out, "200030000", "{v:?}");
-        let failed = vm.jit.counters.compile_failed;
+        let failed = vm.jit().counters.compile_failed;
         assert!(
             failed > 0,
             "{v:?}: the trace was expected to fail to compile"
@@ -441,8 +441,8 @@ fn math_function_reassigned_between_dispatches() {
 fn same_hot(v: LuaVersion, src: &str) -> String {
     let (interp, _) = run(v, src, false);
     let mut vm = luna_jit::new_with_jit(v);
-    vm.jit.trace_hot_threshold = 1;
-    vm.jit.call_hot_threshold = 1;
+    vm.jit_mut().trace_hot_threshold = 1;
+    vm.jit_mut().call_hot_threshold = 1;
     let jit = match vm.eval(src) {
         Ok(r) => match r.first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),

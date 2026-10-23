@@ -3,6 +3,7 @@
 //! `LOADBOOL A 1 1`, loaded back, and run in a hot loop under each trace
 //! tier against the interpreter.
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::jit_backend::trace::baseline_codegen_count;
 use luna_jit::runtime::Value;
@@ -77,7 +78,7 @@ fn a_trace_runs_ltrue_skip_like_the_interpreter() {
         for tier in [TraceTier::Baseline, TraceTier::Optimizing] {
             let mut vm = luna_jit::new_with_jit(version);
             vm.set_jit_enabled(false);
-            vm.jit.trace_hot_threshold = 2;
+            vm.jit_mut().trace_hot_threshold = 2;
             vm.set_trace_tier(tier);
             let baseline_before = baseline_codegen_count();
             let got = run(&mut vm, &chunk);

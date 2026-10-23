@@ -3,6 +3,7 @@
 //! `key=value` words, so a harness can check that a corpus really ran
 //! through compiled traces without the counters touching the output.
 
+use luna_core::__private::VmJitState;
 use luna_jit::vm::Vm;
 use std::io::Write;
 
@@ -10,7 +11,7 @@ pub(crate) fn append(vm: &Vm) {
     let Some(path) = std::env::var_os("LUNA_JIT_COUNTERS") else {
         return;
     };
-    let c = &vm.jit.counters;
+    let c = &vm.jit().counters;
     // a 32-bit build has no JIT, so no code of its
     #[cfg(target_pointer_width = "64")]
     let (jt, baseline) = (

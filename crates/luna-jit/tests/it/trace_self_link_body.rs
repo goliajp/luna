@@ -4,6 +4,7 @@
 //! embedder turned self-link on and ran a crafted chunk) is declined
 //! rather than compiled or tripping an internal assertion.
 
+use luna_core::__private::VmJitState;
 use luna_jit::__private::raw;
 use luna_jit::__private::{RecordedOp, TraceRecord};
 use luna_jit::jit::trace::{SelfRecKind, last_compile_checkpoint, try_compile_trace};
@@ -55,7 +56,7 @@ fn loop_edge_inside_a_self_link_body_is_declined() {
         (add, p.code[add as usize]),
     ];
     let rec = self_link_record(p, &ops);
-    assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
     assert_eq!(last_compile_checkpoint(), "bail:self-link-body-terminator");
 }
 
@@ -74,6 +75,6 @@ fn call_not_inlined_inside_a_self_link_body_is_declined() {
         (add, p.code[add as usize]),
     ];
     let rec = self_link_record(p, &ops);
-    assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
     assert_eq!(last_compile_checkpoint(), "bail:self-link-body-terminator");
 }

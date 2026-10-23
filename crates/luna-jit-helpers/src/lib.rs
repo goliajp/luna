@@ -26,6 +26,7 @@
 // All helpers use fully-qualified `luna_core::*` paths internally.
 // Only the `JitVmGuard` re-export is needed by the `enter_jit`
 // signature below.
+use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, ValueInternals};
 use luna_core::jit::JitVmGuard;
 
@@ -186,7 +187,7 @@ fn raw_bits(raw: luna_core::__private::RawVal) -> i64 {
 /// first is `n` and each pair after it is the tag and payload of one live
 /// value.
 unsafe fn push_ssa_roots(vm: &mut luna_core::vm::Vm, roots: i64) -> usize {
-    let mark = vm.jit.ssa_roots.len();
+    let mark = vm.jit().ssa_roots.len();
     if roots != 0 {
         let p = roots as *const i64;
         // SAFETY: `roots` points at the count word followed by `2 * n`
@@ -198,7 +199,7 @@ unsafe fn push_ssa_roots(vm: &mut luna_core::vm::Vm, roots: i64) -> usize {
             };
             // SAFETY: each pair is one live value's tag and payload (# Safety)
             let v = unsafe { luna_core::runtime::Value::pack(pair[0] as u8, raw) };
-            vm.jit.ssa_roots.push(v);
+            vm.jit_mut().ssa_roots.push(v);
         }
     }
     mark

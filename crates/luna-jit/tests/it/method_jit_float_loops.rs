@@ -3,6 +3,7 @@
 //! that are not dyadic, NaN and infinite bounds, and a body that assigns
 //! the loop variable.
 
+use luna_core::__private::VmJitState;
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
 
@@ -13,7 +14,7 @@ fn run(version: LuaVersion, src: &str, jit: bool) -> (String, u64) {
     vm.set_jit_enabled(jit);
     vm.set_trace_jit_enabled(false);
     // compile `f` on its first call
-    vm.jit.call_hot_threshold = 1;
+    vm.jit_mut().call_hot_threshold = 1;
     let out = match vm.eval(src) {
         Ok(r) => match r.first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
@@ -21,7 +22,7 @@ fn run(version: LuaVersion, src: &str, jit: bool) -> (String, u64) {
         },
         Err(e) => format!("error: {}", vm.error_text(&e)),
     };
-    (out, vm.jit.counters.method_compiled)
+    (out, vm.jit().counters.method_compiled)
 }
 
 /// `body` is the loop with its header; it sees the locals `s` (a running

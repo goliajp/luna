@@ -17,6 +17,7 @@
 //! Each script runs on every dialect and both trace code generators, at
 //! several trace thresholds, and must print what the interpreter prints.
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
@@ -58,7 +59,7 @@ fn check(src: &str, traced: &[LuaVersion]) {
                 vm.set_trace_jit_enabled(true);
                 vm.set_trace_tier(tier);
                 if let Some(h) = hot {
-                    vm.jit.trace_hot_threshold = h;
+                    vm.jit_mut().trace_hot_threshold = h;
                 }
                 let got = show(vm.eval(src).map_err(|e| vm.error_text(&e)));
                 dispatched += vm.trace_dispatched_count();

@@ -93,14 +93,14 @@ impl<'a> Api<'a> {
     pub(super) fn stack(&self) -> &LVec<Value> {
         // SAFETY: the thread is live while its state is, and the C stack is
         // written only through `stack_mut`, never while this borrow lives
-        unsafe { &(*self.thread().as_ptr()).host_stack }
+        unsafe { &*self.thread().as_ptr() }.host_stack()
     }
 
     #[allow(clippy::misnamed_getters)]
     pub(super) fn stack_mut(&mut self) -> &mut LVec<Value> {
         // SAFETY: as `stack`; the exclusive borrow of `self` keeps any other
         // access to the C stack through this call out
-        unsafe { &mut (*self.thread().as_ptr()).host_stack }
+        unsafe { &mut *self.thread().as_ptr() }.host_stack_mut()
     }
 
     pub(super) fn base(&mut self) -> usize {

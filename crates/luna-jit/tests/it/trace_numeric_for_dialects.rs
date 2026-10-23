@@ -9,7 +9,7 @@
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
-use luna_jit::vm::Vm;
+use luna_jit::{__private::VmJitState, vm::Vm};
 
 const ALL: [LuaVersion; 5] = [
     LuaVersion::Lua51,
@@ -31,8 +31,8 @@ fn traced(v: LuaVersion, tier: TraceTier, tier_up_at: u32) -> Vm {
     // the method JIT would run whole functions instead of the interpreter
     // the trace recorder watches
     vm.set_jit_enabled(false);
-    vm.jit.trace_hot_threshold = 8;
-    vm.jit.call_hot_threshold = 8;
+    vm.jit_mut().trace_hot_threshold = 8;
+    vm.jit_mut().call_hot_threshold = 8;
     vm.set_trace_tier(tier);
     vm.set_trace_tier_up_at(tier_up_at);
     vm
@@ -41,7 +41,7 @@ fn traced(v: LuaVersion, tier: TraceTier, tier_up_at: u32) -> Vm {
 fn method_jit(v: LuaVersion) -> Vm {
     let mut vm = luna_jit::new_with_jit(v);
     vm.set_trace_jit_enabled(false);
-    vm.jit.call_hot_threshold = 1;
+    vm.jit_mut().call_hot_threshold = 1;
     vm
 }
 

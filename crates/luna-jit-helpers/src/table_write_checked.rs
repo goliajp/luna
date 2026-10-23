@@ -3,6 +3,7 @@
 
 use crate::table_write::barrier_for;
 use crate::{current_jit_vm, str_arg, table_arg};
+use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, TableInternals, ValueInternals};
 
 /// The trace JIT's table stores, `t[key] = val`, with the value given as
@@ -27,7 +28,7 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
     let g = unsafe { table_arg(t) };
     // a read-only table is left to the interpreter too, which raises
     if g.metatable().is_some() || g.is_readonly() {
-        vm.jit.counters.deopt += 1;
+        vm.jit_mut().counters.deopt += 1;
         return 0;
     }
     // SAFETY: `t` is a live table and (`val_tag`, `val_raw`) one value's
@@ -43,7 +44,7 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
         )
     };
     if table.set_unguarded(&mut vm.heap, key, val).is_err() {
-        vm.jit.counters.deopt += 1;
+        vm.jit_mut().counters.deopt += 1;
         return 0;
     }
     barrier_for(vm, g, key, val);

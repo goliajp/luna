@@ -2,6 +2,7 @@
 
 use crate::table_read::checked_read;
 use crate::{JIT_CL, current_jit_closure, current_jit_vm, payload_bits};
+use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, VmHostInternals, VmJitFrames};
 
 /// `R[A] = upvals[idx]` value-read variant. Reads the
@@ -26,7 +27,7 @@ pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     payload_bits(vm.upval_get(cl, idx as u32))
@@ -67,13 +68,13 @@ pub unsafe extern "C" fn luna_jit_upval_get_float(idx: i64) -> i64 {
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    if vm.jit.pending_err.is_some() {
+    if vm.jit().pending_err.is_some() {
         return 0;
     }
     match vm.upval_get(cl, idx as u32) {
         luna_core::runtime::Value::Float(f) => f.to_bits() as i64,
         _ => {
-            vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: upvalue is not a float"));
+            vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: upvalue is not a float"));
             0
         }
     }
@@ -97,7 +98,8 @@ pub unsafe extern "C" fn luna_jit_upval_is_int(idx: i64) -> i64 {
     match vm.upval_get(cl, idx as u32) {
         luna_core::runtime::Value::Int(_) => 1,
         _ => {
-            vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: upvalue is not an integer"));
+            vm.jit_mut().pending_err =
+                Some(vm.runtime_error("JIT deopt: upvalue is not an integer"));
             0
         }
     }
@@ -124,7 +126,7 @@ pub unsafe extern "C" fn luna_jit_self_upval_check(idx: i64) -> i64 {
     match vm.upval_get(cl, idx as u32) {
         luna_core::runtime::Value::Closure(c) if c.ptr_eq(cl) => 1,
         _ => {
-            vm.jit.pending_err =
+            vm.jit_mut().pending_err =
                 Some(vm.runtime_error("JIT deopt: callee is not the running closure"));
             0
         }

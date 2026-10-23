@@ -2,6 +2,7 @@
 //! bytecode and the inputs the lowerer reads.
 
 use super::*;
+use luna_core::__private::VmJitState;
 
 /// cross-`Vm` JIT cache. Look up the proto by a hash of its
 /// bytecode + structural ABI fields; on miss, compile through
@@ -178,7 +179,7 @@ pub(crate) enum CacheEntry {
 /// probe per-`Vm` cache size without a downcast. Harmless utility for
 /// any embedder.
 pub fn cache_entry_count(vm: &luna_core::vm::Vm) -> usize {
-    let storage = vm.jit.storage.as_ref().as_any();
+    let storage = vm.jit().storage.as_ref().as_any();
     let cs = storage
         .downcast_ref::<storage::CraneliftJitStorage>()
         .expect("vm storage not CraneliftJitStorage");
@@ -191,7 +192,7 @@ pub fn cache_entry_count(vm: &luna_core::vm::Vm) -> usize {
 /// Functions of the method JIT the Vm installed from its engine (see
 /// [`crate::Engine`]) instead of compiling them.
 pub fn chunk_adopted_count(vm: &luna_core::vm::Vm) -> u64 {
-    vm.jit
+    vm.jit()
         .storage
         .as_ref()
         .as_any()
@@ -206,7 +207,7 @@ pub fn chunk_adopted_count(vm: &luna_core::vm::Vm) -> u64 {
 /// Takes `&mut Vm` since the cache is per-`Vm`. Public for the same
 /// reason as [`cache_entry_count`].
 pub fn cache_clear(vm: &mut luna_core::vm::Vm) {
-    let storage = vm.jit.storage.as_mut().as_any_mut();
+    let storage = vm.jit_mut().storage.as_mut().as_any_mut();
     if let Some(cs) = storage.downcast_mut::<storage::CraneliftJitStorage>() {
         // the handles stay: functions already compiled keep calling
         // their code until the Vm drops

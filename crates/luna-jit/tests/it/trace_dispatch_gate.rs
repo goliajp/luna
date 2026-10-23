@@ -3,6 +3,7 @@
 //! could be admitted at its head (dispatchable, or linked for
 //! down-recursion), or the dispatcher would skip a trace it should enter.
 
+use luna_jit::__private::ProtoTraceInternals;
 use luna_jit::runtime::{Gc, LuaClosure, Value};
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
@@ -34,7 +35,7 @@ fn flag_is_set_for_a_dispatched_loop_trace() {
     assert!(matches!(r[0], Value::Int(12_502_500)), "{r:?}");
     let Value::Closure(main) = r[1] else { panic!() };
     assert!(admissible(main));
-    assert!(main.proto.has_dispatchable_trace.get());
+    assert!(main.proto.has_dispatchable_trace());
     assert!(vm.trace_dispatched_count() > 0);
 }
 
@@ -61,7 +62,7 @@ fn flag_stays_clear_when_only_undispatchable_traces_are_cached() {
     let cached = get.proto.traces.borrow().len();
     assert!(cached > 0, "get compiled no trace");
     assert!(!admissible(get));
-    assert!(!get.proto.has_dispatchable_trace.get());
+    assert!(!get.proto.has_dispatchable_trace());
 }
 
 #[test]
@@ -89,7 +90,7 @@ fn flag_is_set_for_a_trace_with_a_downrec_link() {
         traces.iter().any(|t| t.downrec_link.is_some()),
         "no downrec trace was cached"
     );
-    assert!(fib.proto.has_dispatchable_trace.get());
+    assert!(fib.proto.has_dispatchable_trace());
     drop(traces);
     assert!(
         vm.trace_downrec_dispatched_count() + vm.trace_downrec_deopt_count() > 0,
@@ -139,7 +140,7 @@ fn flag_is_set_for_an_undispatchable_trace_admitted_by_its_downrec_link() {
         "no undispatchable downrec trace: {shapes:?}"
     );
     assert!(!traces.iter().any(|t| t.dispatchable), "{shapes:?}");
-    assert!(sum.proto.has_dispatchable_trace.get());
+    assert!(sum.proto.has_dispatchable_trace());
     drop(traces);
     assert!(
         vm.trace_downrec_dispatched_count() + vm.trace_downrec_deopt_count() > 0,
@@ -167,7 +168,7 @@ fn call_head_settles_when_a_call_trace_is_cached() {
     );
     let Value::Closure(get) = r[1] else { panic!() };
     assert!(get.proto.traces.borrow().iter().any(|t| t.head_pc == 0));
-    assert!(get.proto.trace_call_head_settled.get());
+    assert!(get.proto.trace_call_head_settled());
 }
 
 #[test]
@@ -188,7 +189,7 @@ fn call_head_settles_when_recording_it_is_abandoned() {
     );
     let Value::Closure(f) = r[1] else { panic!() };
     assert!(
-        !f.proto.trace_call_head_settled.get(),
+        !f.proto.trace_call_head_settled(),
         "settled below the threshold"
     );
     let r = run(
@@ -202,7 +203,7 @@ fn call_head_settles_when_recording_it_is_abandoned() {
     );
     assert!(matches!(r[0], Value::Int(1000)), "{r:?}");
     let Value::Closure(f) = r[1] else { panic!() };
-    assert!(f.proto.trace_call_head_settled.get());
+    assert!(f.proto.trace_call_head_settled());
     assert!(f.proto.traces.borrow().is_empty());
     let failed = vm.trace_compile_failed_count();
     // three for f's entry, up to three for the loop's head (a head is
@@ -246,7 +247,7 @@ fn a_head_reached_by_falling_through_is_entered() {
         .call_value(Value::Closure(f), &[Value::Int(1000)])
         .expect("warm");
     assert!(matches!(warm[0], Value::Int(1000)), "{warm:?}");
-    let heads = f.proto.trace_heads.get();
+    let heads = f.proto.trace_heads();
     let admissible_heads: Vec<u32> = f
         .proto
         .traces
@@ -257,7 +258,7 @@ fn a_head_reached_by_falling_through_is_entered() {
         .collect();
     assert_eq!(admissible_heads.len(), 1, "{admissible_heads:?}");
     assert_eq!(heads[0], admissible_heads[0]);
-    assert_eq!(heads[1], luna_jit::runtime::function::TRACE_HEADS_NONE);
+    assert_eq!(heads[1], luna_jit::__private::TRACE_HEADS_NONE);
     let before = vm.trace_dispatched_count();
     for _ in 0..100 {
         let r = vm

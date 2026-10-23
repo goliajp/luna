@@ -1,7 +1,7 @@
 use super::*;
-use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 use luna_core::vm::isa::{Inst, Op};
+use luna_core::{__private::VmJitState, version::LuaVersion};
 
 const WIDE_SRC: &[u8] = b"local a,b,c,d = 0,0,0,0; return a+b+c+d";
 
@@ -42,8 +42,7 @@ fn single_call_op_side_exits_at_call_pc() {
         5,
         &[Inst::iabc(Op::Call, 0, 1, 1, false)], // call R[0], 0 args, 0 results
     );
-    let ct =
-        try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("Op::Call-only trace must compile");
+    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![42, 43, 44, 0, 0];
     state.resize(p.max_stack as usize, 0);
@@ -73,7 +72,7 @@ fn arith_then_call_stores_back_post_arith_state() {
         Inst::iabc(Op::Call, 2, 1, 0, false),
     ];
     let rec = closed_record(p, 0, &prog);
-    let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = 100;
@@ -104,7 +103,7 @@ fn ops_after_first_call_are_silently_dropped() {
         Inst::iabc(Op::Mul, 0, 200, 200, false), // would-be OOB if validated
     ];
     let rec = closed_record(p, 0, &prog);
-    let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec)
         .expect("compile despite post-truncation OOB");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -137,7 +136,7 @@ fn cmp_immediately_before_call_bails() {
         Inst::iabc(Op::Call, 2, 1, 0, false),
     ];
     let rec = closed_record(p, 0, &prog);
-    assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
 }
 
 #[test]
@@ -146,7 +145,7 @@ fn call_a_register_out_of_bounds_bails() {
     let p = load_proto(&mut vm, WIDE_SRC);
     // p.max_stack ≈ 5; A=200 is way past it.
     let rec = closed_record(p, 0, &[Inst::iabc(Op::Call, 200, 1, 0, false)]);
-    assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
 }
 
 #[test]
@@ -162,7 +161,7 @@ fn cmp_then_jmp_then_call_truncation() {
         Inst::iabc(Op::Call, 3, 1, 0, false),
     ];
     let rec = closed_record(p, 0, &prog);
-    let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     // R[0]=5, R[1]=10 → 5 < 10 holds → cmp matches K=1 → continue.
@@ -220,7 +219,8 @@ fn forloop_continues_internal_loop_until_count_hits_zero() {
         tier_up_at: 0,
         dialect: None,
     };
-    let ct = try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).expect("compile");
+    let ct =
+        try_compile_trace_with_options(vm.jit_mut().storage.as_mut(), &rec, opts).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     // R[0] = accumulator, R[3] = step for the body's add.
@@ -260,8 +260,8 @@ fn forloop_one_shot_returns_body_pc_on_continue() {
     // ForLoop only — empty body, single iter dispatch.
     let prog = [Inst::iabc(Op::ForLoop, 0, 0, 0, false)];
     let rec = closed_record(p, 9, &prog);
-    let ct =
-        try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile one-shot ForLoop trace");
+    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec)
+        .expect("compile one-shot ForLoop trace");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = 10;
@@ -305,7 +305,7 @@ fn forloop_pre53_compiles_the_limit_form() {
         tier_up_at: 0,
         dialect: None,
     };
-    assert!(try_compile_trace_with_options(vm.jit.storage.as_mut(), &rec, opts).is_some());
+    assert!(try_compile_trace_with_options(vm.jit_mut().storage.as_mut(), &rec, opts).is_some());
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn forloop_a_plus_3_out_of_bounds_bails() {
     // max_stack = 5; A=3 → A+3 = 6 ≥ 5 → bail.
     let prog = [Inst::iabc(Op::ForLoop, 3, 0, 0, false)];
     let rec = closed_record(p, 0, &prog);
-    assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
 }
 
 #[test]
@@ -329,7 +329,7 @@ fn op_call_then_unwhitelisted_op_still_compiles() {
         Inst::iabc(Op::Return0, 0, 0, 0, false), // would bail if validated
     ];
     let rec = closed_record(p, 0, &prog);
-    let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec)
+    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec)
         .expect("compile despite post-truncation Return0");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
