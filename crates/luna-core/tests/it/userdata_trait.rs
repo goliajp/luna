@@ -77,8 +77,8 @@ impl LuaUserdata for Vec3 {
                     Value::Userdata(g) => g
                         .downcast::<Vec3>()
                         .copied()
-                        .ok_or_else(|| vm.rt_err("__add expected Vec3"))?,
-                    _ => return Err(vm.rt_err("__add expected Vec3")),
+                        .ok_or_else(|| vm.runtime_error("__add expected Vec3"))?,
+                    _ => return Err(vm.runtime_error("__add expected Vec3")),
                 };
                 Ok(vm.create_userdata(Vec3 {
                     x: this.x + rhs.x,

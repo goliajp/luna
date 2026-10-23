@@ -49,8 +49,9 @@ impl LuaUserdata for Vec3 {
              this,
              (rhs,): (luna_core::runtime::Value,)|
              -> Result<luna_core::runtime::Value, _> {
-                let rhs = extract_vec3(rhs)
-                    .ok_or_else(|| vm.rt_err("__add expected Vec3 on the right-hand side"))?;
+                let rhs = extract_vec3(rhs).ok_or_else(|| {
+                    vm.runtime_error("__add expected Vec3 on the right-hand side")
+                })?;
                 Ok(vm.create_userdata(Vec3 {
                     x: this.x + rhs.x,
                     y: this.y + rhs.y,
@@ -66,8 +67,9 @@ impl LuaUserdata for Vec3 {
              this,
              (rhs,): (luna_core::runtime::Value,)|
              -> Result<luna_core::runtime::Value, _> {
-                let rhs = extract_vec3(rhs)
-                    .ok_or_else(|| vm.rt_err("__sub expected Vec3 on the right-hand side"))?;
+                let rhs = extract_vec3(rhs).ok_or_else(|| {
+                    vm.runtime_error("__sub expected Vec3 on the right-hand side")
+                })?;
                 Ok(vm.create_userdata(Vec3 {
                     x: this.x - rhs.x,
                     y: this.y - rhs.y,

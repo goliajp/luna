@@ -55,6 +55,7 @@ mod hooks;
 mod hooks_exec;
 mod host_api;
 pub mod host_c;
+mod host_ops;
 mod host_pcall;
 mod host_rng;
 mod index;

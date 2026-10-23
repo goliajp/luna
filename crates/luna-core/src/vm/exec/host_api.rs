@@ -265,20 +265,6 @@ impl Vm {
         }
     }
 
-    /// `t[key]` with metamethods, as the Lua expression does (PUC
-    /// `lua_gettable`). For the C API.
-    #[doc(hidden)]
-    pub fn index_with_mm(&mut self, t: Value, key: Value) -> Result<Value, LuaError> {
-        self.index_value(t, key)
-    }
-
-    /// `t[key] = v` with metamethods, as the Lua assignment does (PUC
-    /// `lua_settable`). For the C API.
-    #[doc(hidden)]
-    pub fn set_index_with_mm(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
-        self.newindex_value(t, key, v)
-    }
-
     /// PUC `luaL_getmetafield`: the field `event` of `v`'s metatable, read
     /// raw; nil when `v` has no metatable or the field is absent.
     pub fn metafield(&mut self, v: Value, event: &str) -> Value {

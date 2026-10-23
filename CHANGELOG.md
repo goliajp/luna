@@ -1201,6 +1201,11 @@ optimization.
 
 ### Added
 
+- `Vm::runtime_error`: a runtime error with the position of the running
+  Lua code, as a library function raises it (`luaL_error`); it replaces
+  the hidden `Vm::rt_err` for hosts. `Vm::index_with_mm` and
+  `Vm::set_index_with_mm` (`lua_gettable`, `lua_settable`) are documented
+  and part of the public API.
 - `Vm::into_standalone` and `Standalone`: a Vm in the state PUC's
   standalone interpreter `lua` has when it starts running anything, made
   as `lua.c` makes it (its call level and arguments, the libraries, `arg`
