@@ -35,7 +35,7 @@ pub const SELF_CALL_RET_TABLE: i64 = 3;
 /// which a level calls [`luna_jit_self_level`], and the base of level 0.
 pub const SELF_CTX_WORDS: usize = 4;
 
-/// What [`luna_jit_self_call_slow`] needs to know about the call, packed
+/// What [`luna_jit_self_level`] needs to know about the call, packed
 /// into the constant compiled code passes it: the argument count, which
 /// arguments are floats and which tables, and the result's kind.
 pub fn self_call_desc(nargs: u32, float_mask: u8, table_mask: u8, ret: i64) -> i64 {
