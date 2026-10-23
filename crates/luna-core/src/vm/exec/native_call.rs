@@ -45,8 +45,7 @@ impl NativeKind {
 impl Vm {
     /// A native that is the library function `builtin`, collecting in an
     /// emergency when memory runs out.
-    #[doc(hidden)]
-    pub fn builtin(
+    pub(crate) fn builtin(
         &mut self,
         f: crate::runtime::value::NativeFn,
         upvals: &[Value],

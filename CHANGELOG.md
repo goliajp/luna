@@ -23,6 +23,11 @@ optimization.
 
 ### Breaking
 
+- The functions hidden from the docs that luna's other crates use (the
+  JIT's helpers, the C API, the CLI, the tests) moved to
+  `luna_core::__private`, which is not covered by semantic versioning and
+  which an embedder does not need. `Vm::rt_err` is private: hosts use
+  `Vm::runtime_error`.
 - Functions hidden from the docs that only luna itself used are private
   now or gone: `numeric::c_fmod`, `Heap::new_table_presized`,
   `Heap::try_create_table`, `Vm::call_value_with_handler_status`,

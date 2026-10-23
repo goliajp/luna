@@ -21,10 +21,10 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1479** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
-| of which in tests, benches and examples | 229 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
-| **`pub unsafe fn` in the public API** | **7** | six `#[doc(hidden)]`, and `MemOwner::raw`, see §5 |
-| **`pub unsafe extern "C" fn`** | 200 | the C API (143), the `luna_jit_*` helpers compiled code calls (51, re-exported by `luna-jit`), the AOT entries (4) and two in tests; see §5 |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1786** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| of which in tests, benches and examples | 250 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
+| **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; eight more in `luna_core::__private`, which is not public API, see §5 |
+| **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
 | **`unsafe impl Send` / `Sync`** | 10 | see §5 |
 
 A "site" is a line matching `unsafe (\{|fn |impl |trait |extern )`,
@@ -36,33 +36,35 @@ quotes the pattern counts too.
 
 | Crate | Module | Sites | What the `unsafe` is for |
 |---|---|---:|---|
-| `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`, `num_words.rs`) | 82 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch; a numeric `for`'s control values read a word pair at a time (aarch64) |
-| | `vm/exec/index_*` | 39 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
-| | `vm/exec` (other) | 96 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
-| | `runtime/heap*`, `gc_ptr.rs` | 94 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit |
-| | `runtime/table*` | 49 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
-| | `runtime/mem` | 72 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix, a push into room the caller made |
-| | `runtime` (other) | 41 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
-| | `vm/lib_*` | 41 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`), the table writes that build each library, and on Windows the `ReadFile` call that reads a console as the MSVC C library does, the `CreateFileW`, `DeleteFileW` and `MoveFileExW` calls that open, remove and rename files as it does, the `MultiByteToWideChar` and `WideCharToMultiByte` calls that take names and environment text through the ANSI code page as it does, and the `File` made of the standard input handle for seeking it |
-| | `vm` (other) | 45 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
+| `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`, `num_words.rs`) | 84 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch; a numeric `for`'s control values read a word pair at a time (aarch64) |
+| | `vm/exec/index_*` | 40 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
+| | `vm/exec` (other) | 109 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
+| | `runtime/heap*`, `gc_ptr.rs`, `gc_hooks` | 183 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation, the `Gc<T>` handle, the debug check of the slow-store bit; the collector checks of the test-only builds (`gc-verify`: the freed-address probes, the tricolour and string-count checks) |
+| | `runtime/puc` | 113 | the model of PUC's allocations: the records it keeps over raw object headers (the parser's tables and frames a collection step marks, 5.1's environment records, the objects PUC makes and luna does not yet, the strings a load sets aside), its marking and sweeping of them, the 5.5 sizer |
+| | `private` (`luna_core::__private`) | 20 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, and the four JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
+| | `runtime/table*` | 52 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
+| | `runtime/mem` | 88 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix, a push into room the caller made |
+| | `runtime` (other) | 42 | string headers and their trailing bytes, the value tag/payload encoding, closure upvalue storage |
+| | `vm/lib_*` | 40 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`), the table writes that build each library, and on Windows the `ReadFile` call that reads a console as the MSVC C library does, the `CreateFileW`, `DeleteFileW` and `MoveFileExW` calls that open, remove and rename files as it does, the `MultiByteToWideChar` and `WideCharToMultiByte` calls that take names and environment text through the ANSI code page as it does, and the `File` made of the standard input handle for seeking it |
+| | `vm` (other) | 47 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
 | | `stdio.rs` | 1 | C-style standard output writing descriptor 1 without closing it |
 | | `native_stack.rs` | 10 | reading the running thread's stack bounds from the OS (`pthread_getattr_np`, `pthread_get_stackaddr_np`, `GetCurrentThreadStackLimits`, and on glibc's and musl's main thread `getrlimit`, on glibc also `__libc_stack_end`) |
 | | `jit`, `frontend` | 12 | trace metadata handed to the backend; the `isb` that lets a thread run code another thread wrote (aarch64); interned-name text |
-| | unit-test files under `src/` | 22 | tests that inspect raw layouts; a test `lua_Alloc` |
-| | `tests/` | 54 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc`, the environment variables of the Windows file-name test |
+| | unit-test files under `src/` | 23 | tests that inspect raw layouts; a test `lua_Alloc` |
+| | `tests/` | 70 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc`, the environment variables of the Windows file-name test |
 | `luna-jit` | `capi*` | 386 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
-| | `jit_backend` | 61 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, `Send` and `Sync` for the record a baseline trace keeps to be lowered again for the optimizing tier, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
-| | other | 2 | the CLI's `arg` table and the `lua_facade` table handle |
-| | unit-test files under `src/` | 70 | tests that call compiled code or the `extern "C"` helpers directly |
-| | `tests/`, `benches/`, `examples/` | 46 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
-| `luna-jit-helpers` | | 166 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
-| `luna-jit-llvm` | `src/` | 6 | LLVM execution engines (one per compiled method or trace), `Send` for an engine compiled on the background compile thread, and the register-file GEPs |
+| | `jit_backend` | 67 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, `Send` and `Sync` for the record a baseline trace keeps to be lowered again for the optimizing tier, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
+| | other | 1 | the CLI's `arg` table and the `lua_facade` table handle |
+| | unit-test files under `src/` | 66 | tests that call compiled code or the `extern "C"` helpers directly |
+| | `tests/`, `benches/`, `examples/` | 54 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
+| `luna-jit-helpers` | | 185 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
+| `luna-jit-llvm` | `src/` | 8 | LLVM execution engines (one per compiled method or trace), `Send` for an engine compiled on the background compile thread, and the register-file GEPs |
 | | `tests/` | 34 | calling LLVM-compiled chunks |
-| `luna-runtime-helpers` | | 45 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
+| `luna-runtime-helpers` | | 46 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1479** | |
+| **Total** | | **1786** | |
 
 ## 3. Pattern catalog
 
@@ -490,28 +492,29 @@ the heap and `vm/exec`. That is 1479, the ceiling now.
 
 ## 5. Public `unsafe` surface
 
-### `pub unsafe fn` (7, six of them `#[doc(hidden)]`)
+### `pub unsafe fn` (1 in the public API, 8 in `luna_core::__private`)
 
 | Location | Function | Why |
 |---|---|---|
-| `runtime/gc_ptr.rs` | `Gc::<T>::from_ptr` | Rebuilds a handle from a pointer compiled code passes around; the pointer must be a live object. |
-| `runtime/gc_ptr.rs` | `Gc::<T>::as_mut` | Internal mutation; embedders use `TableBuilder` / `LuaUserdata`. |
-| `runtime/value.rs` | `Value::as_closure_unchecked` | JIT hot path; skips the tag match. Safe alternative: match `Value::Closure(_)`. |
-| `runtime/value.rs` | `Value::as_int_unchecked` | Same shape. |
-| `runtime/value_raw.rs` | `Value::pack` | Low-level constructor from the array-part encoding, used by the JIT and the C API. |
-| `runtime/mem/ctx.rs` | `MemCtx::set_raw_alloc` | `lua_setallocf`: the C API swaps the host function, which must accept the previous one's blocks. |
 | `runtime/mem/ctx.rs` | `MemOwner::raw` | A host that supplies a `lua_Alloc`-style function vouches for it; the safe way to watch or limit a Vm's memory is `MemOwner::policy`. |
+| `__private::GcInternals` | `from_ptr` | Rebuilds a handle from a pointer compiled code passes around; the pointer must be a live object. |
+| `__private::GcInternals` | `as_mut` | Mutation through a handle by luna's own crates; embedders use `TableBuilder` / `LuaUserdata`. |
+| `__private::ValueInternals` | `pack` | Low-level constructor from the array-part encoding, used by the JIT and the C API. |
+| `__private::MemCtxInternals` | `set_raw_alloc` | `lua_setallocf`: the C API swaps the host function, which must accept the previous one's blocks. |
+| `__private::VmJitFrames` | `jit_set_top`, `jit_push_inlined_frame`, `jit_handoff_frame` | Compiled code's helpers set the stack top, rebuild an inlined function's frame, and hand a level to the interpreter at a frame and instruction compiled code vouches for. |
+| `__private::VmJitAlloc` | `jit_closure` | A closure capturing registers of the frame compiled code says is running. |
 
-None of these but `MemOwner::raw` appears in the `cargo doc` view of the
-API; using the API does not need any of them.
+`luna_core::__private` is not part of the public API: luna's own crates
+use it, nothing in it is covered by semantic versioning, and an embedder
+does not need it. The public API needs no `unsafe` but `MemOwner::raw`.
 
-### `pub unsafe extern "C" fn` (203)
+### `pub unsafe extern "C" fn` (208)
 
 | Location | Count | Why |
 |---|---:|---|
 | `luna-jit/src/capi*` | 143 | the C API, called from C with raw `lua_State` pointers (the functions written in C are reached through naked jumps, which are not `unsafe fn`s) |
-| `luna-jit-helpers/src/*` | 54 | the `luna_jit_*` helpers compiled code calls (§3.5); each has a `# Safety` section |
-| `luna-runtime-helpers/src/*` | 4 | `luna_aot_run_dialect`, the AOT binary's entry, called by the generated C `main` with the dialect the script was compiled for; `luna_aot_run`, the same entry for 5.5 |
+| `luna-jit-helpers/src/*` | 59 | the `luna_jit_*` helpers compiled code calls (§3.5); each has a `# Safety` section |
+| `luna-runtime-helpers/src/*`, `luna-aot` | 6 | `luna_aot_run_dialect`, the AOT binary's entry, called by the generated C `main` with the dialect the script was compiled for; `luna_aot_run`, the same entry for 5.5 |
 
 ### `unsafe impl Send` / `Sync` (10)
 

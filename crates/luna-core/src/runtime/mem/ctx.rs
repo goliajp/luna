@@ -311,8 +311,7 @@ impl MemCtx {
     ///
     /// # Safety
     /// `f` accepts every live block of the previous function, with `ud`.
-    #[doc(hidden)]
-    pub unsafe fn set_raw_alloc(&self, f: RawAllocFn, ud: *mut c_void) {
+    pub(crate) unsafe fn set_raw_alloc(&self, f: RawAllocFn, ud: *mut c_void) {
         assert!(
             matches!(self.mode, Mode::Raw),
             "the context has a host function"

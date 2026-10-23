@@ -5,6 +5,7 @@
 
 use super::ccall::{Cont, KFn, LUNA_RECOVER, PendingYield, Wait, pcall_outcome, push_results};
 use super::*;
+use luna_core::__private::VmHostInternals;
 use luna_core::runtime::ErrorStatus;
 use luna_core::vm::exec::host_c::HostContSpec;
 
@@ -208,7 +209,7 @@ pub(super) fn yieldk(api: &mut Api, nresults: c_int, k: Option<KFn>, ctx: isize)
     if let Some(msg) = api.vm.host_yield_refusal() {
         // inside a hook the interrupted Lua function is where it happens
         if super::hooks::in_lua_hook(api) {
-            let e = api.vm.rt_err(msg);
+            let e = api.vm.runtime_error(msg);
             api.raise(e);
         } else {
             api.raise_msg(msg);

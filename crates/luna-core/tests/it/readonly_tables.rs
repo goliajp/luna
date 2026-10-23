@@ -6,9 +6,9 @@
 //! one raised inside a library function carries none (`luaG_runerror`).
 //! The JIT's compiled stores are covered in luna-jit's tests.
 
+use luna_core::__private::GcInternals;
 use luna_core::runtime::{Gc, Table, TableError, Value};
-use luna_core::version::LuaVersion;
-use luna_core::vm::Vm;
+use luna_core::{version::LuaVersion, vm::Vm};
 
 const ALL: [LuaVersion; 5] = [
     LuaVersion::Lua51,

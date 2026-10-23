@@ -16,6 +16,7 @@
 
 use super::slots::rw_ranges;
 use super::*;
+use luna_core::__private::CompiledTraceInternals;
 
 /// For each of the head frame's `max_stack` registers, whether the trace
 /// takes its value (and so its tag) from the entry. Only the ops the

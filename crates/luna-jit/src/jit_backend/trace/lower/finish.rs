@@ -1,4 +1,5 @@
 use super::*;
+use luna_core::__private::classify_exit_tags;
 
 /// What the emit pass leaves for `CompiledTrace`.
 pub(super) struct Emitted {

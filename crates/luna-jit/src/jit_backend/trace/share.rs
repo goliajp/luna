@@ -7,7 +7,7 @@ use super::reloc::Code;
 use super::*;
 use crate::jit_backend::engine::HeadKey;
 use crate::jit_backend::storage::CraneliftJitStorage;
-use luna_core::jit::trace_types::{AdoptRequest, AdoptedTrace, CompiledTrace, entry_tags_admit};
+use luna_core::__private::entry_tags_admit;
 use std::sync::Arc;
 
 pub(crate) use super::tier_source::TierSource;

@@ -6,6 +6,7 @@
 //! hand with `LUNA_PROBE_VERSION` (51 to 55) and `LUNA_PROBE_CHUNK`.
 //! The counts such a host sees are PUC's, as measured on its 64-bit build.
 
+use luna_core::__private::VmHostInternals;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;

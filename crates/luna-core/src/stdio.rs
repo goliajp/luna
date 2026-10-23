@@ -48,8 +48,7 @@ pub struct HostStdout {
 /// From now on, write standard output through the C library's `stdout`
 /// (see [`HostStdout`]). Process-wide, like C's `stdout`; the first call
 /// wins.
-#[doc(hidden)]
-pub fn use_host_stdout(h: HostStdout) {
+pub(crate) fn use_host_stdout(h: HostStdout) {
     let _ = HOST.set(h);
 }
 

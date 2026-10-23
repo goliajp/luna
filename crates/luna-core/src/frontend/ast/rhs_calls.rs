@@ -72,9 +72,8 @@ pub(crate) fn is_known_pure_stdlib_root(text: &str) -> bool {
 ///
 /// O(n) in expression tree size — n is bounded by the source-character
 /// count of the statement RHS. No allocation.
-#[doc(hidden)]
 #[allow(dead_code)]
-pub fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
+pub(crate) fn walk_rhs_for_calls(chunk: &Chunk, eid: ExprId) -> RhsCallScan {
     walk_with(chunk, eid)
 }
 
@@ -190,9 +189,12 @@ fn classify_callee(chunk: &Chunk, callee: ExprId) -> RhsCallScan {
 ///   is treated as unsafe. Variable-tracking is a separate subsystem.
 /// - `obj` that is itself an Index (e.g. `t.a.b = v`) is rejected —
 ///   only direct local Index-LHS is in scope.
-#[doc(hidden)]
 #[allow(dead_code)]
-pub fn metamethod_safe_for_index_lhs(chunk: &Chunk, obj_eid: ExprId, rhs_eid: ExprId) -> bool {
+pub(crate) fn metamethod_safe_for_index_lhs(
+    chunk: &Chunk,
+    obj_eid: ExprId,
+    rhs_eid: ExprId,
+) -> bool {
     matches!(chunk.expr(obj_eid), Expr::Name(_)) && rhs_calls_nothing_unknown(chunk, rhs_eid)
 }
 

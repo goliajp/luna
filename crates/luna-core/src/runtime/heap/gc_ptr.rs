@@ -32,8 +32,7 @@ impl<T> Gc<T> {
     /// `p` points at a live object of type `T` that a [`Heap`](super::Heap)
     /// allocated and still manages, and whoever uses the handle keeps that
     /// object reachable while doing so: [`Deref`] reads through it.
-    #[doc(hidden)]
-    pub unsafe fn from_ptr(p: *mut T) -> Gc<T> {
+    pub(crate) unsafe fn from_ptr(p: *mut T) -> Gc<T> {
         Gc {
             ptr: NonNull::new(p).expect("gc pointer must be non-null"),
         }
@@ -74,8 +73,7 @@ impl<T> Gc<T> {
     /// freshly-allocated tables is the `TableBuilder` / `vm.table_of(...)` API.
     /// Cross-crate access from `luna` (e.g. `jit_backend`, `capi`) keeps
     /// working — `#[doc(hidden)] pub` doesn't demote visibility, just docs.
-    #[doc(hidden)]
-    pub unsafe fn as_mut<'a>(self) -> &'a mut T {
+    pub(crate) unsafe fn as_mut<'a>(self) -> &'a mut T {
         // SAFETY: `ptr` is non-null and points at an object of the heap that allocated it; the caller's contract above keeps that object unfreed and unaliased for as long as the returned borrow lives
         unsafe { &mut *self.ptr.as_ptr() }
     }

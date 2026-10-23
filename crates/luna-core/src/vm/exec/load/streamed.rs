@@ -7,8 +7,7 @@ impl Vm {
     /// (`lua_load`, `load` with a function): what the parse needs from the
     /// vm, so that the reader can use the vm while the parse runs. `None`
     /// for MacroLua, whose macro pass needs the whole source first.
-    #[doc(hidden)]
-    pub fn text_load(&mut self) -> Option<TextLoad> {
+    pub(crate) fn text_load(&mut self) -> Option<TextLoad> {
         if self.version.is_macro_lua() {
             return None;
         }
@@ -37,8 +36,7 @@ impl Vm {
     /// once for the load whichever way it goes on; 5.2 on, the thread is
     /// not yieldable while the chunk is parsed (`incnny` in
     /// `luaD_protectedparser`).
-    #[doc(hidden)]
-    pub fn host_load_begin(&mut self) -> Result<(), LuaError> {
+    pub(crate) fn host_load_begin(&mut self) -> Result<(), LuaError> {
         let checked = self.lua_load_checkpoint();
         self.heap.set_load_checked(true);
         if self.version >= LuaVersion::Lua52 {
@@ -48,8 +46,7 @@ impl Vm {
     }
 
     /// The parse of the `lua_load` [`Vm::host_load_begin`] began has ended.
-    #[doc(hidden)]
-    pub fn host_load_end(&mut self) {
+    pub(crate) fn host_load_end(&mut self) {
         self.heap.set_load_checked(false);
         if self.version >= LuaVersion::Lua52 {
             self.nny -= 1;

@@ -3,6 +3,7 @@
 
 use super::ccall::{take_error, with_c};
 use super::*;
+use luna_core::__private::VmHostInternals;
 use luna_core::runtime::LuaClosure;
 use luna_core::vm::exec::host_c::HostLoadError;
 

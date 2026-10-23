@@ -57,8 +57,7 @@ pub(crate) fn new_table_operands(
 /// `(array size, hash size)` a `NewTable` with these operands makes (see
 /// [`new_table_operands`]); `None` past the sizes a table can have, which
 /// only crafted bytecode asks for. Public for the JIT crates.
-#[doc(hidden)]
-pub fn new_table_sizes(b: u32, c: u32, k: bool) -> Option<(usize, usize)> {
+pub(crate) fn new_table_sizes(b: u32, c: u32, k: bool) -> Option<(usize, usize)> {
     let (asize, hsize) = if k {
         (fb2int(b), fb2int(c))
     } else {
@@ -78,8 +77,7 @@ impl Table {
     /// Before a `SetList` stores up to index `last`: grow the array part to
     /// exactly `last` when it is smaller, keeping the hash part's size
     /// (PUC `luaH_resizearray`). Public for the JIT crates.
-    #[doc(hidden)]
-    pub fn reserve_list(&mut self, heap: &mut Heap, last: u64) -> Result<(), TableError> {
+    pub(crate) fn reserve_list(&mut self, heap: &mut Heap, last: u64) -> Result<(), TableError> {
         if last <= u64::from(self.asize) {
             return Ok(());
         }

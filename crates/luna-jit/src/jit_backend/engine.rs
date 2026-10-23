@@ -3,6 +3,7 @@
 use super::chunk_share::{ChunkImage, ChunkKey};
 use super::trace::image::{Settings, TraceImage};
 use super::trace::share_failures::Failure;
+use luna_core::__private::VmHostInternals;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

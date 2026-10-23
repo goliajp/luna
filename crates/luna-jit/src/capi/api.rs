@@ -2,6 +2,7 @@
 //! as C sees it, and raising an error for the C side to throw.
 
 use super::*;
+use luna_core::__private::GcInternals;
 use luna_core::runtime::{NativeClosure, Table};
 
 mod raise;

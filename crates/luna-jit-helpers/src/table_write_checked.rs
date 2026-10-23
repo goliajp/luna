@@ -3,6 +3,7 @@
 
 use crate::table_write::barrier_for;
 use crate::{current_jit_vm, str_arg, table_arg};
+use luna_core::__private::{GcInternals, TableInternals, ValueInternals};
 
 /// The trace JIT's table stores, `t[key] = val`, with the value given as
 /// a `raw` tag and payload. They return `1` when stored. They store

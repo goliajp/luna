@@ -3,6 +3,7 @@
 //!   - `per_exit_inline` is empty for traces with no cmp@d>0 site
 //!   - the helper returns -1 when there is no live Lua frame
 use super::*;
+use luna_core::__private::VmJitFrames;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 use luna_core::vm::isa::{Inst, Op};
@@ -92,9 +93,8 @@ fn helper_pushes_one_inlined_frame_with_correct_metadata() {
     let cl = vm.load(WIDE_SRC, b"=t").expect("compile");
     // Push a synthetic head frame so `jit_last_lua_frame` returns Some.
     vm.jit_ensure_stack(64);
-    vm.jit_push_inlined_frame(
-        cl, /*base*/ 1, /*pc*/ 7, /*nresults*/ 1, /*n_varargs*/ 0,
-    );
+    // SAFETY: base 1, pc 7 (an instruction of `cl`), in the 64 slots made
+    unsafe { vm.jit_push_inlined_frame(cl, 1, 7, 1, 0) };
     let frames_before = {
         // borrow vm just to count — use the accessor via guard
         // scope below to compose without lifetime pain.
@@ -253,7 +253,8 @@ fn helper_pushes_multiple_frames_in_order() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let cl = vm.load(WIDE_SRC, b"=t").expect("compile");
     vm.jit_ensure_stack(64);
-    vm.jit_push_inlined_frame(cl, 1, 0, 1, 0);
+    // SAFETY: base 1, pc 0 (`cl`'s first instruction), in the 64 slots made
+    unsafe { vm.jit_push_inlined_frame(cl, 1, 0, 1, 0) };
     let metas = [
         FrameMaterializeInfo {
             base_offset: 3,

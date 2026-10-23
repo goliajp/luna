@@ -41,8 +41,7 @@ impl Vm {
     /// find a collection step due when it checks after making the table
     /// (PUC's size of it, as the operands give it): then the interpreter
     /// runs it. A table the operands cannot give is the interpreter's too.
-    #[doc(hidden)]
-    pub fn jit_table_due(&self, b: u32, c: u32, k: bool) -> bool {
+    pub(crate) fn jit_table_due(&self, b: u32, c: u32, k: bool) -> bool {
         match crate::runtime::table::new_table_sizes(b, c, k) {
             Some((a, h)) => {
                 let h = if h == 0 { 0 } else { h.next_power_of_two() };
@@ -55,8 +54,7 @@ impl Vm {
     /// Record the frame of the compiled level at `base` (level 0's when
     /// `None`), which the interpreter goes on with at `pc`, its registers
     /// `vals`.
-    #[doc(hidden)]
-    pub fn jit_handoff_frame(&mut self, base: Option<u32>, pc: u32, vals: Vec<Value>) {
+    pub(crate) fn jit_handoff_frame(&mut self, base: Option<u32>, pc: u32, vals: Vec<Value>) {
         let base = base.unwrap_or(self.jit.levels_slot);
         // the interpreter runs the op a helper parked a deopt for
         self.jit.pending_err = None;

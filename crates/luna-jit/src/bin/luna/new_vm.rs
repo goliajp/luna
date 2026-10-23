@@ -105,7 +105,7 @@ pub(crate) fn new_vm(
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
         {
-            luna_jit::runtime::table::set_len_search_seed(Some(s));
+            luna_core::__private::set_len_search_seed(Some(s));
         }
         let seed = std::env::var("LUNA_HASH_SEED")
             .ok()

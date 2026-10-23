@@ -182,6 +182,7 @@ fn take_luna_opts(argv: Vec<Vec<u8>>) -> (LunaOpts, Vec<Vec<u8>>) {
 
 use args::{LuaArgs, collectargs, print_usage};
 use interp::{Interp, lua_tostring, show};
+use luna_core::__private::VmHostInternals;
 /// `lua.c`'s `print_version`, with luna's name: 5.1 writes it to stderr,
 /// later versions to stdout.
 fn print_version(v: LuaVersion) {

@@ -1,6 +1,7 @@
 //! The trace JIT's generic `for` call.
 
 use crate::{current_jit_vm, push_ssa_roots};
+use luna_core::__private::VmJitFrames;
 
 /// Trace JIT helper for a generic `TForCall A 0 C` of any layout; `nvars`
 /// packs C with the layout's registers (`ForLayout::pack_call`).

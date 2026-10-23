@@ -2,6 +2,7 @@
 
 use crate::table_read::checked_read;
 use crate::{JIT_CL, current_jit_closure, current_jit_vm, payload_bits};
+use luna_core::__private::{GcInternals, VmHostInternals, VmJitFrames};
 
 /// `R[A] = upvals[idx]` value-read variant. Reads the
 /// active closure's upvalue cell, dispatching open/closed via the
@@ -72,7 +73,7 @@ pub unsafe extern "C" fn luna_jit_upval_get_float(idx: i64) -> i64 {
     match vm.upval_get(cl, idx as u32) {
         luna_core::runtime::Value::Float(f) => f.to_bits() as i64,
         _ => {
-            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: upvalue is not a float"));
+            vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: upvalue is not a float"));
             0
         }
     }
@@ -96,7 +97,7 @@ pub unsafe extern "C" fn luna_jit_upval_is_int(idx: i64) -> i64 {
     match vm.upval_get(cl, idx as u32) {
         luna_core::runtime::Value::Int(_) => 1,
         _ => {
-            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: upvalue is not an integer"));
+            vm.jit.pending_err = Some(vm.runtime_error("JIT deopt: upvalue is not an integer"));
             0
         }
     }
@@ -123,7 +124,8 @@ pub unsafe extern "C" fn luna_jit_self_upval_check(idx: i64) -> i64 {
     match vm.upval_get(cl, idx as u32) {
         luna_core::runtime::Value::Closure(c) if c.ptr_eq(cl) => 1,
         _ => {
-            vm.jit.pending_err = Some(vm.rt_err("JIT deopt: callee is not the running closure"));
+            vm.jit.pending_err =
+                Some(vm.runtime_error("JIT deopt: callee is not the running closure"));
             0
         }
     }

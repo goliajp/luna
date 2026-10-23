@@ -31,8 +31,9 @@ embedder follows the patterns in §2:
   is not a sandbox boundary: both luna's own dump format and PUC `.luac`
   loading are off by default in `Vm::sandbox(...)`.
 - **Unsound `unsafe` at the embedder surface.** Every public
-  `cargo doc`-visible API is safe Rust. The five `pub unsafe fn`
-  remnants are `#[doc(hidden)]` (see
+  `cargo doc`-visible API is safe Rust but `MemOwner::raw` (a host's own
+  allocation function). The `unsafe fn`s luna's other crates use are in
+  `luna_core::__private`, which is not public API (see
   [`unsafe-accounting.md`](unsafe-accounting.md) §5).
 - **`__gc` finalizer misuse from Rust userdata.** Drop ordering for
   `LuaUserdata` finalizers is bounded by the GC sweep; see §6.
@@ -197,11 +198,13 @@ to bound what the `open_os_io()` opt-in could reach.
 ## 5. Zero `unsafe` at the embedder surface
 
 Every type and function that `cargo doc` shows
-to a downstream crate is safe Rust. The five remaining
-`pub unsafe fn` (`Gc::<T>::from_ptr`, `Gc::<T>::as_mut`,
-`Value::as_closure_unchecked`, `Value::as_int_unchecked`, `Value::pack`)
-are `#[doc(hidden)]` —
-they exist for the JIT and capi paths, not for embedders.
+to a downstream crate is safe Rust, but `MemOwner::raw`, through which a
+host supplies its own allocation function and vouches for it. The
+`unsafe fn`s the JIT and the C API use (`from_ptr` and `as_mut` of a
+`Gc<T>`, `Value`'s `pack`, the host allocation function's swap, and four
+JIT entries that trust compiled code's frame layout) are in
+`luna_core::__private`, which is not public API and which an embedder
+does not need.
 See [`unsafe-accounting.md`](unsafe-accounting.md) §5 for the
 exhaustive list.
 

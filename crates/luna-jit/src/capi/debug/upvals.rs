@@ -4,6 +4,7 @@
 use super::super::api::C_UPVALS;
 use super::super::*;
 use super::c_api_fn;
+use luna_core::__private::GcInternals;
 
 /// Where upvalue `n` of a native lives in its upvalue array: a C
 /// function's follow the C API's own.

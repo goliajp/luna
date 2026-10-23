@@ -1,6 +1,7 @@
 //! The trace JIT's string accumulator buffers (`s = s .. v` loops).
 
 use crate::{current_jit_vm, str_arg};
+use luna_core::__private::VmJitAlloc;
 use luna_core::runtime::mem::LVec;
 
 /// Trace JIT helper:acquire a fresh accumulator

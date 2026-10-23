@@ -140,8 +140,11 @@ impl Vm {
 
     /// `luaL_traceback(L, L, msg, level)` (5.2 on) as the standalone
     /// interpreter's message handler calls it: the string PUC makes.
-    #[doc(hidden)]
-    pub fn traceback_string(&mut self, msg: Option<&[u8]>, level: i64) -> Result<Value, LuaError> {
+    pub(crate) fn traceback_string(
+        &mut self,
+        msg: Option<&[u8]>,
+        level: i64,
+    ) -> Result<Value, LuaError> {
         Ok(Value::Str(self.puc_traceback(None, msg, level)?))
     }
 

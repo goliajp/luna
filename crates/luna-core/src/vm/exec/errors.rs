@@ -89,8 +89,7 @@ impl Vm {
         out
     }
 
-    #[doc(hidden)]
-    pub fn rt_err(&mut self, msg: &str) -> LuaError {
+    pub(crate) fn rt_err(&mut self, msg: &str) -> LuaError {
         self.rt_errf(format_args!("{msg}"))
     }
 
@@ -223,8 +222,7 @@ impl Vm {
 
     /// How many errors have taken a status of their own so far; see
     /// [`Vm::error_status`].
-    #[doc(hidden)]
-    pub fn special_errors(&self) -> SpecialErrors {
+    pub(crate) fn special_errors(&self) -> SpecialErrors {
         SpecialErrors {
             errerr: self.errerr_raised,
             gcmm: self.gcmm_raised,
@@ -236,8 +234,7 @@ impl Vm {
     /// the vm raised itself with a status of its own carries that status's
     /// message, so a message the program raised with the same text, and no
     /// such error raised meanwhile, stays `Run`.
-    #[doc(hidden)]
-    pub fn error_status(&self, e: Value, before: SpecialErrors) -> ErrorStatus {
+    pub(crate) fn error_status(&self, e: Value, before: SpecialErrors) -> ErrorStatus {
         let now = self.special_errors();
         let Value::Str(s) = e else {
             return ErrorStatus::Run;

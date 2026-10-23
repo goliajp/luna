@@ -5,6 +5,7 @@
 //! than none (the native standing in for the call had left, still taken
 //! off) and the collector shrank the thread with that count.
 
+use luna_core::__private::VmHostInternals;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaError, Vm};

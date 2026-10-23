@@ -1,6 +1,7 @@
 //! Deopt parking and guard checks.
 
 use crate::{current_jit_closure, current_jit_vm, str_arg};
+use luna_core::__private::{GcInternals, VmHostInternals, VmJitAlloc};
 
 /// 1 while no deopt is parked and no error is waiting to be raised. A
 /// method-JIT chunk checks it after a self-recursive call: once the callee
@@ -64,7 +65,8 @@ pub unsafe extern "C" fn luna_jit_park_deopt() {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     if vm.jit.pending_err.is_none() {
-        vm.jit.pending_err = Some(vm.rt_err("JIT deopt: compiled code cannot run this call"));
+        vm.jit.pending_err =
+            Some(vm.runtime_error("JIT deopt: compiled code cannot run this call"));
     }
 }
 
@@ -101,8 +103,8 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
         return 0;
     };
     let lib = match math_key.as_bytes() {
-        b"math" => luna_core::vm::lib_math::inlinable_builtin(name_key.as_bytes()),
-        b"string" => luna_core::vm::lib_string::inlinable_builtin(name_key.as_bytes()),
+        b"math" => luna_core::__private::math_inlinable_builtin(name_key.as_bytes()),
+        b"string" => luna_core::__private::string_inlinable_builtin(name_key.as_bytes()),
         _ => None,
     };
     i64::from(lib.is_some_and(|lib| f.builtin == lib))
@@ -252,5 +254,5 @@ pub unsafe extern "C" fn luna_jit_str_sub(s: i64, i: i64, j: i64) -> i64 {
     let (vm, s) = unsafe { (current_jit_vm(), str_arg(s)) };
     // 0 with a deopt parked when the string cannot be made, as the
     // allocating helpers do
-    luna_core::vm::lib_string::str_sub(vm, s, i, j).map_or(0, |r| r.as_ptr() as i64)
+    luna_core::__private::str_sub(vm, s, i, j).map_or(0, |r| r.as_ptr() as i64)
 }

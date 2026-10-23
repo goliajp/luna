@@ -44,8 +44,7 @@ impl Vm {
     /// sized by `b`, `c`, `k`): `true` when a collection step falls due
     /// with it, the trace then leaving with the table made for real;
     /// otherwise it is counted and recorded.
-    #[doc(hidden)]
-    pub fn jit_sunk_table(&mut self, site: usize, b: u32, c: u32, k: bool) -> bool {
+    pub(crate) fn jit_sunk_table(&mut self, site: usize, b: u32, c: u32, k: bool) -> bool {
         let sunk = &mut self.jit_ghosts().sunk;
         if sunk.len() <= site {
             sunk.resize(site + 1, None);
@@ -69,8 +68,7 @@ impl Vm {
 
     /// Sunk site `site`'s table grows from `old_h` nodes to `new_h` (a
     /// field it had no room for; the site has no array part).
-    #[doc(hidden)]
-    pub fn jit_sunk_grow(&mut self, site: usize, old_h: usize, new_h: usize) {
+    pub(crate) fn jit_sunk_grow(&mut self, site: usize, old_h: usize, new_h: usize) {
         if let Some(Some(t)) = self.jit_ghosts().sunk.get(site).copied() {
             self.heap.ghost_table_resize(t, 0, old_h, 0, new_h);
         }
@@ -79,8 +77,7 @@ impl Vm {
     /// A trace leaves with sunk site `site`'s table, which `make` makes
     /// for real now (`None` when it cannot): when PUC's was counted this
     /// round, it is made without counting and stands for that one.
-    #[doc(hidden)]
-    pub fn jit_sunk_make(
+    pub(crate) fn jit_sunk_make(
         &mut self,
         site: usize,
         make: impl FnOnce(&mut Vm) -> Option<Gc<Table>>,

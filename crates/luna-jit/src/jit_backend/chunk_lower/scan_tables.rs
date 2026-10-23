@@ -16,7 +16,7 @@ pub(super) fn scan_tables(s: &mut ChunkScan, c: ChunkIn<'_>, pc: usize, ins: Ins
             // whose constructor sizes a hash part still bails — none of
             // our headline cells use hash literals, and the per-slot
             // lowering would need a separate dispatch for `nodes`
-            match luna_core::runtime::table::new_table_sizes(ins.b(), ins.c(), ins.k()) {
+            match luna_core::__private::new_table_sizes(ins.b(), ins.c(), ins.k()) {
                 Some((_, 0)) => {}
                 _ => return None,
             }

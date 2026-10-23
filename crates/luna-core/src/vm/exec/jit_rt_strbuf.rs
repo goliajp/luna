@@ -17,8 +17,7 @@ impl Vm {
     /// make an empty one when the pool is empty. The trace keeps it (as
     /// the boxed pointer the helper leaks) in a stack slot through the
     /// loop and appends each piece to it.
-    #[doc(hidden)]
-    pub fn jit_str_buf_acquire(&mut self) -> Box<crate::runtime::mem::LVec<u8>> {
+    pub(crate) fn jit_str_buf_acquire(&mut self) -> Box<crate::runtime::mem::LVec<u8>> {
         let buf = self.jit.str_buf_pool.pop();
         self.jit_ghosts().accum = None;
         Box::new(buf.unwrap_or_else(|| crate::runtime::mem::LVec::new(self.heap.mem())))
@@ -28,9 +27,8 @@ impl Vm {
     /// pool, dropping any excess past `jit_str_buf_pool_cap`. The
     /// buffer is `clear`ed (capacity retained) so the next acquire
     /// gets a ready-to-extend buffer.
-    #[doc(hidden)]
     #[allow(clippy::boxed_local)] // the trace held the buffer boxed; it comes back that way
-    pub fn jit_str_buf_release(&mut self, mut buf: Box<crate::runtime::mem::LVec<u8>>) {
+    pub(crate) fn jit_str_buf_release(&mut self, mut buf: Box<crate::runtime::mem::LVec<u8>>) {
         buf.clear();
         if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
             self.jit.str_buf_pool.push(buf.take());
@@ -39,8 +37,7 @@ impl Vm {
 
     /// Append a piece's bytes to an accumulator buffer; `false`, the
     /// buffer as it was, when it cannot grow.
-    #[doc(hidden)]
-    pub fn jit_str_buf_extend(
+    pub(crate) fn jit_str_buf_extend(
         &mut self,
         buf: &mut crate::runtime::mem::LVec<u8>,
         piece: Gc<crate::runtime::LuaStr>,
@@ -56,8 +53,7 @@ impl Vm {
     /// is; a long one recorded, which the buffer's string stands for once
     /// made). -1 when the buffer cannot grow; 1 when a collection step
     /// falls due, the trace then leaving after the op.
-    #[doc(hidden)]
-    pub fn jit_str_buf_concat(
+    pub(crate) fn jit_str_buf_concat(
         &mut self,
         buf: &mut crate::runtime::mem::LVec<u8>,
         piece: Gc<crate::runtime::LuaStr>,
@@ -96,8 +92,7 @@ impl Vm {
     /// allocated; a deopt is parked then, so the dispatcher drops the
     /// trace's registers (the 0 among them) and the interpreter runs the
     /// loop again.
-    #[doc(hidden)]
-    pub fn jit_str_buf_intern(&mut self, buf: &mut crate::runtime::mem::LVec<u8>) -> i64 {
+    pub(crate) fn jit_str_buf_intern(&mut self, buf: &mut crate::runtime::mem::LVec<u8>) -> i64 {
         // hard cap at 256KB
         // the string PUC made last is this one
         let last = self.jit_ghosts().accum.take();

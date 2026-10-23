@@ -18,8 +18,7 @@ impl Vm {
     /// interpreter runs the op at the head). Never a side trace: it runs
     /// only from its parent's exit, so its parent's function is running or
     /// inlined by a live trace, which tiering the side trace up reads.
-    #[doc(hidden)]
-    pub fn trace_admits(t: &CompiledTrace, pc: u32, downrec_blocked: bool) -> bool {
+    pub(crate) fn trace_admits(t: &CompiledTrace, pc: u32, downrec_blocked: bool) -> bool {
         if t.head_pc != pc || t.dispatch_off_reason == Some(SIDE_TRACE) || downrec_blocked {
             return false;
         }

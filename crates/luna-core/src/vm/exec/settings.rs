@@ -177,8 +177,7 @@ impl Vm {
     /// compiled for code of the same content, and remember the chunks
     /// loaded from now on so such traces find the functions they inlined.
     /// The JIT crate's shared engine turns this on for the Vms it builds.
-    #[doc(hidden)]
-    pub fn enable_trace_sharing(&mut self) {
+    pub(crate) fn enable_trace_sharing(&mut self) {
         self.jit.share_traces = true;
         self.heap.track_chunk_roots();
     }

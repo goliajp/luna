@@ -125,7 +125,7 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
         unsafe { alloc(ud, block, std::mem::size_of::<Global>(), 0) };
         return std::ptr::null_mut();
     }
-    luna_core::stdio::use_host_stdout(luna_core::stdio::HostStdout {
+    luna_core::__private::use_host_stdout(luna_core::stdio::HostStdout {
         write: host_stdout_write,
         flush: host_stdout_flush,
         setvbuf: host_stdout_setvbuf,

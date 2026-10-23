@@ -5,6 +5,7 @@
 //! entry fn ptr is written into the parent's
 //! `exit_side_trace_ptrs[parent_exit_idx]` Cell.
 
+use luna_core::__private::VmHostInternals;
 use luna_jit::version::LuaVersion;
 
 /// fib(28) — at least one side trace must compile (counter ≥ 1)

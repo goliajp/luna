@@ -19,8 +19,7 @@ impl Vm {
     ///     cranelift `stack_load` IR instead. Returns -1 on deopt,
     ///     else R[A+4]'s tag byte | R[A+5]'s tag byte << 8 (the value's
     ///     tag only when `nvars >= 2`, 0 otherwise).
-    #[doc(hidden)]
-    pub fn jit_op_tforcall(
+    pub(crate) fn jit_op_tforcall(
         &mut self,
         slot_offset: u32,
         nvars: i32,

@@ -195,8 +195,12 @@ impl Vm {
     /// `luaL_checkstack(L, n, msg)` in lua.c's `pmain` with `values` values
     /// on its stack (above its function at slot 0): `pmain`'s level
     /// reserves that room from then on.
-    #[doc(hidden)]
-    pub fn host_check_stack(&mut self, values: u32, n: u32, msg: &str) -> Result<(), LuaError> {
+    pub(crate) fn host_check_stack(
+        &mut self,
+        values: u32,
+        n: u32,
+        msg: &str,
+    ) -> Result<(), LuaError> {
         crate::vm::argcheck::check_stack_at(self, 1 + values, i64::from(n), msg)
     }
 

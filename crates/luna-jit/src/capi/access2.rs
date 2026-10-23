@@ -1,6 +1,7 @@
 //! More access functions: lengths, pointers, threads and raw equality.
 
 use super::*;
+use luna_core::__private::UserdataInternals;
 
 /// The raw length of a value (PUC `lua_rawlen`): bytes of a string or a
 /// userdata block, the border of a table, else 0.

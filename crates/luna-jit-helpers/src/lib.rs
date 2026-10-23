@@ -26,6 +26,7 @@
 // All helpers use fully-qualified `luna_core::*` paths internally.
 // Only the `JitVmGuard` re-export is needed by the `enter_jit`
 // signature below.
+use luna_core::__private::{GcInternals, ValueInternals};
 use luna_core::jit::JitVmGuard;
 
 thread_local! {
@@ -209,6 +210,8 @@ const _: () = assert!(std::mem::size_of::<*const ()>() == 8);
 
 mod table_new;
 pub use table_new::*;
+mod table_sunk;
+pub use table_sunk::*;
 mod table_write;
 mod table_write_checked;
 pub use table_write::*;

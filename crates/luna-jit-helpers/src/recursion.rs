@@ -19,6 +19,7 @@
 use luna_core::runtime::Value;
 
 use crate::{current_jit_closure, current_jit_vm, table_arg};
+use luna_core::__private::VmJitFrames;
 
 /// The kind of a self-recursive call's result, in a [`self_call_desc`].
 pub const SELF_CALL_RET_NONE: i64 = 0;
@@ -137,7 +138,7 @@ pub unsafe extern "C" fn luna_jit_self_level(
 }
 
 /// Record the frame of a compiled level that hands itself to the
-/// interpreter (see [`luna_core::vm::Vm::jit_handoff_frame`]): the
+/// interpreter (see `VmJitFrames::jit_handoff_frame`): the
 /// interpreter goes on with it at `pc`, its frame at `base` (level 0's
 /// when negative), its registers the `n` pairs of tag and payload words
 /// at `regs`.
@@ -163,7 +164,9 @@ pub unsafe extern "C" fn luna_jit_handoff_frame(pc: i64, base: i64, regs: i64, n
         .map(|&[tag, payload]| reg_value(tag, payload, float_only))
         .collect();
     let base = u32::try_from(base).ok();
-    vm.jit_handoff_frame(base, pc as u32, vals);
+    // SAFETY: compiled code hands over only a level it is running, at an
+    // instruction of that level's function, with its registers (# Safety)
+    unsafe { vm.jit_handoff_frame(base, pc as u32, vals) };
 }
 
 /// A register compiled code holds, by the tag its kind gives it: a table

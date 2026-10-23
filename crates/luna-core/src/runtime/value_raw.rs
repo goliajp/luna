@@ -8,9 +8,8 @@ impl Value {
     /// tag with `Bool` split in two (`FALSE`, `TRUE`), so every tag from
     /// `Int` up is one more than the value's; the payload is kept for the
     /// variants that have one and zeroed for `nil` and the booleans.
-    #[doc(hidden)]
     #[inline]
-    pub fn unpack(self) -> (u8, RawVal) {
+    pub(crate) fn unpack(self) -> (u8, RawVal) {
         let t = self.tag_byte();
         if t <= tag::BOOL {
             let truth = matches!(self, Value::Bool(true));
@@ -25,9 +24,8 @@ impl Value {
 
     /// SAFETY: `(tag, v)` must come from a matching `unpack` of a value that
     /// is still alive.
-    #[doc(hidden)]
     #[inline]
-    pub unsafe fn pack(tag: u8, v: RawVal) -> Value {
+    pub(crate) unsafe fn pack(tag: u8, v: RawVal) -> Value {
         let mut out = std::mem::MaybeUninit::<Value>::uninit();
         // SAFETY: the caller's contract is `pack_into`'s
         unsafe {
