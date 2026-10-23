@@ -26,16 +26,20 @@ pub mod aot_meta;
 
 // Backend trait surface. The Cranelift-bound CraneliftBackend lives in
 // luna's jit_backend module.
-mod abi;
+pub(crate) mod abi;
+pub(crate) mod rebind;
+pub(crate) use abi::TraceCompiler;
 pub use abi::{
     CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JIT_GC_CALL,
-    JIT_GC_PREV, MAX_JIT_ARITY, NullJitBackend, TraceCompiler,
+    JIT_GC_PREV, MAX_JIT_ARITY, NullJitBackend,
 };
+pub(crate) use rebind::JitVmRebindRestore;
 
 // Per-Vm JIT storage trait. Holds the JIT cache + handle collections
 // so a Vm carries its own JIT state across thread moves.
-mod storage;
-pub use storage::{JitStorage, NullJitStorage};
+pub(crate) mod storage;
+pub(crate) use storage::JitStorage;
+pub use storage::NullJitStorage;
 
 // cfg-gated Send-friendly aliases & wrappers for
 // the trace IR interior-mutability types. Default-feature path is
@@ -131,29 +135,6 @@ impl JitVmGuard {
     pub(crate) fn from_restore(r: JitVmRebindRestore) -> Self {
         Self { restore: Some(r) }
     }
-}
-
-/// Capture of the previous `(JIT_VM, JIT_CL)` slot contents at the
-/// moment [`JitVmGuard`] takes ownership, plus a function pointer
-/// that writes them back. The function pointer lets luna-core hold
-/// the drop semantics without referencing Cranelift's TLS storage
-/// (the cells themselves live in `luna_jit::jit_backend` because
-/// that's where the `thread_local!` block is, but the cells hold
-/// luna-core types — `*mut Vm` and `*const LuaClosure`).
-///
-/// Fields are `pub` rather than `pub(crate)` because luna-jit's
-/// `enter_jit` needs to construct an instance, and luna-jit is a
-/// separate crate. The whole type is `#[doc(hidden)]` so it stays
-/// out of the embedder surface.
-#[doc(hidden)]
-pub struct JitVmRebindRestore {
-    pub prev_vm: *mut crate::vm::Vm,
-    pub prev_cl: *const crate::runtime::LuaClosure,
-    /// luna-jit-side function that writes `(prev_vm, prev_cl)` back
-    /// into the TLS cells. Set by `enter_jit`. It only stores the two
-    /// pointers; the helpers that read them are the ones with a
-    /// contract.
-    pub restore_fn: fn(prev_vm: *mut crate::vm::Vm, prev_cl: *const crate::runtime::LuaClosure),
 }
 
 impl Drop for JitVmGuard {

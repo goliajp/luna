@@ -1,6 +1,6 @@
 //! Which register slots a recorded op reads and writes.
 
-use super::*;
+use luna_core::__private::{RecordedOp, TraceRecord};
 
 /// per-op (reads, writes) slot analysis. Returns the
 /// slot indices an op READS from and WRITES to in the caller's

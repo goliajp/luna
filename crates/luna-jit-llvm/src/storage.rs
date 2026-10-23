@@ -36,7 +36,8 @@
 
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
-use luna_core::jit::{CompileResult, JitStorage};
+use luna_core::__private::JitStorage;
+use luna_core::jit::CompileResult;
 use std::collections::HashMap;
 
 /// Cached compile result for a single Proto key. `entry` is the

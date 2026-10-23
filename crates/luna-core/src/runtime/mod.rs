@@ -1,6 +1,6 @@
 //! Runtime core: values, GC heap, strings, tables, function objects.
 
-mod builtin;
+pub(crate) mod builtin;
 pub mod coroutine;
 pub(crate) mod dialect;
 pub mod frame_marker;
@@ -50,7 +50,7 @@ mod upvalue;
 pub mod userdata;
 pub mod value;
 
-pub use builtin::Builtin;
+pub(crate) use builtin::Builtin;
 pub use coroutine::{Coro, CoroStatus, ErrorStatus};
 pub use function::{
     AfterClose, CallFrame, CloseCont, ContKind, DebugName, Frame, HostCont, LocVar, LuaClosure,

@@ -68,7 +68,7 @@ pub unsafe extern "C" fn lua_tocfunction(L: *mut LuaState, idx: c_int) -> Option
     let Some(Value::Native(nc)) = api.get(idx) else {
         return None;
     };
-    if nc.builtin != luna_core::runtime::Builtin::CFunction {
+    if nc.builtin != luna_core::__private::Builtin::CFunction {
         return None;
     }
     let Value::LightUserdata(p) = nc.upvals[0] else {

@@ -18,7 +18,7 @@ fn load_proto(vm: &mut Vm, src: &[u8]) -> Gc<Proto> {
 
 fn make_record(proto: Gc<Proto>, items: Vec<(Inst, u8)>) -> TraceRecord {
     // The registers these traces compute on hold integers.
-    let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
+    let tags = vec![luna_core::__private::raw::INT; proto.max_stack as usize];
     let mut rec = TraceRecord::start(proto, 0, tags, true);
     for (i, (inst, depth)) in items.into_iter().enumerate() {
         let pushed = rec.push(RecordedOp {

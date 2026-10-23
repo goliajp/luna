@@ -9,14 +9,12 @@ use super::*;
 use crate::vm::callstack::{Ar, DbgKind, LocalSlot, ThreadStack};
 use crate::vm::lib_debug;
 
-#[doc(hidden)]
 /// The C API's runner of a C hook function: the hook (a `lua_Hook`
 /// pointer), the event (`b"call"`, `b"return"`, `b"tail call"`,
 /// `b"tail return"`, `b"line"`, `b"count"`) and the line of a line event.
 pub type HostHookFn = fn(&mut Vm, *const (), &[u8], Option<i64>) -> Result<(), LuaError>;
 
 /// What runs at one stack level.
-#[doc(hidden)]
 #[derive(Clone, Copy)]
 pub enum HostLevel {
     /// a Lua function
@@ -33,7 +31,6 @@ pub enum HostLevel {
 }
 
 /// PUC `lua_Debug`'s fields, all filled.
-#[doc(hidden)]
 pub struct HostAr {
     /// `"Lua"`, `"C"`, `"main"` or `"tail"`
     pub what: &'static str,

@@ -78,7 +78,7 @@ pub unsafe extern "C" fn luna_jit_enter_ctx(ctx: *mut i64) {
     let lim = vm.jit_limits(cl, base);
     // SAFETY: `ctx` points to SELF_CTX_WORDS writable words (# Safety)
     unsafe {
-        *ctx = luna_core::native_stack::jit_limit() as i64;
+        *ctx = luna_core::__private::native_stack::jit_limit() as i64;
         *ctx.add(1) = 0;
         *ctx.add(2) = i64::from(lim.base);
         *ctx.add(3) = i64::from(base);
@@ -172,7 +172,7 @@ pub unsafe extern "C" fn luna_jit_handoff_frame(pc: i64, base: i64, regs: i64, n
 /// A register compiled code holds, by the tag its kind gives it: a table
 /// register holding 0 is nil.
 fn reg_value(tag: i64, payload: i64, float_only: bool) -> Value {
-    use luna_core::runtime::value::raw;
+    use luna_core::__private::raw;
     match tag as u8 {
         raw::INT if float_only => Value::Float(payload as f64),
         raw::INT => Value::Int(payload),

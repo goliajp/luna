@@ -32,10 +32,9 @@
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 compile_error!("the LLVM backend (`llvm-jit`) supports x86_64 and aarch64 only");
 
-use luna_core::jit::{
-    CompileResult, IntChunkCompiler, JitStorage, JitVmGuard, TraceCompiler,
-    trace_types::{CompileOptions, CompiledTrace, TraceRecord},
-};
+use luna_core::__private::{CompileOptions, CompiledTrace, TraceRecord};
+use luna_core::__private::{JitStorage, TraceCompiler};
+use luna_core::jit::{CompileResult, IntChunkCompiler, JitVmGuard};
 use luna_core::runtime::{Gc, LuaClosure, function::Proto};
 use luna_core::vm::Vm;
 

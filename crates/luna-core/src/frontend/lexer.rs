@@ -14,12 +14,11 @@ use crate::version::LuaVersion;
 mod escape;
 mod interning;
 mod number;
-mod source;
+pub(crate) mod source;
 mod strings;
 
 pub(crate) use source::{Feed, Stream};
-#[doc(hidden)]
-pub use source::{Source, Whole};
+pub(crate) use source::{Source, Whole};
 
 /// Streaming Lua lexer. Holds the source bytes (borrowed whole, or read
 /// piece by piece) and the current line counter; `next_token()` produces

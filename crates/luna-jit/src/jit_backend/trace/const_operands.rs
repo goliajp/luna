@@ -1,7 +1,7 @@
 //! A recording's constant- and immediate-operand ops presented to the
 //! lowerer as their register forms.
 
-use luna_core::jit::trace_types::TraceRecord;
+use luna_core::__private::TraceRecord;
 use luna_core::runtime::Gc;
 use luna_core::runtime::Value;
 use luna_core::runtime::function::Proto;

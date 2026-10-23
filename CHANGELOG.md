@@ -23,6 +23,16 @@ optimization.
 
 ### Breaking
 
+- The types, modules and constants hidden from the docs that luna's other
+  crates use moved to `luna_core::__private`: the trace JIT's records and
+  compiled traces (`TraceRecord`, `RecordedOp`, `CompiledTrace`,
+  `CompileOptions`, the exit and adoption records), the lexer's `Source`,
+  `Builtin`, the array encoding (`raw`, `RawVal`), `HostStdout`, the C
+  API's debug and load types, `JitState`, and the `cerrno` and
+  `native_stack` modules. Their old paths are gone.
+- `TraceCompiler` and `JitStorage`, the traits a trace JIT backend
+  implements, moved to `luna_core::__private` with the methods that were
+  hidden from their docs.
 - The C API's host interface on `Vm` (the `host_*` methods and the hooks
   it installs), hidden from the docs, moved to `luna_core::__private`.
 - The C API's host helpers nothing called (`Vm::host_set_body`,

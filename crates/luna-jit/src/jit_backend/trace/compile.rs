@@ -88,7 +88,7 @@ impl TraceHandle {
 /// [`try_compile_trace_with_options`] with [`CompileOptions::default`]
 /// (one-shot, the shape unit tests assume).
 pub fn try_compile_trace(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
 ) -> Option<CompiledTrace> {
     try_compile_trace_with_options(storage, record, CompileOptions::default())
@@ -201,7 +201,7 @@ pub fn reset_base_var_scaffold_declared_count() {
 /// `storage.trace_handles` so the entry stays callable for the
 /// lifetime of the owning `Vm`.
 pub fn try_compile_trace_with_options(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
 ) -> Option<CompiledTrace> {
@@ -211,7 +211,7 @@ pub fn try_compile_trace_with_options(
 /// [`try_compile_trace_with_options`] for a record of dialect `version`.
 #[doc(hidden)]
 pub fn try_compile_trace_for(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,
@@ -229,7 +229,7 @@ pub fn try_compile_trace_for(
 /// With `version` known, a Vm sharing its traces through an engine hands
 /// the trace to it (see `super::share`).
 pub(crate) fn compile_trace_for_vm(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     float_only: bool,

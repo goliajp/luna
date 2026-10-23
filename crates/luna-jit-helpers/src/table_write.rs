@@ -73,7 +73,7 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
     // and payload (# Safety); `g` is not dereferenced again while `table`
     // is in use, and `Table::set_int` never runs the collector
     let (table, v) = unsafe {
-        let raw = luna_core::runtime::value::RawVal {
+        let raw = luna_core::__private::RawVal {
             zero: raw_bits as u64,
         };
         (g.as_mut(), luna_core::runtime::Value::pack(tag as u8, raw))
@@ -128,7 +128,7 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
     // tag and payload (# Safety); `g` is not dereferenced again while
     // `table` is in use, and `Table::set` never runs the collector
     let (table, v) = unsafe {
-        let raw = luna_core::runtime::value::RawVal {
+        let raw = luna_core::__private::RawVal {
             zero: val_raw as u64,
         };
         (

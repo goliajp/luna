@@ -89,6 +89,7 @@ pub(super) fn emit_step_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use luna_core::__private::RecordedOp;
     use luna_core::version::LuaVersion;
     use luna_core::vm::isa::Inst;
 
@@ -103,7 +104,7 @@ mod tests {
             )
             .expect("compile")
             .proto;
-        let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
+        let tags = vec![luna_core::__private::raw::INT; proto.max_stack as usize];
         let mut rec = TraceRecord::start(proto, 0, tags, false);
         for (pc, &inst) in ops.iter().enumerate() {
             assert!(rec.push(RecordedOp {

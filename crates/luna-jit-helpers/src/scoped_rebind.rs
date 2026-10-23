@@ -41,7 +41,8 @@
 //! cfg-gated `#[cfg(not(feature = "send"))]` no-op drop variant can
 //! be reintroduced.
 
-use luna_core::jit::{JitVmGuard, JitVmRebindRestore};
+use luna_core::__private::JitVmRebindRestore;
+use luna_core::jit::JitVmGuard;
 use luna_core::runtime::{Gc, LuaClosure};
 use luna_core::vm::Vm;
 

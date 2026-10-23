@@ -34,7 +34,7 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
     // tag and payload (# Safety); `g` is not dereferenced again while
     // `table` is in use, and `Table::set` never runs the collector
     let (val, table) = unsafe {
-        let raw = luna_core::runtime::value::RawVal {
+        let raw = luna_core::__private::RawVal {
             zero: val_raw as u64,
         };
         (
@@ -109,7 +109,7 @@ pub unsafe extern "C" fn luna_jit_table_set_checked(
     // SAFETY: (`key_tag`, `key_raw`) is one value's tag and payload, and
     // the rest is what `checked_store` asks (# Safety)
     unsafe {
-        let raw = luna_core::runtime::value::RawVal {
+        let raw = luna_core::__private::RawVal {
             zero: key_raw as u64,
         };
         let key = luna_core::runtime::Value::pack(key_tag as u8, raw);

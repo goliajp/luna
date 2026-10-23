@@ -60,7 +60,7 @@ pub unsafe extern "C" fn luna_capi_lua_setmetatable(L: *mut LuaState, idx: c_int
 /// The C API's closure of a C function, which keeps its 5.1 environment
 /// as native upvalue 1; `None` for luna's own library functions.
 fn c_closure(nc: Gc<NativeClosure>) -> Option<Gc<NativeClosure>> {
-    (nc.builtin == luna_core::runtime::Builtin::CFunction).then_some(nc)
+    (nc.builtin == luna_core::__private::Builtin::CFunction).then_some(nc)
 }
 
 /// PUC 5.1 `lua_getfenv`: push the environment of the function, thread or

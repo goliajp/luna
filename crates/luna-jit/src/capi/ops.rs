@@ -4,7 +4,7 @@
 //! the stack until the operation is over.
 
 use super::*;
-use luna_core::vm::exec::host_c::{HOST_OP_BNOT, HOST_OP_UNM};
+use luna_core::__private::{HOST_OP_BNOT, HOST_OP_UNM};
 
 /// `lua_arith`'s `op` of the state's dialect as the 5.3+ `LUA_OP*`
 /// number: 5.2 numbers `+ - * / % ^` and unary minus 0 to 6.

@@ -6,7 +6,7 @@
 //! deeply nested as the parser allows. (musl's `pthread_getattr_np` reports
 //! only the mapped part of the main thread's stack.)
 
-use luna_core::native_stack;
+use luna_core::__private::native_stack;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 

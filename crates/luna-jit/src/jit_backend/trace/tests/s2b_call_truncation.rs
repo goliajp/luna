@@ -14,7 +14,7 @@ fn closed_record(proto: Gc<Proto>, head_pc: u32, ops: &[Inst]) -> TraceRecord {
     let mut rec = TraceRecord::start(
         proto,
         head_pc,
-        vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize],
+        vec![luna_core::__private::raw::INT; proto.max_stack as usize],
         false,
     );
     for (i, inst) in ops.iter().copied().enumerate() {

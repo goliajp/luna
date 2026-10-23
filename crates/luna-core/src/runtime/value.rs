@@ -278,7 +278,7 @@ pub fn f2i_exact(f: f64) -> Option<i64> {
 /// declaration order; reordering Value variants requires updating
 /// these constants in lock-step.
 ///
-/// Separate from the [`raw`] module's tagging scheme: `raw::*` is the
+/// Separate from the `raw` module's tagging scheme: `raw::*` is the
 /// luna 5.5-style "compact arrays" marshalling tag (separates
 /// `Bool(false)` vs `Bool(true)` into FALSE/TRUE tags, encodes
 /// `Userdata`/`LightUserdata` together, etc.). `tag::*` is the actual
@@ -309,50 +309,10 @@ pub mod tag {
     pub const LIGHTUSERDATA: u8 = 10;
 }
 
-/// Compact (tag, payload) encoding used by table array parts — the 5.5
-/// "compact arrays" layout: 1 tag byte + 8 payload bytes per slot. The
-/// payload is a union (PUC `Value` union shape) rather than u64 bits so that
-/// pointer provenance survives the round-trip (strict-provenance clean).
-#[doc(hidden)]
-pub mod raw {
-    pub const NIL: u8 = 0;
-    pub const FALSE: u8 = 1;
-    pub const TRUE: u8 = 2;
-    pub const INT: u8 = 3;
-    pub const FLOAT: u8 = 4;
-    pub const STR: u8 = 5;
-    pub const TABLE: u8 = 6;
-    pub const CLOSURE: u8 = 7;
-    pub const NATIVE: u8 = 8;
-    pub const CORO: u8 = 9;
-    pub const USERDATA: u8 = 10;
-    pub const LIGHTUSERDATA: u8 = 11;
+#[path = "value_raw_tags.rs"]
+pub(crate) mod raw;
 
-    /// Heap-managed tags.
-    pub fn is_gc(tag: u8) -> bool {
-        // LIGHTUSERDATA is an opaque host pointer (PUC void*); not GC-managed.
-        (STR..LIGHTUSERDATA).contains(&tag)
-    }
-}
-
-#[derive(Clone, Copy)]
-#[doc(hidden)]
-pub union RawVal {
-    pub zero: u64,
-    pub i: i64,
-    pub f: f64,
-    pub s: *mut LuaStr,
-    pub t: *mut Table,
-    pub c: *mut LuaClosure,
-    pub n: *mut NativeClosure,
-    pub co: *mut Coro,
-    pub u: *mut Userdata,
-    pub lu: *const (),
-}
-
-impl RawVal {
-    pub(crate) const NIL: RawVal = RawVal { zero: 0 };
-}
+pub(crate) use raw::RawVal;
 
 #[path = "value_raw.rs"]
 mod raw_impl;

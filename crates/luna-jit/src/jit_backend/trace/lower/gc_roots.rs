@@ -67,5 +67,5 @@ pub(super) fn emit_ssa_roots<E: Emit>(lw: &mut Lower<E>, i: usize, live_end: usi
 
 /// The tag of a register of kind `k` when its value is collectable.
 fn gc_tag(k: RegKind) -> Option<u8> {
-    known_tag(k).filter(|&t| luna_core::runtime::value::raw::is_gc(t))
+    known_tag(k).filter(|&t| luna_core::__private::raw::is_gc(t))
 }

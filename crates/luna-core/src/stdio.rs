@@ -32,18 +32,8 @@ static C_MODE: AtomicBool = AtomicBool::new(false);
 static STDOUT: Mutex<CFile> = Mutex::new(CFile::new());
 static HOST: OnceLock<HostStdout> = OnceLock::new();
 
-/// The C library's own `stdout`, as a C host linking luna's C API has it:
-/// the C API routes standard output there, so it interleaves with what the
-/// host writes with `printf` as PUC's output does.
-#[doc(hidden)]
-pub struct HostStdout {
-    /// `fwrite(bytes, 1, n, stdout)`; `false` on a short write
-    pub write: fn(&[u8]) -> bool,
-    /// `fflush(stdout)`; `false` on failure
-    pub flush: fn() -> bool,
-    /// `setvbuf(stdout, NULL, mode, BUFSIZ)`: `0` full, `1` line, `2` none
-    pub setvbuf: fn(u8),
-}
+pub(crate) mod host;
+pub(crate) use host::HostStdout;
 
 /// From now on, write standard output through the C library's `stdout`
 /// (see [`HostStdout`]). Process-wide, like C's `stdout`; the first call

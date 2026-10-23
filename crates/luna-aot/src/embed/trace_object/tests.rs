@@ -1,9 +1,9 @@
 use object::{Object, ObjectSection};
 
+use luna_core::__private::raw;
+use luna_core::__private::{CompileOptions, RecordedOp, TraceRecord};
 use luna_core::jit::send_compat::TArc;
-use luna_core::jit::trace_types::{CompileOptions, RecordedOp, TraceRecord};
 use luna_core::runtime::function::Proto;
-use luna_core::runtime::value::raw;
 use luna_core::runtime::{Gc, Value};
 use luna_core::version::LuaVersion;
 use luna_core::vm::isa::{Inst, Op};

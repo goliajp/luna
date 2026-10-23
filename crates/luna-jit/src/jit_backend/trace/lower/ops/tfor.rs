@@ -38,7 +38,8 @@ pub(super) fn emit_tfor_call_op<E: Emit>(
             // `R[A]`'s library tag if Native; `ipairs`'s iterator
             // specialises emit into inline Table aget IR (skip the
             // `op_tforcall` C call entirely on the hot path).
-            let is_ipairs_trace = record.tfor_iter == Some(luna_core::runtime::Builtin::IpairsIter);
+            let is_ipairs_trace =
+                record.tfor_iter == Some(luna_core::__private::Builtin::IpairsIter);
 
             // spill discipline:
             // - non-ipairs case: spill R[A..=A+2] upfront (helper

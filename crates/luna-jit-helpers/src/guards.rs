@@ -118,7 +118,7 @@ pub unsafe extern "C" fn luna_jit_math_fn_is_library(math_key: i64, name_key: i6
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub extern "C" fn luna_jit_fmod(a: f64, b: f64) -> f64 {
-    luna_core::cerrno::fmod(a, b)
+    luna_core::__private::cerrno::fmod(a, b)
 }
 
 /// A one-argument C math function for a compiled `math.<fn>(x)`, `f` its
@@ -127,7 +127,7 @@ pub extern "C" fn luna_jit_fmod(a: f64, b: f64) -> f64 {
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub extern "C" fn luna_jit_math1(x: f64, f: i64) -> f64 {
-    luna_core::cerrno::math1(luna_core::cerrno::MathFn::ALL[f as usize], x)
+    luna_core::__private::cerrno::math1(luna_core::__private::cerrno::MathFn::ALL[f as usize], x)
 }
 
 /// For a compiled 5.1 / 5.2 float `for` loop `init, limit, step` (`step` a
@@ -223,7 +223,7 @@ fn for_scale(init: f64, limit: f64, step: i64) -> Option<i64> {
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub extern "C" fn luna_jit_pow(a: f64, b: f64) -> f64 {
-    luna_core::cerrno::pow(a, b)
+    luna_core::__private::cerrno::pow(a, b)
 }
 
 /// A compiled `^` of 5.4 and later (`luai_numpow`): `a*a` when `b` is 2,
@@ -235,7 +235,7 @@ pub extern "C" fn luna_jit_numpow(a: f64, b: f64) -> f64 {
     if b == 2.0 {
         a * a
     } else {
-        luna_core::cerrno::pow(a, b)
+        luna_core::__private::cerrno::pow(a, b)
     }
 }
 

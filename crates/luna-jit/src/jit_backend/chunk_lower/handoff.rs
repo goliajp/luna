@@ -3,7 +3,7 @@
 //! self call whose callee handed itself over or did not start.
 
 use super::*;
-use luna_core::runtime::value::raw;
+use luna_core::__private::raw;
 use luna_jit_helpers::{SELF_FAILED, SELF_HANDED, SELF_NOT_STARTED};
 
 /// Record this level's frame, which the interpreter goes on with at `pc`

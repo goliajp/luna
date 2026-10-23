@@ -51,7 +51,7 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::default_libcall_names;
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
-use luna_core::jit::trace_types::{CompileOptions, RecordedOp, TraceRecord};
+use luna_core::__private::{CompileOptions, RecordedOp, TraceRecord};
 use luna_core::runtime::Gc;
 use luna_core::runtime::function::Proto;
 use luna_core::version::LuaVersion;
@@ -125,7 +125,7 @@ fn make_pure_arith_record(proto: Gc<Proto>) -> TraceRecord {
     // registers enter as integers: arithmetic is lowered only for
     // operands of a known number kind, since anything else holds a
     // pointer.
-    let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
+    let tags = vec![luna_core::__private::raw::INT; proto.max_stack as usize];
     let mut rec = TraceRecord::start(proto, 0, tags, false);
     for (i, inst) in ops.iter().copied().enumerate() {
         let pushed = rec.push(RecordedOp {

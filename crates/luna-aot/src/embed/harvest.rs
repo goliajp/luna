@@ -24,7 +24,7 @@
 use std::fs;
 use std::path::Path;
 
-use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
+use luna_core::__private::{CompileOptions, CompiledTrace, TraceRecord};
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -73,11 +73,11 @@ fn capture_record(record: &TraceRecord) {
     });
 }
 
-impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
+impl luna_core::__private::TraceCompiler for RecordingTraceCompiler {
     // `storage` is passed through to the inner backend.
     fn try_compile_trace(
         &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
+        storage: &mut dyn luna_core::__private::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
@@ -87,7 +87,7 @@ impl luna_core::jit::TraceCompiler for RecordingTraceCompiler {
 
     fn try_compile_trace_for(
         &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
+        storage: &mut dyn luna_core::__private::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
         version: LuaVersion,

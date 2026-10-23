@@ -24,10 +24,8 @@ const ARITH_OPS: [ArithOp; 12] = [
     ArithOp::Shr,
 ];
 
-#[doc(hidden)]
 /// 5.3+ `LUA_OPUNM`.
 pub const HOST_OP_UNM: u8 = 12;
-#[doc(hidden)]
 /// 5.3+ `LUA_OPBNOT`.
 pub const HOST_OP_BNOT: u8 = 13;
 

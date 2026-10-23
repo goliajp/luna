@@ -439,7 +439,7 @@ fn emit_frame_get_tab_up<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_
         oc.i,
         oc.rop,
         ins.b(),
-        luna_core::runtime::value::raw::TABLE,
+        luna_core::__private::raw::TABLE,
     );
     let key_v = match rop.proto.consts[ins.c() as usize] {
         luna_core::runtime::Value::Str(s) => s,

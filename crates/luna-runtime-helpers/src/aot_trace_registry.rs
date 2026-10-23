@@ -16,10 +16,11 @@
 //! has both bracket symbols collapse to the same address; the walk
 //! short-circuits with `Ok(0)`.
 
+use luna_core::__private::{CompiledTrace, InlineSideExit};
 use luna_core::jit::aot_meta::{
     AotTraceIndexEntry, decode_meta_blob, unpack_exit_tag, unpack_tag_res_kind,
 };
-use luna_core::jit::trace_types::{CompiledTrace, ExitTag, TraceFn};
+use luna_core::jit::trace_types::{ExitTag, TraceFn};
 use luna_core::vm::Vm;
 
 // Bracket symbols — same pattern as the strkey_idx
@@ -318,9 +319,8 @@ fn decode_per_exit_inline(
     entries: &[luna_core::jit::aot_meta::PerExitInlineEntry],
     head_pc: u32,
     probe_on: bool,
-) -> Option<Vec<luna_core::jit::trace_types::InlineSideExit>> {
-    let mut per_exit_inline_decoded: Vec<luna_core::jit::trace_types::InlineSideExit> =
-        Vec::with_capacity(entries.len());
+) -> Option<Vec<InlineSideExit>> {
+    let mut per_exit_inline_decoded: Vec<InlineSideExit> = Vec::with_capacity(entries.len());
     let mut inline_ok = true;
     for ent in entries {
         let Some(chain_vec) = ent.rebuild_chain() else {
@@ -351,7 +351,7 @@ fn decode_per_exit_inline(
             }
             break;
         }
-        per_exit_inline_decoded.push(luna_core::jit::trace_types::InlineSideExit {
+        per_exit_inline_decoded.push(InlineSideExit {
             cont_pc: ent.cont_pc,
             head_resume_pc: ent.head_resume_pc,
             exit_tags: tags.into(),

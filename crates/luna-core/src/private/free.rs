@@ -25,7 +25,7 @@ pub fn metamethod_safe_for_index_lhs(chunk: &Chunk, obj_eid: ExprId, rhs_eid: Ex
 /// tags are `now`, by the dispatcher's rule.
 #[inline]
 pub fn entry_tags_admit(compiled: &[u8], now: &[u8]) -> bool {
-    crate::jit::entry_tags_admit(compiled, now)
+    crate::jit::trace_types::adopt::entry_tags_admit(compiled, now)
 }
 
 /// Walk an `exit_tags` slice and classify it for the

@@ -4,7 +4,7 @@
 //! a library itself is made by luna-core, through `luna_capi_openlib`.
 
 use super::*;
-use luna_core::vm::exec::host_c::HostOpenError;
+use luna_core::__private::HostOpenError;
 
 c_exports! {
     luaopen_base => luna_c_luaopen_base,

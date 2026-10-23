@@ -78,7 +78,7 @@ pub(super) fn infer_getx_exit_inst(getx_a: u32, next: Inst) -> Option<ExitTag> {
 /// what the ops after it (up to `end`) use it as. The read is checked
 /// against it either way.
 pub(super) fn infer_getx_exit(record: &TraceRecord, i: usize, end: usize) -> Option<ExitTag> {
-    use luna_core::runtime::value::raw;
+    use luna_core::__private::raw;
     let seen = record.result_tag(i).and_then(|t| match t {
         raw::INT => Some(ExitTag::Int),
         raw::FLOAT => Some(ExitTag::Float),
@@ -156,7 +156,7 @@ pub(super) fn infer_getx_exit_lookahead(getx_a: u32, ops_after: &[RecordedOp]) -
 /// The kind a GetX result is typed as, from its inferred use, and the
 /// value tag its checked read demands (`None`: the use is not typed).
 pub(super) fn getx_want(tag: Option<ExitTag>) -> Option<(RegKind, u8)> {
-    use luna_core::runtime::value::raw;
+    use luna_core::__private::raw;
     match tag {
         Some(ExitTag::Int) => Some((RegKind::Int, raw::INT)),
         Some(ExitTag::Table) => Some((RegKind::Table, raw::TABLE)),

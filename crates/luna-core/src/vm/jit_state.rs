@@ -15,19 +15,14 @@
 //! is fixed; `Option<JitState>` would impose an `unwrap()` on the
 //! hot path for no benefit.
 //!
-//! Visibility: `#[doc(hidden)] pub` mirrors the existing pattern
-//! used by the `#[doc(hidden)] pub fn jit_*` Vm helper methods.
-//! Cross-crate access from `luna::jit_backend::*`
-//! (which writes `vm.jit.pending_err` from `extern "C"` Cranelift
-//! helpers) requires the struct + field to be `pub` somewhere
-//! reachable, and `#[doc(hidden)]` keeps it out of the public
-//! rustdoc surface.
+//! luna's other crates (the compiled code's helpers write
+//! `pending_err` from `extern "C"` functions) reach it through
+//! `luna_core::__private`, outside the public API.
 
 use crate::runtime::Value;
 use crate::vm::error::LuaError;
 
 /// JIT-specific Vm state. See module docs.
-#[doc(hidden)]
 pub struct JitState {
     /// Master JIT switch. Off until a real backend is installed
     /// ([`crate::vm::Vm::install_jit_backend`]), which turns it on unless
@@ -196,7 +191,6 @@ impl JitState {
 /// Diagnostic counters and probe lists. All fields here are
 /// diagnostic-only — they never affect dispatch correctness, and
 /// can be cleared/snapshotted as a unit by tests.
-#[doc(hidden)]
 #[derive(Default)]
 pub struct JitCounters {
     /// Number of traces that have closed cleanly.
@@ -329,7 +323,7 @@ pub struct JitCounters {
     /// Number of times the dispatcher's
     /// `is_downrec_sentinel` arm observed a guard MISS (the trace
     /// invocation returned with `downrec_link.is_some()` but the
-    /// returned sentinel was NOT [`SIDE_SENT_DOWNREC_CODE`] — i.e.
+    /// returned sentinel was NOT `SIDE_SENT_DOWNREC_CODE` — i.e.
     /// the lowerer's `deopt_blk` arm fired, returning `head_pc` via
     /// the GLOBAL sentinel). Bumped on the dispatcher side via the
     /// post-invoke check so the caller-pc guard miss-rate can be

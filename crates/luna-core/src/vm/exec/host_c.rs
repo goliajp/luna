@@ -16,18 +16,17 @@ use crate::vm::callstack::NativeAct;
 mod alloc;
 mod block;
 mod cont;
-mod debug;
-mod libs;
-mod load;
+pub(crate) mod debug;
+pub(crate) mod libs;
+pub(crate) mod load;
 mod registry;
 mod threads;
 mod upvals;
-mod values;
+pub(crate) mod values;
 pub use block::HostBlock;
-pub use debug::{HostAr, HostHookFn, HostLevel};
-pub use libs::HostOpenError;
-pub use load::HostLoadError;
-pub use values::{HOST_OP_BNOT, HOST_OP_UNM};
+pub(crate) use debug::{HostAr, HostHookFn, HostLevel};
+pub(crate) use libs::HostOpenError;
+pub(crate) use load::HostLoadError;
 
 /// The C API's side of a [`ContKind::Host`] continuation.
 #[derive(Clone, Copy)]

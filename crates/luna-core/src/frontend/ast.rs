@@ -6,12 +6,12 @@
 
 mod chunk;
 mod list;
-mod rhs_calls;
+pub(crate) mod rhs_calls;
 mod vararg;
 pub use super::names::{Names, Sym};
 pub use chunk::Chunk;
 pub use list::{List, ListItem};
-pub use rhs_calls::*;
+pub(crate) use rhs_calls::*;
 pub use vararg::block_uses_vararg;
 
 /// Typed index into [`Chunk::exprs`].

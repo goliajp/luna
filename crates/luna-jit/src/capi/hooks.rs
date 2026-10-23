@@ -94,7 +94,7 @@ fn run_c_hook(vm: &mut Vm, cf: *const (), event: &[u8], line: Option<i64>) -> Re
     ar.set_level_ref(raw);
     let lua = matches!(
         vm.host_level(co, 0),
-        Some(luna_core::vm::exec::host_c::HostLevel::Lua)
+        Some(luna_core::__private::HostLevel::Lua)
     );
     let top = co.host_stack.len();
     // SAFETY: `l` is the running thread's live state; the borrow ends here

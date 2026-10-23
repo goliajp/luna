@@ -6,10 +6,10 @@ use super::*;
 /// Where the interpreter would start recording a trace, asked of the
 /// backend first: a trace compiled for code of the same content may be
 /// installed instead.
-#[doc(hidden)]
 pub struct AdoptRequest<'a> {
     /// The function the trace would start in.
     pub proto: Gc<Proto>,
+    /// The pc the trace would start at.
     pub head_pc: u32,
     /// The raw tags of the frame's registers now.
     pub entry_tags: &'a [u8],
@@ -23,6 +23,7 @@ pub struct AdoptRequest<'a> {
     pub settings: u8,
     /// The options the trace would be compiled with.
     pub opts: CompileOptions,
+    /// The dialect the Vm runs.
     pub version: crate::version::LuaVersion,
     /// The functions of every chunk this `Vm` loaded that is still alive,
     /// by their main functions.
@@ -32,7 +33,6 @@ pub struct AdoptRequest<'a> {
 }
 
 /// A trace the backend installed for an [`AdoptRequest`].
-#[doc(hidden)]
 pub struct AdoptedTrace {
     /// As the backend would return it right after compiling it.
     pub trace: CompiledTrace,

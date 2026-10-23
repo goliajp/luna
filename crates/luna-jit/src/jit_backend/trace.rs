@@ -21,6 +21,10 @@ use luna_core::vm::isa::{Inst, Op};
 // to resolve, and so the v1.0-compatible `luna_jit::jit::trace::*` surface
 // (assembled in `luna_jit::lib::jit::trace`) sees both type defs and
 // codegen entry points side-by-side.
+use luna_core::__private::{
+    AdoptRequest, AdoptedTrace, CompileOptions, CompiledTrace, FrameMaterializeInfo,
+    InlineSideExit, RecordedOp, TierUp, TraceRecord,
+};
 pub use luna_core::jit::trace_types::*;
 
 mod const_operands;

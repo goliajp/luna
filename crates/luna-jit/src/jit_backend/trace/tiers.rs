@@ -25,7 +25,7 @@ pub fn baseline_fallback() -> (u64, &'static str) {
 /// library converts its number arguments to floats and returns floats
 /// (`math.min(1, 2)` is the float `1`).
 pub(super) fn compile_trace_jit(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     always_codegen: bool,
@@ -37,7 +37,7 @@ pub(super) fn compile_trace_jit(
 /// [`compile_trace_jit`], also handing back the code when `capture` (for a
 /// Vm that shares its traces; see `super::share`).
 pub(super) fn compile_trace_captured(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     always_codegen: bool,
@@ -69,7 +69,7 @@ type Compiled = Option<(CompiledTrace, Option<image::Captured>)>;
 /// The baseline tier: `Ok(None)` when the record cannot be lowered at all,
 /// `Err` when the baseline code generator cannot take it.
 fn compile_trace_baseline(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     always_codegen: bool,
@@ -129,7 +129,7 @@ fn compile_trace_baseline(
 }
 
 pub(super) fn compile_trace_cranelift(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     always_codegen: bool,
@@ -197,7 +197,7 @@ pub(super) fn compile_trace_cranelift(
 /// Compiles a baseline trace again with Cranelift, from the instructions the
 /// baseline tier ran (see `TraceCompiler::tier_up`).
 pub(crate) fn tier_up_trace(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     ct: &CompiledTrace,
 ) -> Option<TraceFn> {
     share::tier_up(storage, ct)

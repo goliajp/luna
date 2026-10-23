@@ -6,13 +6,13 @@
 //! one-shot, and then a loop edge they recorded is straight-line code: such
 //! a side trace compiles and runs (`side_trace_through_an_inner_loop`).
 
+use luna_jit::__private::raw;
+use luna_jit::__private::{CompileOptions, RecordedOp, TraceRecord};
 use luna_jit::jit::trace::{
-    CompileOptions, RecordedOp, TraceRecord, last_compile_checkpoint, try_compile_trace,
-    try_compile_trace_with_options,
+    last_compile_checkpoint, try_compile_trace, try_compile_trace_with_options,
 };
 use luna_jit::runtime::Gc;
 use luna_jit::runtime::function::Proto;
-use luna_jit::runtime::value::raw;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::isa::{Inst, Op};
 
@@ -126,23 +126,23 @@ fn one_shot_side_trace_takes_its_recorded_loop_edge() {
 /// take over the inner loop before a side trace could run through it.
 struct NoInnerLoopTrace;
 
-impl luna_jit::jit::TraceCompiler for NoInnerLoopTrace {
+impl luna_jit::__private::TraceCompiler for NoInnerLoopTrace {
     fn try_compile_trace(
         &self,
-        s: &mut dyn luna_jit::jit::JitStorage,
+        s: &mut dyn luna_jit::__private::JitStorage,
         r: &TraceRecord,
         o: CompileOptions,
-    ) -> Option<luna_jit::jit::trace::CompiledTrace> {
+    ) -> Option<luna_jit::__private::CompiledTrace> {
         self.try_compile_trace_for(s, r, o, LuaVersion::Lua54)
     }
 
     fn try_compile_trace_for(
         &self,
-        s: &mut dyn luna_jit::jit::JitStorage,
+        s: &mut dyn luna_jit::__private::JitStorage,
         r: &TraceRecord,
         o: CompileOptions,
         v: LuaVersion,
-    ) -> Option<luna_jit::jit::trace::CompiledTrace> {
+    ) -> Option<luna_jit::__private::CompiledTrace> {
         let head = r.head_proto.code[r.head_pc as usize].op();
         if r.side_trace_parent.is_none() && matches!(head, Op::Lt | Op::Le | Op::LtI | Op::LeI) {
             return None;
@@ -156,8 +156,8 @@ impl luna_jit::jit::TraceCompiler for NoInnerLoopTrace {
 
     fn tier_up(
         &self,
-        s: &mut dyn luna_jit::jit::JitStorage,
-        ct: &luna_jit::jit::trace::CompiledTrace,
+        s: &mut dyn luna_jit::__private::JitStorage,
+        ct: &luna_jit::__private::CompiledTrace,
     ) -> Option<luna_jit::jit::trace::TraceFn> {
         luna_jit::jit::CraneliftBackend.tier_up(s, ct)
     }

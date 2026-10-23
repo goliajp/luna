@@ -108,11 +108,11 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
     let nil_const = lw
         .bcx
         .ins()
-        .iconst(types::I64, luna_core::runtime::value::raw::NIL as i64);
+        .iconst(types::I64, luna_core::__private::raw::NIL as i64);
     let int_const = lw
         .bcx
         .ins()
-        .iconst(types::I64, luna_core::runtime::value::raw::INT as i64);
+        .iconst(types::I64, luna_core::__private::raw::INT as i64);
     let is_nil = lw.bcx.ins().icmp(IntCC::Equal, val_tag, nil_const);
     // runtime val_tag guard. Snapshot
     // at recorder fire (R[A+5]'s tag) is the
@@ -128,7 +128,7 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
     // available (snapshot=None) or when the
     // snapshot is Nil itself (degenerate).
     if let Some(expected_tag) = record.tfor_val_tag
-        && expected_tag != luna_core::runtime::value::raw::NIL
+        && expected_tag != luna_core::__private::raw::NIL
     {
         let exp_const = lw.bcx.ins().iconst(types::I64, expected_tag as i64);
         let is_exp = lw.bcx.ins().icmp(IntCC::Equal, val_tag, exp_const);

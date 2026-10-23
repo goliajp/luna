@@ -51,14 +51,14 @@ pub(super) enum RegKind {
 impl RegKind {
     pub(super) fn from_entry_tag(tag: u8) -> Option<Self> {
         match tag {
-            luna_core::runtime::value::raw::INT => Some(RegKind::Int),
-            luna_core::runtime::value::raw::FLOAT => Some(RegKind::Float),
-            luna_core::runtime::value::raw::TABLE => Some(RegKind::Table),
-            luna_core::runtime::value::raw::CLOSURE => Some(RegKind::Closure),
-            luna_core::runtime::value::raw::NATIVE => Some(RegKind::Native),
-            luna_core::runtime::value::raw::NIL => Some(RegKind::Nil),
-            luna_core::runtime::value::raw::STR => Some(RegKind::Str),
-            luna_core::runtime::value::raw::FALSE | luna_core::runtime::value::raw::TRUE => {
+            luna_core::__private::raw::INT => Some(RegKind::Int),
+            luna_core::__private::raw::FLOAT => Some(RegKind::Float),
+            luna_core::__private::raw::TABLE => Some(RegKind::Table),
+            luna_core::__private::raw::CLOSURE => Some(RegKind::Closure),
+            luna_core::__private::raw::NATIVE => Some(RegKind::Native),
+            luna_core::__private::raw::NIL => Some(RegKind::Nil),
+            luna_core::__private::raw::STR => Some(RegKind::Str),
+            luna_core::__private::raw::FALSE | luna_core::__private::raw::TRUE => {
                 Some(RegKind::Bool)
             }
             _ => None,
@@ -118,12 +118,12 @@ pub(super) fn loop_kinds_match(tail: &[RegKind], head: &[RegKind]) -> bool {
 }
 
 /// map a [`RegKind`] to its matching
-/// [`luna_core::runtime::value::raw`] tag byte for the materialise
+/// [`luna_core::__private::raw`] tag byte for the materialise
 /// helper's per-slot kind array. Untyped slots become `NIL` so the
 /// helper writes Nil into the corresponding array index — matches
 /// Lua's "table created with array part, slot unwritten" semantics.
 pub(super) fn kind_to_raw_tag(k: RegKind) -> u8 {
-    use luna_core::runtime::value::raw;
+    use luna_core::__private::raw;
     match k {
         RegKind::Int => raw::INT,
         RegKind::Float => raw::FLOAT,
@@ -139,7 +139,7 @@ pub(super) fn kind_to_raw_tag(k: RegKind) -> u8 {
 /// The value tag (`runtime::value::raw`) of a register of kind `k`, or
 /// `None` when the kind does not say.
 pub(super) fn known_tag(k: RegKind) -> Option<u8> {
-    use luna_core::runtime::value::raw;
+    use luna_core::__private::raw;
     match k {
         RegKind::Int => Some(raw::INT),
         RegKind::Float => Some(raw::FLOAT),
@@ -157,7 +157,7 @@ pub(super) fn known_tag(k: RegKind) -> Option<u8> {
 /// `None` when the kind does not say.
 pub(super) fn emit_kind_tag<E: Ins>(bcx: &mut E, k: RegKind, payload: Value) -> Option<Value> {
     if k == RegKind::Bool {
-        let f = i64::from(luna_core::runtime::value::raw::FALSE);
+        let f = i64::from(luna_core::__private::raw::FALSE);
         return Some(bcx.ins().iadd_imm_u(payload, f));
     }
     known_tag(k).map(|t| bcx.ins().iconst(types::I64, i64::from(t)))

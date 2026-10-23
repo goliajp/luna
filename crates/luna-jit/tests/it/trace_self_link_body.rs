@@ -4,12 +4,11 @@
 //! embedder turned self-link on and ran a crafted chunk) is declined
 //! rather than compiled or tripping an internal assertion.
 
-use luna_jit::jit::trace::{
-    RecordedOp, SelfRecKind, TraceRecord, last_compile_checkpoint, try_compile_trace,
-};
+use luna_jit::__private::raw;
+use luna_jit::__private::{RecordedOp, TraceRecord};
+use luna_jit::jit::trace::{SelfRecKind, last_compile_checkpoint, try_compile_trace};
 use luna_jit::runtime::Gc;
 use luna_jit::runtime::function::Proto;
-use luna_jit::runtime::value::raw;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::isa::{Inst, Op};
 

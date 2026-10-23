@@ -15,7 +15,7 @@ pub(crate) use super::tier_source::TierSource;
 /// Hands `ct`, just compiled from `record` with `cap`'s code, to the
 /// engine of the Vm `storage` belongs to, if it has one.
 pub(crate) fn publish(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     ct: &CompiledTrace,
     opts: CompileOptions,
@@ -67,9 +67,9 @@ pub(crate) fn publish(
     engine.cache().insert(key, img);
 }
 
-/// [`luna_core::jit::TraceCompiler::adopt_traces`].
+/// [`luna_core::__private::TraceCompiler::adopt_traces`].
 pub(crate) fn adopt(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     req: &AdoptRequest<'_>,
 ) -> Vec<AdoptedTrace> {
     let Ok(cs) = crate::jit_backend::storage::from_storage(storage) else {
@@ -237,8 +237,7 @@ fn value_of(
         }
         Source::Proto(p) => protos[*p as usize].as_ptr() as i64,
         Source::Chain(n) => TArc::as_ptr(&ct.per_exit_inline.get(*n as usize)?.chain)
-            as *const luna_core::jit::trace_types::FrameMaterializeInfo
-            as i64,
+            as *const luna_core::__private::FrameMaterializeInfo as i64,
         // the optimizing tier's code does not count
         Source::TierCell => ct
             .tier_up
@@ -262,7 +261,7 @@ fn find_proto(roots: &[Gc<Proto>], c: &Content) -> Option<Gc<Proto>> {
 /// The optimizing tier's code for `ct`: taken from the image it shares when
 /// some Vm compiled it already, else compiled (and given to the image).
 pub(crate) fn tier_up(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     ct: &CompiledTrace,
 ) -> Option<TraceFn> {
     let source = ct.tier_up.as_ref()?.source.borrow_mut().take()?;
@@ -272,7 +271,7 @@ pub(crate) fn tier_up(
 
 /// Cranelift's code for the trace `src` holds.
 pub(crate) fn clif_tier_up(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     src: &TierSource,
     head_pc: u32,
 ) -> Option<TraceFn> {

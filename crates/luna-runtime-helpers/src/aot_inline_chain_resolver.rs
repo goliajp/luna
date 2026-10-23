@@ -37,7 +37,7 @@
 //     trace install path); the IR pointer and the dispatcher field
 //     point at independently-allocated copies of the same data, but
 //     neither side compares pointers, only reads through them.
-use luna_core::jit::trace_types::FrameMaterializeInfo;
+use luna_core::__private::FrameMaterializeInfo;
 
 /// Wire-size of one `FrameMaterializeInfo` record on disk and in
 /// the bytes section payload. Asserted at compile time in

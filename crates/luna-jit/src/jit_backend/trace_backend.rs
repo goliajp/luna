@@ -7,7 +7,7 @@ impl TraceCompiler for CraneliftBackend {
     // parked on the per-`Vm` `storage.trace_handles` Vec
     fn try_compile_trace(
         &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
+        storage: &mut dyn luna_core::__private::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
@@ -16,7 +16,7 @@ impl TraceCompiler for CraneliftBackend {
 
     fn try_compile_trace_for(
         &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
+        storage: &mut dyn luna_core::__private::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
         version: luna_core::version::LuaVersion,
@@ -35,7 +35,7 @@ impl TraceCompiler for CraneliftBackend {
 
     fn tier_up(
         &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
+        storage: &mut dyn luna_core::__private::JitStorage,
         ct: &CompiledTrace,
     ) -> Option<luna_core::jit::trace::TraceFn> {
         trace::tier_up_trace(storage, ct)
@@ -43,15 +43,15 @@ impl TraceCompiler for CraneliftBackend {
 
     fn adopt_traces(
         &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
-        req: &luna_core::jit::trace::AdoptRequest<'_>,
-    ) -> Vec<luna_core::jit::trace::AdoptedTrace> {
+        storage: &mut dyn luna_core::__private::JitStorage,
+        req: &luna_core::__private::AdoptRequest<'_>,
+    ) -> Vec<luna_core::__private::AdoptedTrace> {
         trace::adopt_traces(storage, req)
     }
 
     fn failure_known(
         &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
+        storage: &mut dyn luna_core::__private::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
         version: luna_core::version::LuaVersion,
@@ -61,7 +61,7 @@ impl TraceCompiler for CraneliftBackend {
 
     fn publish_failure(
         &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
+        storage: &mut dyn luna_core::__private::JitStorage,
         record: &TraceRecord,
         opts: CompileOptions,
         version: luna_core::version::LuaVersion,

@@ -89,7 +89,7 @@ pub(crate) unsafe fn checked_read(
     want_tag: i64,
     out: *mut i64,
 ) -> i64 {
-    use luna_core::runtime::value::raw;
+    use luna_core::__private::raw;
     let (tag, payload) = v.unpack();
     // `raw::FALSE` asks for a boolean of either value, as 0 or 1
     let bits = match tag {
