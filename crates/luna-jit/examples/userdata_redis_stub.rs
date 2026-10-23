@@ -85,14 +85,14 @@ impl LuaUserdata for FakeRedis {
             |vm, this, args: Vec<Value>| -> Result<Value, LuaError> {
                 let argv: Vec<Vec<u8>> = args.into_iter().map(val_to_bytes).collect();
                 if argv.is_empty() {
-                    return Err(vm.rt_err("redis.call: missing command"));
+                    return Err(vm.runtime_error("redis.call: missing command"));
                 }
                 match this.dispatch(argv) {
                     Ok(bytes) => {
                         let s = vm.intern_str(std::str::from_utf8(&bytes).unwrap_or(""));
                         Ok(Value::Str(s))
                     }
-                    Err(msg) => Err(vm.rt_err(&msg)),
+                    Err(msg) => Err(vm.runtime_error(&msg)),
                 }
             },
         );
