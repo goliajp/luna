@@ -23,6 +23,9 @@ optimization.
 
 ### Breaking
 
+- The C API's host helpers nothing called (`Vm::host_set_body`,
+  `host_retry`, `host_new_native`, `host_hook_yield_clear`,
+  `host_level_of_slot`) are gone.
 - The functions hidden from the docs that luna's other crates use (the
   JIT's helpers, the C API, the CLI, the tests) moved to
   `luna_core::__private`, which is not covered by semantic versioning and

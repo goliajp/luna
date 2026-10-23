@@ -25,7 +25,6 @@ impl Vm {
     /// by `luna-tools` (`luna-profile`'s sampler walks this from
     /// inside a `Count` hook). Sibling-module scope: not part of the
     /// public embedder surface, but `inspect::frames_for_profile` is.
-    #[doc(hidden)]
     pub(in crate::vm) fn inspect_frames(&self) -> &[CallFrame] {
         &self.frames
     }

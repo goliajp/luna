@@ -18,11 +18,9 @@ pub use crate::runtime::upvalue::{UpvalState, Upvalue};
 #[doc(hidden)]
 pub const TRACE_HEADS_NONE: u32 = u32::MAX;
 /// [`Proto::trace_heads`] once more traces can be entered than it holds.
-#[doc(hidden)]
-pub const TRACE_HEADS_MANY: u32 = u32::MAX - 1;
+pub(crate) const TRACE_HEADS_MANY: u32 = u32::MAX - 1;
 /// Slots in [`Proto::trace_heads`].
-#[doc(hidden)]
-pub const TRACE_HEADS_CAP: usize = 4;
+pub(crate) const TRACE_HEADS_CAP: usize = 4;
 
 /// A compiled function (PUC Proto). Immutable after compilation.
 #[repr(C)]
@@ -164,7 +162,7 @@ pub struct Proto {
     pub has_dispatchable_trace: std::cell::Cell<bool>,
     /// Head pcs of the traces that set `has_dispatchable_trace`, so the
     /// interpreter looks traces up only where one can start: up to
-    /// [`TRACE_HEADS_CAP`], the rest [`TRACE_HEADS_NONE`]; [`TRACE_HEADS_MANY`]
+    /// `TRACE_HEADS_CAP`, the rest `TRACE_HEADS_NONE`; `TRACE_HEADS_MANY`
     /// in all once there are more.
     #[doc(hidden)]
     pub trace_heads: std::cell::Cell<[u32; TRACE_HEADS_CAP]>,
@@ -177,8 +175,7 @@ pub struct Proto {
     /// prototypes, constants, line info, absolute line info, local
     /// variables, upvalue descriptors), counted when it was made and
     /// uncounted when it is freed (they differ from this prototype's).
-    #[doc(hidden)]
-    pub puc_arrays: std::cell::Cell<[u32; 7]>,
+    pub(crate) puc_arrays: std::cell::Cell<[u32; 7]>,
 }
 
 impl Proto {
