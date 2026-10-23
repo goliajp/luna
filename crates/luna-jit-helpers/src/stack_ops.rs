@@ -1,6 +1,7 @@
 //! Stack-slot access and the opcode helpers that work on the frame (close, concat, tforcall, closure).
 
 use crate::{current_jit_closure, current_jit_vm, payload_bits, push_ssa_roots};
+use luna_core::__private::{ValueInternals, VmJitAlloc, VmJitFrames};
 
 /// Trace JIT helper for `Op::Close A`. Wraps
 /// `Vm::jit_op_close` which does the predict-and-deopt logic:
@@ -192,24 +193,31 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     let base = match vm.jit_last_lua_frame() {
         Some(f) => f.base,
         None => {
-            vm.jit.pending_err = Some(vm.rt_err("JIT op_closure: no Lua frame"));
+            vm.jit.pending_err = Some(vm.runtime_error("JIT op_closure: no Lua frame"));
             return 0;
         }
     };
-    new_closure(vm, cl, proto_idx as usize, base)
+    // SAFETY: `cl` is the running closure (# Safety), its frame the trace
+    // head's at `base`; compiled code asks only for its own prototypes
+    unsafe { new_closure(vm, cl, proto_idx as usize, base) }
 }
 
 /// `cl.proto.protos[idx]` as a new closure of a frame of `cl` whose
 /// registers start at stack slot `base`, as the interpreter's `CLOSURE`
 /// makes it (the trace spilled the in-stack upvalues' values first).
 /// Returns the closure's payload, 0 when it cannot be made.
-pub(crate) fn new_closure(
+///
+/// # Safety
+/// `cl` runs the frame whose registers start at `base`, and its prototype
+/// has a nested function `idx`.
+pub(crate) unsafe fn new_closure(
     vm: &mut luna_core::vm::Vm,
     cl: luna_core::runtime::Gc<luna_core::runtime::LuaClosure>,
     idx: usize,
     base: u32,
 ) -> i64 {
-    match vm.jit_closure(cl, idx, base) {
+    // SAFETY: the caller's contract
+    match unsafe { vm.jit_closure(cl, idx, base) } {
         Some(nc) => payload_bits(luna_core::runtime::Value::Closure(nc)),
         None => 0,
     }

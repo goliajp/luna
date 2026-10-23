@@ -127,9 +127,8 @@ pub struct JitVmGuard {
 impl JitVmGuard {
     /// Construct a guard from a captured restore record. Called only
     /// by luna-jit's `enter_jit`; embedders never call this directly.
-    #[doc(hidden)]
     #[inline]
-    pub fn from_restore(r: JitVmRebindRestore) -> Self {
+    pub(crate) fn from_restore(r: JitVmRebindRestore) -> Self {
         Self { restore: Some(r) }
     }
 }

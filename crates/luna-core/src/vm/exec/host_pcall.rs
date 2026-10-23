@@ -35,8 +35,7 @@ impl Vm {
     /// host's, as lua.c's `docall` runs inside `pmain`: that function is one
     /// C level below `f`, which `debug.getinfo` finds and a traceback ends
     /// with (`[C]: in ?`, 5.1 `[C]: ?`).
-    #[doc(hidden)]
-    pub fn call_value_with_handler_in_c(
+    pub(crate) fn call_value_with_handler_in_c(
         &mut self,
         f: Value,
         args: &[Value],
@@ -56,8 +55,11 @@ impl Vm {
     /// function, as lua.c's `l_print` calls `print` from `pmain`. That
     /// function is one C level below `f`, as for
     /// [`Vm::call_value_with_handler_in_c`].
-    #[doc(hidden)]
-    pub fn call_value_in_c(&mut self, f: Value, args: &[Value]) -> Result<Vec<Value>, LuaError> {
+    pub(crate) fn call_value_in_c(
+        &mut self,
+        f: Value,
+        args: &[Value],
+    ) -> Result<Vec<Value>, LuaError> {
         let level = self
             .uncounted(|vm| vm.builtin(builtins::nat_host_pcall_in_c, &[], Builtin::HostPcallInC));
         let level = luna_only(level?);

@@ -257,8 +257,7 @@ impl Vm {
     /// collection step is due, noted with the op whose check it is
     /// (`op_pc`, as [`Vm::checkpoint_after_jit`] takes it) for the exit it
     /// then takes to have the interpreter check.
-    #[doc(hidden)]
-    pub fn jit_gc_due(&mut self, op_pc: u32) -> bool {
+    pub(crate) fn jit_gc_due(&mut self, op_pc: u32) -> bool {
         let due = self.step_due() && self.jit.pending_err.is_none();
         if due {
             self.jit.gc_exit = Some(op_pc);

@@ -1,6 +1,7 @@
 //! Pushing C functions and C closures.
 
 use super::*;
+use luna_core::__private::VmHostInternals;
 
 /// PUC `lua_pushcclosure`: push a C function with the top `n` values as
 /// its upvalues (popped).

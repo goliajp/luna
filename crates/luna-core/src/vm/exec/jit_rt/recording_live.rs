@@ -13,8 +13,7 @@ thread_local! {
 impl Vm {
     /// Have every collection on this thread end by checking the trace
     /// being recorded, if any, holds only objects the collector keeps.
-    #[doc(hidden)]
-    pub fn check_recordings_after_collections(on: bool) {
+    pub(crate) fn check_recordings_after_collections(on: bool) {
         CHECK.set(on);
     }
 

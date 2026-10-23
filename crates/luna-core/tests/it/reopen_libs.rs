@@ -3,6 +3,7 @@
 //! library tables it finds, 5.2 makes every library anew, 5.3 on only
 //! points the globals back at the libraries `package.loaded` holds.
 
+use luna_core::__private::VmHostInternals;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;

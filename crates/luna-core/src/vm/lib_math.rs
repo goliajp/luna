@@ -28,8 +28,7 @@ pub(crate) use puc_fns::{PUC_FNS, puc_setrandfunc};
 /// inline: it replaces the call with its own code only while the field
 /// still holds that function, since a program can assign any value to
 /// it. `None` for other names.
-#[doc(hidden)]
-pub fn inlinable_builtin(name: &[u8]) -> Option<Builtin> {
+pub(crate) fn inlinable_builtin(name: &[u8]) -> Option<Builtin> {
     Some(match name {
         b"sin" => Builtin::MathSin,
         b"cos" => Builtin::MathCos,

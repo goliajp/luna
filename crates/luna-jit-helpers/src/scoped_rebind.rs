@@ -46,6 +46,7 @@ use luna_core::runtime::{Gc, LuaClosure};
 use luna_core::vm::Vm;
 
 use super::{JIT_CL, JIT_VM};
+use luna_core::__private::JitVmGuardInternals;
 
 /// Internal restorer used by [`super::enter_jit`]. Writes the captured
 /// previous slot values back into the TLS cells. [`JitVmGuard::drop`]

@@ -198,8 +198,7 @@ impl Vm {
 
     /// [`Vm::load_file`] of standard input holding `src`, for a test that
     /// runs a script as `lua -` does.
-    #[doc(hidden)]
-    pub fn load_stdin_text(&mut self, src: Vec<u8>) -> Result<Value, LuaError> {
+    pub(crate) fn load_stdin_text(&mut self, src: Vec<u8>) -> Result<Value, LuaError> {
         crate::vm::lib_os_io::load_stdin_text(self, src).map_err(LuaError)
     }
 

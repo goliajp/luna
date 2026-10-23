@@ -1,0 +1,28 @@
+//! luna's own crates (the JIT, its helpers, the C API, the CLI, the
+//! tools) and its tests reach the runtime's internals through here.
+//!
+//! **Not part of the public API.** Nothing here is covered by semver: any
+//! item may change or go in any release, minor or patch. An embedder
+//! uses the documented interface instead; everything an embedder needs
+//! is there, without `unsafe`. The functions here that can break memory
+//! safety or the collector's invariants when misused are `unsafe fn`,
+//! with their conditions under `# Safety`.
+
+mod free;
+mod runtime;
+mod vm_alloc;
+mod vm_host;
+mod vm_jit;
+
+pub use free::*;
+pub use runtime::*;
+pub use vm_alloc::VmJitAlloc;
+pub use vm_host::VmHostInternals;
+pub use vm_jit::VmJitFrames;
+
+/// Have every collection on this thread end by checking the trace
+/// being recorded, if any, holds only objects the collector keeps.
+#[cfg(any(feature = "gc-stress", feature = "gc-verify"))]
+pub fn check_recordings_after_collections(on: bool) {
+    crate::vm::Vm::check_recordings_after_collections(on)
+}

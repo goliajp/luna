@@ -14,7 +14,7 @@ mod patterns;
 mod sub;
 use arith_mm::{mm_add, mm_div, mm_idiv, mm_mod, mm_mul, mm_pow, mm_sub, mm_unm};
 use patterns::{s_find, s_gmatch, s_gsub, s_match};
-pub use sub::*;
+pub(crate) use sub::*;
 mod puc_fns;
 pub(crate) use puc_fns::PUC_FNS;
 

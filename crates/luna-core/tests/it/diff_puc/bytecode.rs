@@ -1,6 +1,7 @@
 //! Fixtures compiled by PUC `luac`, loaded and run by both engines.
 
 use super::*;
+use luna_core::__private::VmHostInternals;
 
 const LUAC_ENV: &[(&str, &str)] = &[
     ("5.1", "PUC_LUAC_51"),

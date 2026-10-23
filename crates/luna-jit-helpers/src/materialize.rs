@@ -1,6 +1,7 @@
 //! Frame materialization for inline side exits.
 
 use crate::current_jit_vm;
+use luna_core::__private::{GcInternals, VmJitAlloc, VmJitFrames};
 
 /// Runtime fire counter for the inline-chain reloc path. Every call to
 /// [`luna_jit_trace_materialize_frames`] from trace mcode (JIT-baked
@@ -84,7 +85,10 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
         // frames that cannot be made park a deopt: the dispatcher pops the
         // ones pushed and the interpreter runs the loop again
         if !vm.jit_ensure_stack((new_base + cl.proto.max_stack as u32) as usize)
-            || !vm.jit_push_inlined_frame(cl, new_base, m.pc, m.nresults, m.n_varargs)
+            // SAFETY: `metas` and `closures` describe the frames the trace
+            // inlined at this exit (# Safety), and the stack covers the
+            // frame's registers (the `jit_ensure_stack` just above)
+            || !unsafe { vm.jit_push_inlined_frame(cl, new_base, m.pc, m.nresults, m.n_varargs) }
         {
             vm.jit_park_oom();
             return -1;

@@ -50,9 +50,9 @@ pub mod jit_layout;
 mod array;
 #[path = "table_ctor.rs"]
 mod ctor;
-pub use ctor::new_table_sizes;
+pub(crate) use ctor::new_table_sizes;
 pub(crate) use ctor::{int2fb, new_table_operands};
-pub use len::set_len_search_seed;
+pub(crate) use len::set_len_search_seed;
 #[path = "table_error.rs"]
 mod error;
 pub use error::TableError;

@@ -27,6 +27,11 @@
 //! compiled traces, exit records, compile options) are hidden from these
 //! docs for that reason; their fields change whenever the trace JIT does.
 //!
+//! `luna_core::__private` holds the internals luna's own crates and tests
+//! use (the JIT's helpers, the C API, the CLI). It is not part of the
+//! public API either: nothing in it is covered by semantic versioning, and
+//! an embedder does not need it.
+//!
 //! # Embedding contract (script-host sandbox)
 //!
 //! The minimal embedding flow:
@@ -97,6 +102,9 @@
 // unchanged — `Vm` stays `!Send + !Sync`. See
 // `docs/threading.md` for the embedder-facing usage patterns.
 
+#[doc(hidden)]
+#[path = "private/mod.rs"]
+pub mod __private;
 #[doc(hidden)]
 pub mod cerrno;
 pub mod compiler;

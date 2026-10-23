@@ -207,8 +207,7 @@ impl Vm {
         }
     }
 
-    #[doc(hidden)]
-    pub fn upval_get(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
+    pub(crate) fn upval_get(&self, cl: Gc<LuaClosure>, idx: u32) -> Value {
         match cl.upvals()[idx as usize].state() {
             UpvalState::Open { slot, thread } => self.read_slot(slot, thread),
             UpvalState::Closed(v) => v,

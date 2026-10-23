@@ -44,8 +44,7 @@ pub struct AdoptedTrace {
 
 /// Whether a trace compiled for `compiled` entry tags admits registers whose
 /// tags are `now`, by the dispatcher's rule.
-#[doc(hidden)]
-pub fn entry_tags_admit(compiled: &[u8], now: &[u8]) -> bool {
+pub(crate) fn entry_tags_admit(compiled: &[u8], now: &[u8]) -> bool {
     use crate::runtime::value::raw;
     compiled.iter().enumerate().all(|(i, &want)| {
         if want == ENTRY_TAG_ANY {

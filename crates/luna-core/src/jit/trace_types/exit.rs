@@ -70,8 +70,7 @@ pub enum TagResKind {
 
 /// Walk an `exit_tags` slice and classify it for the
 /// dispatcher fast path.
-#[doc(hidden)]
-pub fn classify_exit_tags(tags: &[ExitTag]) -> TagResKind {
+pub(crate) fn classify_exit_tags(tags: &[ExitTag]) -> TagResKind {
     if tags.iter().all(|t| matches!(t, ExitTag::Untouched)) {
         return TagResKind::AllUntouched;
     }

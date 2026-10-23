@@ -42,6 +42,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use luna_core::__private::VmHostInternals;
 use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaError, Standalone, StandaloneOptions, Vm};
 

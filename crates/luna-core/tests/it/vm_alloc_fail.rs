@@ -7,6 +7,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use luna_core::__private::VmHostInternals;
 use luna_core::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
 use luna_core::runtime::{ErrorStatus, Value};
 use luna_core::version::LuaVersion;

@@ -25,7 +25,7 @@ fn write(bytes: &[u8]) -> bool {
 pub(super) fn caught<R>(f: impl FnOnce() -> R) -> (R, Vec<u8>) {
     static HOOK: Once = Once::new();
     HOOK.call_once(|| {
-        luna_core::stdio::use_host_stdout(luna_core::stdio::HostStdout {
+        luna_core::__private::use_host_stdout(luna_core::stdio::HostStdout {
             write,
             flush: || true,
             setvbuf: |_| {},

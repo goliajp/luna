@@ -16,9 +16,8 @@
 //! the RHS expression(s); the gate is exercised by feeding it
 //! `(obj_eid, rhs_eid)` extracted from `Stat::Assign`.
 
-use luna_core::frontend::ast::{
-    Chunk, Expr, ExprId, RhsCallScan, Stat, metamethod_safe_for_index_lhs, walk_rhs_for_calls,
-};
+use luna_core::__private::{metamethod_safe_for_index_lhs, walk_rhs_for_calls};
+use luna_core::frontend::ast::{Chunk, Expr, ExprId, RhsCallScan, Stat};
 use luna_core::frontend::parser::parse;
 use luna_core::version::LuaVersion;
 

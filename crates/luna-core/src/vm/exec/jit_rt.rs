@@ -13,8 +13,7 @@ impl Vm {
     /// Last live Lua frame (the trace head's frame at
     /// dispatch time). The frame-materialization helper reads `.base`
     /// to compute offsets for each inlined frame's window.
-    #[doc(hidden)]
-    pub fn jit_last_lua_frame(&self) -> Option<Frame> {
+    pub(crate) fn jit_last_lua_frame(&self) -> Option<Frame> {
         match self.frames.last() {
             Some(CallFrame::Lua(f)) => Some(*f),
             _ => None,
@@ -36,8 +35,7 @@ impl Vm {
     /// frame-materialization helper before pushing an inlined frame
     /// whose register window may exceed the current stack length.
     /// `false` when the stack cannot grow: the caller parks a deopt.
-    #[doc(hidden)]
-    pub fn jit_ensure_stack(&mut self, need: usize) -> bool {
+    pub(crate) fn jit_ensure_stack(&mut self, need: usize) -> bool {
         self.stack.len() >= need || self.stack.resize(need, Value::Nil).is_ok()
     }
 
@@ -47,8 +45,7 @@ impl Vm {
     /// (which may collect in an emergency, as compiled code may not: it
     /// can hold new objects only in machine registers). The parked value
     /// is never raised, so it allocates nothing.
-    #[doc(hidden)]
-    pub fn jit_park_oom(&mut self) {
+    pub(crate) fn jit_park_oom(&mut self) {
         if self.jit.pending_err.is_none() {
             self.jit.pending_err = Some(LuaError(Value::Nil));
         }
@@ -64,8 +61,7 @@ impl Vm {
     ///
     /// Returns are i64-shaped so the cranelift import sig stays
     /// trivial (i64 → i64 mapping).
-    #[doc(hidden)]
-    pub fn jit_op_close(&mut self, start_offset: u32) -> i64 {
+    pub(crate) fn jit_op_close(&mut self, start_offset: u32) -> i64 {
         let Some(f) = self.jit_last_lua_frame() else {
             return 1;
         };
@@ -104,8 +100,7 @@ impl Vm {
     /// only — depth>0 Closure is not supported); `v` is the trace
     /// register's value, which the helper packs from its tag and
     /// payload.
-    #[doc(hidden)]
-    pub fn jit_spill_stack(&mut self, slot_offset: u32, v: Value) {
+    pub(crate) fn jit_spill_stack(&mut self, slot_offset: u32, v: Value) {
         let Some(f) = self.jit_last_lua_frame() else {
             self.jit.pending_err =
                 Some(self.rt_err("JIT spill: no Lua frame on jit_last_lua_frame()"));
@@ -125,8 +120,7 @@ impl Vm {
     /// payload of a slot whose `RegKind` is `Unset` (no compile-time
     /// tag info; commonly `Str` slots which the trace doesn't model)
     /// through it, keeping the tag the interpreter left there.
-    #[doc(hidden)]
-    pub fn jit_stack_slot_mut(&mut self, slot_offset: u32) -> Option<&mut Value> {
+    pub(crate) fn jit_stack_slot_mut(&mut self, slot_offset: u32) -> Option<&mut Value> {
         let f = self.jit_last_lua_frame()?;
         let idx = (f.base as usize) + (slot_offset as usize);
         self.stack.get_mut(idx)
@@ -146,8 +140,7 @@ impl Vm {
     ///
     /// The frame-push detection uses `pre/post frames.len()` and
     /// unwinds any pushed frames first, so the exit sees a clean stack.
-    #[doc(hidden)]
-    pub fn jit_op_concat(&mut self, slot_offset: u32, n: i32) -> i64 {
+    pub(crate) fn jit_op_concat(&mut self, slot_offset: u32, n: i32) -> i64 {
         let Some(f) = self.jit_last_lua_frame() else {
             return -1;
         };
@@ -176,8 +169,7 @@ impl Vm {
     /// Lua frame. Used to reload trace IR `Variable`s after a
     /// helper has written to `vm.stack` directly (e.g. TForCall's
     /// iter results land at `R[A+4..A+4+nvars]`).
-    #[doc(hidden)]
-    pub fn jit_stack_load(&mut self, slot_offset: u32) -> i64 {
+    pub(crate) fn jit_stack_load(&mut self, slot_offset: u32) -> i64 {
         let Some(f) = self.jit_last_lua_frame() else {
             return 0;
         };
@@ -196,8 +188,7 @@ impl Vm {
     /// to dispatch on the iterator's return-key tag at runtime
     /// (`raw::NIL` → loop end exit, `raw::INT` → continue, other →
     /// deopt).
-    #[doc(hidden)]
-    pub fn jit_stack_tag(&mut self, slot_offset: u32) -> u8 {
+    pub(crate) fn jit_stack_tag(&mut self, slot_offset: u32) -> u8 {
         let Some(f) = self.jit_last_lua_frame() else {
             return crate::runtime::value::raw::NIL;
         };
@@ -213,8 +204,7 @@ impl Vm {
     /// returned every value, or a vararg expansion, for an op that reads
     /// it (a call or return of a variable count) and an exit before that
     /// op.
-    #[doc(hidden)]
-    pub fn jit_set_top(&mut self, rel: u32) {
+    pub(crate) fn jit_set_top(&mut self, rel: u32) {
         if let Some(f) = self.jit_last_lua_frame() {
             self.top = f.base + rel;
         }
@@ -228,8 +218,7 @@ impl Vm {
     /// them. The caller has already called `jit_ensure_stack` to cover
     /// `[0..base + cl.proto.max_stack)`.
     /// `false`, pushing nothing, when the frame stack cannot grow.
-    #[doc(hidden)]
-    pub fn jit_push_inlined_frame(
+    pub(crate) fn jit_push_inlined_frame(
         &mut self,
         cl: Gc<LuaClosure>,
         base: u32,

@@ -3,6 +3,7 @@
 //! with a replacement function), and `Vm::call_value_with_handler`, PUC's
 //! `lua_pcall` with a message handler.
 
+use luna_core::__private::VmHostInternals;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;

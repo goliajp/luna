@@ -1,4 +1,5 @@
 use super::*;
+use luna_core::__private::CompiledTraceInternals;
 
 /// The record's frame shape: per-op register-window offsets and the
 /// window size.

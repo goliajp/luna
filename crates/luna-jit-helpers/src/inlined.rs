@@ -1,6 +1,7 @@
 //! Helpers for the frames of functions a trace inlines.
 
 use crate::{current_jit_vm, stack_ops::new_closure};
+use luna_core::__private::{GcInternals, VmJitFrames};
 
 /// Set the stack top to register `rel` of the trace's head frame (see
 /// `Vm::jit_set_top`).
@@ -13,7 +14,9 @@ use crate::{current_jit_vm, stack_ops::new_closure};
 pub unsafe extern "C" fn luna_jit_set_top(rel: i64) {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    vm.jit_set_top(rel as u32);
+    // SAFETY: compiled code sets the top only to a register of the head
+    // frame it has written back, before an op that reads the top
+    unsafe { vm.jit_set_top(rel as u32) };
 }
 
 /// `Op::Closure A Bx` in a frame of a function the trace inlined: `cl_raw`
@@ -43,8 +46,10 @@ pub unsafe extern "C" fn luna_jit_op_closure_in(
     let cl =
         unsafe { luna_core::runtime::Gc::from_ptr(cl_raw as *mut luna_core::runtime::LuaClosure) };
     let Some(head) = vm.jit_last_lua_frame() else {
-        vm.jit.pending_err = Some(vm.rt_err("JIT op_closure: no Lua frame"));
+        vm.jit.pending_err = Some(vm.runtime_error("JIT op_closure: no Lua frame"));
         return 0;
     };
-    new_closure(vm, cl, proto_idx as usize, head.base + frame_off as u32)
+    // SAFETY: `cl` runs the inlined frame at `frame_off` above the head
+    // frame and has the nested function `proto_idx` (# Safety)
+    unsafe { new_closure(vm, cl, proto_idx as usize, head.base + frame_off as u32) }
 }

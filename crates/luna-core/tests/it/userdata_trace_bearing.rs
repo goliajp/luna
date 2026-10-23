@@ -6,8 +6,8 @@
 //! default no-op trace) is unchanged.
 
 use luna_core::runtime::{Gc, Table, Value};
-use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaUserdata, UserdataMarker, Vm};
+use luna_core::{__private::GcInternals, version::LuaVersion};
 
 fn vm() -> Vm {
     Vm::sandbox(LuaVersion::Lua55).open_base().build()

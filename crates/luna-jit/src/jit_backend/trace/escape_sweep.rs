@@ -112,7 +112,7 @@ pub(super) fn sweep_table_write(
             // SetField/GetField. For mixed (b > 0, c > 0) the
             // array part sunk-emits; hash slots accumulate via
             // SetField scan.
-            let sizes = luna_core::runtime::table::new_table_sizes(ins.b(), ins.c(), ins.k());
+            let sizes = luna_core::__private::new_table_sizes(ins.b(), ins.c(), ins.k());
             unbind(bindings, depth, a);
             let sid = sites.len();
             sites.push(AllocSite {

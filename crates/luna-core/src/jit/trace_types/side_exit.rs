@@ -245,8 +245,7 @@ pub struct FrameMaterializeInfo {
 impl CompiledTrace {
     /// The register tags exit `exit_idx` (laid out as `exit_hit_counts`)
     /// leaves, over the whole window from the trace's head frame.
-    #[doc(hidden)]
-    pub fn exit_tags_of(&self, exit_idx: usize) -> &[ExitTag] {
+    pub(crate) fn exit_tags_of(&self, exit_idx: usize) -> &[ExitTag] {
         let inline_n = self.per_exit_inline.len();
         let tags_n = self.per_exit_tags.len();
         if exit_idx < inline_n {
@@ -262,8 +261,7 @@ impl CompiledTrace {
     /// the trace's head frame: the base of the innermost frame an exit
     /// inside an inlined function rebuilds, 0 for an exit in the head frame.
     /// A side trace started at that exit runs on the registers from there.
-    #[doc(hidden)]
-    pub fn exit_frame_offset(&self, exit_idx: usize) -> usize {
+    pub(crate) fn exit_frame_offset(&self, exit_idx: usize) -> usize {
         self.per_exit_inline
             .get(exit_idx)
             .and_then(|e| e.chain.last())

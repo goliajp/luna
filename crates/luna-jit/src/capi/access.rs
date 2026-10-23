@@ -1,6 +1,7 @@
 //! Access functions (stack -> C): type queries and conversions.
 
 use super::*;
+use luna_core::__private::UserdataInternals;
 
 mod tostring;
 pub use tostring::*;

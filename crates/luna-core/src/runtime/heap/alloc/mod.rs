@@ -176,8 +176,7 @@ impl Heap {
     /// A table sized by `NewTable`'s operands, as the interpreter makes it
     /// (see `table::new_table_sizes`); `Ok(None)` for sizes past a table's
     /// limit, an error when memory runs out.
-    #[doc(hidden)]
-    pub fn try_new_table_presized(
+    pub(crate) fn try_new_table_presized(
         &mut self,
         b: u32,
         c: u32,

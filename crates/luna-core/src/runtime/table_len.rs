@@ -12,8 +12,7 @@ static LEN_SEARCH_SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 /// `seed`, as PUC 5.5 does from a state's seed, in every Vm of the process;
 /// `None` goes back to drawing them from each table's address. Only for
 /// comparing with a PUC 5.5 built with a fixed seed.
-#[doc(hidden)]
-pub fn set_len_search_seed(seed: Option<u32>) {
+pub(crate) fn set_len_search_seed(seed: Option<u32>) {
     let v = seed.map_or(u64::MAX, u64::from);
     LEN_SEARCH_SEED.store(v, std::sync::atomic::Ordering::Relaxed);
 }

@@ -202,8 +202,7 @@ impl Vm {
 
     /// Write a mark into the accounting trace (`gc-trace`), where a test
     /// cuts the comparison with PUC's.
-    #[doc(hidden)]
-    pub fn trace_mark(&mut self, name: &str) {
+    pub(crate) fn trace_mark(&mut self, name: &str) {
         self.heap.hook_mark(name);
     }
 

@@ -20,8 +20,7 @@ pub(super) fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// again); `None` without one when 5.1 or 5.2 would collect before
 /// `lua_pushlstring` makes it, for the interpreter to make the call. From
 /// 5.3 the check after it is the compiled code's.
-#[doc(hidden)]
-pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
+pub(crate) fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
     if vm.version() <= LuaVersion::Lua52 && vm.step_due() {
         return None;
     }
@@ -65,8 +64,7 @@ fn sub_bytes(s: &Gc<LuaStr>, i: i64, j: i64) -> &[u8] {
 
 /// The library function `string.<name>` is, if it is one the trace JIT
 /// may run as a direct call on arguments of known types.
-#[doc(hidden)]
-pub fn inlinable_builtin(name: &[u8]) -> Option<crate::runtime::Builtin> {
+pub(crate) fn inlinable_builtin(name: &[u8]) -> Option<crate::runtime::Builtin> {
     match name {
         b"sub" => Some(crate::runtime::Builtin::StringSub),
         _ => None,

@@ -20,8 +20,7 @@ impl Vm {
     /// start at `base`: `None` when an allocation fails (compiled code may
     /// hold new objects only in registers, so no emergency collection
     /// runs; the interpreter then makes the closure).
-    #[doc(hidden)]
-    pub fn jit_closure(
+    pub(crate) fn jit_closure(
         &mut self,
         cl: Gc<LuaClosure>,
         idx: usize,

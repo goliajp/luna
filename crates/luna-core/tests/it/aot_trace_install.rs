@@ -4,10 +4,11 @@
 //! resolver that *calls* this API lives in `luna-runtime-helpers` and
 //! is exercised by `crates/luna-aot/tests/it/aot_trace_fires.rs`.
 
+use luna_core::__private::classify_exit_tags;
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
 use luna_core::jit::send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
-use luna_core::jit::trace::{CompiledTrace, ExitTag, TagResKind, classify_exit_tags};
+use luna_core::jit::trace::{CompiledTrace, ExitTag, TagResKind};
 use luna_core::runtime::Heap;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;

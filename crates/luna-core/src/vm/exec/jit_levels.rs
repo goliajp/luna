@@ -94,8 +94,7 @@ impl Vm {
     /// 5.1's array or takes a new `CallInfo` (and in 5.2 any level while a
     /// collection step could fall due) is a number of levels deeper, each
     /// at least the smallest self call's step above the one before.
-    #[doc(hidden)]
-    pub fn jit_limits(&self, cl: Gc<LuaClosure>, base: u32) -> JitLimits {
+    pub(crate) fn jit_limits(&self, cl: Gc<LuaClosure>, base: u32) -> JitLimits {
         let p = cl.proto;
         let (nparams, max) = (u32::from(p.num_params), u32::from(p.max_stack));
         let stack = self.g.stack_last.saturating_sub(max + nparams);
@@ -119,8 +118,7 @@ impl Vm {
     /// then the limits for the levels after it. `None` when the check would
     /// find a step due: the interpreter makes the call instead, the level
     /// not counted here.
-    #[doc(hidden)]
-    pub fn jit_self_level(
+    pub(crate) fn jit_self_level(
         &mut self,
         cl: Gc<LuaClosure>,
         base: u32,

@@ -1,6 +1,7 @@
 //! `lua.c`'s message handler.
 
 use super::*;
+use luna_core::__private::VmHostInternals;
 
 /// `lua.c`'s message handler of each dialect: the error message with a
 /// traceback of where it was raised (level 1 skips the handler itself).

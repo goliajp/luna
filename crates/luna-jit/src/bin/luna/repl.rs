@@ -11,6 +11,7 @@ use luna_jit::version::LuaVersion;
 mod input;
 use input::Input;
 pub(crate) use input::Line;
+use luna_core::__private::VmHostInternals;
 
 /// What `loadline` found.
 enum Loaded {

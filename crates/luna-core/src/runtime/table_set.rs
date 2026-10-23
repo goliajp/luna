@@ -17,8 +17,7 @@ impl Table {
     /// has made it already: the trace JIT's store helpers test it together
     /// with the metatable, and the method JIT's only reach tables a call
     /// tested on entry or made itself. Not part of the supported API.
-    #[doc(hidden)]
-    pub fn set_unguarded(
+    pub(crate) fn set_unguarded(
         &mut self,
         heap: &mut Heap,
         key: Value,
@@ -29,8 +28,7 @@ impl Table {
 
     /// [`Self::set_int`] without the read-only test; see
     /// [`Self::set_unguarded`].
-    #[doc(hidden)]
-    pub fn set_int_unguarded(
+    pub(crate) fn set_int_unguarded(
         &mut self,
         heap: &mut Heap,
         i: i64,
