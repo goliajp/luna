@@ -160,7 +160,7 @@ pub(super) fn emit_array_set<E: Emit>(
     miss: Block,
     test_readonly: bool,
 ) {
-    use luna_core::runtime::value::raw;
+    use luna_core::__private::raw;
     debug_assert!(!raw::is_gc(r) && r != raw::NIL);
     let flags = MemFlagsData::trusted();
     if test_readonly {

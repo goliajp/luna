@@ -126,7 +126,7 @@ pub(super) fn emit_closure_op<E: Emit>(
             // otherwise typed by the value the recording saw, the read
             // checked against it once, where it is made
             let seen = getx_want(record.result_tag(i).and_then(|t| {
-                use luna_core::runtime::value::raw;
+                use luna_core::__private::raw;
                 match t {
                     raw::INT => Some(ExitTag::Int),
                     raw::FLOAT => Some(ExitTag::Float),
@@ -139,11 +139,10 @@ pub(super) fn emit_closure_op<E: Emit>(
             // `__call`, a native): the register is typed Closure only when
             // the recording saw one, and the read is checked, so an exit
             // never restores some other object under the closure tag
-            let seen_closure =
-                record.result_tag(i) == Some(luna_core::runtime::value::raw::CLOSURE);
+            let seen_closure = record.result_tag(i) == Some(luna_core::__private::raw::CLOSURE);
             match inferred {
                 Some(ExitTag::Closure) if seen_closure => {
-                    let want = luna_core::runtime::value::raw::CLOSURE;
+                    let want = luna_core::__private::raw::CLOSURE;
                     let v = checked_upval_read(lw, pl, oc.i, oc.rop, idx_b, want)?;
                     lw.bcx.def_var(regs[ins.a() as usize], v);
                     lw.current_kinds[off + ins.a() as usize] = RegKind::Closure;

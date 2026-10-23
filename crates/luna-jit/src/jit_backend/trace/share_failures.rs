@@ -64,7 +64,7 @@ fn key_of(settings: Settings, head: &Content, head_pc: u32) -> HeadKey {
 /// The engine of `storage`'s Vm and the key and content of `record`'s
 /// head, when that Vm has an engine.
 fn record_key(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,
@@ -81,9 +81,9 @@ fn side_of(record: &TraceRecord) -> Option<(u32, usize)> {
     record.side_trace_parent.map(|(_, pc, exit)| (pc, exit))
 }
 
-/// [`luna_core::jit::TraceCompiler::failure_known`].
+/// [`luna_core::__private::TraceCompiler::failure_known`].
 pub(crate) fn failure_known(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,
@@ -111,9 +111,9 @@ pub(crate) fn failure_known(
     })
 }
 
-/// [`luna_core::jit::TraceCompiler::publish_failure`].
+/// [`luna_core::__private::TraceCompiler::publish_failure`].
 pub(crate) fn publish_failure(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,

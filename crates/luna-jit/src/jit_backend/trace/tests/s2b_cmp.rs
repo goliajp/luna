@@ -20,7 +20,7 @@ fn cmp_jmp_record(proto: Gc<Proto>, head_pc: u32, cmp_pc: u32, cmp: Inst) -> Tra
     let mut rec = TraceRecord::start(
         proto,
         head_pc,
-        vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize],
+        vec![luna_core::__private::raw::INT; proto.max_stack as usize],
         false,
     );
     rec.push(RecordedOp {
@@ -197,7 +197,7 @@ fn arith_then_cmp_side_exit_stores_back_post_arith_value() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     for (i, inst) in prog.iter().copied().enumerate() {
@@ -248,7 +248,7 @@ fn cmp_at_trailing_position_bails() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     rec.push(RecordedOp {
@@ -273,7 +273,7 @@ fn cmp_followed_by_non_jmp_bails() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     for (i, inst) in prog.iter().copied().enumerate() {
@@ -298,7 +298,7 @@ fn cmp_jmp_with_wrong_pc_offset_bails() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     rec.push(RecordedOp {
@@ -333,7 +333,7 @@ fn orphan_jmp_mid_trace_bails() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     for (i, inst) in prog.iter().copied().enumerate() {
@@ -364,7 +364,7 @@ fn loop_pattern_alternates_continue_and_exit() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     for (i, inst) in prog.iter().copied().enumerate() {

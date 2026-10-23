@@ -24,7 +24,7 @@ use super::*;
 /// `arg_table_mask` is the per-arg `Gc<Table>` indicator and
 /// `ret_is_table` is true ↔ Return1 yields a `Gc<Table>` ptr.
 pub fn cache_lookup_or_compile(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     proto: luna_core::runtime::Gc<Proto>,
     pre53: bool,
     float_only: bool,

@@ -67,7 +67,7 @@ pub(in super::super) fn emit_len_check<E: Emit>(
 /// `alimit` as [`emit_alimit_after_len`] says. Anything else goes to
 /// `miss` (the helper).
 fn emit_len_check_54<E: Emit>(bcx: &mut E, t: Value, hit: Block, miss: Block) {
-    use luna_core::runtime::value::raw;
+    use luna_core::__private::raw;
     let flags = MemFlagsData::trusted();
     // one compare and branch each: `band` chains of the conditions cost
     // more than the branches, which all go one way in a loop

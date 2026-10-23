@@ -17,8 +17,8 @@ use cranelift_codegen::ir::{BlockArg, UserFuncName};
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
-use luna_core::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
-use luna_core::jit::{CompileResult, IntChunkCompiler, JitVmGuard, MAX_JIT_ARITY, TraceCompiler};
+use luna_core::__private::{CompileOptions, CompiledTrace, TraceCompiler, TraceRecord};
+use luna_core::jit::{CompileResult, IntChunkCompiler, JitVmGuard, MAX_JIT_ARITY};
 use luna_core::runtime::Value as LuaValue;
 use luna_core::runtime::function::Proto;
 use luna_core::runtime::{Gc, LuaStr};
@@ -291,15 +291,15 @@ pub(crate) const NODE_KEY_RAW_OFFSET: usize = NODE_KEY_OFFSET + 8;
 #[allow(dead_code)]
 pub(crate) const NODE_KEY_TAG_OFFSET: usize = NODE_KEY_OFFSET;
 
-const RAW_TAG_INT: i64 = luna_core::runtime::value::raw::INT as i64;
-const RAW_TAG_FLOAT: i64 = luna_core::runtime::value::raw::FLOAT as i64;
-const RAW_TAG_TABLE: i64 = luna_core::runtime::value::raw::TABLE as i64;
-const RAW_TAG_NIL: i64 = luna_core::runtime::value::raw::NIL as i64;
+const RAW_TAG_INT: i64 = luna_core::__private::raw::INT as i64;
+const RAW_TAG_FLOAT: i64 = luna_core::__private::raw::FLOAT as i64;
+const RAW_TAG_TABLE: i64 = luna_core::__private::raw::TABLE as i64;
+const RAW_TAG_NIL: i64 = luna_core::__private::raw::NIL as i64;
 
 const _: () = {
     assert!(std::mem::size_of::<*mut u8>() == 8);
-    assert!(std::mem::size_of::<luna_core::runtime::value::RawVal>() == 8);
-    assert!(std::mem::align_of::<luna_core::runtime::value::RawVal>() == 8);
+    assert!(std::mem::size_of::<luna_core::__private::RawVal>() == 8);
+    assert!(std::mem::align_of::<luna_core::__private::RawVal>() == 8);
     // `asize` is a u32 the JIT loads zero-extended (`uload32`), then
     // shifts left 3 to multiply by 8 for the `atags_ptr = array_ptr +
     // asize * 8` computation.
@@ -394,7 +394,7 @@ impl IntChunkCompiler for CraneliftBackend {
     // operate on `Vm.jit.storage.{cache,cache_handles}`.
     fn try_compile(
         &self,
-        storage: &mut dyn luna_core::jit::JitStorage,
+        storage: &mut dyn luna_core::__private::JitStorage,
         proto: luna_core::runtime::Gc<luna_core::runtime::function::Proto>,
         pre53: bool,
         float_only: bool,

@@ -169,7 +169,7 @@ fn payload_bits(v: luna_core::runtime::Value) -> i64 {
 
 /// `raw`'s eight bytes as an integer.
 #[inline]
-fn raw_bits(raw: luna_core::runtime::value::RawVal) -> i64 {
+fn raw_bits(raw: luna_core::__private::RawVal) -> i64 {
     // SAFETY: every `RawVal` field is eight bytes wide here (asserted
     // below), so whichever field the value was written through, all of
     // `zero` is initialised
@@ -193,7 +193,7 @@ unsafe fn push_ssa_roots(vm: &mut luna_core::vm::Vm, roots: i64) -> usize {
         // readable words (# Safety)
         let words = unsafe { std::slice::from_raw_parts(p.add(1), 2 * (*p as usize)) };
         for pair in words.as_chunks::<2>().0 {
-            let raw = luna_core::runtime::value::RawVal {
+            let raw = luna_core::__private::RawVal {
                 zero: pair[1] as u64,
             };
             // SAFETY: each pair is one live value's tag and payload (# Safety)

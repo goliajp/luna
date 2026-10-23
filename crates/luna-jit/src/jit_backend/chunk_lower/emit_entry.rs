@@ -35,11 +35,11 @@ pub(super) fn define_entry<M: Module>(
     let arg_tags = (0..num_params)
         .map(|i| {
             if (table_mask >> i) & 1 == 1 {
-                luna_core::runtime::value::raw::TABLE
+                luna_core::__private::raw::TABLE
             } else if (float_mask >> i) & 1 == 1 {
-                luna_core::runtime::value::raw::FLOAT
+                luna_core::__private::raw::FLOAT
             } else {
-                luna_core::runtime::value::raw::INT
+                luna_core::__private::raw::INT
             }
         })
         .collect();

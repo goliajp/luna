@@ -66,7 +66,7 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::default_libcall_names;
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
-use luna_core::jit::trace_types::{CompileOptions, RecordedOp, TraceRecord};
+use luna_core::__private::{CompileOptions, RecordedOp, TraceRecord};
 use luna_core::runtime::Gc;
 use luna_core::runtime::function::Proto;
 use luna_core::version::LuaVersion;
@@ -136,7 +136,7 @@ fn load_proto_with_field_const(vm: &mut luna_core::vm::Vm) -> Gc<Proto> {
 fn make_setfield_record(proto: Gc<Proto>) -> TraceRecord {
     // R[0] enters as a table and R[1] as an integer: a store is lowered
     // only for a value of known kind, which it tags for the table.
-    use luna_core::runtime::value::raw;
+    use luna_core::__private::raw;
     let mut tags = vec![raw::INT; proto.max_stack as usize];
     tags[0] = raw::TABLE;
     let mut rec = TraceRecord::start(proto, 0, tags, false);

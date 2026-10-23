@@ -70,7 +70,7 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     let nil_const = lw
         .bcx
         .ins()
-        .iconst(types::I64, luna_core::runtime::value::raw::NIL as i64);
+        .iconst(types::I64, luna_core::__private::raw::NIL as i64);
     let is_nil = lw.bcx.ins().icmp(IntCC::Equal, tag, nil_const);
     let nil_exit_blk = lw.bcx.create_block();
     let not_nil_blk = lw.bcx.create_block();

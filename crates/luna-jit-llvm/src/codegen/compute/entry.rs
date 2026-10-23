@@ -63,7 +63,7 @@ pub(super) fn emit_entry<'ctx>(
                 }
                 .ok()
             };
-            let tag = u64::from(luna_core::runtime::value::raw::INT);
+            let tag = u64::from(luna_core::__private::raw::INT);
             builder
                 .build_store(at(2 * i as u64, "tag_at")?, i64_type.const_int(tag, false))
                 .ok()?;

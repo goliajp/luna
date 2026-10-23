@@ -32,7 +32,7 @@ fn compiled_traces_have_empty_per_exit_metas_when_no_inline_cmp() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     rec.push(RecordedOp {
@@ -158,8 +158,8 @@ fn per_exit_metas_populated_for_cmp_at_depth_one() {
     assert!(!p.is_vararg);
     // R[0] holds the function itself: an inlined call needs its
     // target to be the entry closure
-    let mut tags = vec![luna_core::runtime::value::raw::INT; p.max_stack as usize];
-    tags[0] = luna_core::runtime::value::raw::CLOSURE;
+    let mut tags = vec![luna_core::__private::raw::INT; p.max_stack as usize];
+    tags[0] = luna_core::__private::raw::CLOSURE;
     let mut rec = TraceRecord::start(p, 0, tags, false);
     // depth 0: an Add, then a self-recursive Call.
     rec.push(RecordedOp {
@@ -223,7 +223,7 @@ fn a_call_wanting_two_results_ends_the_trace() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     rec.push(RecordedOp {

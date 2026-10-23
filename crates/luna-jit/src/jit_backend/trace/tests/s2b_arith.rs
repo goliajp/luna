@@ -20,7 +20,7 @@ const WIDE_SRC: &[u8] = b"local a,b,c,d = 0,0,0,0; return a+b+c+d";
 
 fn make_record(head_pc: u32, ops: &[Inst], proto: Gc<Proto>) -> TraceRecord {
     // The registers these traces compute on hold integers.
-    let tags = vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize];
+    let tags = vec![luna_core::__private::raw::INT; proto.max_stack as usize];
     let mut rec = TraceRecord::start(proto, head_pc, tags, false);
     for (i, inst) in ops.iter().copied().enumerate() {
         let pushed = rec.push(RecordedOp {
@@ -187,7 +187,7 @@ fn non_closed_trace_does_not_compile() {
     let rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     assert!(try_compile_trace(vm.jit.storage.as_mut(), &rec).is_none());
@@ -212,7 +212,7 @@ fn inline_depth_bails() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     rec.push(RecordedOp {
@@ -238,7 +238,7 @@ fn cross_proto_op_bails() {
     let mut rec = TraceRecord::start(
         p1,
         0,
-        vec![luna_core::runtime::value::raw::INT; p1.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p1.max_stack as usize],
         false,
     );
     rec.push(RecordedOp {

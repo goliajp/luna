@@ -261,8 +261,7 @@ pub(crate) enum ErrPos {
 }
 
 /// Counts of the errors the vm raised with a status of their own (see
-/// [`Vm::special_errors`]).
-#[doc(hidden)]
+/// `Vm::special_errors`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SpecialErrors {
     errerr: u64,

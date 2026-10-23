@@ -3,7 +3,6 @@
 use super::*;
 
 /// A text chunk being loaded from a reader (see `Vm::text_load`).
-#[doc(hidden)]
 pub struct TextLoad {
     pub(super) version: crate::version::LuaVersion,
     pub(super) depth: u32,
@@ -11,8 +10,7 @@ pub struct TextLoad {
     pub(super) scratch: crate::frontend::parser::ParseScratch,
 }
 
-/// The outcome of [`TextLoad::parse`], for [`Vm::load_parsed`].
-#[doc(hidden)]
+/// The outcome of `TextLoad::parse`, for `Vm::load_parsed`.
 pub struct ParsedText(pub(super) Result<crate::frontend::parser::Parsed, Failure>);
 
 /// A parse error, with where the parse failed and the source it read.

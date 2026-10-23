@@ -6,11 +6,11 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::{DataDescription, Linkage, Module, default_libcall_names};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
+use luna_core::__private::CompileOptions;
 use luna_core::jit::aot_meta::{
     AotTraceMetaHeader, PerExitInlineEntry, PerExitTagsEntry, encode_meta_blob, pack_exit_tag,
     pack_tag_res_kind,
 };
-use luna_core::jit::trace_types::CompileOptions;
 use luna_core::version::LuaVersion;
 
 use super::AotError;

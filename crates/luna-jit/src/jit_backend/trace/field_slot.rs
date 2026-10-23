@@ -9,7 +9,8 @@ use cranelift_codegen::ir::{Block, MemFlagsData};
 /// discriminant, `value::tag`), for the kinds a trace reads or writes in
 /// a slot.
 pub(super) fn mem_tag(r: u8) -> u8 {
-    use luna_core::runtime::value::{raw, tag};
+    use luna_core::__private::raw;
+    use luna_core::runtime::value::tag;
     match r {
         raw::INT => tag::INT,
         raw::FLOAT => tag::FLOAT,
@@ -127,7 +128,7 @@ pub(super) fn emit_slot_load<E: Emit>(bcx: &mut E, node: Value) -> Value {
 /// Only for a value the collector does not trace: a store of a
 /// collectable one into a table needs the write barrier.
 pub(super) fn emit_slot_store<E: Emit>(bcx: &mut E, node: Value, val: Value, r: u8) {
-    debug_assert!(!luna_core::runtime::value::raw::is_gc(r));
+    debug_assert!(!luna_core::__private::raw::is_gc(r));
     let flags = MemFlagsData::trusted();
     let tag = bcx.ins().iconst(types::I8, i64::from(mem_tag(r)));
     bcx.ins()

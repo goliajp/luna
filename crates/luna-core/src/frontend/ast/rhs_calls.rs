@@ -20,7 +20,6 @@ use super::*;
 /// of the gate may distinguish between the two safe variants (e.g. to count
 /// the third bucket for diagnostics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[doc(hidden)]
 pub enum RhsCallScan {
     /// No `Call` or `MethodCall` AST nodes anywhere in the walked tree.
     /// Pure arith, literals, names, indices, paren and unary/binary chains.
@@ -28,7 +27,7 @@ pub enum RhsCallScan {
     /// Calls present, but every callee is a `<stdlib_module>.<field>` shape
     /// (e.g. `math.min`, `string.byte`, `table.unpack`) where
     /// `<stdlib_module>` is a known-immutable stdlib root (see
-    /// [`is_known_pure_stdlib_root`]). A known-pure call cannot run
+    /// `is_known_pure_stdlib_root`). A known-pure call cannot run
     /// user-supplied Lua code, so it cannot trigger `__newindex` re-binding
     /// of an outer local.
     OnlyKnownPure,

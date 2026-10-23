@@ -63,7 +63,7 @@ pub use lua_facade::{IntoLuaArgs, Lua, LuaFunction, LuaRoot, LuaSandboxBuilder, 
 
 /// Unified `jit` namespace — combines luna-core's trait surface +
 /// pure types with luna's Cranelift-backed implementations. Existing
-/// `use luna_jit::jit::TraceRecord`, `use luna_jit::jit::CraneliftBackend`,
+/// `use luna_jit::__private::TraceRecord`, `use luna_jit::jit::CraneliftBackend`,
 /// `use luna_jit::jit::cache_lookup_or_compile`, etc. resolve through
 /// this module.
 #[cfg(target_pointer_width = "64")]

@@ -6,7 +6,7 @@
 
 use super::super::*;
 use super::CStrings;
-use luna_core::vm::exec::host_c::HostAr;
+use luna_core::__private::HostAr;
 
 /// PUC `LUA_IDSIZE`.
 const IDSIZE: usize = 60;

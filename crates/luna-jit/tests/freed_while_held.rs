@@ -104,7 +104,7 @@ fn run(version: LuaVersion, seed: u32, hot: u32, source: &str) -> String {
 }
 
 fn same_as_interp(version: LuaVersion, source: &str) {
-    Vm::check_recordings_after_collections(true);
+    luna_core::__private::check_recordings_after_collections(true);
     for seed in 1..=8 {
         let want = run(version, seed, 0, source);
         for hot in [1, 3] {

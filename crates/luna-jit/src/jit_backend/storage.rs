@@ -4,13 +4,13 @@
 //! by `crate::install_default_jit` alongside
 //! `install_jit_backend(CraneliftBackend, CraneliftBackend)`.
 //!
-//! Type-erased through [`luna_core::jit::JitStorage`] so luna-core
+//! Type-erased through [`luna_core::__private::JitStorage`] so luna-core
 //! never needs to see `cranelift_jit::JITModule` (preserves the 0
 //! third-party dep gate on luna-core).
 
 use super::trace::TraceHandle;
 use super::{CacheEntry, JitHandle};
-use luna_core::jit::JitStorage;
+use luna_core::__private::JitStorage;
 
 /// Per-`Vm` Cranelift JIT storage. Three collections:
 ///

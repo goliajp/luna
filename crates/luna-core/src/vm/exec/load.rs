@@ -6,8 +6,8 @@ use crate::runtime::mem::{LVec, Oom, catch_load_oom, outside_load};
 
 mod compile;
 mod streamed;
-mod text;
-pub use text::{ParsedText, TextLoad};
+pub(crate) mod text;
+pub(crate) use text::{ParsedText, TextLoad};
 
 /// The memory error of a load whose frontend ran out of memory.
 #[cold]

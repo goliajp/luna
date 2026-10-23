@@ -1,9 +1,9 @@
-//! Compiled code leaves the C library's `errno` (see `luna_core::cerrno`)
+//! Compiled code leaves the C library's `errno` (see `luna_core::__private::cerrno`)
 //! as the interpreter does: a `math.*` call folded into a trace or a method,
 //! a compiled `^` and a compiled float `%`.
 
+use luna_jit::__private::cerrno;
 use luna_jit::LuaVersion;
-use luna_jit::cerrno;
 
 /// `errno` after `src`, starting from 0, and whether compiled code ran: a
 /// trace, or a function the method JIT compiled.

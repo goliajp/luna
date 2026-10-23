@@ -36,8 +36,8 @@ fn cmp_at_depth_one_no_longer_aborts_via_inline_abort() {
     assert!(!p.is_vararg, "fixture must be non-vararg");
     // R[0] holds the function itself: an inlined call needs its
     // target to be the entry closure
-    let mut tags = vec![luna_core::runtime::value::raw::INT; p.max_stack as usize];
-    tags[0] = luna_core::runtime::value::raw::CLOSURE;
+    let mut tags = vec![luna_core::__private::raw::INT; p.max_stack as usize];
+    tags[0] = luna_core::__private::raw::CLOSURE;
     let mut rec = TraceRecord::start(p, 0, tags, false);
     rec.push(RecordedOp {
         proto: p,
@@ -91,7 +91,7 @@ fn first_op_at_depth_gt_zero_bails() {
     let mut rec = TraceRecord::start(
         p,
         0,
-        vec![luna_core::runtime::value::raw::INT; p.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
     rec.push(RecordedOp {
@@ -116,7 +116,7 @@ fn first_op_on_cross_proto_bails() {
     let mut rec = TraceRecord::start(
         p1,
         0,
-        vec![luna_core::runtime::value::raw::INT; p1.max_stack as usize],
+        vec![luna_core::__private::raw::INT; p1.max_stack as usize],
         false,
     );
     rec.push(RecordedOp {

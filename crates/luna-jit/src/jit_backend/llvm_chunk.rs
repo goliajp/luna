@@ -10,7 +10,6 @@
 //! finishes in Cranelift's code.
 
 use super::*;
-use luna_core::jit::JitStorage;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 

@@ -5,7 +5,6 @@
 use crate::runtime::mem::{LVec, Oom};
 
 /// The bytes a [`super::Lexer`] scans.
-#[doc(hidden)]
 pub trait Source {
     /// Whether [`Source::more`] can add bytes; a whole source never asks.
     const STREAMS: bool = false;
@@ -25,7 +24,6 @@ pub trait Source {
 }
 
 /// A source held whole in memory.
-#[doc(hidden)]
 #[derive(Clone, Copy)]
 pub struct Whole<'s>(pub(crate) &'s [u8]);
 

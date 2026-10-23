@@ -245,7 +245,7 @@ fn trace_compiled_on_thread_a_remains_dispatchable_on_thread_b() {
 /// signal than any runtime regression.
 #[test]
 fn jit_aware_send_vm_ir_walks_cross_thread() {
-    use luna_jit::jit::trace::CompiledTrace;
+    use luna_jit::__private::CompiledTrace;
     use luna_jit::runtime::function::Proto;
 
     // Static assertions — these are the structural claims.

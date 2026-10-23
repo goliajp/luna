@@ -42,7 +42,7 @@ pub unsafe extern "C" fn luna_jit_stack_update_raw(slot_offset: i64, raw_bits: i
     }
     if let Some(slot) = vm.jit_stack_slot_mut(slot_offset as u32) {
         let (tag, _) = slot.unpack();
-        let raw = luna_core::runtime::value::RawVal {
+        let raw = luna_core::__private::RawVal {
             zero: raw_bits as u64,
         };
         // SAFETY: `tag` is the slot's own tag and `raw_bits` a payload of that type (# Safety)
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw
     if vm.jit.pending_err.is_some() {
         return;
     }
-    let raw = luna_core::runtime::value::RawVal {
+    let raw = luna_core::__private::RawVal {
         zero: raw_bits as u64,
     };
     // SAFETY: `tag` and `raw_bits` are one value's tag and payload (# Safety)

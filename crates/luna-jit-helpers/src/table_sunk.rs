@@ -54,7 +54,7 @@ fn sunk_site(ops: i64) -> usize {
 /// the per-exit-tags entry to `ExitTag::Table` so the dispatcher
 /// repacks correctly on deopt.
 ///
-/// `kind` byte uses the same `luna_core::runtime::value::raw::*` tag
+/// `kind` byte uses the same `luna_core::__private::raw::*` tag
 /// space as `Value::pack`. Unset slots in `virt_kinds` map to
 /// `raw::NIL` at emit time so the table sees a NIL fill — matches
 /// Lua's "table created with array part, slot unwritten" semantics.
@@ -133,7 +133,7 @@ unsafe fn materialize(
         // buffers are readable and hold one value's payload and tag
         // (# Safety)
         let v = unsafe {
-            let raw = luna_core::runtime::value::RawVal {
+            let raw = luna_core::__private::RawVal {
                 zero: *raws_ptr.add(i),
             };
             luna_core::runtime::Value::pack(*kinds_ptr.add(i), raw)
@@ -153,7 +153,7 @@ unsafe fn materialize(
         // payload and tag (# Safety)
         let (key, v) = unsafe {
             let key = *hash_keys_ptr.add(i) as *mut luna_core::runtime::LuaStr;
-            let raw = luna_core::runtime::value::RawVal {
+            let raw = luna_core::__private::RawVal {
                 zero: *hash_raws_ptr.add(i),
             };
             (

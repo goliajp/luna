@@ -55,7 +55,7 @@ pub(in crate::jit_backend::trace::lower) fn upval_table_read<E: Emit>(
     rop: &RecordedOp,
     idx: u32,
 ) -> Option<Value> {
-    let table = luna_core::runtime::value::raw::TABLE;
+    let table = luna_core::__private::raw::TABLE;
     if std::ptr::eq(rop.proto.as_ptr(), pl.head_proto.as_ptr()) {
         checked_upval_read(lw, pl, i, rop, idx, table)
     } else {

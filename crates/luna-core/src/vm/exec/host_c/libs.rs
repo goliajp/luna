@@ -9,7 +9,6 @@
 use super::*;
 
 /// Why `Vm::host_open_lib` failed.
-#[doc(hidden)]
 pub enum HostOpenError {
     /// 5.1's "name conflict for module": the global of this name holds a
     /// value that is not a table

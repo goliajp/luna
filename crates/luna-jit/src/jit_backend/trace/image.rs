@@ -4,9 +4,7 @@
 
 use super::reloc::Code;
 use super::*;
-use luna_core::jit::trace_types::{
-    CompiledTrace, ExitTag, FrameMaterializeInfo, InlineSideExit, TagResKind, TierUp,
-};
+use luna_core::jit::trace_types::{ExitTag, TagResKind};
 use luna_core::runtime::Value;
 
 /// The content of a function prototype a trace depends on: what the

@@ -249,8 +249,8 @@ fn accum_candidates(
         let entry_tags = &record.entry_tags;
         let s_tag = entry_tags.get(s_slot as usize).copied();
         let v_tag = entry_tags.get(v_slot as usize).copied();
-        if s_tag != Some(luna_core::runtime::value::raw::STR)
-            || v_tag != Some(luna_core::runtime::value::raw::STR)
+        if s_tag != Some(luna_core::__private::raw::STR)
+            || v_tag != Some(luna_core::__private::raw::STR)
         {
             continue;
         }

@@ -3,9 +3,9 @@
 //! yielding), and running its continuation after a yield.
 
 use super::*;
+use luna_core::__private::SpecialErrors;
 use luna_core::runtime::ErrorStatus;
 use luna_core::runtime::NativeClosure;
-use luna_core::vm::exec::SpecialErrors;
 use luna_core::vm::exec::host_c::HostContHooks;
 
 mod results;

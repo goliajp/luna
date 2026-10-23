@@ -13,7 +13,7 @@ pub(super) fn is_rounding(fn_name: &str) -> bool {
 /// The number `luna_jit_math1` takes for the libm function `fn_name` of a
 /// fold, for those that can set `errno`; the others are called directly.
 pub(super) fn errno_math_fn(fn_name: &str) -> Option<i64> {
-    use luna_core::cerrno::MathFn;
+    use luna_core::__private::cerrno::MathFn;
     let f = match fn_name {
         "sin" => MathFn::Sin,
         "cos" => MathFn::Cos,

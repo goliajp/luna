@@ -92,7 +92,7 @@ fn emit_self_inline<E: Emit>(
     bcx.seal_block(mt_blk);
     let link_hit = bcx.create_block();
     bcx.append_block_param(link_hit, types::I64);
-    let table = luna_core::runtime::value::raw::TABLE;
+    let table = luna_core::__private::raw::TABLE;
     field_slot::emit_field_slot_check(bcx, mt, index_arg, slots.0, Some(table), link_hit, slow);
     bcx.switch_to_block(link_hit);
     bcx.seal_block(link_hit);

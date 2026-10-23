@@ -76,7 +76,7 @@ pub struct Vm {
     pub(crate) running_natives: LVec<crate::vm::callstack::NativeAct>,
     /// JIT sidecar. Always present (never `Option`); inert
     /// when `chunk_compiler` / `trace_compiler` are
-    /// [`crate::jit::NullJitBackend`]. See [`crate::vm::jit_state`].
+    /// `crate::jit::NullJitBackend`. See `crate::vm::jit_state`.
     ///
     /// `#[doc(hidden)] pub` so the `luna` crate's
     /// `extern "C"` JIT helpers can write `vm.jit.pending_err`

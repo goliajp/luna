@@ -66,7 +66,7 @@ pub(in crate::capi) fn new_c_closure(
     upvals.extend_from_slice(&api.stack()[from..top]);
     let (tramp, c) = (
         ccall::capi_trampoline as luna_core::runtime::value::NativeFn,
-        luna_core::runtime::Builtin::CFunction,
+        luna_core::__private::Builtin::CFunction,
     );
     // from 5.2 on a C function without upvalues is a light C function,
     // equal to every other push of the same pointer

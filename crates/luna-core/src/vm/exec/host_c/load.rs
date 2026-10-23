@@ -6,7 +6,6 @@ use crate::vm::lib_gc::{self, PARAM_ORDER, Param};
 
 /// Why a C API load failed: a memory error (`LUA_ERRMEM`) or another one
 /// (`LUA_ERRSYNTAX`), with the error object.
-#[doc(hidden)]
 pub enum HostLoadError {
     /// the memory error
     Memory(Value),

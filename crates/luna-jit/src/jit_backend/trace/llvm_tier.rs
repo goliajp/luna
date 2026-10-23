@@ -24,7 +24,7 @@ pub fn llvm_codegen_count() -> u64 {
 }
 
 /// Whether `storage` is the LLVM backend's.
-pub(super) fn is_llvm(storage: &mut dyn luna_core::jit::JitStorage) -> bool {
+pub(super) fn is_llvm(storage: &mut dyn luna_core::__private::JitStorage) -> bool {
     crate::jit_backend::storage::from_storage(storage).is_ok_and(|cs| cs.llvm.is_some())
 }
 
@@ -32,7 +32,7 @@ type Compiled = Result<(usize, luna_jit_llvm::EnginePair), &'static str>;
 
 /// Keeps LLVM's code in `storage` and returns its entry. `None` (with the
 /// reason as the checkpoint) when LLVM did not take the trace.
-fn install(storage: &mut dyn luna_core::jit::JitStorage, c: Compiled) -> Option<TraceFn> {
+fn install(storage: &mut dyn luna_core::__private::JitStorage, c: Compiled) -> Option<TraceFn> {
     let (entry, pair) = match c {
         Ok(c) => c,
         Err(why) => {
@@ -56,7 +56,7 @@ fn compile(lir: &lir::Lir, relocs: &[(RelocKind, i64)]) -> Compiled {
 
 /// [`super::tiers::compile_trace_cranelift`] for the LLVM backend.
 pub(super) fn compile_trace_llvm(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     always_codegen: bool,
@@ -101,7 +101,7 @@ struct Pending {
 /// Cranelift's code until it is entered again. Each entry only reads
 /// flags. Without `delay`, LLVM compiles the trace before it runs on.
 pub(crate) fn tier_up_llvm(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     ct: &CompiledTrace,
     delay: Option<std::time::Duration>,
 ) -> Option<TraceFn> {
@@ -159,7 +159,7 @@ pub(crate) fn tier_up_llvm(
 
 /// Has the compile thread compile `src` for `p`.
 fn hand_over(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     p: &Pending,
     src: Box<share::TierSource>,
     now: std::time::Instant,
@@ -178,7 +178,7 @@ fn hand_over(
 }
 
 fn push_ticket(
-    storage: &mut dyn luna_core::jit::JitStorage,
+    storage: &mut dyn luna_core::__private::JitStorage,
     ticket: crate::jit_backend::llvm_thread::Ticket,
 ) {
     if let Ok(cs) = crate::jit_backend::storage::from_storage(storage) {

@@ -16,7 +16,7 @@ fn closed_record(proto: Gc<Proto>, head_pc: u32, ops: &[Inst]) -> TraceRecord {
     let mut rec = TraceRecord::start(
         proto,
         head_pc,
-        vec![luna_core::runtime::value::raw::INT; proto.max_stack as usize],
+        vec![luna_core::__private::raw::INT; proto.max_stack as usize],
         false,
     );
     for (i, inst) in ops.iter().copied().enumerate() {
@@ -161,8 +161,8 @@ fn metatable_on_set_i_exits_at_the_store() {
             Inst::iabc(Op::SetI, 2, 1, 1, false),
         ],
     );
-    rec.entry_tags[0] = luna_core::runtime::value::raw::TABLE;
-    rec.entry_tags[2] = luna_core::runtime::value::raw::TABLE;
+    rec.entry_tags[0] = luna_core::__private::raw::TABLE;
+    rec.entry_tags[2] = luna_core::__private::raw::TABLE;
     let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -197,7 +197,7 @@ fn metatable_on_get_i_parks_pending_err() {
 
     // Trace: R[1] = R[0][1].
     let mut rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 1, 0, 1, false)]);
-    rec.entry_tags[0] = luna_core::runtime::value::raw::TABLE;
+    rec.entry_tags[0] = luna_core::__private::raw::TABLE;
     let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -231,8 +231,8 @@ fn metatable_on_len_exits_at_the_len() {
             Inst::iabc(Op::Len, 3, 2, 0, false),
         ],
     );
-    rec.entry_tags[0] = luna_core::runtime::value::raw::TABLE;
-    rec.entry_tags[2] = luna_core::runtime::value::raw::TABLE;
+    rec.entry_tags[0] = luna_core::__private::raw::TABLE;
+    rec.entry_tags[2] = luna_core::__private::raw::TABLE;
     let ct = try_compile_trace(vm.jit.storage.as_mut(), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];

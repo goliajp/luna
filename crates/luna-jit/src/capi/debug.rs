@@ -3,9 +3,9 @@
 
 use super::api::C_UPVALS;
 use super::*;
+use luna_core::__private::{HostAr, HostLevel};
 use luna_core::runtime::NativeClosure;
 use luna_core::runtime::mem::{LBox, LVec, MemRef};
-use luna_core::vm::exec::host_c::{HostAr, HostLevel};
 
 mod ar;
 mod cstrings;
@@ -20,7 +20,7 @@ pub(super) use level_ref::*;
 /// The C API's function behind `f`, if it is one.
 pub(super) fn c_api_fn(f: Value) -> Option<Gc<NativeClosure>> {
     match f {
-        Value::Native(nc) if nc.builtin == luna_core::runtime::Builtin::CFunction => Some(nc),
+        Value::Native(nc) if nc.builtin == luna_core::__private::Builtin::CFunction => Some(nc),
         _ => None,
     }
 }

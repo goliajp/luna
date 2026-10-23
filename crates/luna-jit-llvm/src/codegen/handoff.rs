@@ -69,7 +69,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         call_pc: usize,
     ) -> Option<()> {
         // (an upvalue check failing parked a deopt the record replaces)
-        use luna_core::runtime::value::raw;
+        use luna_core::__private::raw;
         let builder = self.builder;
         let i64t = self.i64_type;
         let n = self.num_regs;

@@ -1,8 +1,10 @@
 //! The LLVM backend (`LUNA_JIT_BACKEND=llvm`): luna-jit-llvm's method JIT,
 //! and the shared trace lowering with LLVM as its optimizing tier.
 
-use luna_core::jit::trace::{CompileOptions, CompiledTrace, TraceFn, TraceRecord};
-use luna_core::jit::{CompileResult, IntChunkCompiler, JitStorage, JitVmGuard, TraceCompiler};
+use luna_core::__private::{CompileOptions, CompiledTrace, TraceRecord};
+use luna_core::__private::{JitStorage, TraceCompiler};
+use luna_core::jit::trace::TraceFn;
+use luna_core::jit::{CompileResult, IntChunkCompiler, JitVmGuard};
 
 /// The LLVM backend. Installed with a storage from
 /// `CraneliftJitStorage::with_llvm`: traces start in the baseline tier,

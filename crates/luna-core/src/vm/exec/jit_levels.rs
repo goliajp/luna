@@ -6,9 +6,8 @@
 
 use super::*;
 
-/// When compiled code next needs [`Vm::jit_self_level`]: a level whose
+/// When compiled code next needs `Vm::jit_self_level`: a level whose
 /// base is at `base` or above.
-#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JitLimits {
     /// the lowest base of a level that may need something done
