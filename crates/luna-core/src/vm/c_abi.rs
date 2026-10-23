@@ -109,6 +109,8 @@ pub(crate) fn to_int(d: f64) -> i32 {
 
 /// `(time_t)d`.
 #[inline(always)]
+// `long` is 32 bits on Windows: the conversion is one there
+#[allow(clippy::useless_conversion)]
 pub(crate) fn to_time(d: f64) -> i64 {
     i64::from(to_long(d))
 }

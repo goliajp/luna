@@ -119,8 +119,8 @@ impl Heap {
                 j += 1;
             }
             if j - i > 1 {
-                // SAFETY: the dead strings are allocated
                 dead[i..j].sort_unstable_by_key(|e| {
+                    // SAFETY: the dead strings are allocated
                     std::cmp::Reverse(unsafe { Gc::from_ptr(e.1 as *mut LuaStr).chain() })
                 });
             }

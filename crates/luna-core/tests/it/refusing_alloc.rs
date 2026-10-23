@@ -99,8 +99,8 @@ pub(crate) fn run(version: LuaVersion, seed: u32, refuse_from: usize, source: &s
     let blocks = held.0.take();
     // a freed block written since (a collection marking an object freed
     // before) is a use after free
-    // SAFETY: each block came from `quarantine` with this size and is kept
     let written = blocks.iter().any(|&(p, n)| {
+        // SAFETY: each block came from `quarantine` with this size and is kept
         unsafe { std::slice::from_raw_parts(p, n) }
             .iter()
             .any(|&b| b != POISON)

@@ -76,6 +76,9 @@ pub(crate) struct Gen {
 }
 
 pub(crate) struct Env51 {
+    // boxed: the records' headers live in a `Gen`, and the collector holds
+    // pointers to them, so a `Gen` must not move when the list grows
+    #[allow(clippy::vec_box)]
     gens: Vec<Box<Gen>>,
     /// the package table, the loaders' environment
     package: *mut GcHeader,

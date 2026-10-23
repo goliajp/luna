@@ -59,6 +59,8 @@ pub(super) fn item51(
         b'o' | b'u' | b'x' | b'X' => {
             let n = match v {
                 // `(unsigned long)`
+                // `unsigned long` is 32 bits on Windows: the cast is one there
+                #[allow(clippy::unnecessary_cast)]
                 LuaVersion::Lua51 => {
                     crate::vm::c_abi::to_ulong(argcheck::check_number(vm, a, arg)?) as u64
                 }
