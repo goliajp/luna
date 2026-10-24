@@ -16,6 +16,12 @@
 //! - error mode (`*_err.lua`): the chunk must FAIL at top level on both
 //!   sides and the error text match with the `<chunk>:<line>:` prefix
 //!   stripped (its presence must agree); stdout is not compared.
+//! - script file mode (a fixture whose first line is
+//!   `-- run as a script file`): both sides run it as `lua <file>`, its
+//!   path relative to the crate, not from stdin; stdout must match byte
+//!   for byte.
+//!   What PUC allocates then (the chunk name, the file's buffer) differs
+//!   from the stdin run, and some fixtures need it.
 //!
 //! ## Env
 //! - `PUC_LUA_51` … `PUC_LUA_55` — per-dialect interpreter paths
@@ -257,6 +263,9 @@ fn diff_one_err(path: &Path, bin: &str, version: LuaVersion, source: &str) {
 fn diff_one(path: &Path, bin: &str, version: LuaVersion) {
     let source =
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    if runs_as_file(&source) {
+        return diff_one_file(path, bin, version);
+    }
     if path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -284,6 +293,76 @@ fn diff_one(path: &Path, bin: &str, version: LuaVersion) {
     if puc_n != luna_n {
         eprintln!("=== PUC output ({}) ===\n{puc_n}", path.display());
         eprintln!("=== luna output ({}) ===\n{luna_n}", path.display());
+        panic!("diff: {} diverged between luna and PUC", path.display());
+    }
+}
+
+/// The fixture runs as `lua <file>`.
+pub(super) fn runs_as_file(source: &str) -> bool {
+    source.lines().next() == Some("-- run as a script file")
+}
+
+/// Script file mode: PUC runs `lua <path>` against luna running `path`
+/// as lua.c's `handle_script` does; stdout compared byte for byte. The
+/// path is the fixture's relative to the crate, where the tests run, and
+/// the program is named `lua`, so that what both allocate for the names
+/// is the same on every machine.
+fn diff_one_file(path: &Path, bin: &str, version: LuaVersion) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert_eq!(
+        std::env::current_dir().ok().as_deref(),
+        Some(root.as_path()),
+        "[diff_puc] script file fixtures run from the crate's directory"
+    );
+    let rel = path.strip_prefix(&root).expect("a fixture under the crate");
+    let mut cmd = Command::new(bin);
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::arg0(&mut cmd, "lua");
+    let out = match cmd.arg(rel).current_dir(&root).env("TZ", "UTC").output() {
+        Ok(o) => o,
+        Err(e) => {
+            assert!(
+                !require_all(),
+                "[diff_puc] cannot run PUC binary `{bin}`: {e}"
+            );
+            eprintln!(
+                "[diff_puc] skip {} (PUC binary unavailable)",
+                path.display()
+            );
+            return;
+        }
+    };
+    if !out.status.success() || !out.stderr.is_empty() {
+        panic!(
+            "[diff_puc] fixture {} errors on PUC itself (status={:?} stderr={}) — fix the fixture",
+            path.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let name = rel.as_os_str().as_encoded_bytes();
+    let (r, luna) = super::stdout_capture::caught(|| {
+        let mut s = Vm::new_minimal(version)
+            .into_standalone(
+                &[b"lua".as_slice(), name],
+                Some(1),
+                StandaloneOptions::default(),
+            )
+            .expect("lua.c's state");
+        run_file(&mut s, name).map_err(|e| e.to_string())
+    });
+    r.expect("luna must run the fixture without an error");
+    if out.stdout != luna {
+        eprintln!(
+            "=== PUC output ({}) ===\n{}",
+            path.display(),
+            String::from_utf8_lossy(&out.stdout)
+        );
+        eprintln!(
+            "=== luna output ({}) ===\n{}",
+            path.display(),
+            String::from_utf8_lossy(&luna)
+        );
         panic!("diff: {} diverged between luna and PUC", path.display());
     }
 }
@@ -363,6 +442,16 @@ fn run_as_script(s: &mut Standalone, source: &str) -> Result<(), LuaError> {
     s.script_args()?;
     let vm = s.vm_mut();
     let f = vm.load_stdin_text(source.as_bytes().to_vec())?;
+    let msgh = vm.native(keep_message);
+    vm.call_value_with_handler_in_c(f, &[], msgh).map(|_| ())
+}
+
+/// lua.c's `handle_script` for a file: `name` loaded by `luaL_loadfile`,
+/// run by `docall`.
+fn run_file(s: &mut Standalone, name: &[u8]) -> Result<(), LuaError> {
+    s.script_args()?;
+    let vm = s.vm_mut();
+    let f = vm.load_file(Some(name), None)?;
     let msgh = vm.native(keep_message);
     vm.call_value_with_handler_in_c(f, &[], msgh).map(|_| ())
 }
