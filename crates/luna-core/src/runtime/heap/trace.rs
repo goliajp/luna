@@ -14,7 +14,7 @@ impl Heap {
         // SAFETY: the links of `all` lead to live objects
         unsafe {
             while !cur.is_null() {
-                if self.listed(cur) {
+                if self.puc_counts_in_sweep(cur) {
                     n += 1;
                     by[(*cur).tag as usize] += 1;
                 } else if (*cur).tag == ObjTag::Ghost {
@@ -60,13 +60,13 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             let dead = u8::from(dead);
-            if self.listed(h) && (*h).tag == ObjTag::Str {
+            if self.puc_counts_in_sweep(h) && (*h).tag == ObjTag::Str {
                 let b = string::bytes_of(h as *const LuaStr);
                 let b = String::from_utf8_lossy(&b[..b.len().min(24)])
                     .escape_debug()
                     .to_string();
                 self.hooks.trace.line(format_args!("w 0 {dead} {b}"));
-            } else if self.listed(h) {
+            } else if self.puc_counts_in_sweep(h) {
                 let tag = (*h).tag as u8;
                 self.hooks.trace.line(format_args!("w {tag} {dead}"));
             } else if (*h).tag == ObjTag::Ghost && (*h).sub == 0 {

@@ -116,18 +116,6 @@ impl Heap {
         }
     }
 
-    /// The object `cur` is freed by a sweep: the records it ends swept
-    /// after it, and none found by it any more.
-    ///
-    /// # Safety
-    /// `cur` heads an object of this heap that is still allocated.
-    #[inline]
-    pub(in crate::runtime) unsafe fn env51_freed(&mut self, cur: *mut GcHeader) {
-        // SAFETY: the caller's contract
-        unsafe { self.env51_sweep(cur, true) };
-        self.env51_forget(cur);
-    }
-
     /// A cycle starts: the records are white, as PUC's objects are.
     pub(in crate::runtime) fn env51_whiten(&mut self) {
         let w = self.white();

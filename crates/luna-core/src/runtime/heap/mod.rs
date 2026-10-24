@@ -239,7 +239,7 @@ impl Heap {
 use crate::runtime::puc;
 pub(crate) use crate::runtime::puc::records::{Ghost, GhostRef, parse, strcache};
 use crate::runtime::puc::records::{env51, open_upvals, strt};
-pub(crate) use crate::runtime::puc::{Deferred, PucKind, PucObj, Thread};
+pub(crate) use crate::runtime::puc::{Deferred, Fate, PucKind, PucObj, Thread};
 mod alloc;
 mod barrier;
 #[cfg(any(debug_assertions, feature = "gc-verify", feature = "gc-stress"))]

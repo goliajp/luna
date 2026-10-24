@@ -142,8 +142,10 @@ impl Marker {
             match (*h).tag {
                 ObjTag::Native => {
                     (*h).cls & LUNA_ONLY != 0
-                        || self.dialect != crate::runtime::dialect::Dialect::L51
-                            && pace::native_upvals(h) == 0
+                        || !crate::runtime::puc::c_function_is_object(
+                            self.dialect,
+                            pace::native_upvals(h),
+                        )
                 }
                 ObjTag::Table => (*h).cls & UNLISTED != 0,
                 // the closure standing for PUC's parser's (`reader_layers.rs`)

@@ -3,7 +3,6 @@
 //! created it.
 
 use super::*;
-use crate::runtime::dialect::Dialect;
 
 impl Heap {
     /// `gc-verify` — the set of every live object header

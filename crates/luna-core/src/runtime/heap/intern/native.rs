@@ -62,7 +62,7 @@ impl Heap {
             // SAFETY: `g` was made just above; nothing borrows its header
             // while its per-type byte is written
             unsafe { (*g.header()).set_uncounted(false) };
-            if puc_nup > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51 {
+            if self.puc_c_function_is_object(puc_nup) {
                 self.acct_obj(PucKind::CClosure, self.puc_size(PucObj::CClosure(puc_nup)));
             }
         }
@@ -230,7 +230,7 @@ impl Heap {
                 // header while its per-type byte is written
                 unsafe { (*g.header()).set_uncounted(true) };
             }
-        } else if nup > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51 {
+        } else if self.puc_c_function_is_object(nup) {
             let size = self.puc_size(PucObj::CClosure(nup));
             self.acct_new(g.hdr(), PucKind::CClosure, size);
         }

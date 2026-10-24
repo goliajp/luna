@@ -103,7 +103,7 @@ impl Heap {
     pub(crate) fn main_thread_made(&mut self, t: Gc<crate::runtime::Coro>) {
         // SAFETY: `t` was made just now and nothing else holds it yet
         unsafe { t.as_mut() }.status = crate::runtime::coroutine::CoroStatus::Running;
-        if self.dialect() != crate::runtime::dialect::Dialect::L51 {
+        if !self.puc_udata_after_main_thread() {
             return;
         }
         let h = t.header();

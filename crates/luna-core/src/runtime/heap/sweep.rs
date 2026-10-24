@@ -1,7 +1,6 @@
 //! Sweeping and freeing objects.
 
 use super::*;
-use crate::runtime::dialect::Dialect;
 
 impl Heap {
     /// Sweep the whole `all` list in one pass: free dead-white objects, survivors to the new
@@ -20,21 +19,24 @@ impl Heap {
             let mut link: *mut *mut GcHeader = ptr::addr_of_mut!(head);
             while !(*link).is_null() {
                 let cur = *link;
-                self.sweep_open_at(cur);
-                self.env51_sweep(cur, false);
+                self.puc_sweep_reach(cur);
                 let f = (*cur).flags;
                 // dead = other-white (i.e. white but not current-white).
                 // Survivors are BLACK (just-marked) or current-white (born
                 // during the sweep itself).
-                if is_white(f) && (f & new_white) == 0 && !self.kept_dead(cur) {
-                    self.env51_freed(cur);
+                let fate = if is_white(f) && (f & new_white) == 0 {
+                    self.puc_sweep_dead(cur, false)
+                } else {
+                    Fate::Keep
+                };
+                if let Fate::Free(_) = fate {
                     *link = (*cur).next;
                     self.free_obj(cur);
                     freed += 1;
                 } else {
                     (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
                     link = ptr::addr_of_mut!((*cur).next);
-                    self.env51_sweep(cur, true);
+                    self.puc_sweep_kept(cur);
                 }
             }
             self.all = head;
@@ -89,27 +91,32 @@ impl Heap {
                     break;
                 }
                 n += 1;
-                self.sweep_open_at(cur);
-                self.env51_sweep(cur, false);
+                self.puc_sweep_reach(cur);
                 let f = (*cur).flags;
-                let dead = is_white(f) && (f & new_white) == 0;
-                if dead && to_live && self.in_string_sweep(cur) {
+                let fate = if is_white(f) && (f & new_white) == 0 {
+                    self.puc_sweep_dead(cur, to_live)
+                } else {
+                    Fate::Keep
+                };
+                match fate {
                     // PUC's string table holds it, not the list it sweeps to
                     // the first live object: its string sweep comes first
-                    *link = (*cur).next;
-                    self.hold_for_string_sweep(cur);
-                } else if dead && !self.kept_dead(cur) {
-                    self.env51_freed(cur);
-                    *link = (*cur).next;
-                    self.free_obj(cur);
-                    self.live -= 1;
-                } else {
-                    (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
-                    self.sweep_prev = cur;
-                    self.note_swept(cur);
-                    self.env51_sweep(cur, true);
-                    if to_live {
-                        break;
+                    Fate::Hold => {
+                        *link = (*cur).next;
+                        self.hold_for_string_sweep(cur);
+                    }
+                    Fate::Free(_) => {
+                        *link = (*cur).next;
+                        self.free_obj(cur);
+                        self.live -= 1;
+                    }
+                    Fate::Keep => {
+                        (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
+                        self.sweep_prev = cur;
+                        self.puc_sweep_kept(cur);
+                        if to_live {
+                            break;
+                        }
                     }
                 }
             }
@@ -126,7 +133,7 @@ impl Heap {
         self.sweep_begins();
         let mut n = 0;
         let new_white = self.current_white;
-        let strt = matches!(self.dialect(), Dialect::L51 | Dialect::L52);
+        let strt = self.puc_sweeps_string_table();
         // SAFETY: as in `sweep_objects`
         unsafe {
             loop {
@@ -145,29 +152,33 @@ impl Heap {
                     self.check_no_dangling("sweep_counted");
                     return (n, false);
                 }
-                self.sweep_open_at(cur);
-                n += self.env51_sweep(cur, false);
+                n += self.puc_sweep_reach(cur);
                 let (f, cls) = ((*cur).flags, (*cur).cls);
                 let dead = is_white(f) && (f & new_white) == 0;
                 self.hook_swept(cur, dead, strt);
-                if self.listed(cur) {
+                if self.puc_counts_in_sweep(cur) {
                     n += 1;
                 } else if (*cur).tag == ObjTag::Ghost {
-                    if dead && !self.kept_dead(cur) {
-                        let left = self.free_ghost_records(&mut *(cur as *mut Ghost), quota - n);
-                        n += left.0;
-                        if left.1 {
-                            *link = (*cur).next;
-                            self.free_block(cur as *mut Ghost);
-                            self.live -= 1;
+                    match self.puc_sweep_record(cur, dead, quota - n) {
+                        (k, Some(gone)) => {
+                            n += k;
+                            if gone {
+                                *link = (*cur).next;
+                                self.free_block(cur as *mut Ghost);
+                                self.live -= 1;
+                            }
+                            continue;
                         }
-                        continue;
+                        (k, None) => n += k,
                     }
-                    n += Self::ghost_objects(&*(cur as *mut Ghost));
                 }
-                if dead && !self.kept_dead(cur) {
-                    n += self.env51_sweep(cur, true);
-                    self.env51_forget(cur);
+                let fate = if dead {
+                    self.puc_sweep_dead(cur, false)
+                } else {
+                    Fate::Keep
+                };
+                if let Fate::Free(k) = fate {
+                    n += k;
                     *link = (*cur).next;
                     // gc-verify notes every free in `free_obj`; 5.1 and 5.2
                     // strings mostly go through the string table's sweep
@@ -181,8 +192,7 @@ impl Heap {
                     // white, so SLOW only for a read-only table (`with_slow`)
                     (*cur).flags = (f & !(COLOR_BITS | SLOW)) | new_white | ((cls & RO_CLS) << 1);
                     self.sweep_prev = cur;
-                    self.note_swept(cur);
-                    n += self.env51_sweep(cur, true);
+                    n += self.puc_sweep_kept(cur);
                 }
             }
         }
@@ -198,60 +208,13 @@ impl Heap {
         // SAFETY: the caller's contract; the list links allocated objects
         unsafe {
             while !cur.is_null() {
-                if self.listed(cur) || (*cur).tag == ObjTag::Ghost {
+                if self.puc_counts_in_sweep(cur) || (*cur).tag == ObjTag::Ghost {
                     return true;
                 }
                 cur = (*cur).next;
             }
         }
         false
-    }
-
-    /// Whether the sweep counts the object behind `h`: one of PUC's on the
-    /// list PUC sweeps, not one with a finalizer pending (but in 5.1, whose
-    /// userdata stay on it, as does its main thread, and whose library
-    /// functions and standard files luna made without counting are PUC's).
-    ///
-    /// # Safety
-    /// `h` heads an allocated object of this heap.
-    #[inline]
-    pub(super) unsafe fn listed(&self, h: *mut GcHeader) -> bool {
-        // SAFETY: the caller's contract
-        unsafe {
-            let (f, sub, cls) = ((*h).flags, (*h).sub, (*h).cls);
-            if self.dialect() == Dialect::L51 {
-                let own = match (*h).tag {
-                    ObjTag::Coro => false,
-                    ObjTag::Native => cls & LUNA_ONLY != 0,
-                    // the standard files, made without counting
-                    ObjTag::Userdata => {
-                        sub & UNCOUNTED != 0
-                            && !matches!(
-                                (*(h as *const Userdata)).payload,
-                                UserdataPayload::File(_)
-                            )
-                    }
-                    _ => sub & UNCOUNTED != 0,
-                };
-                // one waiting for its finalizer is on 5.1's `tmudata`
-                cls & UNLISTED == 0 && !own && f & DEFERRED == 0
-            } else {
-                (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0
-            }
-        }
-    }
-
-    /// 5.2's `sweepthread`: a thread the sweep keeps is shrunk, by the VM,
-    /// which holds what that needs (`puc.shrunk` lists them for it).
-    ///
-    /// # Safety
-    /// `h` heads an allocated object of this heap.
-    #[inline]
-    unsafe fn note_swept(&mut self, h: *mut GcHeader) {
-        // SAFETY: the caller's contract
-        if self.dialect() == Dialect::L52 && unsafe { (*h).tag } == ObjTag::Coro {
-            self.puc_swept_thread(h);
-        }
     }
 
     /// The sweep reached the end of the list.
