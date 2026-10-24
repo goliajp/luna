@@ -59,7 +59,7 @@ pub(super) fn singlestep_55<H: StepHost + ?Sized>(h: &mut H, fast: bool) -> Resu
             1 - w
         }
         St::EnterAtomic => {
-            h.atomic();
+            atomic(h);
             h.heap().puc.pace.enter(St::SweepAll);
             ATOMICSTEP
         }

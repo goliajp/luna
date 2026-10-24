@@ -177,6 +177,7 @@ pub(in crate::runtime) use born::{
     StandingFor,
 };
 pub(in crate::runtime) use rules::HeapRules;
+pub(crate) use rules::ShrinkAt;
 pub(crate) use sweep::Fate;
 
 // the names of the model's records the heap goes by: it reaches the model

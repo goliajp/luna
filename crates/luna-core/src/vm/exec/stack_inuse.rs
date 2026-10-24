@@ -225,10 +225,6 @@ impl Vm {
     /// The collector visiting each coroutine marked live that is not
     /// running: the ones a marking just kept ([`Heap::threads`]).
     pub(super) fn collector_shrinks_threads(&mut self) {
-        // 5.2 shrinks each where its sweep reaches it
-        if self.version == LuaVersion::Lua52 {
-            return;
-        }
         let threads = self.heap.take_threads();
         for &co in &threads {
             if self.current.is_some_and(|c| c.ptr_eq(co)) {

@@ -155,7 +155,10 @@ impl Heap {
             };
             // SAFETY: a popped header heads an allocated object
             let coro = unsafe { (*h).tag } == ObjTag::Coro;
-            if coro && self.puc_rules().shrink_on_traverse && self.puc_shrinks_now(h) {
+            if coro
+                && self.puc_rules().shrink_at == crate::runtime::puc::for_heap::ShrinkAt::Traverse
+                && self.puc_shrinks_now(h)
+            {
                 m.push_gray(h);
                 // SAFETY: `h` came off the gray stack, so it heads an
                 // allocated object, and it is a coroutine

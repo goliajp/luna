@@ -7,6 +7,17 @@ use super::*;
 use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::size::PucSizes;
 
+/// Where PUC shrinks a thread's stack.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShrinkAt {
+    /// 5.1, 5.4, 5.5: as the atomic step traverses it
+    Atomic,
+    /// 5.3: as the propagation traverses it, once a cycle
+    Traverse,
+    /// 5.2: where the sweep reaches it (`sweepthread`)
+    Sweep,
+}
+
 /// The rules of one dialect, as the heap reads them.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::runtime) struct HeapRules {
@@ -43,8 +54,21 @@ pub(in crate::runtime) struct HeapRules {
     pub(in crate::runtime) leaf_hdr: usize,
     /// what 5.2 counts for each closed upvalue a traversal marks
     pub(in crate::runtime) leaf_upval: usize,
-    /// 5.3 shrinks a thread as it traverses it, once a cycle
-    pub(in crate::runtime) shrink_on_traverse: bool,
+    /// where a thread's stack shrinks
+    pub(crate) shrink_at: ShrinkAt,
+    /// the objects to be finalized are marked as a cycle starts; 5.1 marks
+    /// them in its atomic step
+    pub(crate) tobefnz_at_restart: bool,
+    /// the atomic step's traversal of a thread counts its `CallInfo`s;
+    /// 5.2's does not
+    pub(crate) atomic_counts_ci: bool,
+    /// 5.2 and 5.3 count the work of what the roots other than the threads
+    /// reach in the atomic step; the threads, gray again, are traversed
+    /// uncounted
+    pub(crate) roots_counted_apart: bool,
+    /// 5.1 treats its pause as marking: a full collection from it first
+    /// ends a sweep, with `checkSizes`
+    pub(crate) full_from_pause_sweeps: bool,
     /// the atomic step counts the work of what the barriers sent gray
     /// again (`grayagain`); 5.2 and 5.3 do not
     pub(in crate::runtime) atomic_counts_again: bool,
@@ -86,7 +110,15 @@ impl HeapRules {
                 Dialect::L52 => PucObj::Upval.bytes(d, sizes),
                 _ => 0,
             },
-            shrink_on_traverse: d == Dialect::L53,
+            shrink_at: match d {
+                Dialect::L52 => ShrinkAt::Sweep,
+                Dialect::L53 => ShrinkAt::Traverse,
+                _ => ShrinkAt::Atomic,
+            },
+            tobefnz_at_restart: !l51,
+            atomic_counts_ci: d != Dialect::L52,
+            roots_counted_apart: matches!(d, Dialect::L52 | Dialect::L53),
+            full_from_pause_sweeps: l51,
             atomic_counts_again: !matches!(d, Dialect::L52 | Dialect::L53),
             enter_sweep: match d {
                 Dialect::L51 => None,

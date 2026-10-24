@@ -53,37 +53,7 @@ impl Vm {
         // luna makes without counting (a load)
         let counting = self.heap.count_all();
         let young = self.heap.young_len();
-        crate::runtime::puc::step::gc_hold_threads(self);
-        self.jit_forget_ghosts();
-        self.name_cache = Default::default();
-        if self.heap.gc_phase_is_propagate() {
-            // finish the cycle in progress: what it finds dead goes; the
-            // objects made since the last safe point are held as young
-            let mut m = self.heap.loan_marker();
-            self.mark_roots(&mut m, true);
-            self.heap.mark_young(&mut m, young);
-            self.heap.stash_marker(m);
-            self.watch_errors();
-            self.lend_open_lists();
-            self.heap.gc_finish_atomic();
-            self.forget_dead_errors();
-            self.heap.gc_finish_sweep();
-        } else {
-            self.heap.gc_finish_sweep();
-            crate::runtime::puc::step::gc_count_marked(self);
-            let mut m = self.heap.gc_begin_full();
-            self.mark_roots(&mut m, false);
-            self.heap.mark_young(&mut m, young);
-            self.watch_errors();
-            // 5.1 and 5.2: the dead open upvalues come off their lists
-            self.lend_open_lists();
-            self.heap.gc_end_full(m);
-            self.forget_dead_errors();
-        }
-        // 5.2's sweep frees each thread's unused `CallInfo`s
-        if self.version == LuaVersion::Lua52 {
-            self.emergency_shrinks_threads();
-        }
+        crate::runtime::puc::step::full_collect(self, Some(young));
         self.heap.keep_young(young);
         self.heap.release_pool();
         self.gc_top = live_top;
