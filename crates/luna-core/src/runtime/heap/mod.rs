@@ -130,11 +130,6 @@ pub struct Heap {
     current_white: u8,
     /// incremental-sweep phase (Pause unless a `step` cycle is mid-sweep)
     phase: GcPhase,
-    /// `collectgarbage("stop")`: auto-GC is suspended while true
-    gc_stopped: bool,
-    /// 5.4 and 5.5: a finalizer is running, which no step may interrupt
-    /// (PUC `GCSTPGC`)
-    gc_fin_stop: bool,
     /// the heap is being dropped: a string it frees is not taken out of
     /// the string table, which goes with it
     dropping: bool,

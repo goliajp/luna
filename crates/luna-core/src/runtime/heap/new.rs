@@ -86,8 +86,6 @@ impl Heap {
             propagate: None,
             phase: GcPhase::Pause,
             sweep_prev: ptr::null_mut(),
-            gc_stopped: false,
-            gc_fin_stop: false,
             dropping: false,
             finalize: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
