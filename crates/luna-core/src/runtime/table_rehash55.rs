@@ -45,7 +45,7 @@ impl Table {
                     total += 1;
                 }
             }
-            let (optimal, in_array) = computesizes_55(&nums, na);
+            let (optimal, in_array) = sizes::computesizes_55(&nums, na);
             na = in_array;
             optimal
         };
@@ -61,24 +61,4 @@ impl Table {
         }
         self.resize(heap, new_asize, nsize)
     }
-}
-
-/// `(array size, keys that go to it)`: the largest power of two that holds
-/// more keys in its last slice and no more than three times as many slots
-/// as keys up to it.
-fn computesizes_55(nums: &[usize; 33], na: usize) -> (usize, usize) {
-    let (mut a, mut optimal, mut in_array) = (0usize, 0usize, 0usize);
-    let mut twotoi = 1usize;
-    for &n in nums.iter() {
-        if twotoi > 3 * na {
-            break;
-        }
-        a += n;
-        if n > 0 && twotoi <= 3 * a {
-            optimal = twotoi;
-            in_array = a;
-        }
-        twotoi *= 2;
-    }
-    (optimal, in_array)
 }

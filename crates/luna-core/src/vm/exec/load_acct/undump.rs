@@ -61,7 +61,18 @@ impl Vm {
                     open.pop();
                 }
                 UEv::Vec(a, n) => {
-                    let b = n as usize * self.elem(a);
+                    let b = self.heap.parser_bytes(
+                        match a {
+                            Arr::Code => ParserArray::Code,
+                            Arr::Protos => ParserArray::Protos,
+                            Arr::Consts => ParserArray::Consts,
+                            Arr::Lines => ParserArray::LineInfo,
+                            Arr::AbsLines => ParserArray::AbsLines,
+                            Arr::LocVars => ParserArray::LocVars,
+                            Arr::Upvals => ParserArray::Upvals,
+                        },
+                        n as usize,
+                    );
                     self.heap.acct_block(0, b);
                     if let Some(p) = open.last() {
                         let mut arrays = p.puc_arrays.get();
@@ -89,10 +100,10 @@ impl Vm {
         if d == Dialect::L51 {
             self.acct_main_closure(cl);
         } else {
-            let s = self.heap.puc_sizes();
+            let upval = self.heap.puc_size(crate::runtime::puc::PucObj::Upval);
             for &uv in cl.upvals().iter().take(cl.proto.upvals.len()) {
                 let hdr = uv.hdr();
-                self.heap.acct_promote_obj(hdr, PucKind::Upval, s.upval);
+                self.heap.acct_promote_obj(hdr, PucKind::Upval, upval);
                 if d == Dialect::L53 {
                     // SAFETY: both are live objects of this heap
                     unsafe { self.heap.link_before(hdr.as_ptr(), cl.as_ptr() as *mut _) };
@@ -101,21 +112,6 @@ impl Vm {
         }
         self.heap.acct_block(buff, 0);
         Ok(())
-    }
-
-    /// The bytes of one element of a prototype's array `a`.
-    fn elem(&self, a: Arr) -> usize {
-        let s = self.heap.puc_sizes();
-        match a {
-            Arr::Code => 4,
-            Arr::Protos => s.ptr,
-            Arr::Consts => s.tvalue,
-            Arr::Lines if matches!(self.heap.dialect(), Dialect::L54 | Dialect::L55) => 1,
-            Arr::Lines => 4,
-            Arr::AbsLines => s.abslineinfo,
-            Arr::LocVars => s.locvar,
-            Arr::Upvals => s.upvaldesc,
-        }
     }
 
     /// A string the undumper makes for the function `p`: a short one is

@@ -57,23 +57,7 @@ impl Table {
         }
         // computesizes: optimal array size = largest 2^i with more than 2^(i-1)
         // integer keys in [1, 2^i]
-        let mut new_asize = 0usize;
-        let mut in_array = 0usize;
-        let mut a = 0usize;
-        let mut two_to_i = 1usize;
-        let mut i = 0usize;
-        while int_keys > two_to_i / 2 {
-            a += nums[i];
-            if a > two_to_i / 2 {
-                new_asize = two_to_i;
-                in_array = a;
-            }
-            i += 1;
-            match two_to_i.checked_mul(2) {
-                Some(n) => two_to_i = n,
-                None => break,
-            }
-        }
+        let (new_asize, in_array) = sizes::computesizes(&nums, int_keys);
         // PUC `luaH_resizearray` raises "table overflow" when the array part
         // would have to grow past MAXASIZE. luna mirrors with `MAX_ASIZE`,
         // checked on both the array and the hash bucket count (the latter is

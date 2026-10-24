@@ -76,20 +76,19 @@ impl Vm {
         }
         slots.retain(|h| !h.is_null());
         slots.extend(temp.map(hdr));
-        let s = self.heap.puc_sizes();
         let mut open = Vec::with_capacity(r.fs.len());
         for (i, f) in r.fs.iter().enumerate() {
             let Some(p) = r.opening.get(f.shape) else {
                 continue;
             };
-            p.puc_arrays.set(f.puc_caps(r.d, &s));
+            p.puc_arrays.set(f.a.caps(&r.sizes));
             let end = r.fs.get(i + 1).map_or(r.kstr.len(), |g| g.kbase);
             open.push(OpenView {
                 proto: hdr(*p),
                 k: (f.kbase, end),
-                kids: f.p.n,
-                ups: f.up.n,
-                locs: f.loc.n,
+                kids: f.a.p.n,
+                ups: f.a.up.n,
+                locs: f.a.loc.n,
             });
         }
         ParseFrame {

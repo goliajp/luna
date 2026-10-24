@@ -72,6 +72,9 @@ mod rehash55;
 mod resize;
 #[path = "table_set.rs"]
 mod set;
+#[path = "table_sizes.rs"]
+pub(crate) mod sizes;
+use sizes::ceil_log2;
 #[path = "table_slab.rs"]
 mod slab;
 #[path = "table_trace.rs"]
@@ -353,11 +356,6 @@ fn pointer_hash(k: Value) -> u32 {
         // the keys `main_position` handles itself
         _ => 0,
     }
-}
-
-/// For k ≥ 1: the bucket l such that k ∈ (2^(l-1), 2^l].
-fn ceil_log2(k: u64) -> usize {
-    (u64::BITS - (k - 1).leading_zeros()) as usize
 }
 
 #[cfg(test)]
