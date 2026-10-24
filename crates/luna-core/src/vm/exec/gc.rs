@@ -17,7 +17,7 @@ impl Vm {
         if new == "generational" && prev != new && self.version >= LuaVersion::Lua54 {
             self.heap.trace_line(format_args!("X"));
             if !self.gc_finalizing && !self.heap.no_gc() {
-                self.clear_dead_stack(false);
+                self.clear_dead_stack();
                 self.full_collect();
                 crate::runtime::puc::step::gc_minor_debt(self);
             }
@@ -84,21 +84,15 @@ impl Vm {
     /// marking ends, so they are cleared then, before the sweep frees what
     /// they point to; the main thread's, while a coroutine runs, from the
     /// top it had when the coroutine started; other threads' stacks are
-    /// marked whole. `shrink`: the stacks shrink as an atomic step's
-    /// traversal finds them (a full collection shrinks them in its own).
-    pub(super) fn clear_dead_stack(&mut self, shrink: bool) {
+    /// marked whole.
+    pub(super) fn clear_dead_stack(&mut self) {
         let lo = (self.gc_top as usize).min(self.stack.len());
         self.stack[lo..].fill(Value::Nil);
         self.clear_saved_main();
-        // 5.3 shrinks a thread as its propagation reaches it, 5.2 the main
-        // one where its sweep ends
-        if shrink && !matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
-            self.collector_shrinks_stacks();
-        }
     }
 
     /// Whether this cycle's propagation has shrunk the running thread.
-    fn running_shrunk(&self) -> bool {
+    pub(super) fn running_shrunk(&self) -> bool {
         let co = self.current.or(self.main_coro);
         co.is_some_and(|c| self.heap.shrunk_this_cycle(c.as_ptr() as *mut _))
     }
@@ -107,50 +101,7 @@ impl Vm {
     /// `luaC_fullgc`), finishing an incremental cycle in progress first.
     /// Returns the number of objects freed.
     pub(crate) fn full_collect(&mut self) -> usize {
-        // a sweep (the one in progress, or 5.1's from a pause, which it
-        // treats as marking) ends before the full cycle, with `checkSizes`
-        let swept = !self.heap.gc_phase_is_pause() || self.version == LuaVersion::Lua51;
-        crate::runtime::puc::step::gc_hold_threads(self);
-        self.jit_forget_ghosts();
-        self.name_cache = Default::default();
-        if self.heap.gc_phase_is_propagate() {
-            // 5.3 shrinks the running thread as it traverses it, if this
-            // cycle has not yet
-            if self.version == LuaVersion::Lua53 && !self.running_shrunk() {
-                self.collector_shrinks_stacks();
-            }
-            let mut m = self.heap.loan_marker();
-            self.mark_roots(&mut m, true);
-            self.heap.stash_marker(m);
-            self.watch_errors();
-            self.lend_open_lists();
-            self.heap.gc_finish_atomic();
-            self.collector_shrinks_threads();
-            self.forget_dead_errors();
-        }
-        self.heap.gc_finish_sweep();
-        if swept {
-            self.heap.acct_check_sizes();
-        }
-        let freed = if self.version == LuaVersion::Lua52 {
-            crate::runtime::puc::step::full_cycle_52(self, swept)
-        } else {
-            crate::runtime::puc::step::gc_count_marked(self);
-            let mut m = self.heap.gc_begin_full();
-            self.mark_roots(&mut m, false);
-            self.watch_errors();
-            self.lend_open_lists();
-            self.heap.mark_from(&mut m);
-            // the running threads shrink as the cycle traverses them, after
-            // the sweep it finished (`checkSizes`), the rest after its own
-            // sweep; 5.2's single steps did both
-            self.collector_shrinks_stacks();
-            let freed = self.heap.gc_sweep_full();
-            self.collector_shrinks_threads();
-            self.heap.acct_check_sizes();
-            freed
-        };
-        self.forget_dead_errors();
+        let freed = crate::runtime::puc::step::full_collect(self, None);
         // there may be objects to be finalized
         self.heap.finalizers_due();
         crate::runtime::puc::step::gc_full_pause(self);
@@ -184,7 +135,7 @@ impl Vm {
             if self.version == LuaVersion::Lua52 {
                 self.call_all_pending(true)?;
             } else {
-                self.clear_dead_stack(false);
+                self.clear_dead_stack();
             }
             freed = self.full_collect();
             self.hook_frames_live("collect_garbage");

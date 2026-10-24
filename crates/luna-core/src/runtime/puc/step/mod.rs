@@ -5,58 +5,34 @@
 //! the state are the model's.
 
 use crate::runtime::dialect::Dialect;
-use crate::runtime::heap::{Heap, Running};
+use crate::runtime::heap::{Heap, Marker, Running};
 use crate::runtime::puc::Param;
 use crate::runtime::puc::pace::*;
 use crate::vm::LuaError;
 
+mod atomic;
 mod d51;
 mod d52;
 mod d53;
 mod d54;
 mod d55;
+mod full;
+mod host;
 mod pause;
+pub(super) use atomic::atomic;
 use d51::*;
 use d52::*;
 pub(crate) use d52::{enter_generational_52, full_cycle_52, leave_generational_52};
 use d53::*;
 use d54::*;
 use d55::*;
+pub(crate) use full::full_collect;
+pub(crate) use host::{CiCount, StepHost};
 pub(crate) use pause::{gc_full_pause, gc_full_repause, gc_leave_generational, gc_minor_debt};
 
 /// 5.5 `singlestep`'s results that end `incstep`'s loop.
 const STEP2PAUSE: i64 = -3;
 const ATOMICSTEP: i64 = -2;
-
-/// What a step needs of the VM: the threads it holds and their stacks, the
-/// marking from its roots, its finalizers.
-pub(crate) trait StepHost {
-    fn heap(&mut self) -> &mut Heap;
-    /// The running thread and the main one, as the collector finds them.
-    fn running(&self) -> Running;
-    /// Before a step: what the VM keeps of objects a step may free.
-    fn before_step(&mut self);
-    /// PUC's propagation with `work` to do (down to `floor`); true when no
-    /// object is gray.
-    fn propagate(&mut self, work: &mut i64, floor: i64, run: Running) -> bool;
-    /// `restartcollection`: the roots marked.
-    fn restart(&mut self);
-    /// `atomic` and `entersweep`: the work, and the objects the sweep went
-    /// over on the way in.
-    fn atomic(&mut self) -> (i64, i64);
-    /// The list sweep of `quota` objects: how many it swept and the bytes
-    /// it freed; `None` once the list is done.
-    fn sweep_quota(&mut self, quota: i64) -> Option<(i64, i64)>;
-    /// `GCTM`: the next finalizer run.
-    fn run_finalizer(&mut self, propagate: bool) -> Result<(), LuaError>;
-    /// Whether the stack has room for a finalizer's call.
-    fn finalizer_has_room(&mut self, closing: bool) -> bool;
-    /// 5.2's `sweepthread` of coroutine `h`, which the sweep just kept
-    /// (the main thread's comes at the end of the sweep).
-    fn shrink_swept_thread_52(&mut self, co: crate::runtime::Gc<crate::runtime::Coro>);
-    /// The end of 5.2's sweep: the main thread shrunk.
-    fn sweep_main_52(&mut self);
-}
 
 /// `restartcollection` (5.1 `markroot`): the roots marked, the cycle
 /// propagating.
@@ -64,7 +40,12 @@ fn restart<H: StepHost + ?Sized>(h: &mut H) {
     // no thread shrunk yet this cycle
     h.heap().puc.shrunk.clear();
     gc_count_marked(h);
-    h.restart();
+    let mut m = h.heap().gc_begin_propagate();
+    h.mark_roots_restart(&mut m);
+    if h.heap().puc.rules.tobefnz_at_restart {
+        h.heap().mark_tobefnz(&mut m);
+    }
+    h.heap().stash_marker(m);
     h.heap().puc.pace.enter(St::Propagate);
 }
 

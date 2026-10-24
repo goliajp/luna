@@ -85,7 +85,7 @@ pub(crate) fn full_cycle_52<H: StepHost + ?Sized>(h: &mut H, swept: bool) -> usi
 /// estimate the memory traversed, and the sweep entered.
 pub(super) fn atomic_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
     let s = h.heap().puc.sizes;
-    let (work, swept) = h.atomic();
+    let (work, swept) = atomic(h);
     shrink_swept_52(h);
     // `GCestimate`: what the cycle traversed, `atomic` included
     h.heap().puc.pace.estimate = h.heap().puc.pace.trav + work;

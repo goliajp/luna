@@ -67,7 +67,7 @@ pub(super) fn singlestep_53<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, LuaE
             0
         }
         St::Atomic => {
-            let (work, _) = h.atomic();
+            let (work, _) = atomic(h);
             h.heap().puc.pace.enter(St::SweepAll);
             h.heap().puc.pace.estimate = h.heap().bytes() as i64;
             work

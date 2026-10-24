@@ -53,7 +53,7 @@ pub(super) fn step_51<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
 
 /// 5.1's `atomic`, from the step that finds no gray object.
 pub(super) fn atomic_51<H: StepHost + ?Sized>(h: &mut H) {
-    h.atomic();
+    atomic(h);
     h.heap().puc.pace.enter(St::SweepString);
     // `totalbytes - udsize`: what is to be finalized is not counted
     h.heap().puc.pace.estimate = h.heap().bytes() as i64 - h.heap().puc.udsize;
