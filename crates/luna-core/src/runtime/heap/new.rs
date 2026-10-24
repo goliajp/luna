@@ -105,6 +105,7 @@ impl Heap {
             table_pool: Vec::new(),
             slab: Default::default(),
             stdin_ud: ptr::null_mut(),
+            udata_after: None,
             mem,
         };
         h.make_memerr().ok()?;

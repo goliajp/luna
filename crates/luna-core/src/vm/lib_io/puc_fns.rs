@@ -42,15 +42,13 @@ fn luaopen_io(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         && let Value::Table(io) = vm.stack[fs as usize]
     {
         // where 5.1's environment records are on PUC's list of objects:
-        // after the library's first function, before its last, before
-        // `stderr`
+        // after the library's first function, before its last
         let h = |vm: &Vm, k: &[u8]| match vm.heap.find_interned(k).map(|k| io.get(Value::Str(k))) {
             Some(Value::Native(n)) => n.as_ptr() as *mut _,
-            Some(Value::Userdata(u)) => u.as_ptr() as *mut _,
             _ => std::ptr::null_mut(),
         };
-        let (first, last, stderr) = (h(vm, b"close"), h(vm, b"write"), h(vm, b"stderr"));
-        vm.heap.env51_anchors(first, last, stderr);
+        let (first, last) = (h(vm, b"close"), h(vm, b"write"));
+        vm.heap.env51_anchors(first, last);
     }
     Ok(n)
 }

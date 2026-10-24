@@ -35,30 +35,38 @@ impl Heap {
             // the records of this opening the sweep frees, each on its own
             // as PUC frees them (an anchor names `newfenv`'s closure before
             // its table, which it made first)
-            let mut each = [None; 2];
+            // a group's records, each anchor's: two groups at most share one
+            let mut each = [None; 4];
+            let mut m = 0;
             let Some(e) = &mut self.puc.env51_box else {
                 return 0;
             };
             let g = &mut e.gens[i];
-            let Some(a) = g.anchors.iter().find(|a| a.at == cur && a.before != after) else {
-                continue;
-            };
-            found = true;
-            first = first.min(a.recs[1]);
-            for (k, r) in a.recs.into_iter().enumerate() {
-                let p = &mut g.ph[r];
-                if p.dead {
+            // two groups at one place: the newer (later anchor) first, as
+            // the list has it
+            for j in (0..g.anchors.len()).rev() {
+                let a = g.anchors[j];
+                if a.at != cur || a.before == after {
                     continue;
                 }
-                n += 1;
-                let f = p.hdr.flags;
-                if is_white(f) && f & w == 0 {
-                    p.dead = true;
-                    p.hdr.flags = BLACK;
-                    each[k] = Some((r, p.counted));
-                } else {
-                    p.hdr.flags = w;
+                found = true;
+                first = first.min(a.recs[1]);
+                for (k, r) in a.recs.into_iter().enumerate() {
+                    let p = &mut g.ph[r];
+                    if p.dead {
+                        continue;
+                    }
+                    n += 1;
+                    let f = p.hdr.flags;
+                    if is_white(f) && f & w == 0 {
+                        p.dead = true;
+                        p.hdr.flags = BLACK;
+                        each[m + k] = Some((r, p.counted));
+                    } else {
+                        p.hdr.flags = w;
+                    }
                 }
+                m += 2;
             }
             for (r, counted) in each.into_iter().flatten() {
                 freed += self.env51_free_record(r, counted);

@@ -13,9 +13,12 @@ impl Vm {
     /// [`Vm::open_all_libs`].
     pub(crate) fn open_lua_c_libs(&mut self) -> Result<(), LuaError> {
         if self.version == crate::version::LuaVersion::Lua51 {
-            let size = self.heap.puc_size(crate::runtime::puc::PucObj::CClosure(0));
-            let kind = crate::runtime::heap::PucKind::CClosure;
-            self.heap.acct_obj(kind, size);
+            // `pmain`'s closure stays in the stack's first slot while it
+            // runs, the protected call lua.c's `docall` makes from it
+            // (`Vm::call_value_with_handler_in_c`): the collector marks and
+            // traverses it as PUC's
+            let f = crate::vm::builtins::nat_host_xpcall_in_c;
+            self.stack[0] = self.builtin(f, &[], crate::runtime::Builtin::HostXpcallInC)?;
         } else {
             // `pmain`'s
             self.extend_ci_to(1);

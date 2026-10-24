@@ -226,17 +226,13 @@ impl Heap {
 
     /// Where the latest records are on PUC's list: E1 and `io_fclose`
     /// after the io library's first function, E2 and `io_noclose` before
-    /// its last, E3 and `io_pclose` before `stderr`.
-    pub(crate) fn env51_anchors(
-        &mut self,
-        first: *mut GcHeader,
-        last: *mut GcHeader,
-        stderr: *mut GcHeader,
-    ) {
+    /// its last, E3 and `io_pclose` before them (the standard files they
+    /// were made after are at the list's end).
+    pub(crate) fn env51_anchors(&mut self, first: *mut GcHeader, last: *mut GcHeader) {
         let a = &mut self.env51_gen_now().anchors;
         (a[0].at, a[0].before) = (first, false);
         (a[1].at, a[1].before) = (last, true);
-        (a[2].at, a[2].before) = (stderr, true);
+        (a[2].at, a[2].before) = (last, true);
         let e = self.env51_records();
         e.ats = e
             .gens

@@ -114,16 +114,19 @@ impl Vm {
         args: &[Value],
         msgh: Value,
     ) -> Result<Vec<Value>, LuaError> {
-        // the protected call PUC makes from C is no function of its own:
-        // luna's stand-in for it is not counted
-        let level = self.uncounted(|vm| vm.builtin(level, &[], builtin));
-        let level = luna_only(level?);
         let k = self.g.host_slots as usize;
         let docall = builtin == Builtin::HostXpcallInC
             && k > 0
             && self.current.is_none()
             && self.frames_top == 0
             && self.top as usize == k;
+        // the protected call PUC makes from C is no function of its own:
+        // luna's stand-in for it is not counted, but 5.1's `pmain`, a
+        // closure of PUC's, makes `docall`'s
+        let level = match self.stack.first() {
+            Some(&v @ Value::Native(n)) if docall && n.builtin == builtin => v,
+            _ => luna_only(self.uncounted(|vm| vm.builtin(level, &[], builtin))?),
+        };
         let mut results = if docall {
             // lua.c's `docall`: the native takes `pmain`'s place, its
             // arguments above it, then the handler below the function
@@ -230,7 +233,7 @@ impl Vm {
 }
 
 /// `f`, a native of luna's own: no function of PUC's.
-fn luna_only(f: Value) -> Value {
+pub(crate) fn luna_only(f: Value) -> Value {
     if let Value::Native(n) = f {
         // SAFETY: `n` is a live native; only its class byte is written
         unsafe { (*n.header()).cls |= crate::runtime::heap::LUNA_ONLY };

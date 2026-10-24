@@ -454,7 +454,9 @@ jobs:
   # behind luna_core::__private (one unsafe fn, its caller) to 1788, and
   # the C API reading a thread's state through a safe accessor to 1787,
   # and the safe functions that read through a raw object pointer taking
-  # handles or becoming unsafe fns (header writes made explicit) to 1794.
+  # handles or becoming unsafe fns (header writes made explicit) to 1794,
+  # and 5.1's main thread and userdata placed on the list as PUC's are
+  # (the list's end found past luna's own objects) to 1797.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -469,7 +471,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=1794
+          ceiling=1797
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then

@@ -192,6 +192,9 @@ pub struct Heap {
     slab: slab::NativeSlab,
     /// `io.stdin` as made, which the host reads lines through; null once freed
     stdin_ud: *mut GcHeader,
+    /// 5.1: the main thread, the list's oldest object, after which each new
+    /// userdata goes (`luaS_newudata` links it after `mainthread`)
+    udata_after: Option<Gc<GcHeader>>,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
