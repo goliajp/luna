@@ -448,7 +448,7 @@ impl PucSizes {
         hdr + len + 1
     }
 
-    pub(crate) fn lua_closure(&self, nupvals: usize) -> usize {
+    pub(in crate::runtime::puc) fn lua_closure(&self, nupvals: usize) -> usize {
         self.lcl_base + self.lcl_per * nupvals
     }
 

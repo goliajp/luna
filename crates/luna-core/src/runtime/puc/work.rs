@@ -172,7 +172,7 @@ impl Heap {
 
     /// PUC's size of a thread with a stack of `stack` slots and `ci`
     /// `CallInfo`s (5.1: the size of its array).
-    pub(crate) fn thread_bytes(&self, stack: u32, ci: u32) -> usize {
+    pub(in crate::runtime::puc) fn thread_bytes(&self, stack: u32, ci: u32) -> usize {
         thread_bytes(&self.puc.sizes, self.puc.dialect, stack, ci)
     }
 }
@@ -182,7 +182,7 @@ impl Heap {
 ///
 /// # Safety
 /// `h` heads an allocated object other than a thread.
-pub(in crate::runtime) unsafe fn objsize(s: &PucSizes, d: Dialect, h: *mut GcHeader) -> usize {
+pub(in crate::runtime::puc) unsafe fn objsize(s: &PucSizes, d: Dialect, h: *mut GcHeader) -> usize {
     // SAFETY: the caller's contract; the tag names the type
     unsafe {
         if (*h).is_uncounted() {
@@ -245,13 +245,13 @@ pub(crate) fn native_puc_upvals(n: &NativeClosure) -> usize {
 ///
 /// # Safety
 /// `h` heads an allocated native function.
-pub(in crate::runtime) unsafe fn native_upvals(h: *mut GcHeader) -> usize {
+pub(in crate::runtime::puc) unsafe fn native_upvals(h: *mut GcHeader) -> usize {
     // SAFETY: the caller's contract
     native_puc_upvals(unsafe { &*(h as *const NativeClosure) })
 }
 
 /// The bytes of a table's array part of `n` slots.
-pub(in crate::runtime) fn array_bytes(s: &PucSizes, d: Dialect, n: usize) -> usize {
+pub(in crate::runtime::puc) fn array_bytes(s: &PucSizes, d: Dialect, n: usize) -> usize {
     match (d, n) {
         (_, 0) => 0,
         // 5.5 keeps the values, then a byte per tag, around an unsigned
@@ -263,7 +263,7 @@ pub(in crate::runtime) fn array_bytes(s: &PucSizes, d: Dialect, n: usize) -> usi
 /// The bytes of a table's hash part of `h` nodes: 5.5 puts a `lastfree`
 /// pointer (`Limbox`, padded to a node's alignment) in front of eight
 /// nodes or more.
-pub(in crate::runtime) fn hash_bytes(s: &PucSizes, d: Dialect, h: usize) -> usize {
+pub(in crate::runtime::puc) fn hash_bytes(s: &PucSizes, d: Dialect, h: usize) -> usize {
     let limbox = if cfg!(target_arch = "wasm32") {
         8
     } else {
@@ -277,13 +277,18 @@ pub(in crate::runtime) fn hash_bytes(s: &PucSizes, d: Dialect, h: usize) -> usiz
 
 /// PUC's size of a thread with a stack of `stack` slots and `ci`
 /// `CallInfo`s (5.1: the size of its array).
-pub(in crate::runtime) fn thread_bytes(s: &PucSizes, d: Dialect, stack: u32, ci: u32) -> usize {
+pub(in crate::runtime::puc) fn thread_bytes(
+    s: &PucSizes,
+    d: Dialect,
+    stack: u32,
+    ci: u32,
+) -> usize {
     s.thread + stack_bytes(s, d, stack) + s.callinfo * ci as usize
 }
 
 /// The bytes of a stack of `n` slots (PUC's `stacksize`, which from 5.4
 /// leaves out the `EXTRA_STACK` slots it allocates beyond it).
-pub(in crate::runtime) fn stack_bytes(s: &PucSizes, d: Dialect, n: u32) -> usize {
+pub(in crate::runtime::puc) fn stack_bytes(s: &PucSizes, d: Dialect, n: u32) -> usize {
     match (n, d >= Dialect::L54) {
         (0, _) => 0,
         (n, true) => (n as usize + 5) * s.tvalue,

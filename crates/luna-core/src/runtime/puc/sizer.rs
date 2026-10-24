@@ -56,7 +56,7 @@ impl Sizer {
 
 impl Heap {
     /// A sizer for a marker, when markings count `GCmarked`.
-    pub(in crate::runtime) fn lend_sizer(&mut self) -> Option<Sizer> {
+    pub(in crate::runtime::puc) fn lend_sizer(&mut self) -> Option<Sizer> {
         let run = self.puc.pace.run.filter(|_| self.puc.pace.count_marked)?;
         Some(Sizer {
             sizes: self.puc.sizes,

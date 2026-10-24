@@ -206,7 +206,7 @@ impl Heap {
 
     /// PUC's string table resized from `from` buckets with no new string
     /// on the way (a shrink, or a string luna has no object for).
-    pub(crate) fn strt_resized(&mut self, from: usize) {
+    pub(in crate::runtime::puc) fn strt_resized(&mut self, from: usize) {
         if crate::runtime::gc_hooks::TRACE
             && matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
         {
@@ -216,7 +216,7 @@ impl Heap {
     }
 
     /// The table grew from `from` buckets for a string about to enter.
-    pub(crate) fn strt_grew(&mut self, from: usize) {
+    pub(in crate::runtime::puc) fn strt_grew(&mut self, from: usize) {
         if crate::runtime::gc_hooks::TRACE {
             self.puc.strt.grow_from = Some(from);
         }
@@ -224,7 +224,7 @@ impl Heap {
 
     /// A string luna has no object for entered: a growth on its way is
     /// done.
-    pub(crate) fn strt_settle(&mut self) {
+    pub(in crate::runtime::puc) fn strt_settle(&mut self) {
         if let Some(from) = self.puc.strt.grow_from.take() {
             self.strt_resized(from);
         }

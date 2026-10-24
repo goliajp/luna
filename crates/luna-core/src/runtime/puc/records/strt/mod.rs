@@ -133,7 +133,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an object of this heap that is still allocated.
-    pub(in crate::runtime) unsafe fn in_string_sweep(&self, h: *mut GcHeader) -> bool {
+    pub(in crate::runtime::puc) unsafe fn in_string_sweep(&self, h: *mut GcHeader) -> bool {
         // SAFETY: the caller's contract
         unsafe {
             self.puc.strt.next < self.puc.strt.dead.len()
@@ -146,12 +146,12 @@ impl Heap {
     /// The list sweep reached dead string `h` that PUC's string sweep, not
     /// the list's, frees: held off the list until that sweep ends.
     #[inline]
-    pub(in crate::runtime) fn hold_for_string_sweep(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime::puc) fn hold_for_string_sweep(&mut self, h: *mut GcHeader) {
         self.puc.strt.held.push(h);
     }
 
     /// The strings held for the string sweep, taken (the heap is dropped).
-    pub(in crate::runtime) fn take_held_strings(&mut self) -> Vec<*mut GcHeader> {
+    pub(in crate::runtime::puc) fn take_held_strings(&mut self) -> Vec<*mut GcHeader> {
         std::mem::take(&mut self.puc.strt.held)
     }
 
@@ -177,7 +177,7 @@ impl Heap {
 
     /// The string sweep went up to bucket `upto`: the dead strings of the
     /// buckets before it leave the count. Returns the bytes freed.
-    pub(crate) fn sweep_strings_upto(&mut self, upto: i64) -> i64 {
+    pub(in crate::runtime::puc) fn sweep_strings_upto(&mut self, upto: i64) -> i64 {
         let before = self.puc.bytes as i64;
         while let Some(&(b, h)) = self.puc.strt.dead.get(self.puc.strt.next) {
             if i64::from(b) >= upto {

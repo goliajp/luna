@@ -47,7 +47,7 @@ pub(crate) const BASIC_CI_51: u32 = 8;
 
 impl Heap {
     /// The bytes of a stack of `s` slots.
-    pub(in crate::runtime) fn stack_bytes(&self, s: u32) -> usize {
+    pub(in crate::runtime::puc) fn stack_bytes(&self, s: u32) -> usize {
         crate::runtime::puc::work::stack_bytes(&self.puc.sizes, self.puc.dialect, s)
     }
 
@@ -91,7 +91,7 @@ impl Heap {
     /// What a new thread allocates after its state (`stack_init`): 5.1 its
     /// `CallInfo` array, then its stack of `stack` slots; counted as the
     /// thread is, not while luna builds its own objects.
-    pub(crate) fn acct_thread_blocks(&mut self, stack: u32) {
+    pub(in crate::runtime::puc) fn acct_thread_blocks(&mut self, stack: u32) {
         if !self.counting() {
             return;
         }
@@ -105,7 +105,7 @@ impl Heap {
     /// `CallInfo`s, its stack of `stack` slots, its state. `ci` is 5.1's
     /// array size, or the `CallInfo`s a later thread allocated besides its
     /// base one.
-    pub(crate) fn acct_thread_free(&mut self, stack: u32, ci: u32) {
+    pub(in crate::runtime::puc) fn acct_thread_free(&mut self, stack: u32, ci: u32) {
         if self.puc.dialect == Dialect::L51 {
             self.ci51_blocks(ci, 0);
         } else {

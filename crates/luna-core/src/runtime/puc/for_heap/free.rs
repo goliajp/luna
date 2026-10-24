@@ -6,6 +6,7 @@
 use super::*;
 use crate::runtime::Coro;
 use crate::runtime::function::{LuaClosure, NativeClosure, Proto};
+use crate::runtime::puc::records::parse::is_load_tab;
 use crate::runtime::upvalue::Upvalue;
 
 /// What PUC's count loses when the heap frees an object of this type.

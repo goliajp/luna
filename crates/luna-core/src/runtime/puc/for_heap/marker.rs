@@ -3,6 +3,8 @@
 
 use super::*;
 use crate::runtime::function::NativeClosure;
+use crate::runtime::puc::records::env51::is_phantom;
+use crate::runtime::puc::records::parse::is_load_tab;
 use crate::runtime::userdata::UserdataPayload;
 
 impl Marker {

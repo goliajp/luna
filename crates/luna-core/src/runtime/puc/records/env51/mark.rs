@@ -34,7 +34,7 @@ impl Marker {
     ///
     /// # Safety
     /// `h` heads a record of the marker's.
-    pub(crate) unsafe fn trace_phantom(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime::puc) unsafe fn trace_phantom(&mut self, h: *mut GcHeader) {
         // what the record holds, gathered before any is marked
         let mut kids = [ptr::null_mut(); 8];
         let mut n = 0;

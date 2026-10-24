@@ -17,14 +17,14 @@ impl Heap {
     /// Whether the count reaches the next step's due point once `more`
     /// bytes more are counted.
     #[inline(always)]
-    pub(in crate::runtime) fn puc_due_after(&self, more: usize) -> bool {
+    pub(in crate::runtime::puc) fn puc_due_after(&self, more: usize) -> bool {
         self.puc.bytes + more >= self.puc.gc_limit
     }
 
     /// The collector restarts (`collectgarbage("restart")`): a step falls
     /// due at once (5.1 `GCthreshold = totalbytes`, later
     /// `luaE_setdebt(g, 0)`).
-    pub(in crate::runtime) fn puc_restart_due(&mut self) {
+    pub(in crate::runtime::puc) fn puc_restart_due(&mut self) {
         let d = self.puc.dialect;
         match d {
             Dialect::L51 => self.puc.pace.set_threshold(self.puc.bytes as i64),
@@ -35,7 +35,7 @@ impl Heap {
     /// Where the next step falls due, from the pace; never while 5.1's
     /// collector is `stopped_51` (an unreachable threshold).
     #[inline]
-    pub(in crate::runtime) fn puc_set_limit(&mut self, stopped_51: bool) {
+    pub(in crate::runtime::puc) fn puc_set_limit(&mut self, stopped_51: bool) {
         self.puc.gc_limit = if stopped_51 {
             usize::MAX
         } else {
@@ -46,7 +46,7 @@ impl Heap {
     /// A cycle ended with the count at what it is now: the pause before
     /// the next one, `pause` in percent of what survived (PUC `setpause`;
     /// 5.1 `setthreshold`), the collector in its pause.
-    pub(in crate::runtime) fn puc_pause(&mut self, pause: i64) {
+    pub(in crate::runtime::puc) fn puc_pause(&mut self, pause: i64) {
         let d = self.puc.dialect;
         let bytes = self.puc.bytes;
         match d {
@@ -99,7 +99,7 @@ impl Heap {
     /// 5.1: what the atomic step found to finalize (`udsize`), which the
     /// step's estimate leaves out.
     #[inline]
-    pub(in crate::runtime) fn puc_found_to_finalize(&mut self, bytes: i64) {
+    pub(in crate::runtime::puc) fn puc_found_to_finalize(&mut self, bytes: i64) {
         self.puc.udsize = bytes;
     }
 
@@ -115,20 +115,13 @@ impl Heap {
 
     /// 5.2: the sweep kept thread `h`, which `sweepthread` shrinks.
     #[inline]
-    pub(in crate::runtime) fn puc_swept_thread(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime::puc) fn puc_swept_thread(&mut self, h: *mut GcHeader) {
         self.puc.shrunk.push(h);
-    }
-
-    /// PUC `luaS_clearcache`: the cache forgets the strings this cycle
-    /// found dead.
-    #[inline]
-    pub(in crate::runtime) fn puc_clear_string_cache(&mut self) {
-        self.puc.strcache.clear_dead();
     }
 
     /// The uncounted object `h` stands for objects of PUC's of the sizes in
     /// `sizes`, freed with it.
-    pub(in crate::runtime) fn stand_for(
+    pub(in crate::runtime::puc) fn stand_for(
         &mut self,
         h: *mut GcHeader,
         sizes: impl Iterator<Item = usize>,
@@ -138,7 +131,7 @@ impl Heap {
 
     /// The objects of PUC's that `h`, an uncounted object of luna's, stood
     /// for are freed with it.
-    pub(in crate::runtime) fn free_stand_in(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime::puc) fn free_stand_in(&mut self, h: *mut GcHeader) {
         while let Some(i) = self.puc.stand_ins.iter().position(|(p, _)| *p == h) {
             let (_, size) = self.puc.stand_ins.swap_remove(i);
             if size & STRT_STAND != 0 {
@@ -150,7 +143,7 @@ impl Heap {
 
     /// The bytes of PUC's string table (its array of buckets).
     #[inline]
-    pub(in crate::runtime) fn strt_bytes(&self) -> usize {
+    pub(in crate::runtime::puc) fn strt_bytes(&self) -> usize {
         self.puc.strt_size * self.puc.sizes.ptr
     }
 
@@ -189,11 +182,8 @@ pub(crate) use sweep::Fate;
 // the names of the model's records the heap goes by: it reaches the model
 // through this module and the methods on `Heap`, never its other modules
 pub(in crate::runtime) use crate::runtime::puc::records::Ghost;
-pub(in crate::runtime) use crate::runtime::puc::records::env51::is_phantom;
-#[cfg(feature = "gc-trace")]
-pub(in crate::runtime) use crate::runtime::puc::records::env51::phantom_is_table;
 pub(in crate::runtime) use crate::runtime::puc::records::parse::{
-    KEPT, LoadTab, ParseFrame, is_load_tab, kept_bit,
+    KEPT, LoadTab, ParseFrame, kept_bit,
 };
 pub(in crate::runtime) use crate::runtime::puc::records::strt::SWEPT;
 pub(in crate::runtime) use crate::runtime::puc::{PucKind, PucObj};

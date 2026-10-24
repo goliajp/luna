@@ -36,7 +36,7 @@ impl Heap {
     /// one the replay never reaches (a chunk that failed to compile) is not
     /// counted when freed either. The arrays it keeps for its free are
     /// those counted here: none while nothing is.
-    pub(crate) fn acct_proto(&mut self, p: Gc<crate::runtime::function::Proto>) {
+    pub(in crate::runtime::puc) fn acct_proto(&mut self, p: Gc<crate::runtime::function::Proto>) {
         self.acct_new(p.hdr(), PucKind::Proto, self.puc.sizes.proto);
         let arrays = match self.counting() {
             true => self.proto_arrays(&p),
@@ -49,7 +49,7 @@ impl Heap {
     }
 
     /// A prototype freed.
-    pub(crate) fn acct_proto_free(&mut self, p: &crate::runtime::function::Proto) {
+    pub(in crate::runtime::puc) fn acct_proto_free(&mut self, p: &crate::runtime::function::Proto) {
         let a = p.puc_arrays.get();
         // 5.5 frees the code and line arrays first
         let order = if self.puc.dialect == Dialect::L55 {

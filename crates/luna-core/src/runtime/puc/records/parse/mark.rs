@@ -10,7 +10,7 @@ impl Marker {
     ///
     /// # Safety
     /// `h` heads a parser table, whose objects are allocated.
-    pub(in crate::runtime) unsafe fn trace_load_tab(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime::puc) unsafe fn trace_load_tab(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
             for &r in (*(h as *const LoadTab)).refs.iter() {

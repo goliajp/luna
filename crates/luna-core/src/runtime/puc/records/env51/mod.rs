@@ -20,7 +20,7 @@ mod sweep;
 #[cfg(feature = "gc-trace")]
 mod trace;
 #[cfg(feature = "gc-trace")]
-pub(in crate::runtime) use trace::phantom_is_table;
+pub(in crate::runtime::puc) use trace::phantom_is_table;
 
 /// The class bits naming a 5.1 environment (`ENV_*`); none, the globals.
 const ENV_SHIFT: u8 = 5;
@@ -270,7 +270,7 @@ impl Heap {
 ///
 /// # Safety
 /// `h` heads an allocated object or a record.
-pub(in crate::runtime) unsafe fn is_phantom(h: *mut GcHeader) -> bool {
+pub(in crate::runtime::puc) unsafe fn is_phantom(h: *mut GcHeader) -> bool {
     // SAFETY: the caller's contract
     unsafe { (*h).tag == ObjTag::Ghost && (*h).sub == PHANTOM }
 }
@@ -279,7 +279,7 @@ pub(in crate::runtime) unsafe fn is_phantom(h: *mut GcHeader) -> bool {
 ///
 /// # Safety
 /// `h` heads a record.
-pub(in crate::runtime) unsafe fn phantom_size(h: *mut GcHeader) -> i64 {
+pub(in crate::runtime::puc) unsafe fn phantom_size(h: *mut GcHeader) -> i64 {
     // SAFETY: the caller's contract; a record starts with its header
     unsafe { i64::from((*(h as *const Phantom)).size) }
 }

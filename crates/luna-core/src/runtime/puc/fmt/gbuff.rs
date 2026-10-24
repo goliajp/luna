@@ -40,7 +40,7 @@ impl Heap {
 
     /// The buffer set to `size` bytes by `checkSizes`, smaller (5.1 halves
     /// it, 5.2 frees it).
-    pub(crate) fn shrink_gbuff(&mut self, size: usize) {
+    pub(in crate::runtime::puc) fn shrink_gbuff(&mut self, size: usize) {
         let old = self.puc.gbuff.size();
         self.shrink_gbuff_to(size);
         self.acct_part(old, self.puc.gbuff.size());

@@ -27,7 +27,7 @@ pub(crate) enum PucKind {
 impl Heap {
     /// The model takes on `version`: PUC's sizes and dialect, and 5.1's
     /// string table holding every string.
-    pub(in crate::runtime) fn puc_dialect(&mut self, version: crate::version::LuaVersion) {
+    pub(in crate::runtime::puc) fn puc_dialect(&mut self, version: crate::version::LuaVersion) {
         let d = Dialect::of(version);
         self.puc.dialect = d;
         self.puc.params = super::GcParams::new(version);
@@ -52,7 +52,12 @@ impl Heap {
     /// counted, or, while luna builds objects of its own, marked as one PUC
     /// has not made, whose free is not counted either (see
     /// [`Heap::acct_promote_obj`]).
-    pub(crate) fn acct_new(&mut self, h: Gc<GcHeader>, kind: PucKind, size: usize) {
+    pub(in crate::runtime::puc) fn acct_new(
+        &mut self,
+        h: Gc<GcHeader>,
+        kind: PucKind,
+        size: usize,
+    ) {
         if !self.counting() {
             // SAFETY: `h` is a handle, so its object is live; nothing
             // borrows the header while its per-type byte is written
@@ -91,7 +96,7 @@ impl Heap {
     /// that what its free takes off is what was counted. Nothing once the
     /// heap is being dropped.
     #[inline]
-    pub(crate) fn acct_part(&mut self, old: usize, new: usize) {
+    pub(in crate::runtime::puc) fn acct_part(&mut self, old: usize, new: usize) {
         if !self.is_dropping() {
             self.count_part(old, new);
         }
@@ -100,7 +105,7 @@ impl Heap {
     /// [`Heap::acct_part`] for a caller that has seen the heap is not
     /// being dropped.
     #[inline]
-    pub(in crate::runtime) fn count_part(&mut self, old: usize, new: usize) {
+    pub(in crate::runtime::puc) fn count_part(&mut self, old: usize, new: usize) {
         self.hook_block(old, new);
         self.puc.bytes = self.puc.bytes + new - old;
     }
@@ -120,7 +125,7 @@ impl GcHeader {
     /// Marks this object as one PUC has (not) made; only the per-type byte
     /// is written, which no type but a table uses otherwise.
     #[inline]
-    pub(in crate::runtime) fn set_uncounted(&mut self, on: bool) {
+    pub(in crate::runtime::puc) fn set_uncounted(&mut self, on: bool) {
         if on {
             self.sub |= UNCOUNTED;
         } else {

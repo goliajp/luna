@@ -6,12 +6,12 @@ use crate::runtime::dialect::Dialect;
 
 impl Heap {
     /// The bytes of a table's array part of `n` slots.
-    pub(in crate::runtime) fn array_bytes(&self, n: usize) -> usize {
+    pub(in crate::runtime::puc) fn array_bytes(&self, n: usize) -> usize {
         crate::runtime::puc::work::array_bytes(&self.puc.sizes, self.puc.dialect, n)
     }
 
     /// The bytes of a table's hash part of `h` nodes.
-    pub(in crate::runtime) fn hash_bytes(&self, h: usize) -> usize {
+    pub(in crate::runtime::puc) fn hash_bytes(&self, h: usize) -> usize {
         crate::runtime::puc::work::hash_bytes(&self.puc.sizes, self.puc.dialect, h)
     }
 
@@ -80,7 +80,7 @@ impl Heap {
     /// own, a table PUC does not have, which nothing counts as long as it
     /// lives (its parts as they grow, its free).
     #[inline]
-    pub(crate) fn acct_new_table(&mut self, h: Gc<GcHeader>) {
+    pub(in crate::runtime::puc) fn acct_new_table(&mut self, h: Gc<GcHeader>) {
         if !self.counting() {
             // SAFETY: `h` is a handle, so its table is live; nothing borrows
             // the header while its class byte is written
@@ -107,7 +107,7 @@ impl Heap {
 
     /// A counted table freed with `a` array slots and `h` nodes (PUC
     /// `luaH_free`).
-    pub(crate) fn acct_table_free(&mut self, a: usize, h: usize) {
+    pub(in crate::runtime::puc) fn acct_table_free(&mut self, a: usize, h: usize) {
         let (ab, hb) = (self.array_bytes(a), self.hash_bytes(h));
         self.acct_part(hb, 0);
         self.acct_part(ab, 0);
@@ -119,7 +119,7 @@ impl Heap {
 impl Heap {
     /// A new string of `len` bytes (PUC `createstrobj`).
     #[inline]
-    pub(crate) fn acct_string(&mut self, len: usize) {
+    pub(in crate::runtime::puc) fn acct_string(&mut self, len: usize) {
         // a short string with no trace to write: only the sum is seen
         // (the table grows on the same condition either side of the
         // string's own count)
@@ -222,7 +222,7 @@ impl Heap {
     /// PUC's string table) whatever luna builds meanwhile, as it was
     /// counted (see [`Heap::acct_part`]).
     #[inline]
-    pub(crate) fn acct_string_free(&mut self, len: usize) {
+    pub(in crate::runtime::puc) fn acct_string_free(&mut self, len: usize) {
         if self.is_dropping() {
             return;
         }
