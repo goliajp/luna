@@ -46,7 +46,7 @@ impl Heap {
     /// Hash the interned strings again with `seed` and the dialect's
     /// function.
     pub(crate) fn rehash_strings(&mut self, seed: u32) {
-        let strict = self.dialect() <= crate::runtime::dialect::Dialect::L53;
+        let strict = self.puc_strt_grows_strictly();
         self.strings.rehash(seed, self.rules.hash51(), strict);
     }
 
@@ -184,9 +184,8 @@ impl Heap {
     ) -> Result<Gc<crate::runtime::Coro>, Oom> {
         let mem = self.mem();
         let size = self.puc_size(PucObj::Thread);
-        let l51 = self.dialect() == crate::runtime::dialect::Dialect::L51;
-        // `stack_init`: `BASIC_STACK_SIZE`, 5.1 with its extra slots
-        let stack_size = if l51 { 45 } else { 40 };
+        let stack_size = self.puc_basic_stack();
+        let (frame_size, ci_alloc) = self.puc_new_thread_ci();
         let coro = crate::runtime::Coro {
             hdr: GcHeader {
                 aux: self.take_id(),
@@ -213,8 +212,8 @@ impl Heap {
             stale_frames: 0,
             yield_ci_top: 0,
             stack_size,
-            frame_size: if l51 { puc::BASIC_CI_51 } else { u32::MAX },
-            ci_alloc: if l51 { u32::MAX } else { 0 },
+            frame_size,
+            ci_alloc,
             hook: crate::vm::exec::HookState::default(),
             globals,
             host_stack: LVec::new(mem),

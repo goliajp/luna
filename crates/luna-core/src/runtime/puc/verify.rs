@@ -2,9 +2,11 @@
 //! strings, the strings a load keeps for the sweep.
 
 use super::*;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::records::ghost::{Ghost, SHORT, TAKEN};
 use crate::runtime::puc::records::parse::KEPT;
 use crate::runtime::puc::records::strt::SWEPT;
+use crate::runtime::userdata::UserdataPayload;
 
 /// Whether `h` is a string only a load holds ([`KEPT`]), which the sweep
 /// keeps.
@@ -134,6 +136,45 @@ impl Heap {
                     );
                 }
                 cur = (*cur).next_obj();
+            }
+        }
+    }
+}
+
+impl Heap {
+    /// Whether PUC keeps the object behind `h` on the list it sweeps
+    /// (`allgc`, 5.1 `rootgc`): one of PUC's, with no finalizer pending,
+    /// and (`strt`) no string the string table holds.
+    ///
+    /// # Safety
+    /// `h` heads an allocated object of this heap.
+    pub(in crate::runtime) unsafe fn puc_listed(&self, h: *mut GcHeader, strt: bool) -> bool {
+        // SAFETY: the caller's contract
+        unsafe {
+            let d51 = self.puc.dialect == Dialect::L51;
+            let own51 = match (*h).tag {
+                ObjTag::Coro => false,
+                ObjTag::Native => (*h).cls & LUNA_ONLY != 0,
+                ObjTag::Userdata => {
+                    (*h).is_uncounted()
+                        && !matches!((*(h as *const Userdata)).payload, UserdataPayload::File(_))
+                }
+                _ => (*h).is_uncounted(),
+            };
+            let pending51 = d51 && (*h).flags() & DEFERRED != 0;
+            if (if d51 { own51 } else { (*h).is_uncounted() })
+                || (*h).flags() & FIN != 0 && !d51
+                || pending51
+            {
+                return false;
+            }
+            match (*h).tag {
+                ObjTag::Str => {
+                    !strt
+                        || (self.puc.dialect == Dialect::L52 && !(*(h as *const LuaStr)).is_short())
+                }
+                ObjTag::Table => !self.is_own_table(&*(h as *const Table)),
+                _ => true,
             }
         }
     }

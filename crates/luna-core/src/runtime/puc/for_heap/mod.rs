@@ -182,3 +182,8 @@ impl Heap {
         l[id] = Some(g);
     }
 }
+
+mod rules;
+mod sweep;
+pub(crate) use rules::c_function_is_object;
+pub(crate) use sweep::Fate;

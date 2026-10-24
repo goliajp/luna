@@ -87,7 +87,7 @@ impl Heap {
     /// The sweep of [`Heap::gc_end_full`], after its marking.
     pub(crate) fn gc_sweep_full(&mut self) -> usize {
         // 5.1's full cycle sweeps the string table before the list
-        if self.dialect() == crate::runtime::dialect::Dialect::L51 {
+        if self.puc_full_sweeps_strings_first() {
             self.collect_dead_strings();
             self.sweep_strings_upto(i64::MAX);
         }
@@ -197,7 +197,7 @@ impl Heap {
         // so the following drain_marker propagates through it.
         let mut dead = self.separate_finalizables(m);
         // 5.1 counts what they keep alive with them (`propagateall`'s work)
-        dead += if self.dialect() == crate::runtime::dialect::Dialect::L51 {
+        dead += if self.puc_counts_finalizable_work() {
             self.drain_work(m, run)
         } else {
             drain_marker(m);
@@ -321,9 +321,9 @@ impl Heap {
             dialect: self.dialect(),
             cached_protos: std::mem::take(&mut prop.cached_protos),
             leaf_black: 0,
-            leaf_hdr: self.leaf_hdr(),
+            leaf_hdr: self.puc_leaf_hdr(),
             leaf_bytes: 0,
-            leaf_upval: self.leaf_upval(),
+            leaf_upval: self.puc_leaf_upval(),
             sizer,
             quiet: std::mem::take(&mut prop.quiet),
             quiet_mode: false,

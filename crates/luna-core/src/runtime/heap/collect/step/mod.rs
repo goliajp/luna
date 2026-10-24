@@ -18,7 +18,7 @@ impl Heap {
         self.env51_whiten();
         // 5.2's fixed strings are white like any other: a cycle marks them
         // where it reaches them, and counts them
-        if self.dialect() == crate::runtime::dialect::Dialect::L52 {
+        if self.puc_fixed_strings_marked() {
             self.color_fixed_strings(self.current_white);
         }
         // what a back barrier sent there during the last sweep is white now
@@ -135,26 +135,6 @@ pub(crate) struct Running {
 }
 
 impl Heap {
-    /// 5.2 and 5.3 count the strings and userdata a traversal marks.
-    pub(super) fn leaf_hdr(&self) -> usize {
-        match self.dialect() {
-            crate::runtime::dialect::Dialect::L52 | crate::runtime::dialect::Dialect::L53 => {
-                self.puc_size(crate::runtime::puc::PucObj::StrHeader)
-            }
-            _ => 0,
-        }
-    }
-
-    /// 5.2 counts a closed upvalue a traversal marks.
-    pub(super) fn leaf_upval(&self) -> usize {
-        match self.dialect() {
-            crate::runtime::dialect::Dialect::L52 => {
-                self.puc_size(crate::runtime::puc::PucObj::Upval)
-            }
-            _ => 0,
-        }
-    }
-
     /// PUC `propagatemark` one object at a time, taking each one's work off
     /// `remaining`: the first always (a step's loop runs its body once
     /// before testing), the next ones while `remaining` is above `floor`.
@@ -175,10 +155,7 @@ impl Heap {
             };
             // SAFETY: a popped header heads an allocated object
             let coro = unsafe { (*h).tag } == ObjTag::Coro;
-            if self.dialect() == crate::runtime::dialect::Dialect::L53
-                && coro
-                && self.puc_shrinks_now(h)
-            {
+            if coro && self.puc_shrinks_traversed(h) {
                 m.push_gray(h);
                 // SAFETY: `h` came off the gray stack, so it heads an
                 // allocated object, and it is a coroutine

@@ -1,7 +1,6 @@
 //! Byte accounting and collection pacing.
 
 use super::*;
-use crate::runtime::dialect::Dialect;
 
 pub(super) use crate::runtime::puc::work::native_upvals;
 
@@ -108,7 +107,7 @@ impl Heap {
     /// stops the collector with an unreachable threshold; the later
     /// dialects still step then, to put the debt back.
     pub(crate) fn refresh_gc_limit(&mut self) {
-        self.puc_set_limit(self.gc_stopped && self.dialect() == Dialect::L51);
+        self.puc_set_limit(self.gc_stopped && self.puc_stop_unreachable());
     }
 
     /// A cycle ended with the count at what it is now: the pause before

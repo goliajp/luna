@@ -19,6 +19,7 @@ mod count;
 pub(crate) use count::*;
 mod defer;
 mod for_heap;
+pub(crate) use for_heap::{Fate, c_function_is_object};
 mod lent;
 pub(crate) use lent::Lent;
 mod load_session;

@@ -13,48 +13,12 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             assert_eq!(
-                self.listed(h),
+                self.puc_counts_in_sweep(h),
                 ((*h).tag != ObjTag::Ghost || super::parse::is_load_tab(h))
                     && self.puc_listed(h, strt),
                 "[gc-verify] class byte of a {:?}",
                 (*h).tag
             );
-        }
-    }
-
-    /// Whether PUC keeps the object behind `h` on the list it sweeps
-    /// (`allgc`, 5.1 `rootgc`): one of PUC's, with no finalizer pending,
-    /// and (`strt`) no string the string table holds.
-    ///
-    /// # Safety
-    /// `h` heads an allocated object of this heap.
-    unsafe fn puc_listed(&self, h: *mut GcHeader, strt: bool) -> bool {
-        // SAFETY: the caller's contract
-        unsafe {
-            let d51 = self.dialect() == Dialect::L51;
-            let own51 = match (*h).tag {
-                ObjTag::Coro => false,
-                ObjTag::Native => (*h).cls & LUNA_ONLY != 0,
-                ObjTag::Userdata => {
-                    (*h).is_uncounted()
-                        && !matches!((*(h as *const Userdata)).payload, UserdataPayload::File(_))
-                }
-                _ => (*h).is_uncounted(),
-            };
-            let pending51 = d51 && (*h).flags & DEFERRED != 0;
-            if (if d51 { own51 } else { (*h).is_uncounted() })
-                || (*h).flags & FIN != 0 && !d51
-                || pending51
-            {
-                return false;
-            }
-            match (*h).tag {
-                ObjTag::Str => {
-                    !strt || (self.dialect() == Dialect::L52 && !(*(h as *const LuaStr)).is_short())
-                }
-                ObjTag::Table => !self.is_own_table(&*(h as *const Table)),
-                _ => true,
-            }
         }
     }
 

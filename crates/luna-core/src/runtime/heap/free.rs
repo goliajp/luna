@@ -73,9 +73,7 @@ impl Heap {
                         0 => nat.upvals.len(),
                         k => k as usize - 1,
                     };
-                    if (n > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51)
-                        && !(*h).is_uncounted()
-                    {
+                    if self.puc_c_function_is_object(n) && !(*h).is_uncounted() {
                         self.acct_part(self.puc_size(PucObj::CClosure(n)), 0);
                     }
                     if (*h).cls & SLAB != 0 {
@@ -88,11 +86,7 @@ impl Heap {
                 ObjTag::Coro => {
                     if !(*h).is_uncounted() {
                         let c = &*(h as *mut crate::runtime::Coro);
-                        let ci = if self.dialect() == crate::runtime::dialect::Dialect::L51 {
-                            c.frame_size
-                        } else {
-                            c.ci_alloc
-                        };
+                        let ci = self.puc_thread_ci(c);
                         self.acct_thread_free(c.stack_size, ci);
                     }
                     self.free_block(h as *mut crate::runtime::Coro);
