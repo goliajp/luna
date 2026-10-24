@@ -93,7 +93,7 @@ impl Marker {
                 let h = p.as_ptr() as *mut GcHeader;
                 // SAFETY: a prototype of a load in progress is allocated;
                 // it is traversed here, so it goes black at once
-                unsafe { (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK) };
+                unsafe { (*h).paint(BLACK) };
                 self.keep(p.source);
                 for &k in p.consts.iter() {
                     match k {
@@ -123,7 +123,7 @@ impl Marker {
         // SAFETY: a string luna holds is allocated; only its header is read
         // and written
         unsafe {
-            if is_white((*h).flags) && !(*h).is_uncounted() && (*h).sub & EXTERNAL == 0 {
+            if is_white((*h).flags()) && !(*h).is_uncounted() && (*h).sub & EXTERNAL == 0 {
                 (*h).cls |= KEPT;
                 return;
             }
@@ -145,9 +145,8 @@ impl Heap {
         unsafe {
             if self.phase() == GcPhase::Propagate {
                 self.barrier_forward_obj(parent, child);
-            } else if is_black((*parent).flags) {
-                let f = (*parent).flags;
-                (*parent).flags = (*parent).with_slow((f & !COLOR_BITS) | self.white());
+            } else if is_black((*parent).flags()) {
+                (*parent).paint(self.white());
             }
         }
     }
@@ -160,7 +159,7 @@ impl Heap {
         let h = p.as_ptr() as *mut GcHeader;
         // SAFETY: a live prototype; only flag bytes are read and written
         unsafe {
-            if self.phase() != GcPhase::Propagate || !is_black((*h).flags) {
+            if self.phase() != GcPhase::Propagate || !is_black((*h).flags()) {
                 return;
             }
             let strs = p.consts.iter().filter_map(|k| match k {
@@ -170,9 +169,9 @@ impl Heap {
             let names = p.puc_names.borrow();
             for s in strs.chain(names.iter().copied()).chain([p.source]) {
                 let sh = s.as_ptr() as *mut GcHeader;
-                let f = (*sh).flags;
+                let f = (*sh).flags();
                 if is_white(f) {
-                    (*sh).flags = (*sh).with_slow((f & !COLOR_BITS) | BLACK);
+                    (*sh).paint(BLACK);
                 }
             }
             for &c in p.protos.iter() {

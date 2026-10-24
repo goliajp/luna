@@ -22,12 +22,14 @@ impl Heap {
     /// Mark the parser objects of the loads a collection step runs in the
     /// middle of: above their C functions' slots on PUC's stack.
     pub(crate) fn mark_load_slots(&self, m: &mut Marker) {
-        for f in &self.puc.parse {
+        let frames = std::mem::take(&mut m.lent.parse);
+        for f in &frames {
             for &h in &f.slots {
                 // SAFETY: a parser object is allocated while its load runs
                 unsafe { m.header(h) };
             }
         }
+        m.lent.parse = frames;
     }
 
     /// How many stack slots the loads' parser objects take (see

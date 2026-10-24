@@ -77,7 +77,7 @@ impl Heap {
             while !cur.is_null() {
                 n += usize::from(counted(cur));
                 // SAFETY: the lists link this heap's live objects
-                cur = unsafe { (*cur).next };
+                cur = unsafe { (*cur).next_obj() };
             }
         }
         // and the strings a load made that are still set aside: interned
@@ -105,7 +105,7 @@ impl Heap {
                         .filter(|&&s| s & (SHORT | TAKEN) == SHORT)
                         .count();
                 }
-                cur = (*cur).next;
+                cur = (*cur).next_obj();
             }
         }
         n
@@ -123,7 +123,7 @@ impl Heap {
         // read
         unsafe {
             while !cur.is_null() {
-                let (tag, f, cls) = ((*cur).tag, (*cur).flags, (*cur).cls);
+                let (tag, f, cls) = ((*cur).tag, (*cur).flags(), (*cur).cls);
                 if tag == ObjTag::Str && cls & KEPT != 0 {
                     let dead = is_white(f) && f & self.white() == 0;
                     assert!(
@@ -133,7 +133,7 @@ impl Heap {
                         self.phase()
                     );
                 }
-                cur = (*cur).next;
+                cur = (*cur).next_obj();
             }
         }
     }

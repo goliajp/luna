@@ -71,9 +71,7 @@ impl Heap {
             sizer: self.lend_sizer(),
             quiet: Vec::new(),
             quiet_mode: false,
-            env51: self.env51_ptr(),
-            parse: self.parse_ptr(),
-            stands: std::ptr::null(),
+            lent: self.lend_model(false),
             verify: Default::default(),
         }
     }
@@ -311,6 +309,8 @@ impl Heap {
             .propagate
             .take()
             .expect("propagate state taken outside Propagate phase");
+        let sizer = self.lend_sizer();
+        let lent = self.lend_model(sizer.is_none());
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
@@ -324,12 +324,10 @@ impl Heap {
             leaf_hdr: self.leaf_hdr(),
             leaf_bytes: 0,
             leaf_upval: self.leaf_upval(),
-            sizer: self.lend_sizer(),
+            sizer,
             quiet: std::mem::take(&mut prop.quiet),
             quiet_mode: false,
-            env51: self.env51_ptr(),
-            parse: self.parse_ptr(),
-            stands: self.stand_ins_ptr(),
+            lent,
             verify: Default::default(),
         }
     }

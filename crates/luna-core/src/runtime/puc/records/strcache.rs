@@ -80,7 +80,7 @@ impl StrCache {
     pub(in crate::runtime) fn clear_dead(&mut self) {
         // SAFETY: called as marking ends, before the sweep: every header
         // listed is still allocated, and only its flags are read
-        let dead = |h: *const GcHeader| unsafe { is_white((*h).flags) };
+        let dead = |h: *const GcHeader| unsafe { is_white((*h).flags()) };
         self.entries.retain_mut(|(k, slots)| {
             if let CStr::In(h, _) | CStr::Named(h, _) = *k
                 && dead(h)

@@ -42,12 +42,7 @@ impl Marker {
 
     /// The loads the marking runs in the middle of.
     pub(in crate::runtime) fn all_load_frames(&self) -> &[ParseFrame] {
-        if self.parse.is_null() {
-            return &[];
-        }
-        // SAFETY: the frames live in the heap the marker marks for, and a
-        // load changes them only between steps
-        unsafe { &*self.parse }
+        &self.lent.parse
     }
 
     /// [`Marker::all_load_frames`], none while marking what luna's own

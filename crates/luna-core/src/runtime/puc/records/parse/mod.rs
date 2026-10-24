@@ -91,7 +91,8 @@ impl Heap {
     /// A new empty parser table (PUC `luaH_new`), counted.
     pub(crate) fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom> {
         let mut hdr = GcHeader::new(ObjTag::Ghost);
-        (hdr.sub, hdr.flags, hdr.cls) = (LOADTAB, 0, 0);
+        (hdr.sub, hdr.cls) = (LOADTAB, 0);
+        hdr.set_flags(0);
         let refs = LVec::new(self.mem());
         let t = self.try_adopt(LoadTab {
             hdr,
@@ -124,7 +125,7 @@ impl Heap {
         // SAFETY: `t` is a handle, so the parser table is live, and nothing
         // else borrows it
         unsafe { t.as_mut() }.refs.push(obj.as_ptr())?;
-        if is_white(obj.flags) {
+        if is_white(obj.flags()) {
             // SAFETY: `t` is a handle, so the parser table is live
             unsafe { self.barrier_back_obj(t.header()) };
         }
@@ -182,11 +183,6 @@ impl Heap {
             self.free_block(h as *mut LoadTab);
         }
     }
-
-    /// The loads in progress, for a marker.
-    pub(in crate::runtime) fn parse_ptr(&self) -> *const Vec<ParseFrame> {
-        &self.puc.parse
-    }
 }
 
 /// Mark the object of `g` as one the parser is building, or no more.
@@ -229,8 +225,7 @@ impl Heap {
                 self.acct_string_free((*(h as *const crate::runtime::LuaStr)).len());
             }
             (*h).set_uncounted(true);
-            let f = (*h).flags;
-            (*h).flags = (*h).with_slow((f & !COLOR_BITS) | self.white());
+            (*h).paint(self.white());
         }
         true
     }
@@ -248,19 +243,18 @@ impl Heap {
         // SAFETY: both are live objects of this heap; only flag bytes are
         // read and written
         unsafe {
-            if !is_black((*c).flags) || !is_white((*u).flags) {
+            if !is_black((*c).flags()) || !is_white((*u).flags()) {
                 return;
             }
             // in a sweep the closure goes white instead (`luaC_barrier`)
             if self.phase() != GcPhase::Propagate {
-                let f = (*c).flags;
-                (*c).flags = (*c).with_slow((f & !COLOR_BITS) | self.white());
+                (*c).paint(self.white());
                 return;
             }
             if self.puc.pace.count_marked && self.phase() == GcPhase::Propagate {
                 self.count_marked(u);
             }
-            (*u).flags = (*u).with_slow(((*u).flags & !COLOR_BITS) | BLACK);
+            (*u).paint(BLACK);
         }
         if let crate::runtime::function::UpvalState::Closed(v) = uv.state {
             self.barrier_forward(uv, v);

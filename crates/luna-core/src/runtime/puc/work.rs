@@ -39,7 +39,12 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
-    pub(crate) unsafe fn object_work(&self, h: *mut GcHeader, run: Running) -> i64 {
+    pub(crate) unsafe fn object_work(
+        &self,
+        h: *mut GcHeader,
+        run: Running,
+        stands: &[(*mut GcHeader, usize)],
+    ) -> i64 {
         let run = if h == run.h {
             Some((run.top, run.size, run.ci))
         } else if h == run.main {
@@ -85,7 +90,7 @@ impl Heap {
                         // 5.2 and 5.3 count the strings of PUC's it stands
                         // for as they mark them
                         let stands = if d != Dialect::L51 && (*h).cls & STANDS != 0 {
-                            let s = self.puc.stand_ins.iter().filter(|s| s.0 == h);
+                            let s = stands.iter().filter(|s| s.0 == h);
                             s.map(|s| s.1).sum::<usize>() + self.kept_bytes(h)
                         } else {
                             0

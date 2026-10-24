@@ -80,14 +80,14 @@ impl Heap {
             list.retain(|&(slot, uv)| {
                 let h = uv.as_ptr() as *mut GcHeader;
                 // SAFETY: a listed upvalue is allocated
-                let f = unsafe { (*h).flags };
+                let f = unsafe { (*h).flags() };
                 if !is_white(f) {
                     return true;
                 }
                 // SAFETY: as above; the block is kept through this sweep,
                 // holding nothing (its thread may be freed by it)
                 unsafe {
-                    (*h).flags = (*h).with_slow((f & !COLOR_BITS) | BLACK);
+                    (*h).paint(BLACK);
                     (*uv.as_ptr()).state = UpvalState::Closed(Value::Nil);
                 }
                 self.puc.open_dead.dead.push((owner, slot, uv));

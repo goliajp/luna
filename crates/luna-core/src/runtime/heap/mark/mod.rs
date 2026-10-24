@@ -77,12 +77,8 @@ pub(crate) struct Marker {
     pub(in crate::runtime::heap) quiet: Vec<*mut GcHeader>,
     /// marking what `quiet` holds: nothing is counted
     pub(in crate::runtime::heap) quiet_mode: bool,
-    /// 5.1's environment records, or null
-    pub(in crate::runtime) env51: *const super::env51::Env51,
-    /// the loads a step runs inside (`PucModel::parse`), or null
-    pub(in crate::runtime::heap) parse: *const Vec<super::parse::ParseFrame>,
-    /// 5.2 and 5.3: the objects of PUC's luna's stand for, or null
-    pub(in crate::runtime::heap) stands: *const Vec<(*mut GcHeader, usize)>,
+    /// what the marking reads of the PUC model, borrowed from it
+    pub(in crate::runtime) lent: crate::runtime::puc::Lent,
     /// `gc-verify`: instead of marking a child, report one the sweep about
     /// to run would free (see `gc_hooks::ChildCheck`)
     pub(in crate::runtime::heap) verify: crate::runtime::gc_hooks::ChildCheck,

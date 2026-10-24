@@ -87,6 +87,38 @@ impl GcHeader {
         self.flags = self.with_slow(self.flags);
     }
 
+    /// The flag byte: colour, finalizer state, the leaf bit.
+    #[inline(always)]
+    pub(in crate::runtime) fn flags(&self) -> u8 {
+        self.flags
+    }
+
+    /// The object's colour set to `colour` (white bits and BLACK), its other
+    /// flags kept.
+    #[inline(always)]
+    pub(in crate::runtime) fn paint(&mut self, colour: u8) {
+        self.flags = self.with_slow((self.flags & !COLOR_BITS) | colour);
+    }
+
+    /// The whole flag byte replaced by `f` (a record made, a colour put
+    /// back).
+    #[inline(always)]
+    pub(in crate::runtime) fn set_flags(&mut self, f: u8) {
+        self.flags = self.with_slow(f);
+    }
+
+    /// The object has something to trace after all.
+    #[inline(always)]
+    pub(in crate::runtime) fn clear_leaf(&mut self) {
+        self.flags &= !LEAF;
+    }
+
+    /// The next object on the list it is on.
+    #[inline(always)]
+    pub(in crate::runtime) fn next_obj(&self) -> *mut GcHeader {
+        self.next
+    }
+
     /// Flag byte `f`, about to replace this header's, with SLOW set to
     /// agree with its BLACK bit and the read-only mark. Every write of the
     /// colour bits goes through here.

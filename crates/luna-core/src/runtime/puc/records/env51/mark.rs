@@ -8,11 +8,12 @@ impl Marker {
     /// bits `cls` name; `h` itself is only compared.
     pub(crate) fn mark_env51(&mut self, h: *mut GcHeader, cls: u8) {
         let env = cls >> ENV_SHIFT;
-        if env == 0 || env == ENV_PROTO || self.env51.is_null() {
+        if env == 0 || env == ENV_PROTO {
             return;
         }
-        // SAFETY: the records live as long as the heap the marker marks
-        let e = unsafe { &*self.env51 };
+        let Some(e) = self.lent.env51.as_deref() else {
+            return;
+        };
         let g = e.gen_of(h);
         let h = match env {
             ENV_PACKAGE => e.package,
@@ -21,7 +22,8 @@ impl Marker {
             _ => &g.ph[E3].hdr as *const GcHeader as *mut GcHeader,
         };
         if !h.is_null() {
-            // SAFETY: a record, or the live package table
+            // SAFETY: a record (boxed in the records the marker holds, which
+            // do not move), or the live package table
             unsafe { self.header(h) };
         }
     }
@@ -33,10 +35,16 @@ impl Marker {
     /// # Safety
     /// `h` heads a record of the marker's.
     pub(crate) unsafe fn trace_phantom(&mut self, h: *mut GcHeader) {
-        // SAFETY: the caller's contract; the records outlive the marking
+        // what the record holds, gathered before any is marked
+        let mut kids = [ptr::null_mut(); 8];
+        let mut n = 0;
+        // SAFETY: the caller's contract; the records the marker holds are
+        // boxed, so their headers stay where they are while it marks
         unsafe {
             let p = &*(h as *const Phantom);
-            let e = &*self.env51;
+            let Some(e) = self.lent.env51.as_deref() else {
+                return;
+            };
             let Some(g) = e
                 .gens
                 .iter()
@@ -44,40 +52,38 @@ impl Marker {
             else {
                 return;
             };
+            let mut push = |k: *mut GcHeader| {
+                kids[n] = k;
+                n += 1;
+            };
             if std::ptr::eq(p, &g.ph[E1]) {
                 for f in [g.io[1], g.io[0]] {
                     if !f.is_null() {
-                        self.header(f);
+                        push(f);
                     }
                 }
             }
             // a table's one node: its key, then its value (`kids`)
             if p.kids[0] != NONE && !e.close.is_null() {
-                self.header(e.close);
+                push(e.close);
             }
             if p.env != 0 {
                 // a closure's environment, its own opening's E1
-                let e1 = &g.ph[E1].hdr as *const GcHeader as *mut GcHeader;
-                self.header(e1);
+                push(&g.ph[E1].hdr as *const GcHeader as *mut GcHeader);
             }
             for &k in &p.kids {
                 if k != NONE {
-                    self.header(&g.ph[usize::from(k)].hdr as *const GcHeader as *mut GcHeader);
+                    push(&g.ph[usize::from(k)].hdr as *const GcHeader as *mut GcHeader);
                 }
+            }
+            for &k in &kids[..n] {
+                self.header(k);
             }
         }
     }
 }
 
 impl Heap {
-    /// The pointer a marker reaches the records through.
-    pub(in crate::runtime) fn env51_ptr(&self) -> *const Env51 {
-        self.puc
-            .env51_box
-            .as_deref()
-            .map_or(ptr::null(), |e| e as *const Env51)
-    }
-
     /// `lua_setfield` of `key` and the record `v` (a closure) into the
     /// record `t`, one of the io library's tables: 5.1's `luaC_barriert`.
     ///
@@ -93,7 +99,7 @@ impl Heap {
         // SAFETY: the caller's contract; records live as long as the heap,
         // and only flags are read
         unsafe {
-            if is_white((*v).flags) {
+            if is_white((*v).flags()) {
                 self.barrier_back_obj(t);
             }
         }

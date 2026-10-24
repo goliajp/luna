@@ -6,19 +6,6 @@
 
 use super::*;
 
-/// In the `next` of an object set aside: PUC has not made it yet.
-const UNBORN: *mut GcHeader = ptr::without_provenance_mut(1);
-
-/// Whether `h` is set aside: PUC has not made it yet.
-///
-/// # Safety
-/// `h` heads an allocated object.
-#[inline]
-unsafe fn is_unborn(h: *mut GcHeader) -> bool {
-    // SAFETY: the caller's contract
-    unsafe { (*h).next == UNBORN }
-}
-
 /// Whether loads were set aside before (see [`Heap::set_loads_aside`]).
 #[must_use = "loads stay as set until the token goes back to `Heap::loads_aside_back`"]
 pub(in crate::runtime) struct LoadsAside(bool);
@@ -38,11 +25,7 @@ impl Heap {
         self.puc.unborn.push(h);
         self.hook_reborn(h);
         // SAFETY: the caller's contract
-        unsafe {
-            (*h).next = UNBORN;
-            // white as a new object, for the barriers that reach it first
-            (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.white());
-        }
+        unsafe { self.detach_new(h) };
         true
     }
 
@@ -54,17 +37,17 @@ impl Heap {
     pub(in crate::runtime) unsafe fn born(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
-            if !is_unborn(h) {
+            if !Heap::is_detached(h) {
                 return;
             }
             // one a marking of this cycle made black already (luna holds it
             // before PUC makes it) stays black: what holds it may be black
             // too (one gray is on a gray stack, traversed whatever its color)
-            let f = (*h).flags;
+            let f = (*h).flags();
             self.hook_born(h, f);
             self.link_now(h);
             if self.phase() == GcPhase::Propagate && is_black(f) {
-                (*h).flags = f;
+                (*h).set_flags(f);
             }
         }
     }
@@ -126,7 +109,7 @@ impl Heap {
     pub(crate) unsafe fn link_before(&mut self, h: *mut GcHeader, anchor: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
-            if is_unborn(h) || is_unborn(anchor) {
+            if Heap::is_detached(h) || Heap::is_detached(anchor) {
                 return;
             }
             self.move_before(h, anchor);
@@ -146,7 +129,7 @@ impl Heap {
         for h in self.unborn_objs() {
             // SAFETY: an object set aside is allocated; only its flags are
             // written
-            unsafe { (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | white) };
+            unsafe { (*h).paint(white) };
         }
     }
 
@@ -158,6 +141,6 @@ impl Heap {
             .unborn
             .iter()
             .copied()
-            .filter(|&h| unsafe { is_unborn(h) })
+            .filter(|&h| unsafe { Heap::is_detached(h) })
     }
 }

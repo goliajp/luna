@@ -46,7 +46,7 @@ impl Heap {
                 // SAFETY: a listed thread is allocated until the sweep
                 unsafe {
                     if !is_white((*h).flags) {
-                        let w = self.object_work(h, run);
+                        let w = self.object_work(h, run, &m.lent.stands);
                         self.hook_prop(h, w, run);
                         work += if again_free { 0 } else { w };
                     }
@@ -56,7 +56,7 @@ impl Heap {
             if !seen_run && !run.h.is_null() {
                 // SAFETY: the running thread is allocated
                 // SAFETY: as above
-                let w = unsafe { self.object_work(run.h, run) };
+                let w = unsafe { self.object_work(run.h, run, &m.lent.stands) };
                 // SAFETY: as above
                 unsafe { self.hook_prop(run.h, w, run) };
                 work += if again_free { 0 } else { w };
@@ -123,7 +123,7 @@ impl Heap {
             // SAFETY: as in `propagate_work`
             unsafe {
                 blacken(h, m);
-                let w = self.object_work(h, run) + m.leaf_bytes;
+                let w = self.object_work(h, run, &m.lent.stands) + m.leaf_bytes;
                 self.hook_prop(h, w, run);
                 work += w;
             }

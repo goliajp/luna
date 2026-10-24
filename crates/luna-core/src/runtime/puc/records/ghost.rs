@@ -63,7 +63,7 @@ impl Heap {
         let ghost_head = !head.is_null()
             // SAFETY: `head`, not null, heads a live object of this heap
             && unsafe {
-                (*head).tag == ObjTag::Ghost && (*head).sub == 0 && (*head).flags & COLOR_BITS == born
+                (*head).tag == ObjTag::Ghost && (*head).sub == 0 && (*head).flags() & COLOR_BITS == born
             };
         if ghost_head {
             let g = head as *mut Ghost;
