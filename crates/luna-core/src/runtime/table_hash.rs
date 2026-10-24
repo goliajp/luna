@@ -196,6 +196,39 @@ fn frexp(n: f64) -> (f64, i32) {
     (m, exp - 1022)
 }
 
+/// What a key about to go dead hashed by, kept in its node: a string's hash
+/// (`true`), or an object's number.
+pub(super) fn dead_key_hash(k: Value) -> (u32, bool) {
+    match k {
+        Value::Str(s) => (s.hash(), true),
+        k => (pointer_hash(k), false),
+    }
+}
+
+/// Whether PUC hashes key `k` by its address (`hashpointer`).
+#[inline(always)]
+pub(super) fn hashed_by_address(tag: u8) -> bool {
+    use crate::runtime::value::tag;
+    !matches!(tag, tag::NIL | tag::BOOL | tag::INT | tag::FLOAT | tag::STR)
+}
+
+/// What PUC's `hashpointer` takes of an object key: the low 32 bits of
+/// its address; for luna's objects, the number each got when made
+/// (`Heap::take_id`).
+#[inline]
+pub(super) fn pointer_hash(k: Value) -> u32 {
+    match k {
+        Value::Table(t) => t.id,
+        Value::Closure(c) => c.hdr.aux,
+        Value::Native(n) => n.hdr.aux,
+        Value::Coro(co) => co.hdr.aux,
+        Value::Userdata(u) => u.hdr.aux,
+        Value::LightUserdata(p) => p as u32,
+        // the keys `main_position` handles itself
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,38 +279,5 @@ mod tests {
         assert_eq!(hashnum_52(1.0), 0x4000_0000);
         assert_eq!(l_hashfloat(1.5), 0x6000_0001);
         assert_eq!(l_hashfloat(f64::INFINITY), 0);
-    }
-}
-
-/// What a key about to go dead hashed by, kept in its node: a string's hash
-/// (`true`), or an object's number.
-pub(super) fn dead_key_hash(k: Value) -> (u32, bool) {
-    match k {
-        Value::Str(s) => (s.hash(), true),
-        k => (pointer_hash(k), false),
-    }
-}
-
-/// Whether PUC hashes key `k` by its address (`hashpointer`).
-#[inline(always)]
-pub(super) fn hashed_by_address(tag: u8) -> bool {
-    use crate::runtime::value::tag;
-    !matches!(tag, tag::NIL | tag::BOOL | tag::INT | tag::FLOAT | tag::STR)
-}
-
-/// What PUC's `hashpointer` takes of an object key: the low 32 bits of
-/// its address; for luna's objects, the number each got when made
-/// (`Heap::take_id`).
-#[inline]
-pub(super) fn pointer_hash(k: Value) -> u32 {
-    match k {
-        Value::Table(t) => t.id,
-        Value::Closure(c) => c.hdr.aux,
-        Value::Native(n) => n.hdr.aux,
-        Value::Coro(co) => co.hdr.aux,
-        Value::Userdata(u) => u.hdr.aux,
-        Value::LightUserdata(p) => p as u32,
-        // the keys `main_position` handles itself
-        _ => 0,
     }
 }
