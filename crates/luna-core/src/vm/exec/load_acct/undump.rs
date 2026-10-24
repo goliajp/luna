@@ -50,7 +50,7 @@ impl Vm {
                 }
                 UEv::Proto => {
                     let p = protos.next().unwrap_or(cl.proto);
-                    let hdr = p.as_ptr() as *mut crate::runtime::heap::GcHeader;
+                    let hdr = p.hdr();
                     let size = self.heap.puc_size(crate::runtime::puc::PucObj::Proto);
                     self.heap.acct_promote_obj(hdr, PucKind::Proto, size);
                     // its arrays are kept as they are counted below
@@ -91,11 +91,11 @@ impl Vm {
         } else {
             let s = self.heap.puc_sizes();
             for &uv in cl.upvals().iter().take(cl.proto.upvals.len()) {
-                let hdr = uv.as_ptr() as *mut crate::runtime::heap::GcHeader;
+                let hdr = uv.hdr();
                 self.heap.acct_promote_obj(hdr, PucKind::Upval, s.upval);
                 if d == Dialect::L53 {
                     // SAFETY: both are live objects of this heap
-                    unsafe { self.heap.link_before(hdr, cl.as_ptr() as *mut _) };
+                    unsafe { self.heap.link_before(hdr.as_ptr(), cl.as_ptr() as *mut _) };
                 }
             }
         }
@@ -128,9 +128,8 @@ impl Vm {
         if !long {
             return Ok(Value::Str(self.heap.try_intern(b)?));
         }
-        let uncounted = |s: &Gc<crate::runtime::LuaStr>| {
-            s.as_bytes() == b && crate::runtime::heap::is_uncounted(s.as_ptr() as *mut _)
-        };
+        let uncounted =
+            |s: &Gc<crate::runtime::LuaStr>| s.as_bytes() == b && s.hdr().is_uncounted();
         let found = p.and_then(|p| {
             let consts = p.consts.iter().filter_map(|v| match v {
                 Value::Str(s) => Some(*s),
@@ -144,7 +143,7 @@ impl Vm {
         });
         match found {
             Some(s) => {
-                self.heap.acct_promote(s.as_ptr() as *mut _, b.len());
+                self.heap.acct_promote(s, b.len());
                 Ok(Value::Str(s))
             }
             None => {

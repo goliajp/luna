@@ -135,7 +135,7 @@ impl Heap {
                         crate::runtime::userdata::UserdataPayload::Empty => "empty",
                         _ => "host",
                     };
-                    k = format!("{kind}/{}/{}", u.puc_size, is_uncounted(h));
+                    k = format!("{kind}/{}/{}", u.puc_size, (*h).is_uncounted());
                 }
                 // a record of 5.1's environments as the table or closure
                 // it stands for
@@ -153,9 +153,10 @@ impl Heap {
     }
 
     /// `LUNA_GC_WHERE`: a string `prefix`ed: `s` freed, `s+` made.
-    pub(crate) fn trace_string(&mut self, prefix: &[u8], s: *mut LuaStr) {
+    pub(crate) fn trace_string(&mut self, prefix: &[u8], s: Gc<LuaStr>) {
+        let s = s.as_ptr();
         if self.hooks.trace.where_ {
-            // SAFETY: the caller names an allocated string
+            // SAFETY: `s` comes from a handle, so the string is allocated
             let b = String::from_utf8_lossy(unsafe { string::bytes_of(s) }).into_owned();
             let p = std::str::from_utf8(prefix).unwrap_or("s");
             self.hooks.trace.line(format_args!("{p} {b:?}"));
@@ -163,9 +164,11 @@ impl Heap {
     }
 
     /// `LUNA_GC_SWEEP`: the string sweep frees string `h`.
-    pub(crate) fn trace_string_swept(&mut self, h: *mut GcHeader) {
+    pub(crate) fn trace_string_swept(&mut self, h: Gc<GcHeader>) {
+        let h = h.as_ptr();
         if self.hooks.trace.sweep {
-            // SAFETY: the caller names an allocated string
+            // SAFETY: `h` comes from a handle and the string sweep passes
+            // only strings
             let b = unsafe { string::bytes_of(h as *const LuaStr) };
             let b = String::from_utf8_lossy(&b[..b.len().min(24)])
                 .escape_debug()

@@ -53,7 +53,7 @@ pub(crate) trait StepHost {
     fn finalizer_has_room(&mut self, closing: bool) -> bool;
     /// 5.2's `sweepthread` of coroutine `h`, which the sweep just kept
     /// (the main thread's comes at the end of the sweep).
-    fn shrink_swept_thread_52(&mut self, h: *mut crate::runtime::heap::GcHeader);
+    fn shrink_swept_thread_52(&mut self, co: crate::runtime::Gc<crate::runtime::Coro>);
     /// The end of 5.2's sweep: the main thread shrunk.
     fn sweep_main_52(&mut self);
 }

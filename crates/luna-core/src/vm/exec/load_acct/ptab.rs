@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::runtime::heap::GcHeader;
+use crate::runtime::heap::parse::LoadTab;
 
 /// A key's identity in a parser table.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,7 +97,7 @@ pub(super) struct PTab {
     /// the keys that may go to the array part, by `ceil_log2`
     nums: [u32; 65],
     /// PUC's table, unless nothing is counted
-    tab: Option<*mut GcHeader>,
+    tab: Option<Gc<LoadTab>>,
 }
 
 impl PTab {
@@ -136,7 +137,12 @@ impl PTab {
 
     /// PUC's table, unless nothing is counted.
     pub(super) fn tab(&self) -> Option<*mut GcHeader> {
-        self.tab
+        self.tab.map(|t| t.header())
+    }
+
+    /// [`PTab::tab`] as a handle.
+    pub(super) fn tab_hdr(&self) -> Option<Gc<GcHeader>> {
+        self.tab.map(|t| t.hdr())
     }
 
     /// `k` put in the table (PUC `luaH_newkey`), when it is not there;
@@ -146,7 +152,7 @@ impl PTab {
         heap: &mut Heap,
         d: Dialect,
         k: PKey,
-        obj: Option<*mut GcHeader>,
+        obj: Option<Gc<GcHeader>>,
     ) -> Result<(), crate::runtime::mem::Oom> {
         if !self.keys.insert(k) {
             return Ok(());

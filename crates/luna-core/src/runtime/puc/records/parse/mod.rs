@@ -89,7 +89,7 @@ pub(in crate::runtime) unsafe fn load_tab_size(
 
 impl Heap {
     /// A new empty parser table (PUC `luaH_new`), counted.
-    pub(crate) fn new_load_tab(&mut self) -> Result<*mut GcHeader, Oom> {
+    pub(crate) fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom> {
         let mut hdr = GcHeader::new(ObjTag::Ghost);
         (hdr.sub, hdr.flags, hdr.cls) = (LOADTAB, 0, 0);
         let refs = LVec::new(self.mem());
@@ -101,14 +101,15 @@ impl Heap {
             refs,
         })?;
         self.acct_obj(PucKind::Table, self.puc.sizes.table);
-        Ok(t.as_ptr() as *mut GcHeader)
+        Ok(t)
     }
 
     /// The parser table `t` resized to `a` array slots and `h` nodes (PUC
     /// `luaH_resize`).
-    pub(crate) fn load_tab_resize(&mut self, t: *mut GcHeader, a: usize, h: usize) {
-        // SAFETY: `t` heads a live parser table, and nothing else borrows it
-        let lt = unsafe { &mut *(t as *mut LoadTab) };
+    pub(crate) fn load_tab_resize(&mut self, t: Gc<LoadTab>, a: usize, h: usize) {
+        // SAFETY: `t` is a handle, so the parser table is live, and nothing
+        // else borrows it
+        let lt = unsafe { t.as_mut() };
         let (oa, oh) = (lt.asize as usize, lt.nodes as usize);
         (lt.asize, lt.nodes) = (a as u32, h as u32);
         if lt.counted {
@@ -119,22 +120,23 @@ impl Heap {
     /// `obj` keyed in the parser table `t`: a black table that takes a
     /// white object goes back to gray (`luaC_barrierback` in
     /// `luaH_newkey`).
-    pub(crate) fn load_tab_ref(&mut self, t: *mut GcHeader, obj: *mut GcHeader) -> Result<(), Oom> {
-        // SAFETY: `t` heads a live parser table and `obj` a live object
-        unsafe {
-            (*(t as *mut LoadTab)).refs.push(obj)?;
-            if is_white((*obj).flags) {
-                self.barrier_back_obj(t);
-            }
+    pub(crate) fn load_tab_ref(&mut self, t: Gc<LoadTab>, obj: Gc<GcHeader>) -> Result<(), Oom> {
+        // SAFETY: `t` is a handle, so the parser table is live, and nothing
+        // else borrows it
+        unsafe { t.as_mut() }.refs.push(obj.as_ptr())?;
+        if is_white(obj.flags) {
+            // SAFETY: `t` is a handle, so the parser table is live
+            unsafe { self.barrier_back_obj(t.header()) };
         }
         Ok(())
     }
 
     /// `obj`'s key in the parser table `t` set to nil: a dead key, which
     /// a traversal does not mark.
-    pub(crate) fn load_tab_unref(&mut self, t: *mut GcHeader, obj: *mut GcHeader) {
-        // SAFETY: `t` heads a live parser table, and nothing else borrows it
-        let refs = unsafe { &mut (*(t as *mut LoadTab)).refs };
+    pub(crate) fn load_tab_unref(&mut self, t: Gc<LoadTab>, obj: *mut GcHeader) {
+        // SAFETY: `t` is a handle, so the parser table is live, and nothing
+        // else borrows it
+        let refs = unsafe { &mut t.as_mut().refs };
         if let Some(i) = refs.iter().rposition(|&r| r == obj) {
             refs.remove(i);
         }
@@ -226,7 +228,7 @@ impl Heap {
             } else {
                 self.acct_string_free((*(h as *const crate::runtime::LuaStr)).len());
             }
-            set_uncounted(h, true);
+            (*h).set_uncounted(true);
             let f = (*h).flags;
             (*h).flags = (*h).with_slow((f & !COLOR_BITS) | self.white());
         }

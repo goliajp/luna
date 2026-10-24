@@ -51,7 +51,8 @@ pub(super) fn step_52<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
 fn shrink_swept_52<H: StepHost + ?Sized>(h: &mut H) {
     let swept = std::mem::take(&mut h.heap().puc.shrunk);
     for &t in &swept {
-        h.shrink_swept_thread_52(t);
+        // SAFETY: the sweep just kept `t`, a coroutine
+        h.shrink_swept_thread_52(unsafe { crate::runtime::Gc::from_ptr_unchecked(t.cast()) });
     }
     let mut swept = swept;
     swept.clear();

@@ -10,9 +10,9 @@ impl Heap {
     /// `h` heads a live object of this heap; the caller has read what it
     /// needs from it (its `next` link) and nothing uses it afterwards.
     pub(in crate::runtime) unsafe fn free_obj(&mut self, h: *mut GcHeader) {
-        self.hook_freed(h);
         // SAFETY: the caller's contract: `h` heads an unlinked object of this heap that nothing uses afterwards; its tag names the type it was boxed as (`adopt`, `new_table`, `alloc_str`), so each arm frees it with the matching layout; a short string stays in the string table's chains until removed here
         unsafe {
+            self.hook_freed(Gc::from_ptr_unchecked(h));
             if (*h).cls & STANDS != 0 {
                 self.free_stand_in(h);
             }
@@ -41,14 +41,14 @@ impl Heap {
                     }
                 }
                 ObjTag::Proto => {
-                    if !is_uncounted(h) {
+                    if !(*h).is_uncounted() {
                         self.acct_proto_free(&*(h as *mut Proto));
                     }
                     self.free_block(h as *mut Proto);
                 }
                 ObjTag::Closure => {
                     let c = &*(h as *mut LuaClosure);
-                    if !is_uncounted(h) {
+                    if !(*h).is_uncounted() {
                         // the prototype may be freed already
                         let env = (*h).sub & crate::runtime::puc::ENV51 != 0;
                         let n = c.upvals_len as usize - usize::from(env);
@@ -58,13 +58,13 @@ impl Heap {
                     self.free_block(h as *mut LuaClosure);
                 }
                 ObjTag::Upvalue => {
-                    if !is_uncounted(h) {
+                    if !(*h).is_uncounted() {
                         self.acct_part(self.puc_size(PucObj::Upval), 0);
                     }
                     self.free_block(h as *mut Upvalue);
                 }
                 ObjTag::Native => {
-                    if is_uncounted(h) {
+                    if (*h).is_uncounted() {
                         self.free_stand_in(h);
                     }
                     let nat = &*(h as *mut NativeClosure);
@@ -74,7 +74,7 @@ impl Heap {
                         k => k as usize - 1,
                     };
                     if (n > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51)
-                        && !is_uncounted(h)
+                        && !(*h).is_uncounted()
                     {
                         self.acct_part(self.puc_size(PucObj::CClosure(n)), 0);
                     }
@@ -86,7 +86,7 @@ impl Heap {
                     }
                 }
                 ObjTag::Coro => {
-                    if !is_uncounted(h) {
+                    if !(*h).is_uncounted() {
                         let c = &*(h as *mut crate::runtime::Coro);
                         let ci = if self.dialect() == crate::runtime::dialect::Dialect::L51 {
                             c.frame_size
@@ -102,7 +102,7 @@ impl Heap {
                         self.stdin_ud = ptr::null_mut();
                     }
                     crate::vm::lib_io::write_out_freed(Gc::from_ptr(h as *mut Userdata));
-                    if !is_uncounted(h) {
+                    if !(*h).is_uncounted() {
                         self.acct_part((*(h as *mut Userdata)).puc_size, 0);
                     } else {
                         self.free_stand_in(h);
@@ -156,7 +156,7 @@ impl Heap {
     pub(super) unsafe fn free_plain_str(&mut self, s: *mut LuaStr) {
         // SAFETY: the caller's contract: `s` is an unlinked string of this heap nothing uses afterwards; a short one is still in the string table
         unsafe {
-            self.hook_string_freed(s);
+            self.hook_string_freed(Gc::from_ptr_unchecked(s));
             if !self.dropping {
                 self.acct_string_free((*s).len());
                 if (*s).is_short() {

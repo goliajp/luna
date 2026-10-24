@@ -37,8 +37,7 @@ impl Heap {
     /// counted when freed either. The arrays it keeps for its free are
     /// those counted here: none while nothing is.
     pub(crate) fn acct_proto(&mut self, p: Gc<crate::runtime::function::Proto>) {
-        let h = p.as_ptr() as *mut GcHeader;
-        self.acct_new(h, PucKind::Proto, self.puc.sizes.proto);
+        self.acct_new(p.hdr(), PucKind::Proto, self.puc.sizes.proto);
         let arrays = match self.counting() {
             true => self.proto_arrays(&p),
             false => [0; 7],

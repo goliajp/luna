@@ -17,7 +17,7 @@ impl Thread {
     fn counted(self) -> bool {
         match self {
             Thread::Main => true,
-            Thread::Coro(c) => !is_uncounted(c.as_ptr() as *mut GcHeader),
+            Thread::Coro(c) => !c.hdr().is_uncounted(),
         }
     }
 }

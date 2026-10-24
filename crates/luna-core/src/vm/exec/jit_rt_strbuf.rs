@@ -116,8 +116,7 @@ impl Vm {
             self.heap.counting_on(off);
         }
         if let (Some(g), Some(s)) = (made, r) {
-            self.heap
-                .ghost_made(g, s.as_ptr() as *mut crate::runtime::heap::GcHeader);
+            self.heap.ghost_made(g, s.hdr());
         }
         buf.clear();
         match r {

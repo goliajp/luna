@@ -37,9 +37,9 @@ impl StepHost for Vm {
     fn finalizer_has_room(&mut self, closing: bool) -> bool {
         Vm::finalizer_has_room(self, closing)
     }
-    fn shrink_swept_thread_52(&mut self, h: *mut crate::runtime::heap::GcHeader) {
-        if !self.main_coro.is_some_and(|m| m.as_ptr() as *mut _ == h) {
-            self.collector_shrinks_thread(h);
+    fn shrink_swept_thread_52(&mut self, co: Gc<crate::runtime::Coro>) {
+        if !self.main_coro.is_some_and(|m| m.ptr_eq(co)) {
+            self.collector_shrinks_thread(co);
         }
     }
     fn sweep_main_52(&mut self) {
@@ -125,18 +125,14 @@ impl Vm {
     }
 
     /// The collector visiting thread `h` as it traverses it (5.3).
-    pub(super) fn collector_shrinks_thread(&mut self, h: *mut crate::runtime::heap::GcHeader) {
-        let co = self.current.or(self.main_coro);
-        if co.is_some_and(|c| c.as_ptr() as *mut _ == h) {
+    pub(super) fn collector_shrinks_thread(&mut self, co: Gc<crate::runtime::Coro>) {
+        let running = self.current.or(self.main_coro);
+        if running.is_some_and(|c| c.ptr_eq(co)) {
             let inuse = self.stack_in_use();
             self.shrink_running(super::stack_inuse::Shrink::Collector, inuse);
-        } else if self.main_ctx.is_some()
-            && self.main_coro.is_some_and(|c| c.as_ptr() as *mut _ == h)
-        {
+        } else if self.main_ctx.is_some() && self.main_coro.is_some_and(|c| c.ptr_eq(co)) {
             self.collector_shrinks_main(crate::vm::exec::stack_inuse::Shrink::Collector);
         } else {
-            // SAFETY: `h`, gray, heads a live coroutine
-            let co = unsafe { crate::runtime::heap::Gc::from_ptr(h as *mut _) };
             self.collector_shrinks_coro(co, crate::vm::exec::stack_inuse::Shrink::Collector);
         }
     }

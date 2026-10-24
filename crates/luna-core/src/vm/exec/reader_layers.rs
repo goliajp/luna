@@ -221,7 +221,7 @@ impl Vm {
     /// A 5.1 prototype as the stack holds it: a userdata of type "proto".
     fn proto_value(&mut self) -> Result<Value, LuaError> {
         let u = self.lib_userdata(crate::runtime::userdata::UserdataPayload::Empty, false, 0)?;
-        self.heap.set_env51(u.as_ptr() as *mut _, ENV_PROTO);
+        self.heap.set_env51(u.hdr(), ENV_PROTO);
         Ok(Value::Userdata(u))
     }
 }

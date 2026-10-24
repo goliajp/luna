@@ -74,7 +74,7 @@ impl Vm {
                 // a string is an object of PUC's; nil is keyed by the
                 // table itself
                 let obj = match kv {
-                    PVal::V(Value::Str(s)) => Some(s.as_ptr() as *mut GcHeader),
+                    PVal::V(Value::Str(s)) => Some(s.hdr()),
                     _ => None,
                 };
                 if let Some(t) = t {
@@ -91,7 +91,7 @@ impl Vm {
             && r.rec.is_none()
         {
             r.kstr.push(cs);
-            self.proto_barrier(r, r.fs.len().wrapping_sub(1), cs.as_ptr() as *mut GcHeader);
+            self.proto_barrier(r, r.fs.len().wrapping_sub(1), cs.hdr());
         }
         Ok(())
     }
@@ -160,13 +160,13 @@ impl Vm {
     pub(super) fn anchor_in_h(
         &mut self,
         r: &mut Replay,
-        t: Option<(u32, Option<*mut GcHeader>)>,
+        t: Option<(u32, Option<Gc<GcHeader>>)>,
     ) -> Result<(), SyntaxError> {
         let (key, obj) = match t {
             Some((t, tab)) => (PKey::Tab(t), tab),
             None => {
                 r.anchors += 1;
-                let cl = r.cl.map(|c| c.as_ptr() as *mut GcHeader);
+                let cl = r.cl.map(|c| c.hdr());
                 (PKey::Ptr(r.anchors), cl)
             }
         };
@@ -196,6 +196,6 @@ impl Vm {
                 s.hash()
             ));
         }
-        t.insert(&mut self.heap, d, k, Some(s.as_ptr() as *mut GcHeader))
+        t.insert(&mut self.heap, d, k, Some(s.hdr()))
     }
 }

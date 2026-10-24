@@ -209,18 +209,15 @@ fn push_default(
         // PUC's string on luna's where that is a long string of its own,
         // made now as PUC's is, so that the sweep reaches it where PUC's is
         if v == LuaVersion::Lua51 {
-            vm.heap.acct_stand_strt(pkg.header(), def.len());
+            vm.heap.acct_stand_strt(pkg.hdr(), def.len());
         } else {
             match s {
-                Value::Str(ls)
-                    if luna.len() > vm.heap.short_max()
-                        && crate::runtime::heap::is_uncounted(ls.header()) =>
-                {
-                    vm.heap.acct_stand_on(ls.header(), size, true)
+                Value::Str(ls) if luna.len() > vm.heap.short_max() && ls.hdr().is_uncounted() => {
+                    vm.heap.acct_stand_on(ls.hdr(), size, true)
                 }
                 // kept where PUC's list has it, as long as the package table
                 _ => {
-                    let host = pkg.header();
+                    let host = pkg.hdr();
                     vm.retry_oom(|vm| vm.heap.acct_kept_string(host, size))?
                 }
             }

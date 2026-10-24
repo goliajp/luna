@@ -8,7 +8,7 @@ use crate::runtime::{Table, Value};
 impl Heap {
     /// The object `h` is freed: gc-verify notes it for the read probes.
     #[inline(always)]
-    pub(crate) fn hook_freed(&mut self, h: *mut GcHeader) {
+    pub(crate) fn hook_freed(&mut self, h: crate::runtime::Gc<GcHeader>) {
         #[cfg(feature = "gc-verify")]
         self.note_freed(h);
         let _ = h;
@@ -37,7 +37,7 @@ impl Heap {
     /// gc-verify: `h`, about to be held by `what`, is not one the sweep
     /// under way frees.
     #[inline(always)]
-    pub(crate) fn check_not_dying(&self, h: *const GcHeader, what: &str) {
+    pub(crate) fn check_not_dying(&self, h: crate::runtime::Gc<GcHeader>, what: &str) {
         #[cfg(feature = "gc-verify")]
         self.verify_not_dying(h, what);
         let _ = (h, what);

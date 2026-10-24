@@ -210,9 +210,12 @@ impl Heap {
     /// way out so a `setmetatable(obj, mt_with___gc)` inside (or after) the
     /// finalizer can re-register the object for a future round, per the Lua
     /// 5.5 reference manual §2.5.3 re-finalize semantics.
-    fn finalizable_value(&mut self, h: *mut GcHeader) -> crate::runtime::Value {
+    ///
+    /// # Safety
+    /// `h` was taken off `tobefnz`.
+    unsafe fn finalizable_value(&mut self, h: *mut GcHeader) -> crate::runtime::Value {
         use crate::runtime::Value;
-        // SAFETY: every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below, and the caller roots the returned handle until the finalizer has run
+        // SAFETY: the caller's contract; every `tobefnz` entry was marked by `separate_finalizables` (or `mark_all` re-marks it) and so is still allocated; it was registered as a table or a userdata, the two tags matched below, and the caller roots the returned handle until the finalizer has run
         unsafe {
             if self.rules.refinalize() {
                 (*h).flags &= !FINALIZED;
@@ -281,6 +284,7 @@ impl Heap {
             self.tobefnz.truncate(n - self.tobefnz_head);
             self.tobefnz_head = 0;
         }
-        Some(self.finalizable_value(h))
+        // SAFETY: `h` was taken off `tobefnz` above
+        Some(unsafe { self.finalizable_value(h) })
     }
 }

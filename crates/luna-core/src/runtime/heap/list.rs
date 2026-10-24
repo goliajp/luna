@@ -35,7 +35,7 @@ impl Heap {
     }
 
     /// Each interned string.
-    pub(in crate::runtime) fn each_string(&self, f: impl FnMut(*mut LuaStr)) {
+    pub(in crate::runtime) fn each_string(&self, f: impl FnMut(Gc<LuaStr>)) {
         self.strings.each(f);
     }
 

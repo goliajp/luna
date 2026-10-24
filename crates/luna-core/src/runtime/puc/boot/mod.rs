@@ -76,7 +76,7 @@ impl Heap {
     /// lives as long as the object behind `h`, which holds luna's string
     /// in its place (the package table: luna's default path is a short
     /// string all package tables share).
-    pub(crate) fn acct_stand_on(&mut self, h: *mut GcHeader, size: usize, count: bool) {
+    pub(crate) fn acct_stand_on(&mut self, h: Gc<GcHeader>, size: usize, count: bool) {
         if count {
             self.acct_obj(PucKind::LongStr, size);
         }
@@ -87,7 +87,7 @@ impl Heap {
     /// long as the object behind `h` (the package table, which holds
     /// luna's default path in place of PUC's): counted now, and the
     /// table's place given back with it.
-    pub(crate) fn acct_stand_strt(&mut self, h: *mut GcHeader, len: usize) {
+    pub(crate) fn acct_stand_strt(&mut self, h: Gc<GcHeader>, len: usize) {
         self.acct_string(len);
         self.strt_settle();
         let size = self.puc.sizes.string(len, false);
@@ -98,11 +98,13 @@ impl Heap {
     /// as the object behind `h`.
     pub(crate) fn stand_sizes_on(
         &mut self,
-        h: *mut GcHeader,
+        h: Gc<GcHeader>,
         sizes: impl IntoIterator<Item = usize>,
     ) {
+        let h = h.as_ptr();
         self.puc.stand_ins.extend(sizes.into_iter().map(|s| (h, s)));
-        // SAFETY: `h` heads a live object; only its class byte is written
+        // SAFETY: `h` comes from a handle, so its object is live; only its
+        // class byte is written
         unsafe { (*h).cls |= super::STANDS };
     }
 
@@ -110,10 +112,13 @@ impl Heap {
     /// one PUC's scanner made as `ss` (counted) and keeps as the constant:
     /// the count moves to `cs`.
     pub(crate) fn acct_move_long(&mut self, ss: Gc<LuaStr>, cs: Gc<LuaStr>) {
-        let (from, to) = (ss.as_ptr() as *mut GcHeader, cs.as_ptr() as *mut GcHeader);
-        if !is_uncounted(from) && is_uncounted(to) {
-            super::set_uncounted(from, true);
-            super::set_uncounted(to, false);
+        if !ss.hdr().is_uncounted() && cs.hdr().is_uncounted() {
+            // SAFETY: both are handles, so their objects are live; nothing
+            // borrows the headers while their per-type bytes are written
+            unsafe {
+                (*ss.header()).set_uncounted(true);
+                (*cs.header()).set_uncounted(false);
+            }
         }
     }
 }
@@ -122,21 +127,24 @@ impl Heap {
     /// A string just made: counted, or, while luna builds its own objects,
     /// marked as one PUC has not made.
     #[inline]
-    pub(crate) fn acct_new_string(&mut self, h: *mut GcHeader, len: usize) {
+    pub(crate) fn acct_new_string(&mut self, s: Gc<LuaStr>, len: usize) {
+        let h = s.header();
         // 5.1's string table holds every string, 5.2's the short ones
         let held = match self.puc.dialect {
             Dialect::L51 => true,
             Dialect::L52 => len <= self.puc.short_max,
             _ => false,
         };
-        // SAFETY: `h` heads the string just made; only its class byte is written
+        // SAFETY: `h` comes from a handle, so its string is live; nothing
+        // borrows the header while its class and per-type bytes are written
         unsafe { (*h).cls = u8::from(held) * super::UNLISTED };
         if !self.counting() {
-            super::set_uncounted(h, true);
+            // SAFETY: as above
+            unsafe { (*h).set_uncounted(true) };
         } else {
             self.acct_string(len);
             if held {
-                self.strt_enter(h);
+                self.strt_enter(s);
             }
         }
     }
@@ -145,22 +153,26 @@ impl Heap {
     /// it here.
     #[cold]
     #[inline(never)]
-    pub(crate) fn acct_promote(&mut self, h: *mut GcHeader, len: usize) {
+    pub(crate) fn acct_promote(&mut self, s: Gc<LuaStr>, len: usize) {
+        let h = s.header();
         if !self.counting() {
             return;
         }
-        // SAFETY: the caller names a live string
-        unsafe { self.born(h) };
-        super::set_uncounted(h, false);
+        // SAFETY: `h` comes from a handle, so its string is live; nothing
+        // borrows the header while its per-type byte is written
+        unsafe {
+            self.born(h);
+            (*h).set_uncounted(false);
+        }
         self.acct_string(len);
-        self.strt_enter(h);
+        self.strt_enter(s);
     }
 
     /// The parser's string of the chunk name `s`: counted now if luna made
     /// it without counting (PUC found it made already otherwise).
     pub(crate) fn acct_source(&mut self, s: Gc<LuaStr>) {
         if s.hdr.sub & UNCOUNTED != 0 {
-            self.acct_promote(s.as_ptr() as *mut GcHeader, s.len());
+            self.acct_promote(s, s.len());
         }
     }
 }

@@ -80,11 +80,11 @@ impl Heap {
     /// own, a table PUC does not have, which nothing counts as long as it
     /// lives (its parts as they grow, its free).
     #[inline]
-    pub(crate) fn acct_new_table(&mut self, h: *mut GcHeader) {
+    pub(crate) fn acct_new_table(&mut self, h: Gc<GcHeader>) {
         if !self.counting() {
-            // SAFETY: `h` heads the table just made; only its class byte
-            // is written
-            unsafe { (*h).cls |= super::UNLISTED };
+            // SAFETY: `h` is a handle, so its table is live; nothing borrows
+            // the header while its class byte is written
+            unsafe { (*h.as_ptr()).cls |= super::UNLISTED };
         } else {
             self.acct_obj(PucKind::Table, self.puc.sizes.table);
         }
@@ -101,9 +101,8 @@ impl Heap {
 
     /// Whether `t` is one of luna's own tables, which nothing counts.
     #[inline]
-    pub(crate) fn is_own_table(&self, t: *const crate::runtime::Table) -> bool {
-        // SAFETY: `t` is a live table; only its header is read
-        unsafe { (*t.cast::<GcHeader>()).cls & super::UNLISTED != 0 }
+    pub(crate) fn is_own_table(&self, t: &crate::runtime::Table) -> bool {
+        t.hdr.cls & super::UNLISTED != 0
     }
 
     /// A counted table freed with `a` array slots and `h` nodes (PUC

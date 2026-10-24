@@ -114,6 +114,15 @@ impl<T: GcObject> Gc<T> {
     pub(crate) fn header(self) -> *mut GcHeader {
         self.ptr.as_ptr().cast()
     }
+
+    /// The object's GC header, as a handle: the header of a live object is
+    /// live.
+    #[inline(always)]
+    pub(crate) fn hdr(self) -> Gc<GcHeader> {
+        Gc {
+            ptr: self.ptr.cast(),
+        }
+    }
 }
 
 impl<T> Deref for Gc<T> {

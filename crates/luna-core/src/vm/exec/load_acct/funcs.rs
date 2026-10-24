@@ -2,7 +2,6 @@
 //! table, and the arrays trimmed when it ends.
 
 use super::*;
-use crate::runtime::heap::GcHeader;
 use crate::runtime::heap::parse::set_parsing;
 
 impl Vm {
@@ -28,7 +27,7 @@ impl Vm {
         }
         // the prototype luna made without counting
         if let Some(&p) = r.opening.get(r.opened) {
-            let h = p.as_ptr() as *mut GcHeader;
+            let h = p.hdr();
             self.heap.acct_promote_obj(h, PucKind::Proto, s.proto);
             if r.rec.is_none() {
                 set_parsing(p, true);
@@ -46,7 +45,7 @@ impl Vm {
             Dialect::L53 | Dialect::L54 => None,
         };
         if d == Dialect::L55 {
-            self.anchor_in_h(r, h.as_ref().map(|t| (t.id, t.tab())))?;
+            self.anchor_in_h(r, h.as_ref().map(|t| (t.id, t.tab_hdr())))?;
         }
         let ld = r.opening.get(r.opened).map_or(0, |p| p.line_defined);
         let shape = r.opened;
@@ -130,7 +129,7 @@ impl Vm {
             parent.p.push(&mut self.heap, s.ptr);
             // `pushclosure`
             if let Some(p) = closed {
-                self.proto_barrier(r, r.fs.len() - 1, p.as_ptr() as *mut GcHeader);
+                self.proto_barrier(r, r.fs.len() - 1, p.hdr());
             }
         }
         if d == Dialect::L55

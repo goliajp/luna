@@ -248,7 +248,8 @@ impl Heap {
 
     /// The object behind `h`, a native or a userdata, has environment
     /// `env`: one of the io library's is the latest opening's.
-    pub(crate) fn set_env51(&mut self, h: *mut GcHeader, env: u8) {
+    pub(crate) fn set_env51(&mut self, h: Gc<GcHeader>, env: u8) {
+        let h = h.as_ptr();
         // SAFETY: `h` heads a live object; only its class and flag bytes
         // are written: one with an environment to mark is no leaf
         unsafe {

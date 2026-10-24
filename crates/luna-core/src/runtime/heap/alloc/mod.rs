@@ -59,7 +59,7 @@ impl Heap {
         size: usize,
     ) -> Result<Gc<T>, Oom> {
         let g = self.try_adopt(obj)?;
-        self.acct_new(g.as_ptr() as *mut GcHeader, kind, size);
+        self.acct_new(g.hdr(), kind, size);
         Ok(g)
     }
 
@@ -106,14 +106,17 @@ impl Heap {
             unsafe { t.write(Table::new(GcHeader::new(ObjTag::Table))) };
             t
         };
-        // SAFETY: `p` is a fresh block or a pool table reset above, linked nowhere yet
-        unsafe { self.link(p as *mut GcHeader) };
-        self.acct_new_table(p as *mut GcHeader);
+        // SAFETY: `p` is a fresh block or a pool table reset above, linked
+        // nowhere yet; linked, it is a table the heap manages
+        let g = unsafe {
+            self.link(p as *mut GcHeader);
+            Gc::from_ptr(p)
+        };
+        self.acct_new_table(g.hdr());
         // the Table is now at its final heap address; wire `array_ptr` to
         // point at the inline storage that lives inside it
-        // SAFETY: `p` is the table linked just above, which the heap now manages; no other handle or reference to it exists yet
+        // SAFETY: `g` is the table linked just above; no other handle or reference to it exists yet
         unsafe {
-            let g = Gc::from_ptr(p);
             let t = g.as_mut();
             t.init_array_ptr();
             t.hdr.sub = self.dialect() as u8;
@@ -236,10 +239,7 @@ impl Heap {
         upvals: &[Gc<Upvalue>],
     ) -> Result<Gc<LuaClosure>, Oom> {
         use crate::runtime::function::INLINE_UPVALS_N;
-        self.check_not_dying(
-            proto.as_ptr() as *const GcHeader,
-            "a new closure's prototype",
-        );
+        self.check_not_dying(proto.hdr(), "a new closure's prototype");
         let n = upvals.len();
         let store = if n > INLINE_UPVALS_N {
             Some(LSlice::from_slice(self.mem(), upvals)?)
@@ -280,7 +280,7 @@ impl Heap {
         };
         let size = self.closure_size(&proto, n);
         let env = self.env51(&proto);
-        self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::LuaClosure, size);
+        self.acct_new(g.hdr(), PucKind::LuaClosure, size);
         // SAFETY: `g` is the closure linked just above; no other handle or reference to it exists yet
         let c = unsafe { g.as_mut() };
         c.init_upvals_ptr();

@@ -5,11 +5,18 @@ use super::*;
 impl Heap {
     /// The sweep reaches `cur` (`after`: has swept it): the records swept
     /// with it, as PUC sweeps them. Returns how many.
+    ///
+    /// # Safety
+    /// `cur` heads an object of this heap that is still allocated.
     #[inline(always)]
-    pub(in crate::runtime) fn env51_sweep(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
+    pub(in crate::runtime) unsafe fn env51_sweep(
+        &mut self,
+        cur: *mut GcHeader,
+        after: bool,
+    ) -> i64 {
         // an anchor is one of the io library's objects, with its environment
         // in the class bits: the others are passed by without a search
-        // SAFETY: `cur` heads a live object
+        // SAFETY: the caller's contract
         if unsafe { (*cur).cls } >> ENV_SHIFT == 0 {
             return 0;
         }
@@ -103,9 +110,13 @@ impl Heap {
 
     /// The object `cur` is freed by a sweep: the records it ends swept
     /// after it, and none found by it any more.
+    ///
+    /// # Safety
+    /// `cur` heads an object of this heap that is still allocated.
     #[inline]
-    pub(in crate::runtime) fn env51_freed(&mut self, cur: *mut GcHeader) {
-        self.env51_sweep(cur, true);
+    pub(in crate::runtime) unsafe fn env51_freed(&mut self, cur: *mut GcHeader) {
+        // SAFETY: the caller's contract
+        unsafe { self.env51_sweep(cur, true) };
         self.env51_forget(cur);
     }
 

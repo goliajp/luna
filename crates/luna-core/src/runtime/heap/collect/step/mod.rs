@@ -104,7 +104,7 @@ impl Heap {
 }
 
 /// Where a run of [`Heap::propagate_work`] stopped.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub(crate) enum Propagated {
     /// no object is gray
     Empty,
@@ -115,7 +115,7 @@ pub(crate) enum Propagated {
     Thread(*mut GcHeader),
     /// 5.3: the thread it is about to traverse, gray again, which the
     /// collector shrinks first (`luaD_shrinkstack` in `traversethread`)
-    Shrink(*mut GcHeader),
+    Shrink(Gc<crate::runtime::Coro>),
 }
 
 /// The running thread, for the work of traversing it: its object, and
@@ -180,7 +180,9 @@ impl Heap {
                 && self.puc_shrinks_now(h)
             {
                 m.push_gray(h);
-                out = Propagated::Shrink(h);
+                // SAFETY: `h` came off the gray stack, so it heads an
+                // allocated object, and it is a coroutine
+                out = Propagated::Shrink(unsafe { Gc::from_ptr_unchecked(h.cast()) });
                 break;
             }
             m.leaf_bytes = 0;

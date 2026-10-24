@@ -73,7 +73,7 @@ impl Vm {
         let upval = self.heap.puc_size(crate::runtime::puc::PucObj::Upval);
         for (i, uv) in ups.iter().enumerate() {
             if self.version() > LuaVersion::Lua51 || i != proto.env_upval_idx as usize {
-                let h = uv.as_ptr() as *mut crate::runtime::heap::GcHeader;
+                let h = uv.hdr();
                 self.heap
                     .acct_promote_obj(h, crate::runtime::heap::PucKind::Upval, upval);
             }

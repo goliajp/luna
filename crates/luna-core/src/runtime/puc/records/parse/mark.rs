@@ -123,7 +123,7 @@ impl Marker {
         // SAFETY: a string luna holds is allocated; only its header is read
         // and written
         unsafe {
-            if is_white((*h).flags) && !is_uncounted(h) && (*h).sub & EXTERNAL == 0 {
+            if is_white((*h).flags) && !(*h).is_uncounted() && (*h).sub & EXTERNAL == 0 {
                 (*h).cls |= KEPT;
                 return;
             }
