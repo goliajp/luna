@@ -102,7 +102,13 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // the result is empty for any count when both pieces are; PUC before
     // 5.5 spins `n` times producing it
     if n <= 0 || l + lsep == 0 {
-        let r = vm.api_push_string(b"")?;
+        // 5.1 builds it in a buffer, whose empty result checks for no
+        // collection (`lua_concat` of nothing); later ones push a literal
+        let r = if v == LuaVersion::Lua51 {
+            vm.buffer_result(&[])?
+        } else {
+            vm.api_push_string(b"")?
+        };
         return vm.nat_ret(fs, &[r]);
     }
     let n = n as u128;
