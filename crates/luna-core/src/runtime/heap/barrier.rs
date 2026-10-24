@@ -53,6 +53,13 @@ impl Heap {
             if !is_white(cf) {
                 return;
             }
+            // PUC `luaC_barrierf` in the sweep: no invariant to keep, the
+            // parent goes white instead of marking the child, which would
+            // stay black into the next cycle unswept
+            if self.phase == GcPhase::Sweep {
+                (*parent).paint(self.current_white);
+                return;
+            }
             if self.phase == GcPhase::Propagate {
                 self.count_marked(ch);
             }
