@@ -57,8 +57,12 @@ impl PucBuffer {
         self.concat_51(vm, toget)
     }
 
-    /// `lua_concat(L, n)` of the top `n` strings of the buffer
+    /// `lua_concat(L, n)` of the top `n` strings of the buffer: for one
+    /// string nothing, not even the check for a collection
     pub(super) fn concat_51(&mut self, vm: &mut Vm, n: usize) -> Result<(), LuaError> {
+        if n < 2 {
+            return Ok(());
+        }
         let from = vm.lib_roots.len() - n;
         let mut st: Vec<Value> = vm.lib_roots[from..].to_vec();
         vm.api_check_before()?;
