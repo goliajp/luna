@@ -12,12 +12,12 @@ impl Heap {
         version: crate::version::LuaVersion,
     ) -> Result<(), crate::runtime::mem::Oom> {
         self.rules = crate::runtime::dialect::Rules::of(version);
-        self.puc_dialect(version);
+        self.puc_start(version)?;
         // the strings the heap made before it knew the dialect (its fixed
         // memory error message) move to the dialect's hash
         let seed = self.seed();
         self.rehash_strings(seed);
-        self.acct_boot()
+        Ok(())
     }
 
     /// The dialect's rules.
@@ -46,7 +46,7 @@ impl Heap {
     /// Hash the interned strings again with `seed` and the dialect's
     /// function.
     pub(crate) fn rehash_strings(&mut self, seed: u32) {
-        let strict = self.puc_strt_grows_strictly();
+        let strict = self.puc_rules().strt_grows_strictly;
         self.strings.rehash(seed, self.rules.hash51(), strict);
     }
 
@@ -128,8 +128,9 @@ impl Heap {
 impl Drop for Heap {
     fn drop(&mut self) {
         self.dropping = true;
-        // nothing is counted any more: the token never goes back
-        let _ = self.counting_off();
+        // nothing is counted any more, and the dead strings a string
+        // sweep held off `all` come back
+        let held = self.puc_heap_drops();
         // every block goes straight back to the system
         self.mem().ctx().close_pools();
         // free everything regardless of reachability, including any list still
@@ -143,8 +144,7 @@ impl Drop for Heap {
                     cur = next;
                 }
             }
-            // and the dead strings a string sweep held off `all`
-            for h in self.take_held_strings() {
+            for h in held {
                 self.free_obj_closing(h);
             }
             // the pooled tables' interiors were freed when they were
@@ -183,9 +183,11 @@ impl Heap {
         globals: Gc<crate::runtime::Table>,
     ) -> Result<Gc<crate::runtime::Coro>, Oom> {
         let mem = self.mem();
-        let size = self.puc_size(PucObj::Thread);
-        let stack_size = self.puc_basic_stack();
-        let (frame_size, ci_alloc) = self.puc_new_thread_ci();
+        let stack_size = self.puc_rules().basic_stack;
+        let (frame_size, ci_alloc) = (
+            self.puc_rules().new_frame_size,
+            self.puc_rules().new_ci_alloc,
+        );
         let coro = crate::runtime::Coro {
             hdr: GcHeader {
                 aux: self.take_id(),
@@ -219,11 +221,10 @@ impl Heap {
             host_stack: LVec::new(mem),
             host_state: None,
         };
-        let co = self.adopt_counted(coro, PucKind::Thread, size)?;
-        if self.counting() {
+        let co = self.try_adopt(coro)?;
+        if self.puc_born(co, Made) {
             self.threads.push(co);
         }
-        self.acct_thread_blocks(stack_size);
         Ok(co)
     }
 }

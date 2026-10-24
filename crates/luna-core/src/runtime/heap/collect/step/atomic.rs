@@ -27,7 +27,7 @@ impl Heap {
         // and the barriers' tables again (`retraversegrays`), uncounted;
         // 5.3 stops counting before `grayagain`, the threads among it (the
         // caller counts what the other roots reach)
-        let again_free = !self.puc_atomic_counts_again();
+        let again_free = !self.puc_rules().atomic_counts_again;
         let first = self.drain_work(&mut m, run);
         self.regray_again(&mut m);
         let again = self.drain_work(&mut m, run);
@@ -76,17 +76,10 @@ impl Heap {
             }
         }
         let fin = self.atomic_tail(&mut m, run);
-        self.puc_found_to_finalize(fin);
-        if self.puc_fixed_strings_marked() {
+        if self.puc_rules().fixed_strings_marked {
             self.color_fixed_strings(0);
         }
-        self.settle_sizer(&mut m);
-        self.hook_listed();
-        if run.is_some() {
-            self.collect_dead_strings();
-        } else {
-            self.end_string_sweep();
-        }
+        self.puc_atomic_ends(fin, &mut m, run.is_some());
         // PropagateState consumed; the sweep goes over `all` in place
         // (PUC `entersweep`). Anything allocated past this point goes in
         // front of where it is and survives.
@@ -100,7 +93,7 @@ impl Heap {
         self.young = ptr::null_mut();
         self.phase = GcPhase::Sweep;
         self.sweep_prev = ptr::null_mut();
-        let swept = match self.puc_enter_sweep() {
+        let swept = match self.puc_rules().enter_sweep {
             None => 0,
             Some((budget, to_live)) => self.sweep_objects(budget, to_live) as i64,
         };

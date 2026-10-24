@@ -66,7 +66,7 @@ impl NativeClosure {
     pub(crate) fn trace(&self, m: &mut Marker) {
         // 5.1: its environment first
         m.mark_env51(&self.hdr as *const _ as *mut _, self.hdr.cls);
-        let puc = crate::runtime::heap::native_puc_upvals(self);
+        let puc = crate::runtime::puc::native_puc_upvals(self);
         for (i, &v) in self.upvals.iter().enumerate() {
             if i < puc {
                 m.value(v);

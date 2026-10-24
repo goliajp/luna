@@ -83,7 +83,11 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
+    #[inline]
     pub(in crate::runtime) unsafe fn count_marked(&mut self, h: *mut GcHeader) {
+        if !self.puc.pace.count_marked {
+            return;
+        }
         if let Some(s) = self.lend_sizer() {
             // SAFETY: the caller's contract
             let n = unsafe { s.size(h) };

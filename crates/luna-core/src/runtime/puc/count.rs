@@ -32,6 +32,7 @@ impl Heap {
         self.puc.dialect = d;
         self.puc.params = super::GcParams::new(version);
         self.puc.sizes = PucSizes::of(d);
+        self.puc.rules = super::for_heap::HeapRules::of(d, &self.puc.sizes);
         if d == Dialect::L51 {
             self.puc.short_max = usize::MAX;
         }

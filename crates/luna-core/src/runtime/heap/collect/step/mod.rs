@@ -15,10 +15,10 @@ impl Heap {
     pub(crate) fn gc_begin_propagate(&mut self) -> Marker {
         debug_assert!(self.phase == GcPhase::Pause);
         self.phase = GcPhase::Propagate;
-        self.env51_whiten();
+        self.puc_mark_begins();
         // 5.2's fixed strings are white like any other: a cycle marks them
         // where it reaches them, and counts them
-        if self.puc_fixed_strings_marked() {
+        if self.puc_rules().fixed_strings_marked {
             self.color_fixed_strings(self.current_white);
         }
         // what a back barrier sent there during the last sweep is white now
@@ -155,7 +155,7 @@ impl Heap {
             };
             // SAFETY: a popped header heads an allocated object
             let coro = unsafe { (*h).tag } == ObjTag::Coro;
-            if coro && self.puc_shrinks_traversed(h) {
+            if coro && self.puc_rules().shrink_on_traverse && self.puc_shrinks_now(h) {
                 m.push_gray(h);
                 // SAFETY: `h` came off the gray stack, so it heads an
                 // allocated object, and it is a coroutine

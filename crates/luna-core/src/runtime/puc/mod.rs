@@ -20,7 +20,6 @@ mod count;
 pub(crate) use count::*;
 mod defer;
 pub(in crate::runtime) mod for_heap;
-pub(crate) use for_heap::c_function_is_object;
 mod lent;
 pub(crate) use lent::Lent;
 mod load_session;
@@ -51,3 +50,4 @@ pub(crate) use thread::{BASIC_CI_51, Thread};
 #[cfg(test)]
 mod tests;
 pub(crate) mod work;
+pub(crate) use work::native_puc_upvals;

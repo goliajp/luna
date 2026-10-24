@@ -17,8 +17,18 @@ impl Heap {
     ///
     /// # Safety
     /// As [`Heap::link`]'s.
-    #[cold]
+    #[inline(always)]
     pub(in crate::runtime) unsafe fn set_aside(&mut self, h: *mut GcHeader) -> bool {
+        // SAFETY: the caller's contract
+        self.puc.unborn_on && unsafe { self.set_aside_now(h) }
+    }
+
+    /// [`Heap::set_aside`] while loads set objects aside.
+    ///
+    /// # Safety
+    /// As [`Heap::link`]'s.
+    #[cold]
+    unsafe fn set_aside_now(&mut self, h: *mut GcHeader) -> bool {
         if self.puc.unborn.try_reserve(1).is_err() {
             return false;
         }

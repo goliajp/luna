@@ -41,8 +41,7 @@ impl Heap {
             }
             self.all = head;
         }
-        self.sweep_open_end();
-        self.whiten_unborn();
+        self.puc_sweep_ends();
         self.live -= freed;
         // a sweep keeps the order of `all` (see `Heap::keep_young`)
         self.check_no_dangling("full_sweep");
@@ -101,10 +100,7 @@ impl Heap {
                 match fate {
                     // PUC's string table holds it, not the list it sweeps to
                     // the first live object: its string sweep comes first
-                    Fate::Hold => {
-                        *link = (*cur).next;
-                        self.hold_for_string_sweep(cur);
-                    }
+                    Fate::Hold => *link = (*cur).next,
                     Fate::Free(_) => {
                         *link = (*cur).next;
                         self.free_obj(cur);
@@ -133,7 +129,7 @@ impl Heap {
         self.sweep_begins();
         let mut n = 0;
         let new_white = self.current_white;
-        let strt = self.puc_sweeps_string_table();
+        let strt = self.puc_rules().sweeps_string_table;
         // SAFETY: as in `sweep_objects`
         unsafe {
             loop {
@@ -219,8 +215,7 @@ impl Heap {
 
     /// The sweep reached the end of the list.
     fn end_sweep(&mut self) {
-        self.sweep_open_end();
-        self.whiten_unborn();
+        self.puc_sweep_ends();
         self.sweep_prev = ptr::null_mut();
         self.phase = GcPhase::Pause;
         self.mem_ctx().gc_cycle_ended(self.puc_bytes());

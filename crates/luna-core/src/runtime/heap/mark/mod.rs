@@ -4,7 +4,6 @@ use super::*;
 
 mod at;
 mod notes;
-pub(crate) use at::native_puc_upvals;
 
 /// The gray stack, outside the allocation context: PUC links gray
 /// objects through themselves, so marking allocates nothing a host
@@ -52,9 +51,9 @@ pub(crate) struct Marker {
     /// PUC 5.1 mode: skip ephemeron handling — `__mode='k'` tables mark their
     /// values strongly during the normal trace pass (see [`Heap::no_ephemeron`]).
     pub(in crate::runtime::heap) no_ephemeron: bool,
-    /// the dialect, whose `reallymarkobject` decides which objects are
-    /// traversed as soon as they are marked
-    pub(in crate::runtime::heap) dialect: crate::runtime::dialect::Dialect,
+    /// the model's rules for the dialect, whose `reallymarkobject` decides
+    /// which objects are traversed as soon as they are marked
+    pub(in crate::runtime::heap) rules: crate::runtime::puc::for_heap::HeapRules,
     /// Protos with a closure cache (PUC `Proto.cache`), a weak reference:
     /// a cached closure left unmarked is cleared once marking is done.
     pub(in crate::runtime::heap) cached_protos: Vec<*mut crate::runtime::Proto>,
@@ -120,13 +119,7 @@ pub(super) unsafe fn trace_children(h: *mut GcHeader, m: &mut Marker) {
     unsafe {
         match (*h).tag {
             ObjTag::Str => {}
-            ObjTag::Ghost => {
-                if model::is_phantom(h) {
-                    m.trace_phantom(h);
-                } else if model::is_load_tab(h) {
-                    m.trace_load_tab(h);
-                }
-            }
+            ObjTag::Ghost => m.puc_trace_record(h),
             ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
             ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, m),
             ObjTag::Closure => (*(h as *mut LuaClosure)).trace(m),
@@ -226,7 +219,7 @@ impl Marker {
             let f = (*h).flags;
             if is_white(f) {
                 if !self.quiet_mode {
-                    if self.luna_only(h) {
+                    if self.puc_luna_only(h) {
                         (*h).flags = (*h).with_slow(f & !WHITE_BITS);
                         self.quiet.push(h);
                         return true;

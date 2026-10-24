@@ -168,7 +168,7 @@ fn bytes_and_live_round_trip_to_zero() {
     heap.set_version(crate::version::LuaVersion::Lua55).unwrap();
     let _ = heap.collect(&[]);
     let (bytes0, live0) = (heap.bytes(), heap.live_objects());
-    let strt0 = heap.strt_bytes();
+    let strt0 = heap.puc_hook_strt_bytes();
     // Build a churn: 50 tables, each filled with 200 int keys (forces
     // multiple rehashes); plus interned strings spliced through the
     // hash part. Bytes should grow well past the empty baseline.
@@ -214,7 +214,7 @@ fn bytes_and_live_round_trip_to_zero() {
     );
     // the string table keeps the size it grew to (PUC shrinks it only in
     // a collection's `checkSizes`)
-    let strt_grown = heap.strt_bytes() - strt0;
+    let strt_grown = heap.puc_hook_strt_bytes() - strt0;
     assert_eq!(
         heap.bytes(),
         bytes0 + strt_grown,

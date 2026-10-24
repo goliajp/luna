@@ -50,19 +50,6 @@ impl Heap {
     /// Put `obj` in a new block and under GC management. On failure `obj`
     /// is dropped.
     #[inline]
-    /// [`Heap::try_adopt`], the object counted at `size` (see
-    /// [`Heap::acct_new`]).
-    pub(super) fn adopt_counted<T: GcObject>(
-        &mut self,
-        obj: T,
-        kind: PucKind,
-        size: usize,
-    ) -> Result<Gc<T>, Oom> {
-        let g = self.try_adopt(obj)?;
-        self.acct_new(g.hdr(), kind, size);
-        Ok(g)
-    }
-
     pub(crate) fn try_adopt<T: GcObject>(&mut self, obj: T) -> Result<Gc<T>, Oom> {
         let p = self.alloc_block::<T>()?;
         // SAFETY: `p` is a fresh block for one `T`, linked nowhere yet, and a
@@ -112,7 +99,7 @@ impl Heap {
             self.link(p as *mut GcHeader);
             Gc::from_ptr(p)
         };
-        self.acct_new_table(g.hdr());
+        self.puc_born(g, Made);
         // the Table is now at its final heap address; wire `array_ptr` to
         // point at the inline storage that lives inside it
         // SAFETY: `g` is the table linked just above; no other handle or reference to it exists yet
@@ -206,7 +193,7 @@ impl Heap {
     pub fn try_adopt_proto(&mut self, proto: Proto) -> Result<Gc<Proto>, Oom> {
         debug_assert!(proto.hdr.tag == ObjTag::Proto);
         let g = self.try_adopt(proto)?;
-        self.acct_proto(g);
+        self.puc_born(g, Made);
         Ok(g)
     }
 
@@ -278,9 +265,7 @@ impl Heap {
             self.link(p as *mut GcHeader);
             Gc::from_ptr(p)
         };
-        let size = self.closure_size(&proto, n);
-        let env = self.env51(&proto);
-        self.acct_new(g.hdr(), PucKind::LuaClosure, size);
+        let env = self.puc_born(g, OfProto(&proto, n));
         // SAFETY: `g` is the closure linked just above; no other handle or reference to it exists yet
         let c = unsafe { g.as_mut() };
         c.init_upvals_ptr();

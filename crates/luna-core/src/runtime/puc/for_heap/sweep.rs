@@ -12,7 +12,7 @@ pub(crate) enum Fate {
     Free(i64),
     /// kept: PUC keeps it, or one of its records needs it
     Keep,
-    /// taken off the list for the string sweep under way
+    /// held for the string sweep under way: the heap only unlinks it
     Hold,
 }
 
@@ -63,6 +63,7 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             if to_live && self.in_string_sweep(cur) {
+                self.hold_for_string_sweep(cur);
                 return Fate::Hold;
             }
             if self.kept_dead(cur) {
@@ -129,12 +130,5 @@ impl Heap {
             }
             (Self::ghost_objects(&*(cur as *mut Ghost)), None)
         }
-    }
-
-    /// Whether PUC keeps the strings (5.1: every one, 5.2: the short ones)
-    /// in its string table, swept apart from the list.
-    #[inline]
-    pub(in crate::runtime) fn puc_sweeps_string_table(&self) -> bool {
-        matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
     }
 }

@@ -58,14 +58,7 @@ impl Heap {
         let g = self.uncounted(|h| h.try_new_builtin(f, upvals, builtin, false));
         let g = g?;
         self.set_native_puc_nup(g, puc_nup);
-        if self.counting() {
-            // SAFETY: `g` was made just above; nothing borrows its header
-            // while its per-type byte is written
-            unsafe { (*g.header()).set_uncounted(false) };
-            if self.puc_c_function_is_object(puc_nup) {
-                self.acct_obj(PucKind::CClosure, self.puc_size(PucObj::CClosure(puc_nup)));
-            }
-        }
+        self.puc_born(g, PucFunction(puc_nup));
         Ok(g)
     }
 
@@ -124,21 +117,15 @@ impl Heap {
         };
         let p = self.slab_block()?;
         // SAFETY: `p` is a free slot of a slab block, for one native
-        let h = unsafe {
+        let g = unsafe {
             p.write(obj);
             let h = p as *mut GcHeader;
             (*h).cls |= SLAB;
             self.link(h);
-            h
+            Gc::from_ptr(p)
         };
-        if self.counting() {
-            self.acct_obj(PucKind::CClosure, self.puc_size(PucObj::CClosure(0)));
-        } else {
-            // SAFETY: as above; only its per-type byte is written
-            unsafe { (*h).set_uncounted(true) };
-        }
-        // SAFETY: as above
-        Ok(unsafe { Gc::from_ptr(p) })
+        self.puc_born(g, C0);
+        Ok(g)
     }
 
     /// Native `g` stands for a C closure of PUC's with `n` upvalues (from
@@ -162,12 +149,8 @@ impl Heap {
     ) -> Result<Gc<NativeClosure>, Oom> {
         let g = self.uncounted(|h| h.try_new_builtin(f, upvals, Builtin::None, false));
         let g = g?;
-        if self.counting() {
-            for &(kind, size) in &objs[counted..] {
-                self.acct_obj(kind, size);
-            }
+        if self.puc_born(g, StandingFor { objs, counted }) {
             let h = g.as_ptr() as *mut GcHeader;
-            self.stand_for(h, objs.iter().map(|&(_, s)| s));
             // SAFETY: `h` heads the native just made; only its class byte
             unsafe { (*h).cls |= STANDS };
         }
@@ -220,20 +203,13 @@ impl Heap {
         if fix {
             return Ok(g);
         }
-        // PUC 5.2+ makes a C function without upvalues a light value, and
-        // its library functions are such functions, whatever upvalues
-        // luna's keep (one with upvalues of PUC's is made by
-        // `try_new_native_puc`)
-        if self.fix_natives {
-            if nup > 0 {
-                // SAFETY: `g` was made just above; nothing borrows its
-                // header while its per-type byte is written
-                unsafe { (*g.header()).set_uncounted(true) };
-            }
-        } else if self.puc_c_function_is_object(nup) {
-            let size = self.puc_size(PucObj::CClosure(nup));
-            self.acct_new(g.hdr(), PucKind::CClosure, size);
-        }
+        self.puc_born(
+            g,
+            NativeFunction {
+                nup,
+                fixed: self.fix_natives,
+            },
+        );
         Ok(g)
     }
 }

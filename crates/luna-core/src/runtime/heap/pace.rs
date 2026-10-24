@@ -2,8 +2,6 @@
 
 use super::*;
 
-pub(super) use crate::runtime::puc::for_heap::native_upvals;
-
 impl Heap {
     /// Number of GC-managed objects currently linked into the heap (live + not
     /// yet swept). Useful for `collectgarbage("count")`-style introspection.
@@ -107,7 +105,7 @@ impl Heap {
     /// stops the collector with an unreachable threshold; the later
     /// dialects still step then, to put the debt back.
     pub(crate) fn refresh_gc_limit(&mut self) {
-        self.puc_set_limit(self.gc_stopped && self.puc_stop_unreachable());
+        self.puc_set_limit(self.gc_stopped && self.puc_rules().stop_unreachable);
     }
 
     /// A cycle ended with the count at what it is now: the pause before
