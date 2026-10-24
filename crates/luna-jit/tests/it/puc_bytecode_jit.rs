@@ -100,8 +100,11 @@ end
     if let Err(e) = vm.call_value(Value::Closure(f), &[]) {
         return Err(vm.error_display(&e));
     }
-    match vm.eval("return _G.__out").expect("buffer").first() {
-        Some(Value::Str(s)) => Ok(String::from_utf8_lossy(s.as_bytes()).into_owned()),
+    // read without running code: a finalizer the program left pending
+    // (one that raises, say) would run in a call made now
+    let key = vm.intern_str("__out");
+    match vm.globals().get_str(key) {
+        Value::Str(s) => Ok(String::from_utf8_lossy(s.as_bytes()).into_owned()),
         other => panic!("expected the capture buffer, got {other:?}"),
     }
 }
