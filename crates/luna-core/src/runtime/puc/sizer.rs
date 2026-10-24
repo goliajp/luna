@@ -67,8 +67,10 @@ impl Heap {
         })
     }
 
-    /// The sizer `m` had back: what it counted, and what it held.
+    /// The sizer `m` had back: what it counted, and what it held; and the
+    /// rest of what it borrowed from the model.
     pub(in crate::runtime) fn settle_sizer(&mut self, m: &mut Marker) {
+        self.settle_model(&mut m.lent);
         if let Some(s) = m.take_sizer() {
             self.puc.pace.estimate += s.marked;
             self.puc.stand_ins = s.stand_ins;

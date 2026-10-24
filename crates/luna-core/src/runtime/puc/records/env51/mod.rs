@@ -120,7 +120,7 @@ impl Heap {
         let rec = |size: usize, kid: usize, env: u8| {
             let mut hdr = GcHeader::new(ObjTag::Ghost);
             hdr.sub = PHANTOM;
-            hdr.flags = w;
+            hdr.set_flags(w);
             Phantom {
                 hdr,
                 size: size as u32,
@@ -189,7 +189,8 @@ impl Heap {
         let g = self.env51_gen_now();
         g.opened |= k == E1;
         let p = &mut g.ph[k];
-        (p.hdr.flags, p.dead, p.counted) = (w, false, counted);
+        p.hdr.set_flags(w);
+        (p.dead, p.counted) = (false, counted);
         &mut p.hdr as *mut GcHeader
     }
 
@@ -251,7 +252,7 @@ impl Heap {
         unsafe {
             (*h).cls = ((*h).cls & !(7 << ENV_SHIFT)) | (env << ENV_SHIFT);
             if env != 0 && env != ENV_PROTO {
-                (*h).flags &= !LEAF;
+                (*h).clear_leaf();
             }
         }
         if let Some(e) = &mut self.puc.env51_box

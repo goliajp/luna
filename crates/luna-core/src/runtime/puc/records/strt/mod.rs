@@ -82,7 +82,7 @@ impl Heap {
         // freed while the list is walked
         unsafe {
             while !cur.is_null() {
-                let f = (*cur).flags;
+                let f = (*cur).flags();
                 if (*cur).tag == ObjTag::Str
                     && is_white(f)
                     && f & new_white == 0
@@ -102,7 +102,7 @@ impl Heap {
                         self.puc.strt.dead.push((h % size.max(1), cur));
                     }
                 }
-                cur = (*cur).next;
+                cur = (*cur).next_obj();
             }
         }
         self.puc.strt.sort_dead(size.max(1));
@@ -163,7 +163,7 @@ impl Heap {
         for h in std::mem::take(&mut self.puc.strt.held) {
             // SAFETY: a held string is allocated and on no list
             unsafe {
-                let f = (*h).flags;
+                let f = (*h).flags();
                 if is_white(f) && f & new_white == 0 && !self.kept_dead(h) {
                     self.free_unlisted(h);
                 } else {
@@ -187,7 +187,7 @@ impl Heap {
             // SAFETY: a dead string stays allocated until the object sweep,
             // which comes after this one; a resurrected one is skipped
             unsafe {
-                let f = (*h).flags;
+                let f = (*h).flags();
                 if !is_white(f) || f & self.white() != 0 {
                     continue;
                 }

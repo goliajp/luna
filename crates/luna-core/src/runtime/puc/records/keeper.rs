@@ -56,12 +56,12 @@ impl Heap {
             let Some(i) = self.puc.keepers.iter().position(|k| k.0 == h) else {
                 return false;
             };
-            let f = (*self.puc.keepers[i].1).flags;
+            let f = (*self.puc.keepers[i].1).flags();
             if is_white(f) && f & self.white() == 0 {
                 self.puc.keepers.swap_remove(i);
                 return false;
             }
-            (*h).flags = ((*h).flags & !COLOR_BITS) | self.white();
+            (*h).paint(self.white());
             true
         }
     }

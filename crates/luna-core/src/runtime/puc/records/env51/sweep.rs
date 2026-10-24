@@ -57,13 +57,13 @@ impl Heap {
                         continue;
                     }
                     n += 1;
-                    let f = p.hdr.flags;
+                    let f = p.hdr.flags();
                     if is_white(f) && f & w == 0 {
                         p.dead = true;
-                        p.hdr.flags = BLACK;
+                        p.hdr.set_flags(BLACK);
                         each[m + k] = Some((r, p.counted));
                     } else {
-                        p.hdr.flags = w;
+                        p.hdr.set_flags(w);
                     }
                 }
                 m += 2;
@@ -134,7 +134,7 @@ impl Heap {
         if let Some(e) = &mut self.puc.env51_box {
             for g in e.gens.iter_mut() {
                 for p in g.ph.iter_mut().filter(|p| !p.dead) {
-                    p.hdr.flags = w;
+                    p.hdr.set_flags(w);
                 }
             }
         }

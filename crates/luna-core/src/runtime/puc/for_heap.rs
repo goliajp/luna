@@ -133,13 +133,6 @@ impl Heap {
         self.puc.strcache.clear_dead();
     }
 
-    /// 5.2 and 5.3: the objects of PUC's luna's stand for, for a marking
-    /// to count (the marker holds the pointer while it is lent out).
-    #[inline]
-    pub(in crate::runtime) fn stand_ins_ptr(&self) -> *const Vec<(*mut GcHeader, usize)> {
-        &self.puc.stand_ins
-    }
-
     /// The uncounted object `h` stands for objects of PUC's of the sizes in
     /// `sizes`, freed with it.
     pub(in crate::runtime) fn stand_for(

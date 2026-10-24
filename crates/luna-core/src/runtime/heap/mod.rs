@@ -18,7 +18,7 @@ use crate::runtime::value::Value;
 /// mark bits. Always at offset 0 of the containing struct (`#[repr(C)]`).
 #[repr(C)]
 pub struct GcHeader {
-    pub(in crate::runtime) next: *mut GcHeader,
+    pub(in crate::runtime::heap) next: *mut GcHeader,
     pub(in crate::runtime) tag: ObjTag,
     /// tricolor + finalizer state. PUC `gch.marked` layout (lgc.h):
     ///   bit 0 WHITE0 — current-white-A
@@ -36,7 +36,7 @@ pub struct GcHeader {
     ///   bit 7 FIN    — registered for `__gc` (tracked in `finalize`)
     /// Gray = no white bits, no BLACK; that is the in-stack state between the
     /// time a Marker visits an object and the time it traces it.
-    pub(in crate::runtime) flags: u8,
+    pub(in crate::runtime::heap) flags: u8,
     /// Per-type byte in what would otherwise be padding: a table keeps the
     /// dialect whose table rules it follows here (`crate::runtime::dialect::Dialect`).
     pub(crate) sub: u8,

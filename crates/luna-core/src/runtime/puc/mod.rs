@@ -19,6 +19,8 @@ mod count;
 pub(crate) use count::*;
 mod defer;
 mod for_heap;
+mod lent;
+pub(crate) use lent::Lent;
 mod load_session;
 mod loads;
 pub(crate) use defer::Deferred;

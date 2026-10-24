@@ -201,9 +201,7 @@ impl Heap {
             sizer: None,
             quiet: Vec::new(),
             quiet_mode: false,
-            env51: std::ptr::null(),
-            parse: std::ptr::null(),
-            stands: std::ptr::null(),
+            lent: Default::default(),
             verify: Default::default(),
         };
         let mut cur = self.all;

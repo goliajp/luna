@@ -3,7 +3,35 @@
 
 use super::*;
 
+/// In the `next` of an object kept off the list: PUC has not made it yet.
+const DETACHED: *mut GcHeader = ptr::without_provenance_mut(1);
+
 impl Heap {
+    /// A new object `h` kept off the list until PUC makes it ([`Heap::link_now`]
+    /// then puts it on), white as a new object for the barriers that reach
+    /// it first.
+    ///
+    /// # Safety
+    /// `h` heads an allocated object of this heap on no list.
+    #[inline]
+    pub(in crate::runtime) unsafe fn detach_new(&mut self, h: *mut GcHeader) {
+        // SAFETY: the caller's contract
+        unsafe {
+            (*h).next = DETACHED;
+            (*h).paint(self.white());
+        }
+    }
+
+    /// Whether `h` is kept off the list ([`Heap::detach_new`]).
+    ///
+    /// # Safety
+    /// `h` heads an allocated object of this heap.
+    #[inline]
+    pub(in crate::runtime) unsafe fn is_detached(h: *mut GcHeader) -> bool {
+        // SAFETY: the caller's contract
+        unsafe { (*h).next == DETACHED }
+    }
+
     /// The white of objects born now (PUC `luaC_white(g)`).
     #[inline]
     pub(in crate::runtime) fn white(&self) -> u8 {
