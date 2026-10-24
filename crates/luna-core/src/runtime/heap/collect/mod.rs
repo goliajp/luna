@@ -240,8 +240,6 @@ impl Heap {
             // sweep, which has not run; only its flag byte is read
             w.1 = unsafe { is_white((*w.0).flags) };
         }
-        // PUC `luaS_clearcache`
-        self.puc_clear_string_cache();
         self.chunk_roots.retain(|p| {
             // SAFETY: a root still listed was not freed (dead ones leave the
             // list first) and this cycle's sweep has not run
@@ -281,6 +279,8 @@ impl Heap {
         // and the pre-flip current-white becomes the dead-white (the bit the
         // sweep tests for). Born-during-sweep allocations stamp the new
         // current-white via `Heap::link`, so they survive this cycle.
+        // PUC `luaS_clearcache`, after every weak table's clearing
+        self.puc_clear_string_cache();
         self.doom_open_upvals();
         self.current_white ^= WHITE_BITS;
         // the threads the sweep is about to free are no longer visited
