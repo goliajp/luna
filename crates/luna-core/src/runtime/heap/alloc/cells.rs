@@ -14,12 +14,13 @@ impl Heap {
     /// [`Heap::new_upvalue`], failing when memory runs out.
     #[inline]
     pub fn try_new_upvalue(&mut self, state: UpvalState) -> Result<Gc<Upvalue>, Oom> {
-        let size = self.puc_size(PucObj::Upval);
         let upval = Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
         };
-        self.adopt_counted(upval, PucKind::Upval, size)
+        let g = self.try_adopt(upval)?;
+        self.puc_born(g, Made);
+        Ok(g)
     }
 
     /// Create a userdata (an io file handle — luna's only userdata) with no
@@ -37,7 +38,7 @@ impl Heap {
     ) -> Result<Gc<Userdata>, Oom> {
         // a userdata a host makes from Rust has no counterpart in PUC: one
         // with no block and a user value
-        let size = self.puc_size(PucObj::udata(1, 0));
+        let size = self.puc_size(PucObj::Udata { nuv: 1, bytes: 0 });
         self.try_new_userdata_sized(payload, writable, size)
     }
 
@@ -53,6 +54,8 @@ impl Heap {
         hdr.aux = self.take_id();
         let mut u = Userdata::new(hdr, payload, writable);
         u.puc_size = size;
-        self.adopt_counted(u, PucKind::Userdata, size)
+        let g = self.try_adopt(u)?;
+        self.puc_born(g, Made);
+        Ok(g)
     }
 }

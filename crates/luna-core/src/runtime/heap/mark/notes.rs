@@ -9,7 +9,13 @@ impl Marker {
     /// The dialect whose marking rules apply.
     #[inline]
     pub(crate) fn dialect(&self) -> crate::runtime::dialect::Dialect {
-        self.dialect
+        self.rules.dialect()
+    }
+
+    /// The model's rules for the dialect.
+    #[inline(always)]
+    pub(in crate::runtime) fn rules(&self) -> &crate::runtime::puc::for_heap::HeapRules {
+        &self.rules
     }
 
     /// A marked table with a weak mode: its dead entries are cleared once

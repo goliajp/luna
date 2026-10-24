@@ -4,23 +4,6 @@
 use super::*;
 
 impl Heap {
-    /// The class byte of `h`, which the sweep goes over, says whether PUC
-    /// lists it (`strt`: the string table holds strings).
-    ///
-    /// # Safety
-    /// `h` heads an allocated object of this heap.
-    pub(crate) unsafe fn verify_class_byte(&self, h: *mut GcHeader, strt: bool) {
-        // SAFETY: the caller's contract
-        unsafe {
-            assert_eq!(
-                self.puc_counts_in_sweep(h),
-                ((*h).tag != ObjTag::Ghost || model::is_load_tab(h)) && self.puc_listed(h, strt),
-                "[gc-verify] class byte of a {:?}",
-                (*h).tag
-            );
-        }
-    }
-
     /// The first object never swept (`fixedgc`).
     #[inline]
     pub(in crate::runtime) fn fixed_head(&self) -> *mut GcHeader {
@@ -99,7 +82,7 @@ pub(crate) unsafe fn dead_child(
     unsafe {
         let f = (*h).flags;
         // a string only a load holds is kept by the sweep
-        if is_white(f) && f & new_white == 0 && !crate::runtime::puc::for_heap::is_kept(h) {
+        if is_white(f) && f & new_white == 0 && !crate::runtime::puc::for_heap::hooks::is_kept(h) {
             let what = if (*h).tag == ObjTag::Str {
                 String::from_utf8_lossy(string::bytes_of(h as *const LuaStr)).into_owned()
             } else {

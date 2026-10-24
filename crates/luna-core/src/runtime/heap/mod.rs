@@ -228,7 +228,7 @@ impl Heap {
     unsafe fn link(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
-            if self.loads_set_aside() && self.set_aside(h) {
+            if self.set_aside(h) {
                 return;
             }
             self.link_now(h);
@@ -238,7 +238,10 @@ impl Heap {
 
 use crate::runtime::puc;
 use crate::runtime::puc::for_heap as model;
-use crate::runtime::puc::for_heap::{Fate, Ghost, PucKind, PucObj};
+use crate::runtime::puc::for_heap::{
+    C0, ExternalStr, Fate, FoundStr, Ghost, Made, NativeFunction, NewStr, OfProto, PucFunction,
+    PucKind, PucObj, RemadeStr, StandingFor,
+};
 mod alloc;
 mod barrier;
 #[cfg(any(debug_assertions, feature = "gc-verify", feature = "gc-stress"))]
@@ -261,7 +264,7 @@ mod pace;
 mod sweep;
 #[cfg(feature = "gc-trace")]
 mod trace;
-pub(crate) use self::mark::{Marker, native_puc_upvals};
+pub(crate) use self::mark::Marker;
 use self::mark::{blacken, drain_marker, survived_mark, weak_key_alive};
 
 #[cfg(feature = "gc-verify")]

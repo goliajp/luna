@@ -54,7 +54,8 @@ impl Heap {
     pub(crate) fn gc_begin_full(&mut self) -> Marker {
         debug_assert!(self.phase == GcPhase::Pause);
         self.grayagain = mark::GrayStack::default();
-        self.env51_whiten();
+        self.puc_mark_begins();
+        let (sizer, lent) = self.puc_lend(false);
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
@@ -62,16 +63,16 @@ impl Heap {
             weak: Vec::new(),
             ephemeron: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),
-            dialect: self.dialect(),
+            rules: *self.puc_rules(),
             cached_protos: Vec::new(),
             leaf_black: LEAF,
             leaf_hdr: 0,
             leaf_bytes: 0,
             leaf_upval: 0,
-            sizer: self.lend_sizer(),
+            sizer,
             quiet: Vec::new(),
             quiet_mode: false,
-            lent: self.lend_model(false),
+            lent,
             verify: Default::default(),
         }
     }
@@ -86,11 +87,7 @@ impl Heap {
 
     /// The sweep of [`Heap::gc_end_full`], after its marking.
     pub(crate) fn gc_sweep_full(&mut self) -> usize {
-        // 5.1's full cycle sweeps the string table before the list
-        if self.puc_full_sweeps_strings_first() {
-            self.collect_dead_strings();
-            self.sweep_strings_upto(i64::MAX);
-        }
+        self.puc_full_sweep_begins();
         let n = self.full_sweep();
         self.end_string_sweep();
         n
@@ -197,7 +194,7 @@ impl Heap {
         // so the following drain_marker propagates through it.
         let mut dead = self.separate_finalizables(m);
         // 5.1 counts what they keep alive with them (`propagateall`'s work)
-        dead += if self.puc_counts_finalizable_work() {
+        dead += if self.puc_rules().counts_finalizable_work {
             self.drain_work(m, run)
         } else {
             drain_marker(m);
@@ -309,8 +306,7 @@ impl Heap {
             .propagate
             .take()
             .expect("propagate state taken outside Propagate phase");
-        let sizer = self.lend_sizer();
-        let lent = self.lend_model(sizer.is_none());
+        let (sizer, lent) = self.puc_lend(true);
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
@@ -318,12 +314,12 @@ impl Heap {
             weak: std::mem::take(&mut prop.weak),
             ephemeron: std::mem::take(&mut prop.ephemeron),
             no_ephemeron: prop.no_ephemeron,
-            dialect: self.dialect(),
+            rules: *self.puc_rules(),
             cached_protos: std::mem::take(&mut prop.cached_protos),
             leaf_black: 0,
-            leaf_hdr: self.puc_leaf_hdr(),
+            leaf_hdr: self.puc_rules().leaf_hdr,
             leaf_bytes: 0,
-            leaf_upval: self.puc_leaf_upval(),
+            leaf_upval: self.puc_rules().leaf_upval,
             sizer,
             quiet: std::mem::take(&mut prop.quiet),
             quiet_mode: false,

@@ -104,7 +104,7 @@ impl Heap {
     /// pointer, not at the later allocator-dependent dereference.
     pub fn verify_no_dangling(&self, ctx: &str) {
         use std::collections::HashSet;
-        self.verify_kept(ctx);
+        self.puc_hook_verify_kept(ctx);
         fn value_header(v: Value) -> Option<*mut GcHeader> {
             match v {
                 Value::Str(s) => Some(s.as_ptr() as *mut GcHeader),
@@ -131,7 +131,7 @@ impl Heap {
                 live.insert(h as usize);
             }
             // and what a load made that PUC has not yet
-            live.extend(self.unborn_objs().map(|h| h as usize));
+            live.extend(self.puc_hook_unborn().map(|h| h as usize));
             for &h in self.tobefnz_live() {
                 live.insert(h as usize);
             }
@@ -191,7 +191,7 @@ impl Heap {
             weak: Vec::new(),
             ephemeron: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),
-            dialect: self.dialect(),
+            rules: *self.puc_rules(),
             cached_protos: Vec::new(),
             leaf_black: 0,
             leaf_hdr: 0,

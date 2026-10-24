@@ -129,36 +129,6 @@ impl Marker {
         }
     }
 
-    /// Whether `h` is an object of luna's own that PUC does not have: a
-    /// native standing for one of PUC's light C functions (from 5.2 on), a
-    /// table of luna's own, a userdata standing for PUC's light userdata.
-    ///
-    /// # Safety
-    /// `h` heads an allocated object.
-    #[inline]
-    pub(in crate::runtime) unsafe fn luna_only(&self, h: *mut GcHeader) -> bool {
-        // SAFETY: the caller's contract; the tag names the type
-        unsafe {
-            match (*h).tag {
-                ObjTag::Native => {
-                    (*h).cls & LUNA_ONLY != 0
-                        || !crate::runtime::puc::c_function_is_object(
-                            self.dialect,
-                            pace::native_upvals(h),
-                        )
-                }
-                ObjTag::Table => (*h).cls & UNLISTED != 0,
-                // the closure standing for PUC's parser's (`reader_layers.rs`)
-                ObjTag::Closure => (*h).cls & LUNA_ONLY != 0,
-                ObjTag::Userdata => {
-                    (*h).is_uncounted()
-                        && matches!((*(h as *const Userdata)).payload, UserdataPayload::Empty)
-                }
-                _ => false,
-            }
-        }
-    }
-
     /// `v`, held by an object of PUC's where PUC holds nothing (an upvalue
     /// of luna's own): marked with the objects of luna's own.
     pub(crate) fn quiet_value(&mut self, v: Value) {
@@ -222,10 +192,4 @@ impl Marker {
         }
         self.quiet_mode = false;
     }
-}
-
-/// How many of `n`'s upvalues PUC's function has (the first ones).
-pub(crate) fn native_puc_upvals(n: &crate::runtime::NativeClosure) -> usize {
-    // SAFETY: `n` is an allocated native, whose header leads it
-    unsafe { pace::native_upvals(n as *const _ as *mut GcHeader) }
 }

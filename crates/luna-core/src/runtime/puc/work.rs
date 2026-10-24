@@ -232,18 +232,22 @@ pub(in crate::runtime) unsafe fn objsize(s: &PucSizes, d: Dialect, h: *mut GcHea
     }
 }
 
+/// How many of `n`'s upvalues PUC's function has (the first ones).
+#[inline(always)]
+pub(crate) fn native_puc_upvals(n: &NativeClosure) -> usize {
+    match n.hdr.sub & !UNCOUNTED {
+        0 => n.upvals.len(),
+        k => k as usize - 1,
+    }
+}
+
 /// The upvalues of PUC's C function standing for the native behind `h`.
 ///
 /// # Safety
 /// `h` heads an allocated native function.
 pub(in crate::runtime) unsafe fn native_upvals(h: *mut GcHeader) -> usize {
     // SAFETY: the caller's contract
-    unsafe {
-        match (*h).sub & !UNCOUNTED {
-            0 => (&*(h as *const NativeClosure)).upvals.len(),
-            k => k as usize - 1,
-        }
-    }
+    native_puc_upvals(unsafe { &*(h as *const NativeClosure) })
 }
 
 /// The bytes of a table's array part of `n` slots.

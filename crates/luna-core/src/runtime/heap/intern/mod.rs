@@ -58,7 +58,7 @@ impl Heap {
                 return Some(self.found_string(g, bytes.len()));
             }
             self.hook_string_made(g);
-            self.acct_new_string(g, bytes.len());
+            self.puc_born(g, NewStr(bytes.len()));
             Some(g)
         } else {
             let p =
@@ -68,7 +68,7 @@ impl Heap {
                 self.link(p as *mut GcHeader);
                 Gc::from_ptr(p)
             };
-            self.acct_new_string(g, bytes.len());
+            self.puc_born(g, NewStr(bytes.len()));
             Some(g)
         }
     }
@@ -86,9 +86,7 @@ impl Heap {
     /// An interned string `p` of `len` bytes found again.
     #[inline]
     fn found_string(&mut self, g: Gc<LuaStr>, len: usize) -> Gc<LuaStr> {
-        if g.hdr.is_uncounted() {
-            self.acct_promote(g, len);
-        }
+        self.puc_born(g, FoundStr(len));
         let p = g.as_ptr();
         // PUC `luaS_new` resurrect guard (lstring.c).
         // The bucket-chain is walked open-loop without consulting GC
@@ -112,12 +110,7 @@ impl Heap {
                 // first uses it
                 if (*p).hdr.sub & model::SWEPT != 0 {
                     (*p).hdr.sub &= !model::SWEPT;
-                    if !self.counting() {
-                        (*(p as *mut GcHeader)).set_uncounted(true);
-                    } else {
-                        self.acct_string(len);
-                        self.strt_enter(g);
-                    }
+                    self.puc_born(g, RemadeStr(len));
                 }
             }
         }
@@ -152,7 +145,7 @@ impl Heap {
             self.link(p as *mut GcHeader);
             Gc::from_ptr(p)
         };
-        self.acct_new_string(g, n);
+        self.puc_born(g, NewStr(n));
         Ok(g)
     }
 
@@ -181,7 +174,7 @@ impl Heap {
             self.link(p as *mut GcHeader);
             Gc::from_ptr(p)
         };
-        self.acct_new_string(g, n);
+        self.puc_born(g, NewStr(n));
         Ok(g)
     }
 
@@ -201,13 +194,7 @@ impl Heap {
             }
             Gc::from_ptr(p)
         };
-        if silent {
-            // SAFETY: `g` is the string linked above; nothing borrows its
-            // header while its per-type byte is written
-            unsafe { (*g.header()).set_uncounted(true) };
-        } else {
-            self.acct_obj(PucKind::LongStr, self.puc_size(PucObj::ExternalStr));
-        }
+        self.puc_born(g, ExternalStr);
         Ok(g)
     }
 

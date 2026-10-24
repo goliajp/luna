@@ -96,13 +96,6 @@ impl Heap {
         self.puc.next_id
     }
 
-    /// 5.5: whether what a marking reaches is counted (`GCmarked`), also
-    /// what a barrier marks.
-    #[inline(always)]
-    pub(in crate::runtime) fn puc_counts_marked(&self) -> bool {
-        self.puc.pace.count_marked
-    }
-
     /// 5.1: what the atomic step found to finalize (`udsize`), which the
     /// step's estimate leaves out.
     #[inline]
@@ -161,12 +154,6 @@ impl Heap {
         self.puc.strt_size * self.puc.sizes.ptr
     }
 
-    /// Whether what a load makes now is set aside until PUC makes it.
-    #[inline(always)]
-    pub(in crate::runtime) fn loads_set_aside(&self) -> bool {
-        self.puc.unborn_on
-    }
-
     /// The light function the opening made as function `id`.
     pub(crate) fn light(&self, id: usize) -> Option<Gc<crate::runtime::NativeClosure>> {
         self.puc.lights.get(id).copied().flatten()
@@ -183,9 +170,19 @@ impl Heap {
     }
 }
 
+mod born;
+mod cycle;
+mod free;
+#[cfg(any(feature = "gc-trace", feature = "gc-verify", test))]
+pub(in crate::runtime) mod hooks;
+mod marker;
 mod rules;
 mod sweep;
-pub(crate) use rules::c_function_is_object;
+pub(in crate::runtime) use born::{
+    C0, ExternalStr, FoundStr, Made, NativeFunction, NewStr, OfProto, PucFunction, RemadeStr,
+    StandingFor,
+};
+pub(in crate::runtime) use rules::HeapRules;
 pub(crate) use sweep::Fate;
 
 // the names of the model's records the heap goes by: it reaches the model
@@ -198,7 +195,4 @@ pub(in crate::runtime) use crate::runtime::puc::records::parse::{
     KEPT, LoadTab, ParseFrame, is_load_tab, kept_bit,
 };
 pub(in crate::runtime) use crate::runtime::puc::records::strt::SWEPT;
-#[cfg(feature = "gc-verify")]
-pub(in crate::runtime) use crate::runtime::puc::verify::is_kept;
-pub(in crate::runtime) use crate::runtime::puc::work::native_upvals;
 pub(in crate::runtime) use crate::runtime::puc::{PucKind, PucObj};
