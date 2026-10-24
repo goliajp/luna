@@ -20,8 +20,18 @@ fn thread_in_use(frames: &[CallFrame], top: u32, natives: &[NativeAct]) -> u32 {
             CallFrame::Cont(c) => c.kind.ci_top(),
         });
     }
-    // the host's protected-call levels are no frames of PUC's
-    for a in natives.iter().filter(|a| !a.nc.is_luna_only()) {
+    // the host's protected-call levels luna makes are no frames of PUC's;
+    // a function of luna's own run in their place is (the Lua searcher's
+    // `loadfile` stands for the `luaL_loadfilex` PUC's searcher calls)
+    let host_level = |a: &&NativeAct| {
+        use crate::vm::exec::native_call::NativeKind as K;
+        a.nc.is_luna_only()
+            && matches!(
+                a.nc.kind,
+                K::HostXpcall | K::HostXpcallInC | K::HostPcallInC | K::HostPcall
+            )
+    };
+    for a in natives.iter().filter(|a| !host_level(a)) {
         lim = lim.max(a.ci_top);
     }
     lim + 2
