@@ -542,6 +542,14 @@ messages. What still differs does so on purpose:
   table's address), and from 5.2 on a
   table holding strings, tables or functions as keys is sized by hashes
   PUC seeds per run.
+- **Tables keyed by objects.** A table whose keys are tables,
+  functions, coroutines or userdata, once keys are removed from it or
+  collected out of it, may grow at a different time than in PUC and list
+  its keys in a different order. PUC places such keys by their memory
+  addresses, so its result depends on how the system allocator (glibc's
+  `malloc`, for the reference builds) reuses the addresses of freed
+  objects; luna's does not depend on an allocator. Removing a key and
+  writing it back takes its old place in both.
 - **Implementation-internal values** that the manual leaves open or that
   expose the compiler: `debug.getlocal` past the declared locals reads temporaries
   whose contents depend on register allocation; a C function's

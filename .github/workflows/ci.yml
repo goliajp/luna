@@ -459,7 +459,8 @@ jobs:
   # (the list's end found past luna's own objects) to 1797, and the
   # sweep's calls into the PUC model gathered behind its own entries to 1801,
   # and the heap's other calls into it (births, frees, the debug hooks)
-  # moved into the model to 1802.
+  # moved into the model to 1802, and a dead table key's kept hash, read
+  # back from its node, to 1803.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -474,7 +475,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=1802
+          ceiling=1803
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then

@@ -62,8 +62,9 @@ impl Table {
         // a main position holding no value is taken over as PUC
         // `luaH_newkey` does: a free node, or one whose key was removed or
         // swept, which keeps its `next` so the chain through it stays whole
-        if self.nodes()[mp].val.is_nil() {
-            let next = self.nodes()[mp].next;
+        let n = &self.nodes()[mp];
+        if n.val.is_nil() && (n.is_free() || !reuse_by_address(n, &k)) {
+            let next = n.next;
             self.nodes_mut()[mp] = Node::new(k, v, next, khash);
             return true;
         }
@@ -77,12 +78,16 @@ impl Table {
             return false;
         };
         let other = &self.nodes()[mp];
-        let other_mp =
-            if other.key_tag == crate::runtime::value::tag::STR && self.node_mask <= KHASH_MASK {
-                (other.khash as u32 & self.node_mask) as usize
-            } else {
-                self.main_position_inline(other.key())
-            };
+        let other_mp = if other.dead_key() {
+            match other.dead_hash() {
+                (h, true) => (h & self.node_mask) as usize,
+                (h, false) => (u64::from(h) % u64::from(self.node_mask | 1)) as usize,
+            }
+        } else if other.key_tag == crate::runtime::value::tag::STR && self.node_mask <= KHASH_MASK {
+            (other.khash as u32 & self.node_mask) as usize
+        } else {
+            self.main_position_inline(other.key())
+        };
         if other_mp != mp {
             // colliding node is out of its main position: relocate it to the
             // free slot and take its place
@@ -116,6 +121,28 @@ impl Table {
         }
         None
     }
+}
+
+/// Whether taking over node `n` (no value, its key removed or dead) for
+/// the new key `k` would depend on where the allocator put objects: the
+/// new key or the removed one is hashed by its address, or the removed one
+/// is a dead key (whose main position PUC takes from its address). Such a
+/// node counts as taken, as if the addresses had not met and the
+/// allocator had not given an address back: PUC's layout there changes
+/// with the allocator, and luna does not model it.
+#[inline]
+fn reuse_by_address(n: &Node, k: &Value) -> bool {
+    n.dead_key()
+        || hashed_by_address(n.key_tag)
+        || matches!(
+            k,
+            Value::Table(_)
+                | Value::Closure(_)
+                | Value::Native(_)
+                | Value::Coro(_)
+                | Value::Userdata(_)
+                | Value::LightUserdata(_)
+        )
 }
 
 /// PUC 5.1 `hashnum`: the two 32-bit halves of the double added (0 and -0
@@ -219,5 +246,38 @@ mod tests {
         assert_eq!(hashnum_52(1.0), 0x4000_0000);
         assert_eq!(l_hashfloat(1.5), 0x6000_0001);
         assert_eq!(l_hashfloat(f64::INFINITY), 0);
+    }
+}
+
+/// What a key about to go dead hashed by, kept in its node: a string's hash
+/// (`true`), or an object's number.
+pub(super) fn dead_key_hash(k: Value) -> (u32, bool) {
+    match k {
+        Value::Str(s) => (s.hash(), true),
+        k => (pointer_hash(k), false),
+    }
+}
+
+/// Whether PUC hashes key `k` by its address (`hashpointer`).
+#[inline(always)]
+pub(super) fn hashed_by_address(tag: u8) -> bool {
+    use crate::runtime::value::tag;
+    !matches!(tag, tag::NIL | tag::BOOL | tag::INT | tag::FLOAT | tag::STR)
+}
+
+/// What PUC's `hashpointer` takes of an object key: the low 32 bits of
+/// its address; for luna's objects, the number each got when made
+/// (`Heap::take_id`).
+#[inline]
+pub(super) fn pointer_hash(k: Value) -> u32 {
+    match k {
+        Value::Table(t) => t.id,
+        Value::Closure(c) => c.hdr.aux,
+        Value::Native(n) => n.hdr.aux,
+        Value::Coro(co) => co.hdr.aux,
+        Value::Userdata(u) => u.hdr.aux,
+        Value::LightUserdata(p) => p as u32,
+        // the keys `main_position` handles itself
+        _ => 0,
     }
 }
