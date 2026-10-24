@@ -25,7 +25,7 @@ impl Heap {
     /// 5.1's `GCTM` runs a finalizer: under a threshold of twice the
     /// count. The threshold it had, for [`Heap::fin51_threshold_back`].
     #[inline]
-    pub(crate) fn fin51_threshold(&mut self) -> i64 {
+    pub(in crate::runtime::puc) fn fin51_threshold(&mut self) -> i64 {
         let saved = self.puc.pace.threshold();
         self.puc.pace.set_threshold(2 * self.puc.bytes as i64);
         saved
@@ -33,7 +33,7 @@ impl Heap {
 
     /// The finalizer returned: the threshold it ran under is `saved` again.
     #[inline]
-    pub(crate) fn fin51_threshold_back(&mut self, saved: i64) {
+    pub(in crate::runtime::puc) fn fin51_threshold_back(&mut self, saved: i64) {
         self.puc.pace.set_threshold(saved);
     }
 

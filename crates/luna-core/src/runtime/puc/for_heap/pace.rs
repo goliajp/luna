@@ -4,6 +4,7 @@
 //! write them only through these methods.
 
 use super::*;
+use crate::runtime::dialect::Dialect;
 
 /// The collector's run at some point (see [`Heap::gc_run_mark`]).
 #[must_use]
@@ -108,16 +109,74 @@ impl Heap {
         self.gc_restore_stopped(m.stopped);
     }
 
-    /// Whether a 5.4 or 5.5 finalizer runs, which no step may interrupt.
-    #[inline]
-    pub(crate) fn gc_fin_stop(&self) -> bool {
-        self.puc.fin_stop
-    }
-
     /// A 5.4 or 5.5 finalizer runs (`on`), and no step may run, or none
     /// does any more.
     #[inline]
     pub(crate) fn gc_set_fin_stop(&mut self, on: bool) {
         self.puc.fin_stop = on;
     }
+
+    /// A finalizer is about to run (`GCTM`): the collector stops as PUC's
+    /// does, 5.1 under a threshold twice the count, 5.2 and 5.3 not
+    /// running, 5.4 and 5.5 stopped for the finalizer (`GCSTPGC`). What
+    /// [`Heap::finalizer_returned`] puts back.
+    pub(crate) fn finalizer_runs(&mut self) -> FinalizerStop {
+        let stop = FinalizerStop {
+            stopped: self.puc.stopped,
+            fin_stop: self.puc.fin_stop,
+            threshold: match self.puc.dialect {
+                Dialect::L51 => self.fin51_threshold(),
+                _ => 0,
+            },
+        };
+        match self.puc.dialect {
+            Dialect::L51 => {}
+            Dialect::L52 | Dialect::L53 => self.puc.stopped = true,
+            _ => self.puc.fin_stop = true,
+        }
+        self.refresh_gc_limit();
+        stop
+    }
+
+    /// The finalizer returned, `ok` or raising: the collector runs as
+    /// before it; a 5.1 error leaves the threshold it ran under.
+    pub(crate) fn finalizer_returned(&mut self, stop: FinalizerStop, ok: bool) {
+        match self.puc.dialect {
+            Dialect::L51 => {
+                if ok {
+                    self.fin51_threshold_back(stop.threshold);
+                    self.puc.stopped = stop.stopped;
+                }
+            }
+            Dialect::L52 | Dialect::L53 => self.puc.stopped = stop.stopped,
+            _ => self.puc.fin_stop = stop.fin_stop,
+        }
+        self.refresh_gc_limit();
+    }
+
+    /// Whether an allocation that failed may run an emergency collection:
+    /// never in 5.1; in 5.2 only while the collector runs (`gcrunning`);
+    /// from 5.3 on, always.
+    pub(crate) fn emergency_allowed(&self) -> bool {
+        match self.puc.dialect {
+            Dialect::L51 => false,
+            Dialect::L52 => !self.puc.stopped,
+            _ => true,
+        }
+    }
+
+    /// 5.2's full collection calls the pending finalizers first; the
+    /// others clear the running stack's dead slots.
+    pub(crate) fn full_calls_pending_first(&self) -> bool {
+        self.puc.dialect == Dialect::L52
+    }
+}
+
+/// How the collector ran before a finalizer (see
+/// [`Heap::finalizer_runs`]).
+#[must_use = "the collector stays stopped until the token goes back to `Heap::finalizer_returned`"]
+pub(crate) struct FinalizerStop {
+    stopped: bool,
+    fin_stop: bool,
+    threshold: i64,
 }

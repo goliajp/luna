@@ -18,6 +18,7 @@ mod d54;
 mod d55;
 mod full;
 mod host;
+mod mode;
 mod pause;
 pub(super) use atomic::atomic;
 use d51::*;
@@ -28,6 +29,7 @@ use d54::*;
 use d55::*;
 pub(crate) use full::full_collect;
 pub(crate) use host::{CiCount, StepHost};
+pub(crate) use mode::change_mode;
 pub(crate) use pause::{gc_full_pause, gc_full_repause, gc_leave_generational, gc_minor_debt};
 
 /// 5.5 `singlestep`'s results that end `incstep`'s loop.

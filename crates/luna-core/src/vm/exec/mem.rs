@@ -23,11 +23,7 @@ impl Vm {
         if !self.state_complete || self.gc_finalizing {
             return false;
         }
-        match self.version {
-            LuaVersion::Lua51 => false,
-            LuaVersion::Lua52 => !self.heap.gc_is_stopped(),
-            _ => true,
-        }
+        self.heap.emergency_allowed()
     }
 
     /// PUC `luaC_fullgc(L, 1)` from an allocation that failed: collect what
