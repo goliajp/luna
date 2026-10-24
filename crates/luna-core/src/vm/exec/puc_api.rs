@@ -159,7 +159,7 @@ impl Vm {
     /// `lua_pushstring`, through `luaS_new`'s cache.
     pub(crate) fn api_push_string_at(
         &mut self,
-        at: crate::runtime::heap::strcache::CStr,
+        at: crate::runtime::puc::records::strcache::CStr,
         bytes: &[u8],
     ) -> Result<Value, LuaError> {
         self.api_check_before()?;
@@ -171,7 +171,7 @@ impl Vm {
     /// [`Vm::str_value`] through `luaS_new`'s cache, the C string at `at`.
     pub(crate) fn str_value_at(
         &mut self,
-        at: crate::runtime::heap::strcache::CStr,
+        at: crate::runtime::puc::records::strcache::CStr,
         bytes: &[u8],
     ) -> Result<Value, LuaError> {
         Ok(Value::Str(

@@ -103,7 +103,7 @@ impl Heap {
                     }
                     self.free_block(h as *mut Userdata);
                 }
-                ObjTag::Ghost if super::parse::is_load_tab(h) => self.free_load_tab(h),
+                ObjTag::Ghost if model::is_load_tab(h) => self.free_load_tab(h),
                 ObjTag::Ghost => self.free_ghost(h as *mut Ghost),
                 ObjTag::Str => {
                     let s = h as *mut LuaStr;
@@ -113,7 +113,7 @@ impl Heap {
                         self.acct_part(self.puc_size(PucObj::ExternalStr), 0);
                     } else if (*h).sub & puc::FIXED_EXT != 0 {
                         self.acct_part(self.puc_size(PucObj::LongStrHeader), 0);
-                    } else if (*h).sub & strt::SWEPT != 0 {
+                    } else if (*h).sub & model::SWEPT != 0 {
                         // the string sweep took it off the count
                     } else if (*h).sub & UNCOUNTED != 0 {
                         self.free_stand_in(h);
@@ -139,7 +139,7 @@ impl Heap {
         // SAFETY: the caller's contract; only the header is read
         unsafe {
             (*h).tag == ObjTag::Str
-                && (*h).sub & (EXTERNAL | puc::FIXED_EXT | strt::SWEPT | UNCOUNTED) == 0
+                && (*h).sub & (EXTERNAL | puc::FIXED_EXT | model::SWEPT | UNCOUNTED) == 0
         }
     }
 

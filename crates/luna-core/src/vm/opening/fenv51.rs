@@ -9,7 +9,8 @@
 
 use super::run::Opener;
 use crate::runtime::Value;
-use crate::runtime::heap::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE, PucKind};
+use crate::runtime::puc::PucKind;
+use crate::runtime::puc::records::env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 

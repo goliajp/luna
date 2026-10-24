@@ -1,7 +1,7 @@
 //! `debug.getinfo`: option checking and the result table.
 
 use super::{check_int, getthread, is_function, set_field, set_str, set_str_at};
-use crate::runtime::heap::strcache::{CStr, site};
+use crate::runtime::puc::records::strcache::{CStr, site};
 use crate::runtime::{Coro, Gc, Table, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{Args, opt_string, to_num};

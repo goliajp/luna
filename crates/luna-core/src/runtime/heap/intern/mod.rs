@@ -23,7 +23,7 @@ impl Heap {
     fn resurrect(&self, h: &mut GcHeader) {
         h.flags = h.with_slow((h.flags & !WHITE_BITS) | self.current_white);
         // found again: no more a string only a load holds
-        h.cls &= !parse::KEPT;
+        h.cls &= !model::KEPT;
     }
 
     /// [`Heap::intern`], failing when memory runs out.
@@ -110,8 +110,8 @@ impl Heap {
                 // the string sweep took it off already: PUC makes it again,
                 // now or (found while nothing is counted) when the program
                 // first uses it
-                if (*p).hdr.sub & strt::SWEPT != 0 {
-                    (*p).hdr.sub &= !strt::SWEPT;
+                if (*p).hdr.sub & model::SWEPT != 0 {
+                    (*p).hdr.sub &= !model::SWEPT;
                     if !self.counting() {
                         (*(p as *mut GcHeader)).set_uncounted(true);
                     } else {

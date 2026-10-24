@@ -123,7 +123,7 @@ impl Marker {
                         z.marked += z.size(h);
                     }
                     (*h).flags = (f & !WHITE_BITS) | BLACK | SLOW;
-                    (*h).cls &= !super::parse::KEPT;
+                    (*h).cls &= !model::KEPT;
                 }
             }
         }

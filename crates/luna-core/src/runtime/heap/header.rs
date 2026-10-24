@@ -49,7 +49,7 @@ pub enum ObjTag {
     Coro,
     /// [`crate::runtime::userdata::Userdata`].
     Userdata,
-    /// a record of objects PUC made and luna did not (`puc::records::ghost`)
+    /// a record of objects PUC made and luna did not (the model's `Ghost`)
     Ghost,
 }
 

@@ -104,7 +104,7 @@ pub(super) fn ll_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lua
 /// byte `at` of its buffer, where that is in its frame (see `strcache`),
 /// ≤5.3 made by `luaL_gsub`.
 pub(super) fn found_string(vm: &mut Vm, f: &super::search_acct::Found) -> Result<Value, LuaError> {
-    use crate::runtime::heap::strcache::{CStr, site};
+    use crate::runtime::puc::records::strcache::{CStr, site};
     match (f.made, f.at) {
         (Some(s), _) => Ok(Value::Str(s)),
         (None, Some(off)) => vm.str_value_at(

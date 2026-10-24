@@ -19,7 +19,7 @@ use crate::compiler::puc_log::PEv;
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::Proto;
 use crate::runtime::dialect::Dialect;
-use crate::runtime::heap::PucKind;
+use crate::runtime::puc::PucKind;
 
 mod arr;
 mod consts;
@@ -51,7 +51,7 @@ impl Vm {
         chunk: &crate::frontend::ast::Chunk,
         rec: (&crate::frontend::parser::Marks, &Scanned),
         cl: Gc<LuaClosure>,
-        splices: Vec<(u32, crate::runtime::heap::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
     ) -> Result<(), SyntaxError> {
         let proto = cl.proto;
         let (marks, scanned) = rec;
@@ -115,7 +115,7 @@ impl Vm {
         }
         r.cl = Some(cl);
         if r.rec.is_none() && r.d != Dialect::L51 {
-            crate::runtime::heap::parse::set_parsing(cl, true);
+            crate::runtime::puc::records::parse::set_parsing(cl, true);
         }
         match r.d {
             Dialect::L51 => {}

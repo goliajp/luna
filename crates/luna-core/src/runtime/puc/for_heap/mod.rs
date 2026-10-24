@@ -187,3 +187,18 @@ mod rules;
 mod sweep;
 pub(crate) use rules::c_function_is_object;
 pub(crate) use sweep::Fate;
+
+// the names of the model's records the heap goes by: it reaches the model
+// through this module and the methods on `Heap`, never its other modules
+pub(in crate::runtime) use crate::runtime::puc::records::Ghost;
+pub(in crate::runtime) use crate::runtime::puc::records::env51::is_phantom;
+#[cfg(feature = "gc-trace")]
+pub(in crate::runtime) use crate::runtime::puc::records::env51::phantom_is_table;
+pub(in crate::runtime) use crate::runtime::puc::records::parse::{
+    KEPT, LoadTab, ParseFrame, is_load_tab, kept_bit,
+};
+pub(in crate::runtime) use crate::runtime::puc::records::strt::SWEPT;
+#[cfg(feature = "gc-verify")]
+pub(in crate::runtime) use crate::runtime::puc::verify::is_kept;
+pub(in crate::runtime) use crate::runtime::puc::work::native_upvals;
+pub(in crate::runtime) use crate::runtime::puc::{PucKind, PucObj};

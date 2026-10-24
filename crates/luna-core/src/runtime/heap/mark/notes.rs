@@ -3,7 +3,7 @@
 //! caches, and what PUC's records mark through it.
 
 use super::*;
-use crate::runtime::puc::records::parse::ParseFrame;
+use crate::runtime::puc::for_heap::ParseFrame;
 
 impl Marker {
     /// The dialect whose marking rules apply.

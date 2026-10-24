@@ -74,7 +74,8 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
                 unreachable!("a string")
             };
             vm.lib_roots.extend([f, fname]);
-            let at = crate::runtime::heap::strcache::CStr::In(found.as_ptr() as *const _, 0);
+            let at =
+                crate::runtime::puc::records::strcache::CStr::In(found.as_ptr() as *const _, 0);
             let pushed = vm.api_push_string_at(at, &file);
             vm.lib_roots.pop_n(2);
             vm.nat_ret(fs, &[f, pushed?])

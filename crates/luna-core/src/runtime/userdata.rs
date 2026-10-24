@@ -219,7 +219,7 @@ impl Userdata {
     /// A userdata standing for a 5.1 prototype PUC's parser holds on the
     /// stack: its type is "proto".
     pub(crate) fn is_proto(&self) -> bool {
-        self.hdr.cls >> 5 == crate::runtime::heap::ENV_PROTO
+        self.hdr.cls >> 5 == crate::runtime::puc::records::env51::ENV_PROTO
     }
 
     /// True for host userdata (embedder-supplied `T: 'static`).

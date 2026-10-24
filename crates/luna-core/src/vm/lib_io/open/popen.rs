@@ -58,7 +58,7 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     let u = opened(vm, o, true)?;
     if vm.version() == crate::version::LuaVersion::Lua51 {
         vm.heap
-            .set_env51(u.hdr(), crate::runtime::heap::ENV_IO_POPEN);
+            .set_env51(u.hdr(), crate::runtime::puc::records::env51::ENV_IO_POPEN);
     }
     // SAFETY: `u` was created by `opened` just above and is held only by this local; the borrow covers one field store
     unsafe { u.as_mut() }.popen_child = Some(child);

@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) use crate::runtime::puc::work::native_upvals;
+pub(super) use crate::runtime::puc::for_heap::native_upvals;
 
 impl Heap {
     /// Number of GC-managed objects currently linked into the heap (live + not

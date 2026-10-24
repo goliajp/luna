@@ -82,8 +82,8 @@ impl Vm {
     }
 
     /// The running thread, as the heap counts its blocks.
-    pub(crate) fn running_blocks(&self) -> crate::runtime::heap::Thread {
-        use crate::runtime::heap::Thread;
+    pub(crate) fn running_blocks(&self) -> crate::runtime::puc::Thread {
+        use crate::runtime::puc::Thread;
         self.current.map_or(Thread::Main, Thread::Coro)
     }
 
