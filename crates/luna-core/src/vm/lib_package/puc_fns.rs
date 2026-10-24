@@ -64,9 +64,10 @@ fn searcher_croot_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<
 }
 
 /// luna's `loadfile` the Lua searcher loads with: its own, PUC calls
-/// `luaL_loadfilex`.
+/// `luaL_loadfilex`, so no sweep of PUC's visits it.
 fn own_loadfile(vm: &mut Vm) -> Result<Value, LuaError> {
-    vm.uncounted(|vm| vm.lib_native(crate::vm::lib_os_io::nat_loadfile))
+    let f = vm.uncounted(|vm| vm.lib_native(crate::vm::lib_os_io::nat_loadfile))?;
+    Ok(crate::vm::exec::host_pcall::luna_only(f))
 }
 
 fn searcher_lua_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<Value, LuaError> {

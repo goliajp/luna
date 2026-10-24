@@ -141,7 +141,7 @@ impl Heap {
                     self.check_no_dangling("sweep_counted");
                     return (n, true);
                 }
-                if n >= quota {
+                if n >= quota && self.puc_has_more(cur) {
                     self.check_no_dangling("sweep_counted");
                     return (n, false);
                 }
@@ -186,6 +186,25 @@ impl Heap {
                 }
             }
         }
+    }
+
+    /// Whether an object PUC has is at `cur` or after it: luna's own
+    /// objects at the list's end take no step of PUC's, whose list has
+    /// ended.
+    ///
+    /// # Safety
+    /// `cur` is null or heads an allocated object of this heap.
+    unsafe fn puc_has_more(&self, mut cur: *mut GcHeader) -> bool {
+        // SAFETY: the caller's contract; the list links allocated objects
+        unsafe {
+            while !cur.is_null() {
+                if self.listed(cur) || (*cur).tag == ObjTag::Ghost {
+                    return true;
+                }
+                cur = (*cur).next;
+            }
+        }
+        false
     }
 
     /// Whether the sweep counts the object behind `h`: one of PUC's on the

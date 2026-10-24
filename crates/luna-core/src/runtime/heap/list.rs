@@ -45,18 +45,61 @@ impl Heap {
     /// As [`Heap::link`]'s.
     #[inline]
     pub(in crate::runtime) unsafe fn link_now(&mut self, h: *mut GcHeader) {
-        // SAFETY: the caller's contract
+        // SAFETY: the caller's contract; `udata_after` is the main thread,
+        // which lives as long as the heap
         unsafe {
-            (*h).next = self.all;
             // born the current white in every phase (PUC `luaC_white(g)`):
             // one made while marking is marked by the atomic step if it is
             // reachable then (the roots are marked again there, and a black
             // object that took it was sent back to gray by its barrier)
             (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
+            match self.udata_after {
+                Some(a) if (*h).tag == ObjTag::Userdata => {
+                    let a = a.as_ptr();
+                    (*h).next = (*a).next;
+                    (*a).next = h;
+                }
+                _ => {
+                    (*h).next = self.all;
+                    self.all = h;
+                }
+            }
         }
-        self.all = h;
         self.live += 1;
         self.hook_reborn(h);
+    }
+
+    /// The main thread `t` made just now, running: in 5.1 it is the list's
+    /// oldest object (PUC's state makes it first), and new userdata go
+    /// after it.
+    pub(crate) fn main_thread_made(&mut self, t: Gc<crate::runtime::Coro>) {
+        // SAFETY: `t` was made just now and nothing else holds it yet
+        unsafe { t.as_mut() }.status = crate::runtime::coroutine::CoroStatus::Running;
+        if self.dialect() != crate::runtime::dialect::Dialect::L51 {
+            return;
+        }
+        let h = t.header();
+        // SAFETY: the list holds allocated objects; `h` heads it, made last
+        unsafe {
+            debug_assert!(std::ptr::eq(self.all, h));
+            if (*h).next.is_null() {
+                return self.udata_after = Some(t.hdr());
+            }
+            self.all = (*h).next;
+            let mut last = self.all;
+            while !(*last).next.is_null() {
+                last = (*last).next;
+            }
+            (*last).next = h;
+            (*h).next = std::ptr::null_mut();
+        }
+        self.udata_after = Some(t.hdr());
+    }
+
+    /// 5.1: the main thread, on the list as PUC's is.
+    #[inline]
+    pub(in crate::runtime) fn main_thread_51(&self) -> Option<Gc<GcHeader>> {
+        self.udata_after
     }
 
     /// `h`, off the list, back at its head (a string the string sweep

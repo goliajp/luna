@@ -105,7 +105,12 @@ impl Heap {
     pub(in crate::runtime) unsafe fn sweep_open_at(&mut self, cur: *mut GcHeader) {
         // SAFETY: the caller's contract
         if !self.puc.open_dead.dead.is_empty() && unsafe { (*cur).tag } == ObjTag::Coro {
-            self.free_dead_open(|o, _| o == cur);
+            // 5.1's main thread is on the list too, before the userdata
+            let main = self
+                .main_thread_51()
+                .is_some_and(|m| std::ptr::eq(m.as_ptr(), cur));
+            let owner = if main { ptr::null_mut() } else { cur };
+            self.free_dead_open(|o, _| o == owner);
         }
     }
 

@@ -330,8 +330,7 @@ impl Vm {
         let off = heap.counting_off();
         let mut vm = Vm::new_inner(version, heap)?;
         let mc = vm.heap.try_new_coro(Value::Nil, vm.globals).ok()?;
-        // SAFETY: `mc` was allocated on the line above and is held only by this local; the borrow covers one field store
-        unsafe { mc.as_mut() }.status = CoroStatus::Running;
+        vm.heap.main_thread_made(mc);
         vm.main_coro = Some(mc);
         // PUC's `init_registry`, counted with the state
         vm.host_make_registry().ok()?;
