@@ -103,8 +103,18 @@ impl Vm {
     /// Run `f` with `vals` held as roots, let go after.
     #[inline]
     pub(crate) fn rooted<R>(&mut self, vals: &[Value], f: impl FnOnce(&mut Vm) -> R) -> R {
+        self.lib_scope(|vm| {
+            vm.lib_roots.extend_from_slice(vals);
+            f(vm)
+        })
+    }
+
+    /// Runs `f`; what it leaves on the stack is let go when it returns,
+    /// by an error too, as an error takes PUC's C stack down to the
+    /// protected call.
+    #[inline]
+    pub(crate) fn lib_scope<R>(&mut self, f: impl FnOnce(&mut Vm) -> R) -> R {
         let m = self.lib_roots.mark();
-        self.lib_roots.extend_from_slice(vals);
         let r = f(self);
         self.lib_roots.release(m);
         r

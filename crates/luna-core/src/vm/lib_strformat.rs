@@ -48,6 +48,11 @@ fn max_item(v: LuaVersion) -> usize {
 }
 
 pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    // 5.1's buffer keeps its strings on the stack: an error lets them go
+    vm.lib_scope(|vm| format(vm, fs, nargs))
+}
+
+fn format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let f = argcheck::check_string(vm, a, 0)?;
     let fmt = f.as_bytes();

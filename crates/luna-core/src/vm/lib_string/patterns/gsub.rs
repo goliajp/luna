@@ -12,7 +12,8 @@ pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     let mut frame = LVec::new(vm.heap.mem());
     frame.push(Value::Nil)?;
     vm.sort_scratch.push(frame)?;
-    let r = gsub(vm, fs, nargs);
+    // 5.1's buffer keeps its strings on the stack: an error lets them go
+    let r = vm.lib_scope(|vm| gsub(vm, fs, nargs));
     vm.sort_scratch.pop();
     r
 }

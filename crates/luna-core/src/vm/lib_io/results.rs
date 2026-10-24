@@ -150,13 +150,11 @@ pub(super) fn file_fail_values(
     let m = match fname {
         Some(n) => {
             let args = [FmtArg::S(c_str(n)), FmtArg::S(text.as_bytes())];
-            Value::Str(vm.api_pushing(|vm| vm.pushfstring(b"%s: %s", &args))?)
+            let pushed = |vm: &mut Vm| vm.api_pushing(|vm| vm.pushfstring(b"%s: %s", &args));
+            Value::Str(vm.lib_scope(pushed)?)
         }
         None => vm.api_push_string(text.as_bytes())?,
     };
-    if fname.is_some() {
-        vm.lib_roots.pop();
-    }
     let code = errno(e).map_or(0, i64::from);
     Ok([Value::Nil, m, Value::Int(code)])
 }
