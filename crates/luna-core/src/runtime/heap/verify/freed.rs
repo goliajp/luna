@@ -36,13 +36,13 @@ impl Heap {
                 ObjTag::Coro => false,
                 ObjTag::Native => (*h).cls & LUNA_ONLY != 0,
                 ObjTag::Userdata => {
-                    is_uncounted(h)
+                    (*h).is_uncounted()
                         && !matches!((*(h as *const Userdata)).payload, UserdataPayload::File(_))
                 }
-                _ => is_uncounted(h),
+                _ => (*h).is_uncounted(),
             };
             let pending51 = d51 && (*h).flags & DEFERRED != 0;
-            if (if d51 { own51 } else { is_uncounted(h) })
+            if (if d51 { own51 } else { (*h).is_uncounted() })
                 || (*h).flags & FIN != 0 && !d51
                 || pending51
             {
@@ -52,7 +52,7 @@ impl Heap {
                 ObjTag::Str => {
                     !strt || (self.dialect() == Dialect::L52 && !(*(h as *const LuaStr)).is_short())
                 }
-                ObjTag::Table => !self.is_own_table(h as *const Table),
+                ObjTag::Table => !self.is_own_table(&*(h as *const Table)),
                 _ => true,
             }
         }
@@ -65,12 +65,13 @@ impl Heap {
     }
 
     /// The object `h` freed: noted for the read-time probes.
-    pub(crate) fn note_freed(&mut self, h: *mut GcHeader) {
+    pub(crate) fn note_freed(&mut self, h: Gc<GcHeader>) {
+        let h = h.as_ptr();
         self.hooks.recently_freed.insert(h as usize);
         self.hooks.born_dead.remove(&(h as usize));
         crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().insert(h as usize));
-        // SAFETY: the caller of `free_obj` names an allocated object, read
-        // as a string when its tag says it is one
+        // SAFETY: `h` comes from a handle, so the object is allocated; it is
+        // read as a string when its tag says it is one
         let s = unsafe { ((*h).tag == ObjTag::Str).then(|| Gc::from_ptr(h as *mut LuaStr)) };
         if let Some(s) = s {
             let b = s.as_bytes().to_vec();
@@ -96,8 +97,10 @@ impl Heap {
 
     /// `gc-verify`: a new reference to the object at `h` (`what`) while a
     /// sweep runs must not be to one the sweep frees.
-    pub(crate) fn verify_not_dying(&self, h: *const GcHeader, what: &str) {
-        // SAFETY: the caller names an allocated object; only its flags are read
+    pub(crate) fn verify_not_dying(&self, h: Gc<GcHeader>, what: &str) {
+        let h = h.as_ptr().cast_const();
+        // SAFETY: `h` comes from a handle, so the object is allocated; only
+        // its flags are read
         let f = unsafe { (*h).flags };
         if self.phase == GcPhase::Sweep && is_white(f) && f & self.current_white == 0 {
             panic!(
@@ -109,8 +112,10 @@ impl Heap {
 
     /// `gc-verify`: the color of the object at `h` against the heap's
     /// current white, and the collector's phase.
-    pub(crate) fn describe(&self, h: *const GcHeader) -> String {
-        // SAFETY: the caller names an allocated object; only its flags are read
+    pub(crate) fn describe(&self, h: Gc<GcHeader>) -> String {
+        let h = h.as_ptr().cast_const();
+        // SAFETY: `h` comes from a handle, so the object is allocated; only
+        // its flags are read
         let f = unsafe { (*h).flags };
         format!(
             "flags {f:#x} white {:#x} phase {:?}",

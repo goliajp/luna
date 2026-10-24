@@ -51,20 +51,25 @@ impl Heap {
     /// counted, or, while luna builds objects of its own, marked as one PUC
     /// has not made, whose free is not counted either (see
     /// [`Heap::acct_promote_obj`]).
-    pub(crate) fn acct_new(&mut self, h: *mut GcHeader, kind: PucKind, size: usize) {
+    pub(crate) fn acct_new(&mut self, h: Gc<GcHeader>, kind: PucKind, size: usize) {
         if !self.counting() {
-            set_uncounted(h, true);
+            // SAFETY: `h` is a handle, so its object is live; nothing
+            // borrows the header while its per-type byte is written
+            unsafe { (*h.as_ptr()).set_uncounted(true) };
         } else {
             self.acct_obj(kind, size);
         }
     }
 
     /// An object made without counting is PUC's now: counted here.
-    pub(crate) fn acct_promote_obj(&mut self, h: *mut GcHeader, kind: PucKind, size: usize) {
-        if self.counting() && is_uncounted(h) {
-            // SAFETY: the caller names a live object
-            unsafe { self.born(h) };
-            set_uncounted(h, false);
+    pub(crate) fn acct_promote_obj(&mut self, h: Gc<GcHeader>, kind: PucKind, size: usize) {
+        if self.counting() && h.is_uncounted() {
+            // SAFETY: `h` is a handle, so its object is live; nothing
+            // borrows the header while its per-type byte is written
+            unsafe {
+                self.born(h.as_ptr());
+                (*h.as_ptr()).set_uncounted(false);
+            }
             self.acct_obj(kind, size);
         }
     }
@@ -100,25 +105,25 @@ impl Heap {
     }
 }
 
-/// Whether object `h` is one PUC has not made (see [`Heap::acct_new`]).
-#[inline(always)]
-pub(crate) fn is_uncounted(h: *const GcHeader) -> bool {
-    // SAFETY: `h` heads a live object of this heap; its header is read
-    unsafe { (*h).sub & UNCOUNTED != 0 }
-}
-
 /// in a string's `sub` byte: a 5.5 external string over bytes PUC does not
 /// own (`LSTRFIX`), its header alone counted
 pub(crate) const FIXED_EXT: u8 = 0x20;
 
-pub(in crate::runtime) fn set_uncounted(h: *mut GcHeader, on: bool) {
-    // SAFETY: `h` heads a live object of this heap; only its per-type byte
-    // is written, which no type but a table uses otherwise
-    unsafe {
+impl GcHeader {
+    /// Whether this object is one PUC has not made (see [`Heap::acct_new`]).
+    #[inline(always)]
+    pub(crate) fn is_uncounted(&self) -> bool {
+        self.sub & UNCOUNTED != 0
+    }
+
+    /// Marks this object as one PUC has (not) made; only the per-type byte
+    /// is written, which no type but a table uses otherwise.
+    #[inline]
+    pub(in crate::runtime) fn set_uncounted(&mut self, on: bool) {
         if on {
-            (*h).sub |= UNCOUNTED;
+            self.sub |= UNCOUNTED;
         } else {
-            (*h).sub &= !UNCOUNTED;
+            self.sub &= !UNCOUNTED;
         }
     }
 }

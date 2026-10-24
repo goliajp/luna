@@ -124,7 +124,8 @@ impl Vm {
 
     /// PUC's `luaC_objbarrier` from the prototype of open function `i` to
     /// `child`, which the parser has just put in it.
-    pub(super) fn proto_barrier(&mut self, r: &Replay, i: usize, child: *mut GcHeader) {
+    pub(super) fn proto_barrier(&mut self, r: &Replay, i: usize, child: Gc<GcHeader>) {
+        let child = child.as_ptr();
         if r.rec.is_some() {
             return;
         }
@@ -144,7 +145,7 @@ impl Vm {
         let at = if up { p.locvars.len() + n } else { n }.wrapping_sub(1);
         let name = p.puc_names.borrow().get(at).copied();
         if let Some(s) = name {
-            self.proto_barrier(r, i, hdr(s));
+            self.proto_barrier(r, i, s.hdr());
         }
     }
 }

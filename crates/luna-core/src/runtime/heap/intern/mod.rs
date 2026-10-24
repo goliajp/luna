@@ -47,24 +47,29 @@ impl Heap {
                 .strings
                 .intern(self.mem.mem(), bytes, self.seed, self.rules.hash51())
                 .ok()?;
-            if is_new {
-                // SAFETY: `StringTable::intern` just allocated `p` and put it only in its own bucket chain, which does not link objects
-                unsafe { self.link(p as *mut GcHeader) };
-                self.hook_string_made(p);
-                self.acct_new_string(p as *mut GcHeader, bytes.len());
-            } else {
-                return Some(self.found_string(p, bytes.len()));
+            // SAFETY: `StringTable::intern` made `p` (in its own chain only, which links no objects) or found it there
+            let g = unsafe {
+                if is_new {
+                    self.link(p as *mut GcHeader);
+                }
+                Gc::from_ptr(p)
+            };
+            if !is_new {
+                return Some(self.found_string(g, bytes.len()));
             }
-            // SAFETY: `p` is an interned string the heap manages, new and linked above
-            Some(unsafe { Gc::from_ptr(p) })
+            self.hook_string_made(g);
+            self.acct_new_string(g, bytes.len());
+            Some(g)
         } else {
             let p =
                 string::alloc_long(self.mem.mem(), bytes, self.seed, self.rules.hash51()).ok()?;
             // SAFETY: `alloc_long` just allocated `p`, linked nowhere yet
-            unsafe { self.link(p as *mut GcHeader) };
-            self.acct_new_string(p as *mut GcHeader, bytes.len());
-            // SAFETY: `p` is the string linked just above
-            Some(unsafe { Gc::from_ptr(p) })
+            let g = unsafe {
+                self.link(p as *mut GcHeader);
+                Gc::from_ptr(p)
+            };
+            self.acct_new_string(g, bytes.len());
+            Some(g)
         }
     }
 
@@ -74,15 +79,17 @@ impl Heap {
     pub(crate) fn find_single(&mut self, bytes: &[u8]) -> Option<Gc<LuaStr>> {
         let [c] = *bytes else { return None };
         let p = self.strings.single(c);
-        (!p.is_null()).then(|| self.found_string(p, 1))
+        // SAFETY: a string the table holds is one the heap manages
+        (!p.is_null()).then(|| self.found_string(unsafe { Gc::from_ptr(p) }, 1))
     }
 
     /// An interned string `p` of `len` bytes found again.
     #[inline]
-    fn found_string(&mut self, p: *mut LuaStr, len: usize) -> Gc<LuaStr> {
-        if is_uncounted(p as *mut GcHeader) {
-            self.acct_promote(p as *mut GcHeader, len);
+    fn found_string(&mut self, g: Gc<LuaStr>, len: usize) -> Gc<LuaStr> {
+        if g.hdr.is_uncounted() {
+            self.acct_promote(g, len);
         }
+        let p = g.as_ptr();
         // PUC `luaS_new` resurrect guard (lstring.c).
         // The bucket-chain is walked open-loop without consulting GC
         // color; during incremental sweep an existing entry may be
@@ -94,9 +101,8 @@ impl Heap {
         // Flip the white bits to `current_white` so the upcoming sweep
         // skips it (PUC `changewhite`). Black / not-white objects are
         // already safe and untouched.
-        // SAFETY: `p` came from `StringTable::intern` and is a valid
-        // `LuaStr` header (its bucket chain is consistent under our
-        // single-threaded heap).
+        // SAFETY: `p` comes from a handle, so its string is live; nothing
+        // borrows its header while it is written
         unsafe {
             let f = (*(p as *mut GcHeader)).flags;
             if is_white(f) && (f & self.current_white) == 0 {
@@ -107,17 +113,17 @@ impl Heap {
                 if (*p).hdr.sub & strt::SWEPT != 0 {
                     (*p).hdr.sub &= !strt::SWEPT;
                     if !self.counting() {
-                        puc::set_uncounted(p as *mut GcHeader, true);
+                        (*(p as *mut GcHeader)).set_uncounted(true);
                     } else {
                         self.acct_string(len);
-                        self.strt_enter(p as *mut GcHeader);
+                        self.strt_enter(g);
                     }
                 }
             }
-            // found in the table and kept from this cycle's sweep by the
-            // recoloring above
-            Gc::from_ptr(p)
         }
+        // found in the table and kept from this cycle's sweep by the
+        // recoloring above
+        g
     }
 
     /// The string of `a` then `b` (a concatenation), without a buffer to
@@ -142,10 +148,12 @@ impl Heap {
         }
         let p = string::alloc_long_pair(self.mem.mem(), a, b, self.seed, self.rules.hash51())?;
         // SAFETY: `alloc_long_pair` just allocated `p`, linked nowhere yet
-        unsafe { self.link(p as *mut GcHeader) };
-        self.acct_new_string(p as *mut GcHeader, n);
-        // SAFETY: `p` is the string linked just above
-        Ok(unsafe { Gc::from_ptr(p) })
+        let g = unsafe {
+            self.link(p as *mut GcHeader);
+            Gc::from_ptr(p)
+        };
+        self.acct_new_string(g, n);
+        Ok(g)
     }
 
     /// The string of `parts` one after another (PUC `luaV_concat`'s
@@ -173,7 +181,7 @@ impl Heap {
             self.link(p as *mut GcHeader);
             Gc::from_ptr(p)
         };
-        self.acct_new_string(p as *mut GcHeader, n);
+        self.acct_new_string(g, n);
         Ok(g)
     }
 
@@ -194,7 +202,9 @@ impl Heap {
             Gc::from_ptr(p)
         };
         if silent {
-            puc::set_uncounted(p as *mut GcHeader, true);
+            // SAFETY: `g` is the string linked above; nothing borrows its
+            // header while its per-type byte is written
+            unsafe { (*g.header()).set_uncounted(true) };
         } else {
             self.acct_obj(PucKind::LongStr, self.puc_size(PucObj::ExternalStr));
         }

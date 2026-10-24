@@ -19,8 +19,7 @@ pub(super) fn new_file(
     let u = vm.lib_userdata(UserdataPayload::File(fh), writable, size)?;
     // 5.1: the environment of the io function that opens it
     if vm.version() == LuaVersion::Lua51 {
-        vm.heap
-            .set_env51(u.as_ptr() as *mut _, crate::runtime::heap::ENV_IO);
+        vm.heap.set_env51(u.hdr(), crate::runtime::heap::ENV_IO);
     }
     checked(vm, u)?;
     // SAFETY: `u` was allocated above and is held by the caller's check;

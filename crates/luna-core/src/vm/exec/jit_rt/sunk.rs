@@ -2,7 +2,7 @@
 //! recorded as garbage, unless the trace leaves with it.
 
 use super::*;
-use crate::runtime::heap::{GcHeader, GhostRef};
+use crate::runtime::heap::GhostRef;
 use crate::runtime::table::new_table_sizes;
 
 /// The records of PUC's objects a running trace stands for, while luna
@@ -95,7 +95,7 @@ impl Vm {
         self.heap.counting_on(off);
         let g = self.jit_ghosts().sunk[site].take();
         if let (Some(g), Some(t)) = (g, t) {
-            self.heap.ghost_table_made(g, t.as_ptr() as *mut GcHeader);
+            self.heap.ghost_table_made(g, t.hdr());
         }
         t
     }

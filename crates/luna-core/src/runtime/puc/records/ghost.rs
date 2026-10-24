@@ -156,19 +156,22 @@ impl Heap {
     /// luna made `h`, without counting, for the object of `r` after all
     /// (one without parts): the record neither frees nor sweeps it, and
     /// `h` is counted from now on.
-    pub(crate) fn ghost_made(&mut self, r: GhostRef, h: *mut GcHeader) {
+    pub(crate) fn ghost_made(&mut self, r: GhostRef, h: Gc<GcHeader>) {
         self.record(r)[r.at] |= TAKEN;
-        super::set_uncounted(h, false);
+        // SAFETY: `h` is a handle, so its object is live; nothing borrows
+        // the header while its per-type byte is written
+        unsafe { (*h.as_ptr()).set_uncounted(false) };
     }
 
     /// luna made `h`, without counting, for the table of `t` after all (a
     /// trace leaving with it): the record neither frees nor sweeps it, and
     /// `h` is counted from now on.
-    pub(crate) fn ghost_table_made(&mut self, t: GhostRef, h: *mut GcHeader) {
+    pub(crate) fn ghost_table_made(&mut self, t: GhostRef, h: Gc<GcHeader>) {
         for e in &mut self.record(t)[t.at..t.at + 3] {
             *e |= TAKEN;
         }
-        super::set_uncounted(h, false);
+        // SAFETY: as in `ghost_made`
+        unsafe { (*h.as_ptr()).set_uncounted(false) };
     }
 
     /// The objects of PUC's a record holds, as a sweep counts them.

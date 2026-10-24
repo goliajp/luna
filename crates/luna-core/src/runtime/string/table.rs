@@ -98,13 +98,15 @@ impl StringTable {
     }
 
     /// Every interned string, to `f`.
-    pub(crate) fn each(&self, mut f: impl FnMut(*mut LuaStr)) {
+    pub(crate) fn each(&self, mut f: impl FnMut(crate::runtime::Gc<LuaStr>)) {
         for &head in self.buckets.iter() {
             let mut cur = head;
             while !cur.is_null() {
-                f(cur);
-                // SAFETY: the chains hold only allocated strings
-                cur = unsafe { (*cur).hnext };
+                // SAFETY: the chains hold only allocated strings of the heap
+                // that owns the table
+                let s = unsafe { crate::runtime::Gc::from_ptr_unchecked(cur) };
+                f(s);
+                cur = s.hnext;
             }
         }
     }

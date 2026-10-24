@@ -167,10 +167,11 @@ impl Heap {
                 continue;
             }
             self.puc.open_dead.dead.remove(i);
-            let h = uv.as_ptr() as *mut GcHeader;
-            if !is_uncounted(h) {
+            if !uv.hdr().is_uncounted() {
                 self.acct_part(self.puc.sizes.upval, 0);
-                crate::runtime::puc::set_uncounted(h, true);
+                // SAFETY: `uv` is a handle, so its upvalue is live; nothing
+                // borrows the header while its per-type byte is written
+                unsafe { (*uv.header()).set_uncounted(true) };
             }
         }
     }

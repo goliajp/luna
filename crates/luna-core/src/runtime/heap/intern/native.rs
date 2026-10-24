@@ -57,10 +57,11 @@ impl Heap {
     ) -> Result<Gc<NativeClosure>, Oom> {
         let g = self.uncounted(|h| h.try_new_builtin(f, upvals, builtin, false));
         let g = g?;
-        let h = g.as_ptr() as *mut GcHeader;
         self.set_native_puc_nup(g, puc_nup);
         if self.counting() {
-            puc::set_uncounted(h, false);
+            // SAFETY: `g` was made just above; nothing borrows its header
+            // while its per-type byte is written
+            unsafe { (*g.header()).set_uncounted(false) };
             if puc_nup > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51 {
                 self.acct_obj(PucKind::CClosure, self.puc_size(PucObj::CClosure(puc_nup)));
             }
@@ -133,7 +134,8 @@ impl Heap {
         if self.counting() {
             self.acct_obj(PucKind::CClosure, self.puc_size(PucObj::CClosure(0)));
         } else {
-            puc::set_uncounted(h, true);
+            // SAFETY: as above; only its per-type byte is written
+            unsafe { (*h).set_uncounted(true) };
         }
         // SAFETY: as above
         Ok(unsafe { Gc::from_ptr(p) })
@@ -224,11 +226,13 @@ impl Heap {
         // `try_new_native_puc`)
         if self.fix_natives {
             if nup > 0 {
-                puc::set_uncounted(g.as_ptr() as *mut GcHeader, true);
+                // SAFETY: `g` was made just above; nothing borrows its
+                // header while its per-type byte is written
+                unsafe { (*g.header()).set_uncounted(true) };
             }
         } else if nup > 0 || self.dialect() == crate::runtime::dialect::Dialect::L51 {
             let size = self.puc_size(PucObj::CClosure(nup));
-            self.acct_new(g.as_ptr() as *mut GcHeader, PucKind::CClosure, size);
+            self.acct_new(g.hdr(), PucKind::CClosure, size);
         }
         Ok(g)
     }

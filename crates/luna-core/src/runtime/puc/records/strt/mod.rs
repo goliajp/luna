@@ -30,10 +30,10 @@ pub(in crate::runtime) struct StrtSweep {
     /// entered yet (`Heap::strt_enter`)
     pub(super) grow_from: Option<usize>,
     /// room for renumbering the chains after a resize
-    order: Vec<(u32, u16, *mut LuaStr)>,
+    order: Vec<(u32, u16, Gc<LuaStr>)>,
     /// the old `seq` kept for the next resize
     spare: Vec<u16>,
-    ordered: Vec<(u32, u16, *mut LuaStr)>,
+    ordered: Vec<(u32, u16, Gc<LuaStr>)>,
 }
 
 impl StrtSweep {
@@ -86,7 +86,7 @@ impl Heap {
                 if (*cur).tag == ObjTag::Str
                     && is_white(f)
                     && f & new_white == 0
-                    && !is_uncounted(cur)
+                    && !(*cur).is_uncounted()
                     && (*cur).sub & EXTERNAL == 0
                 {
                     let s = &*(cur as *const LuaStr);
@@ -130,8 +130,11 @@ impl Heap {
 
     /// Whether `h`, dead, waits for the string sweep under way (every dead
     /// string of PUC's string table does, until it is over).
-    pub(in crate::runtime) fn in_string_sweep(&self, h: *mut GcHeader) -> bool {
-        // SAFETY: `h` heads a live object of this heap
+    ///
+    /// # Safety
+    /// `h` heads an object of this heap that is still allocated.
+    pub(in crate::runtime) unsafe fn in_string_sweep(&self, h: *mut GcHeader) -> bool {
+        // SAFETY: the caller's contract
         unsafe {
             self.puc.strt.next < self.puc.strt.dead.len()
                 && (*h).tag == ObjTag::Str
@@ -189,7 +192,7 @@ impl Heap {
                     continue;
                 }
                 (*h).sub |= SWEPT;
-                self.hook_string_swept(h);
+                self.hook_string_swept(Gc::from_ptr_unchecked(h));
                 self.acct_string_free((*(h as *const LuaStr)).len());
             }
         }

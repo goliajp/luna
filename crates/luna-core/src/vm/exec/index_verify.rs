@@ -43,8 +43,7 @@ impl Vm {
                         format!(
                             "closure {c:#x} freed {} {}, proto {p:#x} freed {} defined at {}; frames {}",
                             self.heap.hooks.recently_freed.contains(&c),
-                            self.heap
-                                .describe(c as *const crate::runtime::heap::GcHeader),
+                            self.heap.describe(f.closure.hdr()),
                             self.heap.hooks.recently_freed.contains(&p),
                             f.closure.proto.line_defined,
                             self.frames.len()

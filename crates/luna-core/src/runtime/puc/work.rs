@@ -16,7 +16,7 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             if (*h).tag == ObjTag::Coro {
-                if is_uncounted(h) {
+                if (*h).is_uncounted() {
                     return 0;
                 }
                 let c = &*(h as *const crate::runtime::Coro);
@@ -63,7 +63,7 @@ impl Heap {
                 };
             }
             // the main thread is luna's own, with a stack PUC has
-            if is_uncounted(h) && (*h).tag != ObjTag::Coro {
+            if (*h).is_uncounted() && (*h).tag != ObjTag::Coro {
                 return 0;
             }
             if (*h).tag == ObjTag::Coro {
@@ -180,7 +180,7 @@ impl Heap {
 pub(in crate::runtime) unsafe fn objsize(s: &PucSizes, d: Dialect, h: *mut GcHeader) -> usize {
     // SAFETY: the caller's contract; the tag names the type
     unsafe {
-        if is_uncounted(h) {
+        if (*h).is_uncounted() {
             return 0;
         }
         match (*h).tag {

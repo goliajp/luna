@@ -270,7 +270,7 @@ impl Opener {
             super::Ctor::F(g, b) if nup == 0 => {
                 let n = vm.retry_oom(|vm| vm.heap.try_new_c0(g, b))?;
                 let env = self.env_bits(vm);
-                vm.heap.set_env51(n.as_ptr() as *mut _, env);
+                vm.heap.set_env51(n.hdr(), env);
                 Ok(Value::Native(n))
             }
             super::Ctor::F(g, b) => {

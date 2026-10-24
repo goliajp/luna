@@ -14,9 +14,7 @@ use super::*;
 
 impl Heap {
     /// The bucket of PUC's string table of `size` buckets string `p` is in.
-    fn puc_bucket(&self, p: *const LuaStr, size: usize) -> usize {
-        // SAFETY: `p` is an allocated string
-        let s = unsafe { Gc::from_ptr(p as *mut LuaStr) };
+    fn puc_bucket(&self, s: Gc<LuaStr>, size: usize) -> usize {
         let h = match self.puc.dialect {
             Dialect::L52 if s.len() >= 32 => hash_52(s.as_bytes(), self.seed()),
             _ => s.stored_hash(),
@@ -25,20 +23,16 @@ impl Heap {
     }
 
     /// Whether PUC's string table holds string `p`.
-    fn puc_holds(&self, p: *mut LuaStr) -> bool {
-        let h = p as *mut GcHeader;
-        // SAFETY: `p` is an allocated string
-        unsafe {
-            !is_uncounted(h)
-                && (*h).sub & (EXTERNAL | SWEPT) == 0
-                && (self.puc.dialect == Dialect::L51 || (*p).is_short())
-        }
+    fn puc_holds(&self, p: Gc<LuaStr>) -> bool {
+        !p.hdr.is_uncounted()
+            && p.hdr.sub & (EXTERNAL | SWEPT) == 0
+            && (self.puc.dialect == Dialect::L51 || p.is_short())
     }
 
     /// The table of `size` buckets numbered afresh, `skip` left out: each
     /// string in the order a resize from `from` buckets puts it in its
     /// chain (the old buckets in order, each chain from its head).
-    fn strt_reorder(&mut self, from: usize, size: usize, skip: *mut LuaStr) {
+    fn strt_reorder(&mut self, from: usize, size: usize, skip: Option<Gc<LuaStr>>) {
         if self.strt_rehash_halves(from, size, skip) {
             return;
         }
@@ -46,15 +40,12 @@ impl Heap {
         let mut v = std::mem::take(&mut self.puc.strt.order);
         v.clear();
         self.each_string(|p| v.push((0, 0, p)));
-        v.retain(|e| e.2 != skip && self.puc_holds(e.2));
+        v.retain(|e| !skip.is_some_and(|s| s.ptr_eq(e.2)) && self.puc_holds(e.2));
         let counts = &mut self.puc.strt.counts;
         counts.clear();
         counts.resize(from + 1, 0);
         for e in v.iter_mut() {
-            // SAFETY: the table holds allocated strings
-            let (b, k) = (self.puc_bucket(e.2, from) as u32, unsafe {
-                Gc::from_ptr(e.2).chain()
-            });
+            let (b, k) = (self.puc_bucket(e.2, from) as u32, e.2.chain());
             *e = (b, k, e.2);
             self.puc.strt.counts[b as usize + 1] += 1;
         }
@@ -64,7 +55,7 @@ impl Heap {
         }
         let mut sorted = std::mem::take(&mut self.puc.strt.ordered);
         sorted.clear();
-        sorted.resize(v.len(), (0, 0, std::ptr::null_mut()));
+        sorted.extend_from_slice(&v);
         for &e in &v {
             let at = &mut self.puc.strt.counts[e.0 as usize];
             sorted[*at as usize] = e;
@@ -88,8 +79,7 @@ impl Heap {
             let b = self.puc_bucket(p, size);
             let seq = &mut self.puc.strt.seq;
             seq[b] += 1;
-            // SAFETY: as above
-            unsafe { Gc::from_ptr(p).set_chain(seq[b]) };
+            p.set_chain(seq[b]);
         }
         self.puc.strt.order = v;
         self.puc.strt.ordered = sorted;
@@ -101,7 +91,7 @@ impl Heap {
     /// `b` holds old bucket `b`'s chain reversed, then above it old bucket
     /// `b + size`'s reversed. False (nothing done) for any other resize or
     /// when the numbers would not fit.
-    fn strt_rehash_halves(&mut self, from: usize, size: usize, skip: *mut LuaStr) -> bool {
+    fn strt_rehash_halves(&mut self, from: usize, size: usize, skip: Option<Gc<LuaStr>>) -> bool {
         let grow = size == 2 * from;
         if !(grow || 2 * size == from) || self.puc.strt.seq.len() != from || from == 0 {
             return false;
@@ -141,12 +131,11 @@ impl Heap {
         v.clear();
         self.each_string(|p| v.push((0, 0, p)));
         for &(_, _, p) in &v {
-            if p == skip || !self.puc_holds(p) {
+            if skip.is_some_and(|s| s.ptr_eq(p)) || !self.puc_holds(p) {
                 continue;
             }
             let b = self.puc_bucket(p, from);
-            // SAFETY: the table holds allocated strings
-            let s = unsafe { Gc::from_ptr(p) };
+            let s = p;
             let mut k = old[b] + 1 - s.chain();
             if !grow && b >= size {
                 k += old[b - size] + 1;
@@ -166,17 +155,15 @@ impl Heap {
         let mut v = Vec::new();
         self.each_string(|p| v.push(p));
         v.retain(|&p| self.puc_holds(p) && self.puc_bucket(p, size) == b);
-        // SAFETY: the table holds allocated strings
-        v.sort_unstable_by_key(|&p| unsafe { Gc::from_ptr(p).chain() });
+        v.sort_unstable_by_key(|&p| p.chain());
         for (i, &p) in v.iter().enumerate() {
-            // SAFETY: as above
-            unsafe { Gc::from_ptr(p).set_chain(i as u16 + 1) };
+            p.set_chain(i as u16 + 1);
         }
         self.puc.strt.seq[b] = v.len() as u16;
     }
 
     /// String `p` at the head of its chain in a table of `size` buckets.
-    fn strt_head(&mut self, p: *mut LuaStr, size: usize) {
+    fn strt_head(&mut self, p: Gc<LuaStr>, size: usize) {
         let b = self.puc_bucket(p, size);
         if self.puc.strt.seq.len() != size {
             self.puc.strt.seq.resize(size, 0);
@@ -185,34 +172,32 @@ impl Heap {
             self.strt_renumber(b);
         }
         self.puc.strt.seq[b] += 1;
-        // SAFETY: `p` is an allocated string
-        unsafe { Gc::from_ptr(p).set_chain(self.puc.strt.seq[b]) };
+        p.set_chain(self.puc.strt.seq[b]);
     }
 
     /// The counted string `h` entered PUC's string table, which may have
     /// grown on the way (`grow_from`): 5.1 puts it in, then resizes, 5.2
     /// resizes first.
-    pub(crate) fn strt_enter(&mut self, h: *mut GcHeader) {
+    pub(crate) fn strt_enter(&mut self, p: Gc<LuaStr>) {
         if !crate::runtime::gc_hooks::TRACE
             || !matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
         {
             return;
         }
-        let p = h as *mut LuaStr;
         let size = self.puc.strt_size;
         if !self.puc_holds(p) {
             if let Some(from) = self.puc.strt.grow_from.take() {
-                self.strt_reorder(from, size, std::ptr::null_mut());
+                self.strt_reorder(from, size, None);
             }
             return;
         }
         match self.puc.strt.grow_from.take() {
             Some(from) if self.puc.dialect == Dialect::L51 => {
                 self.strt_head(p, from);
-                self.strt_reorder(from, size, std::ptr::null_mut());
+                self.strt_reorder(from, size, None);
             }
             Some(from) => {
-                self.strt_reorder(from, size, p);
+                self.strt_reorder(from, size, Some(p));
                 self.strt_head(p, size);
             }
             None => self.strt_head(p, size),
@@ -226,7 +211,7 @@ impl Heap {
             && matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
         {
             self.puc.strt.grow_from = None;
-            self.strt_reorder(from, self.puc.strt_size, std::ptr::null_mut());
+            self.strt_reorder(from, self.puc.strt_size, None);
         }
     }
 

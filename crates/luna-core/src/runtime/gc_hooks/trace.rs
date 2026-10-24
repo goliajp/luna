@@ -60,7 +60,7 @@ impl Heap {
 
     /// gc-trace (`LUNA_GC_WHERE`): a string freed.
     #[inline(always)]
-    pub(crate) fn hook_string_freed(&mut self, s: *mut LuaStr) {
+    pub(crate) fn hook_string_freed(&mut self, s: crate::runtime::Gc<LuaStr>) {
         #[cfg(feature = "gc-trace")]
         self.trace_string(b"s", s);
         let _ = s;
@@ -68,7 +68,7 @@ impl Heap {
 
     /// gc-trace (`LUNA_GC_WHERE`): a string made.
     #[inline(always)]
-    pub(crate) fn hook_string_made(&mut self, s: *mut LuaStr) {
+    pub(crate) fn hook_string_made(&mut self, s: crate::runtime::Gc<LuaStr>) {
         #[cfg(feature = "gc-trace")]
         self.trace_string(b"s+", s);
         let _ = s;
@@ -151,7 +151,7 @@ impl Heap {
 
     /// gc-trace (`LUNA_GC_SWEEP`): the string sweep frees string `h`.
     #[inline(always)]
-    pub(crate) fn hook_string_swept(&mut self, h: *mut GcHeader) {
+    pub(crate) fn hook_string_swept(&mut self, h: crate::runtime::Gc<GcHeader>) {
         #[cfg(feature = "gc-trace")]
         self.trace_string_swept(h);
         let _ = h;

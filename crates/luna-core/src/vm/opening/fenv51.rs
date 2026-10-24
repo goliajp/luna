@@ -72,7 +72,7 @@ impl Opener {
         if self.native.is_some()
             && let Some(a) = vm.running_natives.last()
         {
-            let h = a.nc.as_ptr() as *mut _;
+            let h = a.nc.hdr();
             vm.heap.set_env51(h, bits);
             env_barrier(vm, h, env);
         }
@@ -83,12 +83,12 @@ impl Opener {
     pub(crate) fn setfenv(&mut self, vm: &mut Vm, ix: super::run::Ix) -> Result<(), LuaError> {
         let top = self.top(vm) as usize;
         let bits = self.bits_of(vm, Some(vm.stack[top - 1]));
-        let h: *mut crate::runtime::heap::GcHeader = match self.at(vm, ix) {
-            Value::Native(n) => n.as_ptr() as *mut _,
-            Value::Userdata(u) => u.as_ptr() as *mut _,
-            _ => std::ptr::null_mut(),
+        let h = match self.at(vm, ix) {
+            Value::Native(n) => Some(n.hdr()),
+            Value::Userdata(u) => Some(u.hdr()),
+            _ => None,
         };
-        if !h.is_null() {
+        if let Some(h) = h {
             vm.heap.set_env51(h, bits);
             env_barrier(vm, h, vm.stack[top - 1]);
         }
@@ -119,12 +119,14 @@ impl Opener {
 
 /// `luaC_objbarrier` of 5.1's `lua_setfenv` and `lua_replace`: the object
 /// behind `h`, black, takes the environment `env` (a record or a table).
-fn env_barrier(vm: &mut Vm, h: *mut crate::runtime::heap::GcHeader, env: Value) {
+fn env_barrier(vm: &mut Vm, h: crate::runtime::Gc<crate::runtime::heap::GcHeader>, env: Value) {
+    let h = h.as_ptr();
     let e: *mut crate::runtime::heap::GcHeader = match env {
         Value::LightUserdata(p) => p as *mut _,
         Value::Table(t) => t.as_ptr() as *mut _,
         _ => return,
     };
-    // SAFETY: `h` heads a live object and `e` a record or a live table
+    // SAFETY: `h` comes from a handle, so its object is live; `e` is a
+    // record or a live table
     unsafe { vm.heap.barrier_forward_obj(h, e) };
 }

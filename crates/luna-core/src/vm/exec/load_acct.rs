@@ -81,15 +81,15 @@ impl Vm {
         } else {
             match cl.upvals().first() {
                 Some(&uv) => {
-                    let h = uv.as_ptr() as *mut crate::runtime::heap::GcHeader;
-                    if crate::runtime::heap::is_uncounted(h) {
+                    let h = uv.hdr();
+                    if h.is_uncounted() {
                         self.heap.acct_promote_obj(h, PucKind::Upval, s.upval);
                     } else {
                         self.heap.acct_obj(PucKind::Upval, s.upval);
                     }
                     if d == Dialect::L53 {
                         // SAFETY: both are live objects of this heap
-                        unsafe { self.heap.link_before(h, cl.as_ptr() as *mut _) };
+                        unsafe { self.heap.link_before(h.as_ptr(), cl.as_ptr() as *mut _) };
                     }
                     self.heap.barrier_new_upval(cl, uv);
                 }
@@ -199,7 +199,7 @@ impl Vm {
     /// it.
     fn acct_main_closure(&mut self, cl: Gc<LuaClosure>) {
         let size = self.heap.closure_size(&cl.proto, cl.upvals().len());
-        let h = cl.as_ptr() as *mut crate::runtime::heap::GcHeader;
-        self.heap.acct_promote_obj(h, PucKind::LuaClosure, size);
+        self.heap
+            .acct_promote_obj(cl.hdr(), PucKind::LuaClosure, size);
     }
 }

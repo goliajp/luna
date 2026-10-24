@@ -5,7 +5,7 @@ use super::*;
 
 impl Marker {
     /// Mark the environment of the object behind `h`, which its class
-    /// bits `cls` name.
+    /// bits `cls` name; `h` itself is only compared.
     pub(crate) fn mark_env51(&mut self, h: *mut GcHeader, cls: u8) {
         let env = cls >> ENV_SHIFT;
         if env == 0 || env == ENV_PROTO || self.env51.is_null() {
@@ -80,9 +80,18 @@ impl Heap {
 
     /// `lua_setfield` of `key` and the record `v` (a closure) into the
     /// record `t`, one of the io library's tables: 5.1's `luaC_barriert`.
-    pub(crate) fn env51_set_key(&mut self, t: *mut GcHeader, key: Gc<LuaStr>, v: *mut GcHeader) {
+    ///
+    /// # Safety
+    /// `t` and `v` head records of this heap's.
+    pub(crate) unsafe fn env51_set_key(
+        &mut self,
+        t: *mut GcHeader,
+        key: Gc<LuaStr>,
+        v: *mut GcHeader,
+    ) {
         self.env51_records().close = key.as_ptr() as *mut GcHeader;
-        // SAFETY: records live as long as the heap; only flags are read
+        // SAFETY: the caller's contract; records live as long as the heap,
+        // and only flags are read
         unsafe {
             if is_white((*v).flags) {
                 self.barrier_back_obj(t);

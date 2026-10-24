@@ -69,8 +69,7 @@ pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     if let Value::Native(n) = it
         && vm.version() == LuaVersion::Lua51
     {
-        vm.heap
-            .set_env51(n.as_ptr() as *mut _, crate::runtime::heap::ENV_IO);
+        vm.heap.set_env51(n.hdr(), crate::runtime::heap::ENV_IO);
     }
     // 5.4+ return the file as the generic for's closing value
     if toclose && vm.version() >= LuaVersion::Lua54 {

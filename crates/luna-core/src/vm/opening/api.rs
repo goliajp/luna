@@ -48,7 +48,9 @@ impl Opener {
             Value::Table(tt) if tt.metatable().is_none() => vm.raw_set(tt, key, v)?,
             Value::LightUserdata(p) => {
                 if let (Value::Str(s), Value::LightUserdata(c)) = (key, v) {
-                    vm.heap.env51_set_key(p as *mut _, s, c as *mut _);
+                    // SAFETY: a light userdata the opening stores into
+                    // another is one of its records, as both are here
+                    unsafe { vm.heap.env51_set_key(p as *mut _, s, c as *mut _) };
                 }
             }
             _ => vm.host_set_index(t, key, v)?,
@@ -240,7 +242,7 @@ impl Opener {
             vm.retry_oom(|vm| vm.heap.try_new_native_puc(f, upvals, b, nup as usize))?;
         if self.v == LuaVersion::Lua51 {
             let env = self.env_bits(vm);
-            vm.heap.set_env51(n.as_ptr() as *mut _, env);
+            vm.heap.set_env51(n.hdr(), env);
         }
         Ok(Value::Native(n))
     }

@@ -127,9 +127,9 @@ impl Heap {
                 if tag == ObjTag::Str && cls & KEPT != 0 {
                     let dead = is_white(f) && f & self.white() == 0;
                     assert!(
-                        dead && !is_uncounted(cur) && self.phase() == GcPhase::Sweep,
+                        dead && !(*cur).is_uncounted() && self.phase() == GcPhase::Sweep,
                         "[gc-verify] {ctx}: kept string {cur:p}: flags {f:#x}, uncounted {}, phase {:?}",
-                        is_uncounted(cur),
+                        (*cur).is_uncounted(),
                         self.phase()
                     );
                 }
