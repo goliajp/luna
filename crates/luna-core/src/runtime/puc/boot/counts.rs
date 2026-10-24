@@ -6,7 +6,7 @@
 use crate::runtime::dialect::Dialect;
 
 /// The tag-method names `luaT_init` makes, in its order.
-pub(crate) fn tm_names(d: Dialect) -> &'static [&'static str] {
+pub(in crate::runtime::puc) fn tm_names(d: Dialect) -> &'static [&'static str] {
     match d {
         Dialect::L51 => &[
             "__index",
@@ -103,7 +103,7 @@ pub(crate) fn tm_names(d: Dialect) -> &'static [&'static str] {
 }
 
 /// The reserved words `luaX_init` makes, in its order.
-pub(crate) fn reserved_words(d: Dialect) -> &'static [&'static str] {
+pub(in crate::runtime::puc) fn reserved_words(d: Dialect) -> &'static [&'static str] {
     const W51: &[&str] = &[
         "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in",
         "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
@@ -138,7 +138,7 @@ pub(crate) struct BootSizes {
     pub registry_array: usize,
 }
 
-pub(crate) fn boot_sizes(d: Dialect) -> BootSizes {
+pub(in crate::runtime::puc) fn boot_sizes(d: Dialect) -> BootSizes {
     let lg64 = [616, 704, 1552, 1624, 1624];
     let lg32 = [348, 372, 808, 848, 852];
     let i = d as usize - 1;

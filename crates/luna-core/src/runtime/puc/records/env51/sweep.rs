@@ -9,7 +9,7 @@ impl Heap {
     /// # Safety
     /// `cur` heads an object of this heap that is still allocated.
     #[inline(always)]
-    pub(in crate::runtime) unsafe fn env51_sweep(
+    pub(in crate::runtime::puc) unsafe fn env51_sweep(
         &mut self,
         cur: *mut GcHeader,
         after: bool,
@@ -99,7 +99,7 @@ impl Heap {
 
     /// The object `h` is freed: no record is found by it any more.
     #[inline]
-    pub(in crate::runtime) fn env51_forget(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime::puc) fn env51_forget(&mut self, h: *mut GcHeader) {
         if let Some(e) = &mut self.puc.env51_box {
             if !e.owners.is_empty() {
                 e.owners.retain(|o| o.0 != h);
@@ -117,7 +117,7 @@ impl Heap {
     }
 
     /// A cycle starts: the records are white, as PUC's objects are.
-    pub(in crate::runtime) fn env51_whiten(&mut self) {
+    pub(in crate::runtime::puc) fn env51_whiten(&mut self) {
         let w = self.white();
         if let Some(e) = &mut self.puc.env51_box {
             for g in e.gens.iter_mut() {

@@ -77,7 +77,7 @@ impl StrCache {
     /// PUC `luaS_clearcache`, as marking ends: the dead strings go, and so
     /// does every address in a Lua string that died (its memory is
     /// another object's next).
-    pub(in crate::runtime) fn clear_dead(&mut self) {
+    pub(in crate::runtime::puc) fn clear_dead(&mut self) {
         // SAFETY: called as marking ends, before the sweep: every header
         // listed is still allocated, and only its flags are read
         let dead = |h: *const GcHeader| unsafe { is_white((*h).flags()) };

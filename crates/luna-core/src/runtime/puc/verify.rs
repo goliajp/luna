@@ -93,7 +93,7 @@ impl Heap {
 
     /// `gc-verify`: the short strings the live records hold, each a place
     /// in PUC's string table.
-    pub(in crate::runtime) fn ghost_short_strings(&self) -> usize {
+    pub(in crate::runtime::puc) fn ghost_short_strings(&self) -> usize {
         let mut n = 0;
         let mut cur = self.list_head();
         // SAFETY: `all` links this heap's live objects; a header tagged
@@ -119,7 +119,7 @@ impl Heap {
     /// has still to reach. The sweep turns it into an uncounted string of
     /// luna's and drops the mark; a marking that reaches it first drops the
     /// mark too. Panics on the first that is anything else.
-    pub(in crate::runtime) fn verify_kept(&self, ctx: &str) {
+    pub(in crate::runtime::puc) fn verify_kept(&self, ctx: &str) {
         let mut cur = self.list_head();
         // SAFETY: the links of `all` lead to live objects; only headers are
         // read
@@ -148,7 +148,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
-    pub(in crate::runtime) unsafe fn puc_listed(&self, h: *mut GcHeader, strt: bool) -> bool {
+    pub(in crate::runtime::puc) unsafe fn puc_listed(&self, h: *mut GcHeader, strt: bool) -> bool {
         // SAFETY: the caller's contract
         unsafe {
             let d51 = self.puc.dialect == Dialect::L51;

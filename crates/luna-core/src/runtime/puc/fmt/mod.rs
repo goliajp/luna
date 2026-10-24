@@ -141,7 +141,7 @@ impl Heap {
 
 /// PUC `luaO_utf8esc`: `x` (up to 2^31-1) in extended UTF-8, written to
 /// the front of `out`; its length.
-pub(crate) fn utf8_esc(out: &mut [u8; 8], mut x: u32) -> usize {
+pub(in crate::runtime::puc) fn utf8_esc(out: &mut [u8; 8], mut x: u32) -> usize {
     if x < 0x80 {
         out[0] = x as u8;
         return 1;

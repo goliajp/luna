@@ -106,19 +106,22 @@ impl HeapRules {
 
     /// Whether PUC's C function with `nup` upvalues is an object.
     #[inline(always)]
-    pub(in crate::runtime) fn c_function_is_object(&self, nup: usize) -> bool {
+    pub(in crate::runtime::puc) fn c_function_is_object(&self, nup: usize) -> bool {
         nup > 0 || !self.light_c_functions
     }
 
     /// Whether PUC has native `n` as an object.
     #[inline(always)]
-    pub(in crate::runtime) fn native_is_object(&self, n: &crate::runtime::NativeClosure) -> bool {
+    pub(in crate::runtime::puc) fn native_is_object(
+        &self,
+        n: &crate::runtime::NativeClosure,
+    ) -> bool {
         self.c_function_is_object(super::super::native_puc_upvals(n))
     }
 
     /// The `CallInfo`s PUC counts for thread `c`.
     #[inline]
-    pub(in crate::runtime) fn thread_ci(&self, c: &crate::runtime::Coro) -> u32 {
+    pub(in crate::runtime::puc) fn thread_ci(&self, c: &crate::runtime::Coro) -> u32 {
         if self.ci_array {
             c.frame_size
         } else {

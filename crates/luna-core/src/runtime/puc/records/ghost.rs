@@ -175,7 +175,7 @@ impl Heap {
     }
 
     /// The objects of PUC's a record holds, as a sweep counts them.
-    pub(in crate::runtime) fn ghost_objects(g: &Ghost) -> i64 {
+    pub(in crate::runtime::puc) fn ghost_objects(g: &Ghost) -> i64 {
         g.sizes.iter().filter(|&&s| s & (PART | TAKEN) == 0).count() as i64
     }
 
@@ -194,7 +194,7 @@ impl Heap {
     /// Free up to `quota` of the newest objects the dead record `g` holds
     /// (a sweep meets them newest first); how many, and whether none is
     /// left (the caller then unlinks and frees the record).
-    pub(in crate::runtime) fn free_ghost_records(
+    pub(in crate::runtime::puc) fn free_ghost_records(
         &mut self,
         g: &mut Ghost,
         quota: i64,
@@ -213,7 +213,7 @@ impl Heap {
     /// # Safety
     /// `g` heads an unlinked record of this heap that nothing uses
     /// afterwards.
-    pub(in crate::runtime) unsafe fn free_ghost(&mut self, g: *mut Ghost) {
+    pub(in crate::runtime::puc) unsafe fn free_ghost(&mut self, g: *mut Ghost) {
         // SAFETY: the caller's contract
         unsafe {
             let sizes = &(*g).sizes;

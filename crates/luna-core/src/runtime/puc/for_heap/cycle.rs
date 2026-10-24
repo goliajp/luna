@@ -54,6 +54,15 @@ impl Heap {
         }
     }
 
+    /// The atomic step's marking is over, every weak table cleared, just
+    /// before the white flips: the string cache forgets the strings found
+    /// dead (PUC `luaS_clearcache`), and the open upvalues left white come
+    /// off their lists.
+    pub(in crate::runtime) fn puc_marking_ends(&mut self) {
+        self.puc.strcache.clear_dead();
+        self.doom_open_upvals();
+    }
+
     /// A full collection's sweep starts: 5.1's sweeps the string table
     /// before the list.
     pub(in crate::runtime) fn puc_full_sweep_begins(&mut self) {

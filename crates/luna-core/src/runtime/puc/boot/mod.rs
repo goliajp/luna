@@ -12,7 +12,7 @@ impl Heap {
     /// names and reserved words are made here, as PUC makes them; the
     /// memory error message, which the heap made before it knew the
     /// dialect, is counted where PUC makes it.
-    pub(crate) fn acct_boot(&mut self) -> Result<(), crate::runtime::mem::Oom> {
+    pub(in crate::runtime::puc) fn acct_boot(&mut self) -> Result<(), crate::runtime::mem::Oom> {
         use crate::runtime::puc::boot::counts::{boot_sizes, reserved_words, tm_names};
         let d = self.puc.dialect;
         let b = boot_sizes(d);
@@ -96,7 +96,7 @@ impl Heap {
 
     /// Objects of PUC's of `sizes` bytes, counted already, live as long
     /// as the object behind `h`.
-    pub(crate) fn stand_sizes_on(
+    pub(in crate::runtime::puc) fn stand_sizes_on(
         &mut self,
         h: Gc<GcHeader>,
         sizes: impl IntoIterator<Item = usize>,
@@ -127,7 +127,7 @@ impl Heap {
     /// A string just made: counted, or, while luna builds its own objects,
     /// marked as one PUC has not made.
     #[inline]
-    pub(crate) fn acct_new_string(&mut self, s: Gc<LuaStr>, len: usize) {
+    pub(in crate::runtime::puc) fn acct_new_string(&mut self, s: Gc<LuaStr>, len: usize) {
         let h = s.header();
         // 5.1's string table holds every string, 5.2's the short ones
         let held = match self.puc.dialect {

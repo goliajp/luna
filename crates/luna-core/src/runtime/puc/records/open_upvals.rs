@@ -54,7 +54,7 @@ impl Heap {
 
     /// The marking is over: the open upvalues it left white are dead, off
     /// their lists, and kept (black) until their frees are counted.
-    pub(in crate::runtime) fn doom_open_upvals(&mut self) {
+    pub(in crate::runtime::puc) fn doom_open_upvals(&mut self) {
         let Some(lend) = self.puc.open_dead.lend.take() else {
             return;
         };
@@ -102,7 +102,7 @@ impl Heap {
     /// # Safety
     /// `cur` heads an allocated object.
     #[inline]
-    pub(in crate::runtime) unsafe fn sweep_open_at(&mut self, cur: *mut GcHeader) {
+    pub(in crate::runtime::puc) unsafe fn sweep_open_at(&mut self, cur: *mut GcHeader) {
         // SAFETY: the caller's contract
         if !self.puc.open_dead.dead.is_empty() && unsafe { (*cur).tag } == ObjTag::Coro {
             // 5.1's main thread is on the list too, before the userdata
@@ -116,7 +116,7 @@ impl Heap {
 
     /// The sweep is over: the main thread's dead open upvalues are freed
     /// (and any whose thread it did not meet).
-    pub(in crate::runtime) fn sweep_open_end(&mut self) {
+    pub(in crate::runtime::puc) fn sweep_open_end(&mut self) {
         if !self.puc.open_dead.dead.is_empty() {
             self.free_dead_open(|o, _| o.is_null());
             self.free_dead_open(|_, _| true);

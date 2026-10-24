@@ -36,7 +36,7 @@ impl Heap {
 
     /// The bytes of the strings kept for `host`, which PUC's marking of
     /// it reaches.
-    pub(crate) fn kept_bytes(&self, host: *mut GcHeader) -> usize {
+    pub(in crate::runtime::puc) fn kept_bytes(&self, host: *mut GcHeader) -> usize {
         kept_bytes(&self.puc.keepers, host)
     }
 
@@ -46,7 +46,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads a record of this heap.
-    pub(in crate::runtime) unsafe fn keeper_kept(&mut self, h: *mut GcHeader) -> bool {
+    pub(in crate::runtime::puc) unsafe fn keeper_kept(&mut self, h: *mut GcHeader) -> bool {
         // SAFETY: the caller's contract; a host lives until the sweep
         // passes it, after its keeper
         unsafe {
@@ -68,7 +68,7 @@ impl Heap {
 }
 
 /// [`Heap::kept_bytes`] of the keepers `ks`.
-pub(in crate::runtime) fn kept_bytes(
+pub(in crate::runtime::puc) fn kept_bytes(
     ks: &[(*mut GcHeader, *mut GcHeader)],
     host: *mut GcHeader,
 ) -> usize {

@@ -279,9 +279,7 @@ impl Heap {
         // and the pre-flip current-white becomes the dead-white (the bit the
         // sweep tests for). Born-during-sweep allocations stamp the new
         // current-white via `Heap::link`, so they survive this cycle.
-        // PUC `luaS_clearcache`, after every weak table's clearing
-        self.puc_clear_string_cache();
-        self.doom_open_upvals();
+        self.puc_marking_ends();
         self.current_white ^= WHITE_BITS;
         // the threads the sweep is about to free are no longer visited
         self.threads.retain(|&c| header_is_marked(c));

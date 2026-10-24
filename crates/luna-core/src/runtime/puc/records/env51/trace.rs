@@ -5,7 +5,7 @@ use super::*;
 
 impl Heap {
     /// How many of 5.1's environment records a sweep has not freed.
-    pub(in crate::runtime) fn env51_live(&self) -> i64 {
+    pub(in crate::runtime::puc) fn env51_live(&self) -> i64 {
         self.puc.env51_box.as_ref().map_or(0, |e| e.live())
     }
 }
@@ -22,7 +22,7 @@ impl Env51 {
 ///
 /// # Safety
 /// `h` heads a record.
-pub(in crate::runtime) unsafe fn phantom_is_table(h: *mut GcHeader) -> bool {
+pub(in crate::runtime::puc) unsafe fn phantom_is_table(h: *mut GcHeader) -> bool {
     // SAFETY: the caller's contract
     unsafe { (*(h as *const Phantom)).kids[0] != NONE }
 }

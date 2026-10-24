@@ -117,7 +117,7 @@ impl Pace {
     }
 
     /// `luaE_setdebt(g, debt)` with the count at `bytes`.
-    pub(crate) fn set_debt(&mut self, d: Dialect, bytes: usize, debt: i64) {
+    pub(in crate::runtime::puc) fn set_debt(&mut self, d: Dialect, bytes: usize, debt: i64) {
         self.base = match d {
             Dialect::L55 => bytes as i64 + debt,
             _ => bytes as i64 - debt,
@@ -129,7 +129,7 @@ impl Pace {
         self.base
     }
 
-    pub(crate) fn set_threshold(&mut self, t: i64) {
+    pub(in crate::runtime::puc) fn set_threshold(&mut self, t: i64) {
         self.base = t;
     }
 
@@ -145,7 +145,7 @@ impl Pace {
 }
 
 /// The work a 5.1 `luaC_step` may do (`lim`), `stepmul` the parameter.
-pub(crate) fn step_limit_51(stepmul: i64) -> i64 {
+pub(in crate::runtime::puc) fn step_limit_51(stepmul: i64) -> i64 {
     match (STEPSIZE_51 / 100) * stepmul {
         0 => i64::MAX / 4,
         l => l,
@@ -153,28 +153,28 @@ pub(crate) fn step_limit_51(stepmul: i64) -> i64 {
 }
 
 /// 5.1 `setthreshold`.
-pub(crate) fn threshold_51(estimate: i64, pause: i64) -> i64 {
+pub(in crate::runtime::puc) fn threshold_51(estimate: i64, pause: i64) -> i64 {
     (estimate / 100) * pause
 }
 
 /// 5.2 and 5.3 `GCSTEPSIZE` (`100 * sizeof(TString)`).
-pub(crate) fn stepsize_52(s: &PucSizes) -> i64 {
+pub(in crate::runtime::puc) fn stepsize_52(s: &PucSizes) -> i64 {
     100 * s.str_hdr as i64
 }
 
 /// 5.2 and 5.3 `GCSWEEPCOST` and `GCSWEEPMAX`.
-pub(crate) fn sweepcost_52(s: &PucSizes) -> i64 {
+pub(in crate::runtime::puc) fn sweepcost_52(s: &PucSizes) -> i64 {
     (s.str_hdr as i64 + 4) / 4
 }
 
-pub(crate) fn sweepmax_52(s: &PucSizes) -> i64 {
+pub(in crate::runtime::puc) fn sweepmax_52(s: &PucSizes) -> i64 {
     (stepsize_52(s) / sweepcost_52(s)) / 4
 }
 
 /// The work a 5.2 `incstep` (5.3 `getdebt`) starts with: the debt in
 /// work units, `stepmul` the parameter (5.3 stores at least 40), at most
 /// `MAX_LMEM` as PUC caps it.
-pub(crate) fn work_52(d: Dialect, debt: i64, stepmul: i64) -> i64 {
+pub(in crate::runtime::puc) fn work_52(d: Dialect, debt: i64, stepmul: i64) -> i64 {
     if d == Dialect::L53 && debt <= 0 {
         return 0;
     }
@@ -192,14 +192,19 @@ pub(crate) fn work_52(d: Dialect, debt: i64, stepmul: i64) -> i64 {
 
 /// The debt a 5.2 / 5.3 step leaves when the cycle goes on: the work
 /// still owed (`debt`, negative when done ahead) back in bytes.
-pub(crate) fn debt_after_52(debt: i64, stepmul: i64) -> i64 {
+pub(in crate::runtime::puc) fn debt_after_52(debt: i64, stepmul: i64) -> i64 {
     (debt / stepmul) * STEPMULADJ
 }
 
 /// 5.2 to 5.4 `setpause`: the debt a cycle's end leaves, the count at
 /// `bytes`, `estimate` the estimate and `pause` the parameter (5.4: its
 /// stored value times 4).
-pub(crate) fn pause_debt(d: Dialect, bytes: usize, estimate: i64, pause: i64) -> i64 {
+pub(in crate::runtime::puc) fn pause_debt(
+    d: Dialect,
+    bytes: usize,
+    estimate: i64,
+    pause: i64,
+) -> i64 {
     let est = estimate / PAUSEADJ;
     let threshold = if est > 0 && pause >= i64::MAX / est {
         i64::MAX
@@ -217,7 +222,12 @@ pub(crate) fn pause_debt(d: Dialect, bytes: usize, estimate: i64, pause: i64) ->
 /// 5.4 `incstep`'s debt and step size in work units (`WORK2MEM` is
 /// `sizeof(TValue)`), `stepmul` the stored parameter times 4 (or 1),
 /// `stepsize` the log2 parameter.
-pub(crate) fn work_54(s: &PucSizes, debt: i64, stepmul: i64, stepsize: i64) -> (i64, i64) {
+pub(in crate::runtime::puc) fn work_54(
+    s: &PucSizes,
+    debt: i64,
+    stepmul: i64,
+    stepsize: i64,
+) -> (i64, i64) {
     let w2m = s.tvalue as i64;
     let size = if stepsize <= 62 {
         ((1i64 << stepsize) / w2m) * stepmul
@@ -228,13 +238,13 @@ pub(crate) fn work_54(s: &PucSizes, debt: i64, stepmul: i64, stepsize: i64) -> (
 }
 
 /// The debt a 5.4 step leaves when the cycle goes on.
-pub(crate) fn debt_after_54(s: &PucSizes, debt: i64, stepmul: i64) -> i64 {
+pub(in crate::runtime::puc) fn debt_after_54(s: &PucSizes, debt: i64, stepmul: i64) -> i64 {
     (debt / stepmul) * s.tvalue as i64
 }
 
 /// 5.5 `setpause`: the debt a cycle's end leaves (never negative), the
 /// threshold being `pause` (applied) times `marked`.
-pub(crate) fn pause_debt_55(bytes: usize, threshold: i64) -> i64 {
+pub(in crate::runtime::puc) fn pause_debt_55(bytes: usize, threshold: i64) -> i64 {
     (threshold - bytes as i64).max(0)
 }
 

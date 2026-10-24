@@ -172,7 +172,7 @@ impl Heap {
 
     /// Where counting stands now, to return to with [`Heap::restore_counting`].
     #[inline]
-    pub(crate) fn counting_mark(&self) -> CountingMark {
+    pub(in crate::runtime::puc) fn counting_mark(&self) -> CountingMark {
         CountingMark(self.puc.silent)
     }
 

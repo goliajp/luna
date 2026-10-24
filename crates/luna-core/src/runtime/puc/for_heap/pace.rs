@@ -54,7 +54,7 @@ impl Heap {
 
     /// 5.1: an explicit step sets the threshold that `stop` had put out of
     /// reach, so the collector runs on its own again after it.
-    pub(crate) fn gc_unstop_51(&mut self) {
+    pub(in crate::runtime::puc) fn gc_unstop_51(&mut self) {
         self.puc.stopped = false;
     }
 
@@ -67,7 +67,7 @@ impl Heap {
 
     /// Whether PUC's `luaC_step` runs a step (`gcrunning`): not while the
     /// collector is stopped, nor while a 5.4 or 5.5 finalizer runs.
-    pub(crate) fn gc_steps_run(&self) -> bool {
+    pub(in crate::runtime::puc) fn gc_steps_run(&self) -> bool {
         !self.puc.stopped && !self.puc.fin_stop
     }
 
@@ -94,7 +94,7 @@ impl Heap {
     /// Whether the collector runs as it does now (stopped, and stopped for
     /// a 5.4 or 5.5 finalizer), to return to with [`Heap::gc_restore_run`].
     #[inline]
-    pub(crate) fn gc_run_mark(&self) -> RunMark {
+    pub(in crate::runtime::puc) fn gc_run_mark(&self) -> RunMark {
         RunMark {
             stopped: self.puc.stopped,
             fin_stop: self.puc.fin_stop,
@@ -103,7 +103,7 @@ impl Heap {
 
     /// Back to the collector's run at `m`.
     #[inline]
-    pub(crate) fn gc_restore_run(&mut self, m: RunMark) {
+    pub(in crate::runtime::puc) fn gc_restore_run(&mut self, m: RunMark) {
         self.puc.fin_stop = m.fin_stop;
         self.gc_restore_stopped(m.stopped);
     }

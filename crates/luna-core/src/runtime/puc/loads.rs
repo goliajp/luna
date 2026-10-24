@@ -53,13 +53,13 @@ impl Heap {
 
     /// Where the parser frames stand now.
     #[inline]
-    pub(in crate::runtime) fn parse_mark(&self) -> ParseMark {
+    pub(in crate::runtime::puc) fn parse_mark(&self) -> ParseMark {
         ParseMark(self.puc.parse.len())
     }
 
     /// Back to the frames at `m` (a load unwound by running out of memory).
     #[inline]
-    pub(in crate::runtime) fn restore_parse_frames(&mut self, m: ParseMark) {
+    pub(in crate::runtime::puc) fn restore_parse_frames(&mut self, m: ParseMark) {
         self.puc.parse.truncate(m.0);
     }
 

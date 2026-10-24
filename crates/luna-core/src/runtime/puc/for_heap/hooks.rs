@@ -7,6 +7,10 @@ use super::*;
 #[cfg(feature = "gc-trace")]
 use crate::runtime::puc::Running;
 #[cfg(feature = "gc-trace")]
+use crate::runtime::puc::records::env51::{is_phantom, phantom_is_table};
+#[cfg(feature = "gc-verify")]
+use crate::runtime::puc::records::parse::is_load_tab;
+#[cfg(feature = "gc-trace")]
 use crate::runtime::string;
 
 #[cfg(feature = "gc-verify")]

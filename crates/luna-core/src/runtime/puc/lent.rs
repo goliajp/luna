@@ -22,7 +22,7 @@ pub(crate) struct Lent {
 
 impl Heap {
     /// What a marker borrows, `stands` with the stand-ins.
-    pub(in crate::runtime) fn lend_model(&mut self, stands: bool) -> Lent {
+    pub(in crate::runtime::puc) fn lend_model(&mut self, stands: bool) -> Lent {
         Lent {
             env51: self.puc.env51_box.take(),
             parse: std::mem::take(&mut self.puc.parse),
@@ -36,7 +36,7 @@ impl Heap {
     }
 
     /// What a marker borrowed, back.
-    pub(in crate::runtime) fn settle_model(&mut self, l: &mut Lent) {
+    pub(in crate::runtime::puc) fn settle_model(&mut self, l: &mut Lent) {
         if let Some(e) = l.env51.take() {
             self.puc.env51_box = Some(e);
         }
