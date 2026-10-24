@@ -341,23 +341,6 @@ fn normalize_set_key(key: Value) -> Result<Value, TableError> {
     }
 }
 
-/// What PUC's `hashpointer` takes of an object key: the low 32 bits of
-/// its address; for luna's objects, the number each got when made
-/// (`Heap::take_id`).
-#[inline]
-fn pointer_hash(k: Value) -> u32 {
-    match k {
-        Value::Table(t) => t.id,
-        Value::Closure(c) => c.hdr.aux,
-        Value::Native(n) => n.hdr.aux,
-        Value::Coro(co) => co.hdr.aux,
-        Value::Userdata(u) => u.hdr.aux,
-        Value::LightUserdata(p) => p as u32,
-        // the keys `main_position` handles itself
-        _ => 0,
-    }
-}
-
 #[cfg(test)]
 #[path = "table_tests.rs"]
 mod tests;

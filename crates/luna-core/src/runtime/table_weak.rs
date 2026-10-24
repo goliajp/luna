@@ -113,8 +113,8 @@ impl Table {
                             | Value::Str(_)
                     )
                 {
-                    n.key_tag = crate::runtime::value::tag::NIL;
-                    n.set_dead_key();
+                    let (h, str) = super::hash::dead_key_hash(n.key());
+                    n.set_dead_key(h, str);
                 }
                 continue;
             }
@@ -139,8 +139,8 @@ impl Table {
                         | Value::Userdata(_)
                         | Value::Str(_)
                 ) {
-                    n.key_tag = crate::runtime::value::tag::NIL;
-                    n.set_dead_key();
+                    let (h, str) = super::hash::dead_key_hash(n.key());
+                    n.set_dead_key(h, str);
                 }
             } else {
                 // entry survives — resurrect any string reachable through it

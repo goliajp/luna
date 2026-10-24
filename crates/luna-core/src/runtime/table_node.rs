@@ -35,6 +35,10 @@ const DEAD_KEY: u8 = 1;
 /// The key is integer 0 but was stored as -0 under 5.1/5.2, which keep a
 /// new key as it was given; iteration hands it back that way.
 const NEG_ZERO: u8 = 2;
+/// With [`DEAD_KEY`]: the dead key was a string, and the payload keeps its
+/// hash; without, the payload keeps the number an object key hashed by
+/// (`pointer_hash`), so the dead node's main position stays known.
+const DEAD_STR: u8 = 4;
 
 /// The largest node mask [`Node::khash`] covers.
 pub(super) const KHASH_MASK: u32 = u16::MAX as u32;
@@ -77,8 +81,21 @@ impl Node {
         self.flags & DEAD_KEY != 0
     }
 
-    pub(super) fn set_dead_key(&mut self) {
-        self.flags |= DEAD_KEY;
+    /// The key goes dead (PUC `setdeadkey`): `hash` is what it hashed by,
+    /// a string's hash (`str`) or an object's number, kept in the payload
+    /// for its main position.
+    pub(super) fn set_dead_key(&mut self, hash: u32, str: bool) {
+        self.key_tag = crate::runtime::value::tag::NIL;
+        self.flags |= DEAD_KEY | if str { DEAD_STR } else { 0 };
+        self.key_payload = std::mem::MaybeUninit::new(u64::from(hash));
+    }
+
+    /// A dead key's hash and whether it was a string's.
+    #[inline]
+    pub(super) fn dead_hash(&self) -> (u32, bool) {
+        // SAFETY: `set_dead_key` wrote the payload as a `u64`
+        let h = unsafe { self.key_payload.assume_init() } as u32;
+        (h, self.flags & DEAD_STR != 0)
     }
 
     /// See [`NEG_ZERO`].
