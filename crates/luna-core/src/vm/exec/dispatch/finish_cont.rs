@@ -74,18 +74,20 @@ impl Vm {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
             return self.finish_host_cont(nc, hc, entry_depth);
         }
-        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-        if nc.kind.is_host_pcall() {
-            self.host_pcall_popped();
-        }
-        self.cont_popped(false, nc.kind.is_level());
         // f's results sit where f was called (`callee_shift` above the
         // slot after the continuation): moved to that slot, writing `true`
         // at the continuation's makes `true, results…` contiguous
         let callee = (i64::from(nc.func_slot) + 1 + i64::from(nc.kind.callee_shift())) as u32;
         let nret = self.top - callee;
-        // 5.1's `luaD_call` checks for a collection when the call returns
+        // 5.1's `luaD_call` checks for a collection when the call returns,
+        // still inside the protection: what a finalizer raises there the
+        // continuation catches
         self.call_return_checkpoint(callee + nret)?;
+        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+        if nc.kind.is_host_pcall() {
+            self.host_pcall_popped();
+        }
+        self.cont_popped(false, nc.kind.is_level());
         if callee != nc.func_slot + 1 {
             // the results may end past the stack's length (`top` runs ahead
             // of it); both ranges of the move must be inside it
