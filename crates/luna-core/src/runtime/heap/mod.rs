@@ -237,9 +237,8 @@ impl Heap {
 }
 
 use crate::runtime::puc;
-pub(crate) use crate::runtime::puc::records::{Ghost, GhostRef, parse, strcache};
-use crate::runtime::puc::records::{env51, open_upvals, strt};
-pub(crate) use crate::runtime::puc::{Deferred, Fate, PucKind, PucObj, Thread};
+use crate::runtime::puc::for_heap as model;
+use crate::runtime::puc::for_heap::{Fate, Ghost, PucKind, PucObj};
 mod alloc;
 mod barrier;
 #[cfg(any(debug_assertions, feature = "gc-verify", feature = "gc-stress"))]
@@ -256,10 +255,8 @@ mod slab;
 use self::intern::oom_abort_heap;
 pub(crate) use self::new::fresh_seed;
 use self::new::make_seed;
-pub(crate) use env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE, ENV_PROTO};
 mod free;
 mod mark;
-pub(crate) use open_upvals::OpenLend;
 mod pace;
 mod sweep;
 #[cfg(feature = "gc-trace")]

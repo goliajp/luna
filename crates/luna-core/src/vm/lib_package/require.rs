@@ -241,6 +241,6 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
 /// (`luaL_checkstring`): in the string.
 pub(super) fn name_at(
     name: crate::runtime::Gc<crate::runtime::LuaStr>,
-) -> crate::runtime::heap::strcache::CStr {
-    crate::runtime::heap::strcache::CStr::In(name.as_ptr() as *const _, 0)
+) -> crate::runtime::puc::records::strcache::CStr {
+    crate::runtime::puc::records::strcache::CStr::In(name.as_ptr() as *const _, 0)
 }

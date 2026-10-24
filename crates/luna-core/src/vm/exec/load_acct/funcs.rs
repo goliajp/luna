@@ -2,7 +2,7 @@
 //! table, and the arrays trimmed when it ends.
 
 use super::*;
-use crate::runtime::heap::parse::set_parsing;
+use crate::runtime::puc::records::parse::set_parsing;
 
 impl Vm {
     /// A function opens: the main one in `luaY_parser`, a nested one in

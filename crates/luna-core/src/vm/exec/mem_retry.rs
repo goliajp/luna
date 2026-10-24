@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::runtime::LuaStr;
-use crate::runtime::heap::PucKind;
+use crate::runtime::puc::PucKind;
 use crate::runtime::puc::fmt::FmtArg;
 
 impl Vm {

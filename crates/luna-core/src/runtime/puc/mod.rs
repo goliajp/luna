@@ -11,6 +11,7 @@ use crate::runtime::string::{self, LuaStr};
 use crate::runtime::table::Table;
 use crate::runtime::userdata::Userdata;
 use crate::runtime::value::Value;
+use records::{parse, strcache};
 
 pub(crate) mod boot;
 pub(crate) use boot::STRT_STAND;
@@ -18,8 +19,8 @@ mod control;
 mod count;
 pub(crate) use count::*;
 mod defer;
-mod for_heap;
-pub(crate) use for_heap::{Fate, c_function_is_object};
+pub(in crate::runtime) mod for_heap;
+pub(crate) use for_heap::c_function_is_object;
 mod lent;
 pub(crate) use lent::Lent;
 mod load_session;

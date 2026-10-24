@@ -184,7 +184,7 @@ impl Vm {
             // the top before the error is put; the `CallInfo`s stay
             let err = result.is_err() || death_err.is_some();
             let size = 21 + u32::from(err && self.version < LuaVersion::Lua55);
-            let co = crate::runtime::heap::Thread::Coro(co);
+            let co = crate::runtime::puc::Thread::Coro(co);
             self.heap.acct_stack(co, closed.stack_size, size);
             m.stack_size = size;
             m.ci_alloc = closed.ci_alloc;

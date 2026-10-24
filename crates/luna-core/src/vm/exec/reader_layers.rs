@@ -13,8 +13,9 @@ pub(crate) use undump::UndumpShown;
 
 use super::load_acct::{PVal, ReaderView};
 use super::*;
-use crate::runtime::heap::{ENV_PROTO, LUNA_ONLY};
+use crate::runtime::heap::LUNA_ONLY;
 use crate::runtime::mem::LVec;
+use crate::runtime::puc::records::env51::ENV_PROTO;
 
 /// A reader call of a running `load`.
 pub(crate) struct ReaderLayer {

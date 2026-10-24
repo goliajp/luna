@@ -227,7 +227,8 @@ impl Heap {
 
 #[cfg(test)]
 mod tests {
-    use crate::runtime::heap::{Heap, PucKind};
+    use crate::runtime::heap::Heap;
+    use crate::runtime::puc::PucKind;
 
     fn heap() -> Heap {
         let mut h = Heap::new();

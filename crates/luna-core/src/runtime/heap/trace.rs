@@ -140,8 +140,8 @@ impl Heap {
                 // a record of 5.1's environments as the table or closure
                 // it stands for
                 let mut tag = (*h).tag as u8;
-                if super::env51::is_phantom(h) {
-                    let t = super::env51::phantom_is_table(h);
+                if model::is_phantom(h) {
+                    let t = model::phantom_is_table(h);
                     tag = if t { ObjTag::Table } else { ObjTag::Native } as u8;
                     k = String::from("env51");
                 }

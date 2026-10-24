@@ -72,7 +72,7 @@ impl Vm {
         parsed: ParsedText,
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
-        splices: Vec<(u32, crate::runtime::heap::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         self.heap.set_load_checked(false);
         let counted = match &parsed.0 {
@@ -180,7 +180,7 @@ impl Vm {
         src: &[u8],
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
-        splices: Vec<(u32, crate::runtime::heap::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
     ) -> SyntaxError {
         let (v, depth) = (self.version, self.g.nccalls);
         let span = self.heap.load_begins();

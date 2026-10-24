@@ -14,8 +14,7 @@ impl Heap {
         unsafe {
             assert_eq!(
                 self.puc_counts_in_sweep(h),
-                ((*h).tag != ObjTag::Ghost || super::parse::is_load_tab(h))
-                    && self.puc_listed(h, strt),
+                ((*h).tag != ObjTag::Ghost || model::is_load_tab(h)) && self.puc_listed(h, strt),
                 "[gc-verify] class byte of a {:?}",
                 (*h).tag
             );
@@ -100,7 +99,7 @@ pub(crate) unsafe fn dead_child(
     unsafe {
         let f = (*h).flags;
         // a string only a load holds is kept by the sweep
-        if is_white(f) && f & new_white == 0 && !crate::runtime::puc::verify::is_kept(h) {
+        if is_white(f) && f & new_white == 0 && !crate::runtime::puc::for_heap::is_kept(h) {
             let what = if (*h).tag == ObjTag::Str {
                 String::from_utf8_lossy(string::bytes_of(h as *const LuaStr)).into_owned()
             } else {

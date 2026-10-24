@@ -45,7 +45,7 @@ pub(super) struct ThreadSizes {
     pub(super) frames51: u32,
     pub(super) ci: u32,
     /// whose blocks they are
-    pub(super) thread: crate::runtime::heap::Thread,
+    pub(super) thread: crate::runtime::puc::Thread,
 }
 
 /// Where a thread is shrunk: PUC's collector visiting it, or
@@ -215,7 +215,7 @@ impl Vm {
                 stack: m.stack_size,
                 frames51: m.frame_size,
                 ci: m.ci_alloc,
-                thread: crate::runtime::heap::Thread::Main,
+                thread: crate::runtime::puc::Thread::Main,
             };
             shrink_thread(&mut self.heap, v, at, inuse, n, n - m.host_conts, &mut sz);
             (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
@@ -264,7 +264,7 @@ impl Vm {
             stack: m.stack_size,
             frames51: m.frame_size,
             ci: m.ci_alloc,
-            thread: crate::runtime::heap::Thread::Coro(co),
+            thread: crate::runtime::puc::Thread::Coro(co),
         };
         shrink_thread(&mut self.heap, v, at, inuse, n, n - 1, &mut sz);
         (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);

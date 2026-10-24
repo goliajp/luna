@@ -161,7 +161,7 @@ fn tag_payload_size(tag: ObjTag) -> usize {
         ObjTag::Native => core::mem::size_of::<NativeClosure>(),
         ObjTag::Coro => core::mem::size_of::<Coro>(),
         ObjTag::Userdata => core::mem::size_of::<Userdata>(),
-        ObjTag::Ghost => core::mem::size_of::<crate::runtime::heap::Ghost>(),
+        ObjTag::Ghost => core::mem::size_of::<crate::runtime::puc::records::Ghost>(),
     }
 }
 

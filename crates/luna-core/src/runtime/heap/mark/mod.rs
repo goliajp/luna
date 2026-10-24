@@ -121,9 +121,9 @@ pub(super) unsafe fn trace_children(h: *mut GcHeader, m: &mut Marker) {
         match (*h).tag {
             ObjTag::Str => {}
             ObjTag::Ghost => {
-                if super::env51::is_phantom(h) {
+                if model::is_phantom(h) {
                     m.trace_phantom(h);
-                } else if super::parse::is_load_tab(h) {
+                } else if model::is_load_tab(h) {
                     m.trace_load_tab(h);
                 }
             }
@@ -243,7 +243,7 @@ impl Marker {
                 // as PUC's `reallymarkobject` makes it
                 if f & self.leaf_black != 0 || (*h).tag == ObjTag::Str {
                     (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
-                    (*h).cls &= !super::parse::kept_bit((*h).tag);
+                    (*h).cls &= !model::kept_bit((*h).tag);
                 } else if self.at_once(h) {
                     // an upvalue, and a userdata up to 5.3, are never gray:
                     // what they hold is marked as they are

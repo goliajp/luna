@@ -225,7 +225,7 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // `GMatchState` userdata: the userdata, its check for a collection,
     // then the closure (`lua_pushcclosure`) and its check
     let it = if vm.version() >= LuaVersion::Lua53 {
-        use crate::runtime::heap::PucKind;
+        use crate::runtime::puc::PucKind;
         let objs = [
             (
                 PucKind::Userdata,

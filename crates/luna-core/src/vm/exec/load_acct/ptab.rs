@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::runtime::heap::GcHeader;
-use crate::runtime::heap::parse::LoadTab;
+use crate::runtime::puc::records::parse::LoadTab;
 
 /// A key's identity in a parser table.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

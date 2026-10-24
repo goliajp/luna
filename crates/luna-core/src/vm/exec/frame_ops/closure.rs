@@ -75,7 +75,7 @@ impl Vm {
             if self.version() > LuaVersion::Lua51 || i != proto.env_upval_idx as usize {
                 let h = uv.hdr();
                 self.heap
-                    .acct_promote_obj(h, crate::runtime::heap::PucKind::Upval, upval);
+                    .acct_promote_obj(h, crate::runtime::puc::PucKind::Upval, upval);
             }
         }
         Ok(nc)

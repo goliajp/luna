@@ -18,7 +18,7 @@ impl Vm {
         e: &SyntaxError,
         chunk: &Chunk,
         rec: (&Marks, &Scanned),
-        splices: Vec<(u32, crate::runtime::heap::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
     ) -> Result<(), SyntaxError> {
         let opts = std::mem::take(&mut self.compile_scratch.replay);
         let (Some(proto), Some((at, near))) = (opts.sealed, opts.at) else {

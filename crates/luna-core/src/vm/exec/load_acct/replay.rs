@@ -181,7 +181,7 @@ pub(super) struct Replay<'s> {
     pub(super) longs: Vec<Gc<crate::runtime::LuaStr>>,
     /// what the reader of a load read piece by piece counted, and the token
     /// whose scan called it (-1: before the parse starts)
-    pub(super) splices: std::collections::VecDeque<(i64, crate::runtime::heap::Deferred)>,
+    pub(super) splices: std::collections::VecDeque<(i64, crate::runtime::puc::Deferred)>,
     /// the writes into the parser tables, when they are to be shown
     pub(super) rec: Option<Vec<TabOp>>,
 }
@@ -259,7 +259,7 @@ impl<'s> Replay<'s> {
 
     /// The reader calls `splices` made at their byte offsets, each placed
     /// at the token whose scan read that byte.
-    pub(super) fn splice(&mut self, splices: Vec<(u32, crate::runtime::heap::Deferred)>) {
+    pub(super) fn splice(&mut self, splices: Vec<(u32, crate::runtime::puc::Deferred)>) {
         let ends = &self.scanned.ends;
         for (off, d) in splices {
             let tok = if off == 0 {

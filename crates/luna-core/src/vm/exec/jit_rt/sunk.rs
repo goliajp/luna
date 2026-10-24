@@ -2,7 +2,7 @@
 //! recorded as garbage, unless the trace leaves with it.
 
 use super::*;
-use crate::runtime::heap::GhostRef;
+use crate::runtime::puc::records::GhostRef;
 use crate::runtime::table::new_table_sizes;
 
 /// The records of PUC's objects a running trace stands for, while luna

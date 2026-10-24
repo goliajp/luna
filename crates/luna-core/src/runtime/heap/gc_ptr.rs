@@ -104,8 +104,8 @@ gc_objects!(
     crate::runtime::NativeClosure => NativeFn,
     crate::runtime::Coro => Thread,
     crate::runtime::Userdata => Userdata,
-    crate::runtime::heap::Ghost => Other,
-    crate::runtime::heap::parse::LoadTab => Other,
+    crate::runtime::puc::for_heap::Ghost => Other,
+    crate::runtime::puc::for_heap::LoadTab => Other,
 );
 
 impl<T: GcObject> Gc<T> {

@@ -9,7 +9,7 @@ pub(crate) enum AccumLast {
     /// the string the trace entered with, unchanged since
     Entry(Gc<crate::runtime::LuaStr>),
     /// PUC's long string, recorded
-    Long(crate::runtime::heap::GhostRef),
+    Long(crate::runtime::puc::records::GhostRef),
 }
 
 impl Vm {
@@ -74,7 +74,7 @@ impl Vm {
             });
             let g = self
                 .heap
-                .acct_ghost_ref(crate::runtime::heap::PucKind::LongStr, size);
+                .acct_ghost_ref(crate::runtime::puc::PucKind::LongStr, size);
             self.jit_ghosts().accum = g.ok().map(AccumLast::Long);
         }
         if self.heap.gc_due() {

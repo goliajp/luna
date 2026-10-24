@@ -70,7 +70,7 @@ impl Vm {
         &mut self,
         f: NativeFn,
         upvals: &[Value],
-        objs: &[(crate::runtime::heap::PucKind, usize)],
+        objs: &[(crate::runtime::puc::PucKind, usize)],
         counted: usize,
     ) -> Result<Value, LuaError> {
         self.retry_oom(|vm| vm.heap.try_new_native_stand_in(f, upvals, objs, counted))

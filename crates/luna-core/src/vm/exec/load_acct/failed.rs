@@ -20,7 +20,7 @@ impl Vm {
         src: &[u8],
         e: &SyntaxError,
         source: Gc<crate::runtime::LuaStr>,
-        splices: Vec<(u32, crate::runtime::heap::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
     ) -> Result<(), SyntaxError> {
         let (v, depth) = (self.version, self.g.nccalls);
         let Some(failed) = self.parse_scratch.failed else {
@@ -176,7 +176,7 @@ impl Vm {
     /// is replayed.
     pub(in crate::vm::exec) fn splices_stand(
         &mut self,
-        splices: Vec<(u32, crate::runtime::heap::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
     ) -> Result<(), SyntaxError> {
         for (_, d) in splices {
             self.heap.replay_reader_call(d);

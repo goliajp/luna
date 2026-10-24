@@ -2,7 +2,7 @@
 
 use super::{LuaClosure, NativeClosure, Proto};
 use crate::runtime::heap::Marker;
-use crate::runtime::heap::parse::PARSING;
+use crate::runtime::puc::records::parse::PARSING;
 
 impl Proto {
     /// `this` is the pointer the marker reached the prototype through, `self`

@@ -58,7 +58,7 @@ impl Heap {
             }
             if (*ch).tag == ObjTag::Str {
                 (*ch).flags = (*ch).with_slow((cf & !COLOR_BITS) | BLACK);
-                (*ch).cls &= !super::parse::KEPT;
+                (*ch).cls &= !model::KEPT;
             } else {
                 (*ch).flags = (*ch).with_slow(cf & !WHITE_BITS);
                 self.push_gray(ch);

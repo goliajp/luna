@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::runtime::dialect::Dialect;
-use crate::runtime::heap::OpenLend;
+use crate::runtime::puc::records::open_upvals::OpenLend;
 
 impl Vm {
     /// Mark the GC roots in `m`: first-class `Value` roots plus bare-object
