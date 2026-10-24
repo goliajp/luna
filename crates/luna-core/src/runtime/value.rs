@@ -222,8 +222,11 @@ impl Value {
 
     /// Raw equality (no metamethods): `rawequal` and table-key identity.
     /// Mixed int/float numbers are equal iff the float is exactly integral
-    /// and equals the integer (PUC luaV_equalobj F2Ieq rule).
-    #[inline]
+    /// and equals the integer (PUC luaV_equalobj F2Ieq rule). Always
+    /// inlined: a table's chain walk compares every key with it, and left
+    /// to the heuristics it stops being inlined there when code elsewhere
+    /// moves between codegen units.
+    #[inline(always)]
     pub fn raw_eq(self, other: Value) -> bool {
         match (self, other) {
             (Value::Nil, Value::Nil) => true,
