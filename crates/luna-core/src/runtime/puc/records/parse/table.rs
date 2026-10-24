@@ -7,12 +7,12 @@
 //! sizes follow from how many keys there are and which are integers.
 
 use super::*;
-use crate::runtime::heap::GcHeader;
-use crate::runtime::puc::records::parse::LoadTab;
+use crate::runtime::table::sizes::{ceil_log2, computesizes, computesizes_55};
+use crate::runtime::value::Value;
 
 /// A key's identity in a parser table.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum PKey {
+pub(crate) enum PKey {
     Int(i64),
     Float(u64),
     Bool(bool),
@@ -24,7 +24,7 @@ pub(super) enum PKey {
 
 impl PKey {
     /// The key PUC's table has for `v` (an integral float is the integer).
-    pub(super) fn of(v: Value) -> PKey {
+    pub(crate) fn of(v: Value) -> PKey {
         match v {
             Value::Int(i) => PKey::Int(i),
             Value::Float(f) => match crate::runtime::value::f2i_exact(f) {
@@ -42,7 +42,7 @@ impl PKey {
 
     /// The key of string `s` (a long string by its bytes, the first of
     /// them keyed standing for all, in `longs`).
-    pub(super) fn of_str(
+    pub(crate) fn of_str(
         s: Gc<crate::runtime::LuaStr>,
         longs: &mut std::collections::HashMap<Box<[u8]>, usize>,
     ) -> PKey {
@@ -65,7 +65,7 @@ impl PKey {
 /// A key hasher for [`PTab`]'s set: the keys are distinct addresses and
 /// small numbers.
 #[derive(Default)]
-pub(super) struct KeyHasher(u64);
+pub(crate) struct KeyHasher(u64);
 
 impl std::hash::Hasher for KeyHasher {
     fn finish(&self) -> u64 {
@@ -85,8 +85,8 @@ impl std::hash::Hasher for KeyHasher {
 }
 
 /// One of the parser's tables.
-pub(super) struct PTab {
-    pub(super) id: u32,
+pub(crate) struct PTab {
+    pub(crate) id: u32,
     keys: std::collections::HashSet<PKey, std::hash::BuildHasherDefault<KeyHasher>>,
     /// PUC's array size and node count, and the nodes taken
     asize: u64,
@@ -95,7 +95,7 @@ pub(super) struct PTab {
     /// a key was removed (its node stays taken)
     removed: bool,
     /// the keys that may go to the array part, by `ceil_log2`
-    nums: [u32; 65],
+    nums: [usize; 65],
     /// PUC's table, unless nothing is counted
     tab: Option<Gc<LoadTab>>,
 }
@@ -103,12 +103,7 @@ pub(super) struct PTab {
 impl PTab {
     /// A new empty table (PUC `luaH_new`), counted as PUC's (unless
     /// `counted` is false), with room for about `keys` keys.
-    pub(super) fn new(
-        heap: &mut Heap,
-        id: u32,
-        keys: usize,
-        counted: bool,
-    ) -> Result<PTab, SyntaxError> {
+    pub(crate) fn new(heap: &mut Heap, id: u32, keys: usize, counted: bool) -> Result<PTab, Oom> {
         let tab = if counted {
             Some(heap.new_load_tab()?)
         } else {
@@ -127,27 +122,27 @@ impl PTab {
     }
 
     /// PUC's array size and node count.
-    pub(super) fn sizes(&self) -> (u64, u64) {
+    pub(crate) fn sizes(&self) -> (u64, u64) {
         (self.asize, self.nodes)
     }
 
-    pub(super) fn contains(&self, k: PKey) -> bool {
+    pub(crate) fn contains(&self, k: PKey) -> bool {
         self.keys.contains(&k)
     }
 
     /// PUC's table, unless nothing is counted.
-    pub(super) fn tab(&self) -> Option<*mut GcHeader> {
+    pub(crate) fn tab(&self) -> Option<*mut GcHeader> {
         self.tab.map(|t| t.header())
     }
 
     /// [`PTab::tab`] as a handle.
-    pub(super) fn tab_hdr(&self) -> Option<Gc<GcHeader>> {
+    pub(crate) fn tab_hdr(&self) -> Option<Gc<GcHeader>> {
         self.tab.map(|t| t.hdr())
     }
 
     /// `k` put in the table (PUC `luaH_newkey`), when it is not there;
     /// `obj` the object among the key and its value, if any.
-    pub(super) fn insert(
+    pub(crate) fn insert(
         &mut self,
         heap: &mut Heap,
         d: Dialect,
@@ -173,7 +168,7 @@ impl PTab {
     }
 
     /// `k` set to nil: the key goes, its node stays taken.
-    pub(super) fn remove(&mut self, heap: &mut Heap, k: PKey, obj: *mut GcHeader) {
+    pub(crate) fn remove(&mut self, heap: &mut Heap, k: PKey, obj: *mut GcHeader) {
         if let Some(t) = self.tab {
             heap.load_tab_unref(t, obj);
         }
@@ -194,9 +189,19 @@ impl PTab {
         }
         // the pending key is in the set already
         let total = self.keys.len() as u64;
+        let int_keys: usize = nums.iter().sum();
         let (asize, in_array) = match d {
-            Dialect::L55 => sizes_55(&nums, self.array_keys(), self.asize),
-            _ => sizes(&nums),
+            // with no integer key outside the array part, the array part
+            // stays
+            Dialect::L55 if int_keys as u64 == self.array_keys() => (self.asize, self.array_keys()),
+            Dialect::L55 => {
+                let (a, n) = computesizes_55(&nums, int_keys);
+                (a as u64, n as u64)
+            }
+            _ => {
+                let (a, n) = computesizes(&nums, int_keys);
+                (a as u64, n as u64)
+            }
         };
         let mut hash = total - in_array;
         if d == Dialect::L55 && (self.removed || self.nodes == 0) {
@@ -218,58 +223,9 @@ impl PTab {
     fn array_keys(&self) -> u64 {
         (0..65)
             .take_while(|&b| 1u64 << b <= self.asize)
-            .map(|b| u64::from(self.nums[b]))
+            .map(|b| self.nums[b] as u64)
             .sum()
     }
-}
-
-/// The bucket of integer key `k` (PUC `luaO_ceillog2`).
-fn ceil_log2(k: u64) -> usize {
-    (u64::BITS - (k - 1).leading_zeros()) as usize
-}
-
-/// 5.1–5.4 `computesizes`: the largest power of two with more than half
-/// its slots taken by keys, and how many keys go there.
-fn sizes(nums: &[u32; 65]) -> (u64, u64) {
-    let int_keys: u64 = nums.iter().map(|&n| u64::from(n)).sum();
-    let (mut a, mut asize, mut in_array) = (0u64, 0u64, 0u64);
-    let mut two_to_i = 1u64;
-    let mut i = 0;
-    while int_keys > two_to_i / 2 && i < 65 {
-        a += u64::from(nums[i]);
-        if a > two_to_i / 2 {
-            asize = two_to_i;
-            in_array = a;
-        }
-        i += 1;
-        two_to_i *= 2;
-    }
-    (asize, in_array)
-}
-
-/// 5.5 `rehash`: with no integer key outside the array part (`arr` keys
-/// there), the array part stays; otherwise the largest power of two
-/// holding more keys in its last slice and no more than three times as
-/// many slots as keys.
-fn sizes_55(nums: &[u32; 65], arr: u64, asize: u64) -> (u64, u64) {
-    let na: u64 = nums.iter().map(|&n| u64::from(n)).sum();
-    if na == arr {
-        return (asize, arr);
-    }
-    let (mut a, mut optimal, mut in_array) = (0u64, 0u64, 0u64);
-    let mut twotoi = 1u64;
-    for &n in nums.iter() {
-        if twotoi > 3 * na {
-            break;
-        }
-        a += u64::from(n);
-        if n > 0 && twotoi <= 3 * a {
-            optimal = twotoi;
-            in_array = a;
-        }
-        twotoi *= 2;
-    }
-    (optimal, in_array)
 }
 
 #[cfg(test)]

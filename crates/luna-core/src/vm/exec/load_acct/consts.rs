@@ -53,12 +53,11 @@ impl Vm {
                 self.heap.acct_move_long(ss, cs);
             }
         }
-        let s = self.heap.puc_sizes();
         // the constant's index, the value its key gets
-        let index = r.fs.last().map_or(0, |f| f.k.n);
+        let index = r.fs.last().map_or(0, |f| f.a.k.n);
         let k_first = r.d == Dialect::L55;
         if k_first && let Some(f) = r.fs.last_mut() {
-            f.k.push(&mut self.heap, s.tvalue);
+            self.heap.parser_push(&mut f.a.k, ParserArray::Consts);
         }
         if let Some(key) = key {
             let id = match r.d {
@@ -84,7 +83,7 @@ impl Vm {
             }
         }
         if !k_first && let Some(f) = r.fs.last_mut() {
-            f.k.push(&mut self.heap, s.tvalue);
+            self.heap.parser_push(&mut f.a.k, ParserArray::Consts);
         }
         // the constant in the prototype (`luaC_barrier`)
         if let Value::Str(cs) = v

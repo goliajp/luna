@@ -416,7 +416,7 @@ const fn swasm(d: Dialect) -> PucSizes {
 
 /// The parser's `Vardesc` and `Labeldesc` sizes (5.2 on; 5.1 keeps its
 /// active variables in the function state).
-pub(crate) const fn dyd_sizes(d: Dialect) -> (usize, usize) {
+pub(in crate::runtime::puc) const fn dyd_sizes(d: Dialect) -> (usize, usize) {
     let new = matches!(d, Dialect::L54 | Dialect::L55);
     #[cfg(target_pointer_width = "64")]
     let (v, l) = (if new { 24 } else { 2 }, 24);

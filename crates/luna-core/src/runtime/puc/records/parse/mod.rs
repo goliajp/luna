@@ -8,8 +8,12 @@ use super::*;
 use crate::runtime::dialect::Dialect;
 use crate::runtime::mem::{LVec, Oom};
 
+mod arrays;
 mod mark;
+mod table;
 mod unborn;
+pub(crate) use arrays::{FuncArrays, GrowVec, ParserArray, ParserSizes};
+pub(crate) use table::{PKey, PTab};
 pub(in crate::runtime) use unborn::LoadsAside;
 
 /// In a record's `sub` byte: a parser table.

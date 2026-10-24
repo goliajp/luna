@@ -7,50 +7,17 @@ use crate::compiler::TokRef;
 /// A function being compiled, in PUC's terms.
 #[derive(Default)]
 pub(super) struct Fs {
-    pub(super) code: Arr,
-    pub(super) line: Arr,
-    pub(super) abs: Arr,
-    pub(super) k: Arr,
-    pub(super) p: Arr,
-    pub(super) loc: Arr,
-    pub(super) up: Arr,
+    /// its arrays as PUC grows them
+    pub(super) a: FuncArrays,
     /// the function's own table: 5.1 and 5.2 key its strings and constants
     /// in it, 5.5 its constants (`kcache`)
     pub(super) h: Option<PTab>,
-    pub(super) prev_line: u32,
-    pub(super) iwthabs: u32,
-    /// the last instruction's line entry: absolute, and the line before it
-    /// (to take it back, PUC `removelastlineinfo`)
-    pub(super) last_abs: bool,
-    pub(super) last_prev: u32,
     /// which of the shapes is this function's, and the luna instructions
     /// emitted so far
     pub(super) shape: usize,
     pub(super) pc: usize,
     /// where its strings start among `Replay::kstr`
     pub(super) kbase: usize,
-}
-
-impl Fs {
-    /// The bytes of each of its prototype's arrays as grown (see
-    /// `Proto::puc_arrays`).
-    pub(super) fn puc_caps(&self, d: Dialect, s: &crate::runtime::puc::size::PucSizes) -> [u32; 7] {
-        let line = if matches!(d, Dialect::L54 | Dialect::L55) {
-            1
-        } else {
-            4
-        };
-        [
-            (self.code, 4),
-            (self.p, s.ptr),
-            (self.k, s.tvalue),
-            (self.line, line),
-            (self.abs, s.abslineinfo),
-            (self.loc, s.locvar),
-            (self.up, s.upvaldesc),
-        ]
-        .map(|(a, e)| (a.cap * e) as u32)
-    }
 }
 
 /// Where the replay of a load that failed stops: before the events at
@@ -129,7 +96,7 @@ pub(in crate::vm::exec) struct TabOp {
 /// The replay's state.
 pub(super) struct Replay<'s> {
     pub(super) d: Dialect,
-    pub(super) sizes: crate::runtime::puc::size::PucSizes,
+    pub(super) sizes: ParserSizes,
     /// the chunk's main closure
     pub(super) cl: Option<Gc<LuaClosure>>,
     /// 5.2: the table of the function closing, while it anchors the token
@@ -149,9 +116,9 @@ pub(super) struct Replay<'s> {
     pub(super) long_keys: std::collections::HashMap<Box<[u8]>, usize>,
     /// the scanner's buffer
     pub(super) buff: usize,
-    pub(super) actvar: Arr,
-    pub(super) gt: Arr,
-    pub(super) label: Arr,
+    pub(super) actvar: GrowVec,
+    pub(super) gt: GrowVec,
+    pub(super) label: GrowVec,
     /// the prototypes in the order their functions open
     pub(super) opening: Vec<Gc<Proto>>,
     pub(super) opened: usize,
@@ -199,7 +166,7 @@ pub(super) fn walk(p: Gc<Proto>, opening: &mut Vec<Gc<Proto>>, closing: &mut Vec
 impl<'s> Replay<'s> {
     /// A replay of the load of `proto`, whose scanner made `scanned`.
     pub(super) fn new(
-        (d, sizes): (Dialect, crate::runtime::puc::size::PucSizes),
+        (d, sizes): (Dialect, ParserSizes),
         proto: Gc<Proto>,
         version: crate::version::LuaVersion,
         scanned: &'s Scanned,
@@ -219,9 +186,9 @@ impl<'s> Replay<'s> {
             tabs: 0,
             long_keys: Default::default(),
             buff: 0,
-            actvar: Arr::default(),
-            gt: Arr::default(),
-            label: Arr::default(),
+            actvar: GrowVec::default(),
+            gt: GrowVec::default(),
+            label: GrowVec::default(),
             opening,
             opened: 0,
             shapes: crate::vm::dump::shapes(&proto, version).unwrap_or_default(),
@@ -282,7 +249,7 @@ impl Drop for Replay<'_> {
         }
         for f in &self.fs {
             if let Some(p) = self.opening.get(f.shape) {
-                p.puc_arrays.set(f.puc_caps(self.d, &self.sizes));
+                p.puc_arrays.set(f.a.caps(&self.sizes));
             }
         }
     }

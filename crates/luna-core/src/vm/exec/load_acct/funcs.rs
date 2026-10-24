@@ -2,13 +2,13 @@
 //! table, and the arrays trimmed when it ends.
 
 use super::*;
+use crate::runtime::puc::PucObj;
 use crate::runtime::puc::records::parse::set_parsing;
 
 impl Vm {
     /// A function opens: the main one in `luaY_parser`, a nested one in
     /// `addprototype` (5.1 `open_func`), then `open_func`'s own table.
     pub(super) fn replay_open(&mut self, r: &mut Replay) -> Result<(), SyntaxError> {
-        let s = self.heap.puc_sizes();
         let d = r.d;
         let main = r.opened == 0;
         if !main
@@ -16,7 +16,7 @@ impl Vm {
             && let Some(parent) = r.fs.last_mut()
         {
             // `addprototype`: the parent's array, then the new prototype
-            parent.p.push(&mut self.heap, s.ptr);
+            self.heap.parser_push(&mut parent.a.p, ParserArray::Protos);
         }
         // the parser's own string of the chunk name (`luaS_new`) and the
         // scanner's buffer (`luaX_setinput`): 5.1 makes them first, the
@@ -28,7 +28,8 @@ impl Vm {
         // the prototype luna made without counting
         if let Some(&p) = r.opening.get(r.opened) {
             let h = p.hdr();
-            self.heap.acct_promote_obj(h, PucKind::Proto, s.proto);
+            self.heap
+                .acct_promote_obj(h, PucKind::Proto, self.heap.puc_size(PucObj::Proto));
             if r.rec.is_none() {
                 set_parsing(p, true);
                 if !main && d != Dialect::L51 {
@@ -51,7 +52,7 @@ impl Vm {
         let shape = r.opened;
         r.opened += 1;
         r.fs.push(Fs {
-            prev_line: ld,
+            a: FuncArrays::new(ld),
             shape,
             h,
             kbase: r.kstr.len(),
@@ -79,13 +80,7 @@ impl Vm {
     /// enclosing function's prototype array; 5.5 drops the function's
     /// table from the chunk's.
     pub(super) fn replay_close(&mut self, r: &mut Replay, tok: i64) -> Result<(), SyntaxError> {
-        let s = self.heap.puc_sizes();
         let d = r.d;
-        let line_elem = if matches!(d, Dialect::L54 | Dialect::L55) {
-            1
-        } else {
-            4
-        };
         let mut f = r.fs.pop().unwrap_or_default();
         r.kstr.truncate(f.kbase);
         let closed = r.opening.get(f.shape).copied();
@@ -93,17 +88,10 @@ impl Vm {
             set_parsing(p, false);
             self.heap.settle_parsed(p);
         }
-        let h = &mut self.heap;
-        f.code.trim(h, 4);
-        f.line.trim(h, line_elem);
-        f.abs.trim(h, s.abslineinfo);
-        f.k.trim(h, s.tvalue);
-        f.p.trim(h, s.ptr);
-        f.loc.trim(h, s.locvar);
-        f.up.trim(h, s.upvaldesc);
+        self.heap.parser_close(&mut f.a);
         if let Some(p) = r.closing.get(r.closed) {
             // trimmed: each array's size is its count
-            p.puc_arrays.set(f.puc_caps(d, &s));
+            p.puc_arrays.set(f.a.caps(&r.sizes));
         }
         r.closed += 1;
         if matches!(d, Dialect::L51 | Dialect::L52) && !r.fs.is_empty() {
@@ -126,7 +114,7 @@ impl Vm {
         if d == Dialect::L51
             && let Some(parent) = r.fs.last_mut()
         {
-            parent.p.push(&mut self.heap, s.ptr);
+            self.heap.parser_push(&mut parent.a.p, ParserArray::Protos);
             // `pushclosure`
             if let Some(p) = closed {
                 self.proto_barrier(r, r.fs.len() - 1, p.hdr());

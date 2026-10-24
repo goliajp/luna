@@ -92,7 +92,14 @@ impl Vm {
         );
         let (scanned, names) = parsed.failed_scan().expect("checked above");
         let d = self.heap.dialect();
-        let mut r = Replay::new((d, self.heap.puc_sizes()), cl.proto, v, scanned, names, src);
+        let mut r = Replay::new(
+            (d, self.heap.parser_sizes()),
+            cl.proto,
+            v,
+            scanned,
+            names,
+            src,
+        );
         r.splice(splices);
         let log = self.compile_scratch.puc_log.take();
         self.heap.trace_line(format_args!(
@@ -148,7 +155,7 @@ impl Vm {
                     };
                     self.grow_buff(&mut r, n);
                 }
-                unclosed(&mut r, self.heap.puc_sizes());
+                unclosed(&mut r);
                 self.replay_syntax_error(&mut r, e, failed.near, source.as_bytes())
             });
         self.compile_scratch.puc_log = log;
@@ -193,10 +200,10 @@ fn unresolved_goto(msg: &[u8]) -> bool {
 
 /// The prototypes of the functions still open keep their arrays as grown:
 /// their sizes are what freeing them frees.
-pub(super) fn unclosed(r: &mut Replay, s: crate::runtime::puc::size::PucSizes) {
+pub(super) fn unclosed(r: &mut Replay) {
     for f in &r.fs {
         if let Some(p) = r.opening.get(f.shape) {
-            p.puc_arrays.set(f.puc_caps(r.d, &s));
+            p.puc_arrays.set(f.a.caps(&r.sizes));
         }
     }
 }

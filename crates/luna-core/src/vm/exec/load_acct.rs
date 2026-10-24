@@ -20,14 +20,15 @@ use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::Proto;
 use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::PucKind;
+use crate::runtime::puc::records::parse::{
+    FuncArrays, GrowVec, PKey, PTab, ParserArray, ParserSizes,
+};
 
-mod arr;
 mod consts;
 mod events;
 mod failed;
 mod failed_compile;
 mod funcs;
-mod ptab;
 mod replay;
 mod scan;
 mod steps;
@@ -37,9 +38,6 @@ mod view;
 use replay::{Cut, Fs, Replay, walk};
 pub(super) use replay::{PVal, TabOp};
 pub(super) use view::ReaderView;
-
-use arr::Arr;
-use ptab::{PKey, PTab};
 
 impl Vm {
     /// Count a text chunk that compiled to `proto` (without counting) as
@@ -56,9 +54,9 @@ impl Vm {
         let proto = cl.proto;
         let (marks, scanned) = rec;
         let d = self.heap.dialect();
-        let s = self.heap.puc_sizes();
+        let upval = self.heap.puc_size(crate::runtime::puc::PucObj::Upval);
         let mut r = Replay::new(
-            (d, self.heap.puc_sizes()),
+            (d, self.heap.parser_sizes()),
             proto,
             self.version,
             scanned,
@@ -83,9 +81,9 @@ impl Vm {
                 Some(&uv) => {
                     let h = uv.hdr();
                     if h.is_uncounted() {
-                        self.heap.acct_promote_obj(h, PucKind::Upval, s.upval);
+                        self.heap.acct_promote_obj(h, PucKind::Upval, upval);
                     } else {
-                        self.heap.acct_obj(PucKind::Upval, s.upval);
+                        self.heap.acct_obj(PucKind::Upval, upval);
                     }
                     if d == Dialect::L53 {
                         // SAFETY: both are live objects of this heap
@@ -93,7 +91,7 @@ impl Vm {
                     }
                     self.heap.barrier_new_upval(cl, uv);
                 }
-                None => self.heap.acct_obj(PucKind::Upval, s.upval),
+                None => self.heap.acct_obj(PucKind::Upval, upval),
             }
         }
         self.replay_end(&r);
@@ -143,7 +141,7 @@ impl Vm {
             16
         };
         // a view of the tables for the debug library counts nothing
-        PTab::new(&mut self.heap, r.tabs, keys, r.rec.is_none())
+        Ok(PTab::new(&mut self.heap, r.tabs, keys, r.rec.is_none())?)
     }
 
     /// `luaD_protectedparser` frees the scanner's buffer and the parser's
@@ -151,10 +149,9 @@ impl Vm {
     fn replay_end(&mut self, r: &Replay) {
         self.heap.acct_block(r.buff, 0);
         if r.d != Dialect::L51 {
-            let (vd, ld) = crate::runtime::puc::size::dyd_sizes(r.d);
-            for (a, e) in [(r.actvar, vd), (r.gt, ld), (r.label, ld)] {
-                self.heap.acct_block(a.cap * e, 0);
-            }
+            self.heap.parser_free(r.actvar, ParserArray::ActVar);
+            self.heap.parser_free(r.gt, ParserArray::Gotos);
+            self.heap.parser_free(r.label, ParserArray::Labels);
         }
     }
 

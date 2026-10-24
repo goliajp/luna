@@ -24,8 +24,6 @@ impl Vm {
     /// stand for it, with their lines, and the constants PUC adds for it
     /// (an instruction PUC has none for stands for none).
     fn replay_instruction(&mut self, r: &mut Replay, line: u32) {
-        let (d, sizes) = (r.d, &self.heap.puc_sizes());
-        let (abs, tvalue) = (sizes.abslineinfo, sizes.tvalue);
         let Replay { fs, shapes, .. } = r;
         let Some(f) = fs.last_mut() else {
             return;
@@ -34,22 +32,21 @@ impl Vm {
         let pc = f.pc;
         f.pc += 1;
         let Some(sh) = shapes.get(f.shape) else {
-            code_one(f, h, d, abs, line);
+            h.parser_code(&mut f.a, line);
             return;
         };
         let a = sh.pc_map.get(pc).copied().unwrap_or(0) as usize;
         let b = sh.pc_map.get(pc + 1).copied().unwrap_or(a as u32 + 1) as usize;
         for j in a..b.max(a) {
-            code_one(f, h, d, abs, sh.lines.get(j).copied().unwrap_or(line));
+            h.parser_code(&mut f.a, sh.lines.get(j).copied().unwrap_or(line));
         }
         for _ in sh.k_added.iter().filter(|&&p| p == pc) {
-            f.k.push(h, tvalue);
+            h.parser_push(&mut f.a.k, ParserArray::Consts);
         }
     }
 
     /// An event other than an instruction.
     fn replay_other(&mut self, r: &mut Replay, tok: i64, ev: PEv) -> Result<(), SyntaxError> {
-        let s = self.heap.puc_sizes();
         match ev {
             PEv::Open => self.replay_open(r)?,
             PEv::Prologue => {
@@ -57,7 +54,7 @@ impl Vm {
                 let Some(f) = r.fs.last() else {
                     return Ok(());
                 };
-                let (shape, ld) = (f.shape, f.prev_line);
+                let (shape, ld) = (f.shape, f.a.prev_line);
                 let pro = r
                     .shapes
                     .get(shape)
@@ -80,30 +77,21 @@ impl Vm {
             PEv::Uncode => {
                 if let Some(f) = r.fs.last_mut() {
                     f.pc -= 1;
-                    f.code.n -= 1;
-                    f.line.n -= 1;
-                    // 5.4+ `removelastlineinfo`
-                    if f.last_abs {
-                        f.abs.n -= 1;
-                        f.iwthabs = 129;
-                    } else {
-                        f.prev_line = f.last_prev;
-                        f.iwthabs = f.iwthabs.saturating_sub(1);
-                    }
+                    self.heap.parser_uncode(&mut f.a);
                 }
             }
             PEv::Const(key, v) => self.replay_const(r, key, v)?,
             PEv::Upval(depth) => {
                 if let Some(f) = r.fs.get_mut(depth as usize) {
-                    f.up.push(&mut self.heap, s.upvaldesc);
-                    let n = f.up.n;
+                    self.heap.parser_push(&mut f.a.up, ParserArray::Upvals);
+                    let n = f.a.up.n;
                     self.name_barrier(r, depth as usize, n, true);
                 }
             }
             PEv::LocVar => {
                 if let Some(f) = r.fs.last_mut() {
-                    f.loc.push(&mut self.heap, s.locvar);
-                    let n = f.loc.n;
+                    self.heap.parser_push(&mut f.a.loc, ParserArray::LocVars);
+                    let n = f.a.loc.n;
                     self.name_barrier(r, r.fs.len() - 1, n, false);
                 }
             }
@@ -112,17 +100,17 @@ impl Vm {
             PEv::ActVar(_) | PEv::Goto(_) | PEv::Label(_) if r.d == Dialect::L51 => {}
             PEv::ActVar(n) => {
                 // `new_localvar` asks for room past the new entry
-                let (vd, _) = crate::runtime::puc::size::dyd_sizes(r.d);
-                r.actvar.reach(&mut self.heap, n as usize + 1, vd);
+                self.heap
+                    .parser_reach(&mut r.actvar, ParserArray::ActVar, n as usize + 1);
                 r.actvar.n = n as usize;
             }
             PEv::Goto(n) => {
-                let (_, ld) = crate::runtime::puc::size::dyd_sizes(r.d);
-                r.gt.reach(&mut self.heap, n as usize, ld);
+                self.heap
+                    .parser_reach(&mut r.gt, ParserArray::Gotos, n as usize);
             }
             PEv::Label(n) => {
-                let (_, ld) = crate::runtime::puc::size::dyd_sizes(r.d);
-                r.label.reach(&mut self.heap, n as usize, ld);
+                self.heap
+                    .parser_reach(&mut r.label, ParserArray::Labels, n as usize);
             }
         }
         Ok(())
@@ -131,32 +119,8 @@ impl Vm {
     /// One PUC instruction on `line` (`luaK_code`): the code array, then
     /// the line info (5.4+ `savelineinfo`, with its absolute entries).
     pub(super) fn replay_code(&mut self, r: &mut Replay, line: u32) {
-        let abs = self.heap.puc_sizes().abslineinfo;
         if let Some(f) = r.fs.last_mut() {
-            code_one(f, &mut self.heap, r.d, abs, line);
+            self.heap.parser_code(&mut f.a, line);
         }
-    }
-}
-
-/// One PUC instruction on `line` in function `f`: the code array, then the
-/// line info (5.4+ `savelineinfo`, with its absolute entries of `abs`
-/// bytes).
-#[inline(always)]
-fn code_one(f: &mut Fs, h: &mut Heap, d: Dialect, abs: usize, line: u32) {
-    f.code.push(h, 4);
-    if matches!(d, Dialect::L54 | Dialect::L55) {
-        let dif = i64::from(line) - i64::from(f.prev_line);
-        let wthabs = f.iwthabs;
-        f.iwthabs += 1;
-        f.last_prev = f.prev_line;
-        f.last_abs = dif.abs() >= 0x80 || wthabs >= 128;
-        if f.last_abs {
-            f.abs.push(h, abs);
-            f.iwthabs = 1;
-        }
-        f.prev_line = line;
-        f.line.push(h, 1);
-    } else {
-        f.line.push(h, 4);
     }
 }

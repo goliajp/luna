@@ -95,11 +95,4 @@ impl Heap {
     pub(crate) fn puc_size(&self, o: PucObj) -> usize {
         o.bytes(self.puc.dialect, &self.puc.sizes)
     }
-
-    /// PUC's sizes, for the replay of a load, which works out the sizes of
-    /// the parser's arrays as it goes.
-    #[inline]
-    pub(crate) fn puc_sizes(&self) -> size::PucSizes {
-        self.puc.sizes
-    }
 }
