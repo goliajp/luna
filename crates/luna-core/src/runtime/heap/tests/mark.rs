@@ -118,3 +118,35 @@ fn incremental_sweep_keeps_the_survivors_in_order() {
     want.reverse();
     assert_eq!(tables_left, want);
 }
+
+#[test]
+fn a_forward_barrier_in_the_sweep_whitens_its_parent() {
+    let mut heap = Heap::new();
+    let parent = heap.new_userdata(crate::runtime::userdata::UserdataPayload::Empty, false);
+    // newer, so ahead of the parent on the list: the sweep's first step
+    // stops at it, the parent not swept yet
+    let ahead = heap.new_table();
+    heap.gc_start_propagate(&[Value::Userdata(parent), Value::Table(ahead)], &[]);
+    while !heap.gc_step_propagate(usize::MAX) {}
+    heap.gc_finish_atomic();
+    assert!(heap.phase() == GcPhase::Sweep, "the sweep has not begun");
+    assert!(
+        is_black(parent.hdr().flags()),
+        "the marking left the parent black"
+    );
+    // made in the sweep: the current white, never swept this cycle
+    let child = heap.new_table();
+    heap.barrier_forward(parent, Value::Table(child));
+    let (pf, cf) = (parent.hdr().flags(), child.hdr().flags());
+    // PUC `luaC_barrierf` past the atomic step: the parent goes white, the
+    // child stays as it was born
+    assert!(
+        is_white(pf) && pf & heap.current_white != 0,
+        "parent {pf:#x}"
+    );
+    assert!(
+        is_white(cf) && cf & heap.current_white != 0,
+        "child {cf:#x}"
+    );
+    while !heap.gc_sweep_step(usize::MAX) {}
+}
