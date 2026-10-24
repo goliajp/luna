@@ -285,15 +285,16 @@ impl Vm {
     /// later dialects ask for its whole size first (`luaL_buffinitsize`,
     /// `luaL_pushresultsize`).
     pub(crate) fn buffer_result(&mut self, out: &[u8]) -> Result<Value, LuaError> {
-        let b = if self.heap.dialect() == Dialect::L51 {
-            let mut b = PucBuffer::new(self);
-            b.add(self, out, out.len())?;
-            b
-        } else {
-            let mut b = PucBuffer::with_size(self, out.len())?;
-            b.n = out.len();
-            b
-        };
-        Ok(Value::Str(b.finish(self, out)?))
+        self.lib_scope(|vm| {
+            let mut b = match vm.heap.dialect() {
+                Dialect::L51 => PucBuffer::new(vm),
+                _ => PucBuffer::with_size(vm, out.len())?,
+            };
+            match vm.heap.dialect() {
+                Dialect::L51 => b.add(vm, out, out.len())?,
+                _ => b.n = out.len(),
+            }
+            Ok(Value::Str(b.finish(vm, out)?))
+        })
     }
 }

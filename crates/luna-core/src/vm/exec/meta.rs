@@ -112,10 +112,8 @@ impl Vm {
         // 5.1's `luaD_call` checks for a collection when the metamethod
         // returns, its result on the stack
         if self.version == LuaVersion::Lua51 {
-            self.lib_roots.push(result);
             let top = self.lua_window_end();
-            self.call_return_checkpoint(top)?;
-            self.lib_roots.pop();
+            self.rooted(&[result], |vm| vm.call_return_checkpoint(top))?;
         }
         match action {
             MetaAction::Store { dst } => self.stack[dst as usize] = result,

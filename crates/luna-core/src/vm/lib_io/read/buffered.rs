@@ -17,18 +17,21 @@ pub(crate) fn buffered(
     if bytes.len() > crate::runtime::string::MAX_LEN {
         return Err(posix_error(ENOMEM).into());
     }
-    let mut b = PucBuffer::new(vm);
-    let mut at = 0;
-    for &(room, got) in chunks {
-        b.prep(vm, &bytes[..at], room)?;
-        at += got;
-        b.add_size(got);
-    }
-    if nl {
-        at += 1;
-        b.add_chars(vm, &bytes[..at], 1)?;
-    }
-    Ok(Value::Str(b.finish(vm, &bytes[..at])?))
+    // 5.1's buffer keeps its strings on the stack: an error lets them go
+    vm.lib_scope(|vm| {
+        let mut b = PucBuffer::new(vm);
+        let mut at = 0;
+        for &(room, got) in chunks {
+            b.prep(vm, &bytes[..at], room)?;
+            at += got;
+            b.add_size(got);
+        }
+        if nl {
+            at += 1;
+            b.add_chars(vm, &bytes[..at], 1)?;
+        }
+        Ok(Value::Str(b.finish(vm, &bytes[..at])?))
+    })
 }
 
 /// `LUAL_BUFFERSIZE`.

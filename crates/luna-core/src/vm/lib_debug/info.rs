@@ -2,7 +2,7 @@
 
 use super::{check_int, getthread, is_function, set_field, set_str, set_str_at};
 use crate::runtime::heap::strcache::{CStr, site};
-use crate::runtime::{Gc, Table, Value};
+use crate::runtime::{Coro, Gc, Table, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{Args, opt_string, to_num};
 use crate::vm::builtins::arg_error;
@@ -47,22 +47,32 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     } else {
         Some(check_int(vm, a, arg)?)
     };
+    // what `lua_getinfo` pushes is held until the table is made
+    match vm.lib_scope(|vm| info_value(vm, a, co, level, subject, &options))? {
+        Some(r) => vm.nat_ret(fs, &[r]),
+        None => Err(arg_error(vm, arg + 2, "invalid option")),
+    }
+}
+
+/// `debug.getinfo`'s result; `None` for an invalid option.
+fn info_value(
+    vm: &mut Vm,
+    a: Args,
+    co: Option<Gc<Coro>>,
+    level: Option<i64>,
+    subject: Value,
+    options: &[u8],
+) -> Result<Option<Value>, LuaError> {
+    let v = vm.version();
     // `lua_getinfo` makes the set of lines only for 'L'
     let want_lines = options.contains(&b'L');
-    let base = vm.lib_roots.mark();
     let (ar, activelines) = match level {
         None => {
             // `lua_pushfstring(L, ">%s", options)`, which stays pushed
-            let fmt = crate::runtime::puc::fmt::FmtArg::S(&options);
+            let fmt = crate::runtime::puc::fmt::FmtArg::S(options);
             vm.api_pushing(|vm| vm.pushfstring(b">%s", &[fmt]))?;
             let ar = vm.function_ar(subject);
-            let lines = match lines_if(vm, want_lines, subject) {
-                Ok(lines) => lines,
-                Err(e) => {
-                    vm.lib_roots.release(base);
-                    return Err(e);
-                }
-            };
+            let lines = lines_if(vm, want_lines, subject)?;
             (ar, lines)
         }
         Some(level) => {
@@ -79,15 +89,15 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             match found {
                 None => {
                     drop(ts);
-                    return vm.nat_ret(fs, &[Value::Nil]);
+                    return Ok(Some(Value::Nil));
                 }
                 Some(None) | Some(Some((_, DbgKind::Tail))) => {
                     // PUC 5.1 `auxgetinfo` returns before looking at the
                     // options of a lost tail call
                     drop(ts);
                     let ar = crate::vm::callstack::tail_ar();
-                    let t = info_table(vm, &options, &ar, Value::Nil)?;
-                    return vm.nat_ret(fs, &[Value::Table(t)]);
+                    let t = info_table(vm, options, &ar, Value::Nil)?;
+                    return Ok(Some(Value::Table(t)));
                 }
                 Some(Some((i, _))) => {
                     let ar = vm.level_ar(&ts, i);
@@ -104,19 +114,21 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let popped = v <= LuaVersion::Lua53 && level.is_some() && options.first() == Some(&b'>');
     let (ar, activelines, checked) = if popped {
         vm.native_pop(1);
-        let f = a.get(vm, nargs - 1);
+        let f = a.get(vm, a.n - 1);
         (popped_ar(f), Value::Nil, &options[1..])
     } else {
-        (ar, activelines, &options[..])
+        (ar, activelines, options)
     };
     let allowed = valid_options(v);
     if checked.iter().any(|c| !allowed.contains(c)) {
-        vm.lib_roots.release(base);
-        return Err(arg_error(vm, arg + 2, "invalid option"));
+        return Ok(None);
     }
-    let t = info_table(vm, &options, &ar, activelines);
-    vm.lib_roots.release(base);
-    vm.nat_ret(fs, &[Value::Table(t?)])
+    Ok(Some(Value::Table(info_table(
+        vm,
+        options,
+        &ar,
+        activelines,
+    )?)))
 }
 
 /// [`try_activelines`] when `want`, else nothing.

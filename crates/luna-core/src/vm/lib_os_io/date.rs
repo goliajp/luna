@@ -3,6 +3,11 @@
 use super::*;
 
 pub(super) fn os_date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    // 5.1's buffer keeps its strings on the stack: an error lets them go
+    vm.lib_scope(|vm| date(vm, fs, nargs))
+}
+
+fn date(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     let fmt_arg = argcheck::opt_string(vm, a, 0)?;
