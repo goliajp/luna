@@ -9,36 +9,17 @@ mod trace_k;
 
 impl Vm {
     /// Switch the `collectgarbage` mode, returning the previous mode name.
-    /// 5.4 and 5.5 enter generational mode with a full marking and sweep
-    /// (`entergen`), which runs no finalizer.
     pub(crate) fn gc_switch_mode(&mut self, new: &'static str) -> &'static str {
         let prev = std::mem::replace(&mut self.gc_mode, new);
         self.heap.hook_mode(new == "generational");
-        if new == "generational" && prev != new && self.version >= LuaVersion::Lua54 {
-            self.heap.trace_line(format_args!("X"));
-            if !self.gc_finalizing && !self.heap.no_gc() {
-                self.clear_dead_stack();
-                self.full_collect();
-                crate::runtime::puc::step::gc_minor_debt(self);
-            }
-            self.heap.trace_line(format_args!("x"));
-        }
-        if prev != new && self.version == LuaVersion::Lua52 {
-            match new {
-                "generational" => crate::runtime::puc::step::enter_generational_52(self),
-                _ => crate::runtime::puc::step::leave_generational_52(self),
-            }
-        }
-        if new == "incremental" && prev == "generational" {
-            crate::runtime::puc::step::gc_leave_generational(self);
-        }
+        crate::runtime::puc::step::change_mode(self, prev, new);
         prev
     }
 
     /// The standalone interpreter restarting the collector in generational
     /// mode before it runs anything (5.4+ `lua.c`).
     pub(crate) fn gc_enter_generational(&mut self) {
-        if self.version >= LuaVersion::Lua54 {
+        if self.heap.lua_c_starts_generational() {
             self.heap.gc_set_stopped(false);
             self.gc_switch_mode("generational");
         }
@@ -132,7 +113,7 @@ impl Vm {
         let mut freed = 0;
         if !self.heap.no_gc() {
             // 5.2 calls pending finalizers first; its atomic step clears the stack
-            if self.version == LuaVersion::Lua52 {
+            if self.heap.full_calls_pending_first() {
                 self.call_all_pending(true)?;
             } else {
                 self.clear_dead_stack();

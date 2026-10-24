@@ -77,35 +77,15 @@ impl Vm {
             return Ok(());
         };
         self.heap.trace_line(format_args!("f"));
-        let d = self.version;
         let in_hook = std::mem::replace(&mut self.in_hook, true);
         let finalizing = std::mem::replace(&mut self.gc_finalizing, true);
         let gc_top = self.gc_top;
-        let stopped = self.heap.gc_is_stopped();
-        let fin_stop = self.heap.gc_fin_stop();
-        let mut threshold = 0;
-        match d {
-            LuaVersion::Lua51 => threshold = self.heap.fin51_threshold(),
-            LuaVersion::Lua52 | LuaVersion::Lua53 => self.heap.gc_restore_stopped(true),
-            _ => self.heap.gc_set_fin_stop(true),
-        }
-        self.heap.refresh_gc_limit();
+        let stop = self.heap.finalizer_runs();
         let r = self.run_one_finalizer(obj, propagate);
         self.in_hook = in_hook;
         self.gc_finalizing = finalizing;
         self.gc_top = gc_top;
-        match d {
-            // a 5.1 error leaves the threshold the finalizer ran under
-            LuaVersion::Lua51 => {
-                if r.is_ok() {
-                    self.heap.fin51_threshold_back(threshold);
-                    self.heap.gc_restore_stopped(stopped);
-                }
-            }
-            LuaVersion::Lua52 | LuaVersion::Lua53 => self.heap.gc_restore_stopped(stopped),
-            _ => self.heap.gc_set_fin_stop(fin_stop),
-        }
-        self.heap.refresh_gc_limit();
+        self.heap.finalizer_returned(stop, r.is_ok());
         r
     }
 
