@@ -176,6 +176,7 @@ mod free;
 #[cfg(any(feature = "gc-trace", feature = "gc-verify", test))]
 pub(in crate::runtime) mod hooks;
 mod marker;
+mod pace;
 mod rules;
 mod sweep;
 pub(in crate::runtime) use born::{
