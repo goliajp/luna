@@ -119,18 +119,13 @@ pub(crate) fn shapes(proto: &Proto, version: LuaVersion) -> Result<Vec<Shape>, S
     Ok(out)
 }
 
-/// Serialise `proto` as a chunk of the PUC version `version` names;
-/// `strip` drops debug information as PUC's `strip` does.
-pub(crate) fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Result<Vec<u8>, String> {
-    dump_blocks(proto, strip, version).map(|(bytes, _)| bytes)
-}
-
-/// [`dump`], with the size of each block PUC's dumper writes separately.
+/// The PUC chunk of `proto`, the size of each block PUC's dumper writes
+/// separately, and how many strings 5.5's dumper saved.
 pub(crate) fn dump_blocks(
     proto: &Proto,
     strip: bool,
     version: LuaVersion,
-) -> Result<(Vec<u8>, Vec<usize>), String> {
+) -> Result<(Vec<u8>, Vec<usize>, usize), String> {
     let d = match version {
         LuaVersion::Lua51 => Dialect::V51,
         LuaVersion::Lua52 => Dialect::V52,
