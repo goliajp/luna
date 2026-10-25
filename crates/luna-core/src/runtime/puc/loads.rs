@@ -94,6 +94,13 @@ impl Heap {
         std::mem::take(&mut self.puc.load_checked)
     }
 
+    /// Whether the failed load's replay shrank the stack where
+    /// `luaD_pcall` caught its error, now `on`.
+    #[inline]
+    pub(crate) fn load_caught(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.puc.load_caught, on)
+    }
+
     /// A load that must not collect is running.
     #[inline]
     pub(crate) fn loads_held(&self) -> bool {

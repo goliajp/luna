@@ -22,13 +22,13 @@ impl Vm {
     ) -> Result<(), SyntaxError> {
         let opts = std::mem::take(&mut self.compile_scratch.replay);
         let (Some(proto), Some((at, near))) = (opts.sealed, opts.at) else {
-            return self.splices_stand(splices);
+            return self.splices_stand_caught(splices);
         };
         let building = self.heap.build_load(true);
         let cl = self.close_chunk(proto);
         self.heap.load_built(building);
         let Ok(cl) = cl else {
-            return self.splices_stand(splices);
+            return self.splices_stand_caught(splices);
         };
         let (marks, scanned) = rec;
         let d = self.heap.dialect();
@@ -63,6 +63,7 @@ impl Vm {
         if replayed.is_ok() {
             // `luaD_pcall` shrinks the stack, then the parser's buffers go
             self.shrink_caught_error();
+            self.heap.load_caught(true);
             self.replay_end(&r);
         }
         replayed
