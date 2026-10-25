@@ -26,7 +26,7 @@ pub(super) fn new_file(
     // SAFETY: `u` was allocated above and is held by the caller's check;
     // the borrow covers one call
     unsafe { u.as_mut() }.set_metatable(super::refs::file_metatable(vm));
-    vm.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
+    vm.heap.register_finalizable_userdata(u);
     Ok(u)
 }
 

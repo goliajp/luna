@@ -47,7 +47,7 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         // GC time, so adding `__gc` to a shared metatable *after* the
         // proxy was made still works). 5.2+ moved the check to
         // setmetatable time; that's gated by version when needed.
-        vm.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
+        vm.heap.register_finalizable_userdata(u);
     }
     vm.nat_ret(fs, &[Value::Userdata(u)])
 }

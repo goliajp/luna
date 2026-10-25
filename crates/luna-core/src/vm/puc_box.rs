@@ -23,7 +23,7 @@ impl Vm {
         // SAFETY: `u` is a live userdata held in `buffer_boxes`; the borrow covers one store, which allocates nothing
         unsafe { u.as_mut() }.set_metatable(Some(mt));
         self.heap.barrier_forward(u, Value::Table(mt));
-        self.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
+        self.heap.register_finalizable_userdata(u);
         Ok(u)
     }
 

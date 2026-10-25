@@ -75,10 +75,10 @@ impl Heap {
         }
     }
 
-    /// Whether PUC's sweep counts the object behind `h`: one of PUC's on the
-    /// list PUC sweeps, not one with a finalizer pending (but in 5.1, whose
-    /// userdata stay on it, as does its main thread, and whose library
-    /// functions and standard files luna made without counting are PUC's).
+    /// Whether PUC's sweep counts the object behind `h`, on `all`: one of
+    /// PUC's (in 5.1 its main thread too, and the library functions and
+    /// standard files luna made without counting). The objects with
+    /// finalizers are on lists of their own, but 5.1's userdata.
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
@@ -86,7 +86,7 @@ impl Heap {
     pub(in crate::runtime) unsafe fn puc_counts_in_sweep(&self, h: *mut GcHeader) -> bool {
         // SAFETY: the caller's contract
         unsafe {
-            let (f, sub, cls) = ((*h).flags(), (*h).sub, (*h).cls);
+            let (sub, cls) = ((*h).sub, (*h).cls);
             if self.puc.dialect == Dialect::L51 {
                 let own = match (*h).tag {
                     ObjTag::Coro => false,
@@ -101,12 +101,10 @@ impl Heap {
                     }
                     _ => sub & UNCOUNTED != 0,
                 };
-                // one waiting for its finalizer is on 5.1's `tmudata`
-                cls & UNLISTED == 0 && !own && f & DEFERRED == 0
+                cls & UNLISTED == 0 && !own
             } else {
-                // one waiting for its finalizer is on `tobefnz`; luna's own
-                // natives are no objects of PUC's
-                (f & (FIN | DEFERRED)) | (sub & UNCOUNTED) | (cls & (UNLISTED | LUNA_ONLY)) == 0
+                // luna's own natives are no objects of PUC's
+                (sub & UNCOUNTED) | (cls & (UNLISTED | LUNA_ONLY)) == 0
             }
         }
     }

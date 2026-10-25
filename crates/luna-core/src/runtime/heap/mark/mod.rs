@@ -38,10 +38,10 @@ pub(crate) struct Marker {
     /// and `overflow` is set; [`Marker::refill`] walks `scan` for them.
     pub(in crate::runtime::heap) stack: GrayStack,
     pub(in crate::runtime::heap) overflow: bool,
-    /// The heads of the heap's object list and of its parked objects when
-    /// the marker was lent out: every object that can be gray is on them
+    /// The heads of the heap's lists when the marker was lent out
+    /// (`Heap::marked_lists`): every object that can be gray is on them
     /// (new ones are born white, fixed ones live on their own list).
-    pub(in crate::runtime::heap) scan: [*mut GcHeader; 2],
+    pub(in crate::runtime::heap) scan: [*mut GcHeader; 3],
     /// live tables with a weak `__mode`, collected during marking and processed
     /// (dead weak entries cleared) before the sweep
     pub(in crate::runtime::heap) weak: Vec<*mut Table>,

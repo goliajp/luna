@@ -38,6 +38,9 @@ pub(in crate::runtime) struct HeapRules {
     /// 5.1: the main thread is on PUC's list, its oldest object, and each
     /// new userdata goes after it
     pub(in crate::runtime) udata_after_main_thread: bool,
+    /// from 5.2 on an object with a finalizer leaves `allgc` for `finobj`
+    /// as it gets one; 5.1's userdata stay where they are
+    pub(in crate::runtime) finobj: bool,
     /// 5.1 stops the collector with an unreachable threshold; the later
     /// dialects still step while it is stopped, to put the debt back
     pub(in crate::runtime) stop_unreachable: bool,
@@ -111,6 +114,7 @@ impl HeapRules {
             new_ci_alloc: if l51 { u32::MAX } else { 0 },
             basic_stack: if l51 { 45 } else { 40 },
             udata_after_main_thread: l51,
+            finobj: !l51,
             stop_unreachable: l51,
             full_sweeps_strings_first: l51,
             counts_finalizable_work: l51,

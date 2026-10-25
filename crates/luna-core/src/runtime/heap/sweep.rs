@@ -34,14 +34,7 @@ impl Heap {
                     self.free_obj(cur);
                     freed += 1;
                 } else {
-                    if f & DEFERRED != 0
-                        && let parked::Due::Moved =
-                            self.sweep_meets_due(link, cur, link == ptr::addr_of_mut!(head))
-                    {
-                        continue;
-                    }
-                    // an object due put back here was turned white already
-                    (*cur).flags = (*cur).with_slow((f & !(COLOR_BITS | DEFERRED)) | new_white);
+                    (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
                     link = ptr::addr_of_mut!((*cur).next);
                     self.puc_sweep_kept(cur);
                 }
@@ -58,7 +51,7 @@ impl Heap {
                 self.all = added;
             }
         }
-        self.whiten_parked();
+        self.whiten_fin_lists();
         self.puc_sweep_ends();
         self.live -= freed;
         // a sweep keeps the order of `all` (see `Heap::keep_young`)
@@ -131,13 +124,7 @@ impl Heap {
                         self.live -= 1;
                     }
                     Fate::Keep => {
-                        if f & DEFERRED != 0
-                            && let parked::Due::Moved =
-                                self.sweep_meets_due(link, cur, self.sweep_prev.is_null())
-                        {
-                            continue;
-                        }
-                        (*cur).flags = (*cur).with_slow((f & !(COLOR_BITS | DEFERRED)) | new_white);
+                        (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
                         self.sweep_prev = cur;
                         self.puc_sweep_kept(cur);
                         if to_live && listed {
@@ -179,17 +166,11 @@ impl Heap {
                     return (n, false);
                 }
                 n += self.puc_sweep_reach(cur);
-                let (mut f, cls) = ((*cur).flags, (*cur).cls);
+                let (f, cls) = ((*cur).flags, (*cur).cls);
                 let dead = is_white(f) && (f & new_white) == 0;
                 self.hook_swept(cur, dead, strt);
                 if self.puc_counts_in_sweep(cur) {
                     n += 1;
-                } else if f & DEFERRED != 0 {
-                    // due for its finalizer: off the list PUC sweeps
-                    match self.sweep_meets_due(link, cur, self.sweep_prev.is_null()) {
-                        parked::Due::Moved => continue,
-                        parked::Due::Here => (n, f) = (n + 1, (*cur).flags),
-                    }
                 } else if (*cur).tag == ObjTag::Ghost {
                     match self.puc_sweep_record(cur, dead, quota - n) {
                         (k, Some(gone)) => {
@@ -254,7 +235,7 @@ impl Heap {
     #[cold]
     #[inline(never)]
     fn end_sweep(&mut self) {
-        self.whiten_parked();
+        self.whiten_fin_lists();
         self.puc_sweep_ends();
         self.sweep_prev = ptr::null_mut();
         self.phase = GcPhase::Pause;

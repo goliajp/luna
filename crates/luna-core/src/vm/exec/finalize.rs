@@ -14,7 +14,7 @@ impl Vm {
         }
         if !self.get_mm(Value::Table(t), Mm::Gc).is_nil() {
             // `t` is the operand of the running `setmetatable`, a root
-            self.retry_oom(|vm| vm.heap.register_finalizable(t))?;
+            self.heap.register_finalizable(t);
         }
         Ok(())
     }
@@ -28,7 +28,7 @@ impl Vm {
         u: Gc<crate::runtime::Userdata>,
     ) -> Result<(), LuaError> {
         if !self.get_mm(Value::Userdata(u), Mm::Gc).is_nil() {
-            self.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
+            self.heap.register_finalizable_userdata(u);
         }
         Ok(())
     }

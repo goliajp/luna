@@ -86,12 +86,12 @@ impl Heap {
             propagate: None,
             phase: GcPhase::Pause,
             sweep_prev: ptr::null_mut(),
-            parked: ptr::null_mut(),
-            parked_end: ptr::null_mut(),
+            finobj: ptr::null_mut(),
+            tobefnz: ptr::null_mut(),
+            tobefnz_end: ptr::null_mut(),
+            finobj_len: 0,
+            tobefnz_len: 0,
             dropping: false,
-            finalize: crate::runtime::mem::LVec::new(mem.mem()),
-            tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
-            tobefnz_head: 0,
             puc: Default::default(),
             hooks: Default::default(),
             rules: crate::runtime::dialect::Rules::of(crate::version::LuaVersion::Lua55),
@@ -136,9 +136,9 @@ impl Drop for Heap {
         self.mem().ctx().close_pools();
         // free everything regardless of reachability, including any list still
         // detached for an in-flight incremental sweep
-        // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `fixed` and the held strings hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
+        // SAFETY: the heap is being dropped, so nothing uses its objects any more; the object lists and the held strings hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
         unsafe {
-            for mut cur in [self.all, self.fixed, self.parked] {
+            for mut cur in self.object_lists() {
                 while !cur.is_null() {
                     let next = (*cur).next;
                     self.free_obj_closing(cur);

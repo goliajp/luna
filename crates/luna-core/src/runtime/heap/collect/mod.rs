@@ -59,7 +59,7 @@ impl Heap {
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
-            scan: [self.all, self.parked],
+            scan: self.marked_lists(),
             weak: Vec::new(),
             ephemeron: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),
@@ -101,10 +101,7 @@ impl Heap {
     pub(crate) fn mark_from(&mut self, m: &mut Marker) {
         // objects already queued for finalization but not yet run must stay
         // alive until the VM calls their `__gc` (they may be unreachable now).
-        for &h in self.tobefnz_live() {
-            // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_tobefnz`)
-            unsafe { m.header(h) };
-        }
+        self.mark_tobefnz(m);
         drain_marker(m);
         // the threads it did not reach are known now (PUC `remarkupvals`),
         // and the rest is the atomic step's
@@ -300,7 +297,7 @@ impl Heap {
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
-            scan: [self.all, self.parked],
+            scan: self.marked_lists(),
             weak: std::mem::take(&mut prop.weak),
             ephemeron: std::mem::take(&mut prop.ephemeron),
             no_ephemeron: prop.no_ephemeron,
