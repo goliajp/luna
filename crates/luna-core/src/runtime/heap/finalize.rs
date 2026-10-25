@@ -44,12 +44,11 @@ impl Heap {
                 // SAFETY: `h` is the allocated header read above; only its flag
                 // byte is written
                 unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
-                // 5.1 moves it off the list it sweeps until its finalizer
-                // runs (`tmudata`), which `DEFERRED` stands for there
-                if self.gc_event_51.is_some() {
-                    // SAFETY: as above
-                    unsafe { (*h).flags |= DEFERRED };
-                }
+                // PUC moves it off the list it sweeps until its finalizer
+                // runs (5.1 `tmudata`, later `tobefnz`), which `DEFERRED`
+                // stands for
+                // SAFETY: as above
+                unsafe { (*h).flags |= DEFERRED };
                 // SAFETY: as above
                 dead += unsafe { self.puc_objsize(h) } as i64;
                 self.queue_to_finalize(h);

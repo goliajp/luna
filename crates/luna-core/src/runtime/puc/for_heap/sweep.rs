@@ -104,7 +104,9 @@ impl Heap {
                 // one waiting for its finalizer is on 5.1's `tmudata`
                 cls & UNLISTED == 0 && !own && f & DEFERRED == 0
             } else {
-                (f & FIN) | (sub & UNCOUNTED) | (cls & UNLISTED) == 0
+                // one waiting for its finalizer is on `tobefnz`; luna's own
+                // natives are no objects of PUC's
+                (f & (FIN | DEFERRED)) | (sub & UNCOUNTED) | (cls & (UNLISTED | LUNA_ONLY)) == 0
             }
         }
     }
