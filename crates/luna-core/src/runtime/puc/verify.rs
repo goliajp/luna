@@ -167,10 +167,12 @@ impl Heap {
                 }
                 _ => (*h).is_uncounted(),
             };
-            let pending51 = d51 && (*h).flags() & DEFERRED != 0;
+            // due for its finalizer: on `tobefnz` (5.1 `tmudata`), or put
+            // back where the sweep, which counts no such object, moves it
+            let pending = (*h).flags() & DEFERRED != 0;
             if (if d51 { own51 } else { (*h).is_uncounted() })
                 || (*h).flags() & FIN != 0 && !d51
-                || pending51
+                || pending
             {
                 return false;
             }

@@ -273,3 +273,4 @@ fn intern_resurrects_dead_white_short_string() {
 }
 
 mod mark;
+mod parked;

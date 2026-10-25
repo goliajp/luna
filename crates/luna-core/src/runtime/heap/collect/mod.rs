@@ -59,7 +59,7 @@ impl Heap {
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
-            scan: self.all,
+            scan: [self.all, self.parked],
             weak: Vec::new(),
             ephemeron: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),
@@ -300,7 +300,7 @@ impl Heap {
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
-            scan: self.all,
+            scan: [self.all, self.parked],
             weak: std::mem::take(&mut prop.weak),
             ephemeron: std::mem::take(&mut prop.ephemeron),
             no_ephemeron: prop.no_ephemeron,

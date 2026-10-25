@@ -82,7 +82,7 @@ fn a_gray_stack_that_cannot_grow_still_marks_everything() {
 }
 
 /// The objects on `all` in list order.
-fn list_order(heap: &Heap) -> Vec<usize> {
+pub(super) fn list_order(heap: &Heap) -> Vec<usize> {
     let mut out = Vec::new();
     let mut cur = heap.all;
     while !cur.is_null() {

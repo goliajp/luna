@@ -9,7 +9,7 @@ impl Heap {
     /// object lists, and not one a pending sweep frees. Walks every object;
     /// for checks tests turn on.
     pub(crate) fn holds_live(&self, h: *const GcHeader) -> bool {
-        for head in [self.all, self.fixed] {
+        for head in [self.all, self.fixed, self.parked] {
             let mut cur = head;
             while !cur.is_null() {
                 if std::ptr::eq(cur, h) {
