@@ -51,7 +51,7 @@ fn check(dialect: &str, jit: &[bool]) {
 
 #[test]
 fn steps_5_1() {
-    check("5.1", &[false]);
+    check("5.1", &[false, true]);
 }
 
 #[test]

@@ -106,10 +106,11 @@ pub(super) fn rw_ranges(inst: luna_core::vm::isa::Inst) -> ([(u32, u32); 3], [(u
         Op::EqI | Op::LtI | Op::LeI | Op::GtI | Op::GeI => (r1(a), w0),
         Op::Unm | Op::BNot | Op::Not | Op::Len => (r1(b), w1(a)),
         // R[A] := concat(R[A..A+B-1]); with `k`, R[A] := concat(R[C..C+B-1]),
-        // the result left in R[C] too
+        // the result left in R[C] too, and a number among the operands a
+        // string now
         Op::Concat => {
             let (first, out) = inst.concat_operands();
-            ([(first, b), none, none], [one(first), one(out)])
+            ([(first, b), none, none], [(first, b), one(out)])
         }
         Op::Close | Op::Tbc => (r0, w0),
         Op::Jmp | Op::JmpClose | Op::JmpCloseBack | Op::ExtraArg => (r0, w0),

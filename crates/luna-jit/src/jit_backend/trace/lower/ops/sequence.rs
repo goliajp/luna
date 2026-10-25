@@ -148,6 +148,24 @@ pub(super) fn emit_sequence_op<E: Emit>(
                 lw.bcx.def_var(regs[r], result_raw);
                 lw.current_kinds[off + r] = RegKind::Str;
             }
+            // the other operands as the concat left them: a number among
+            // them is a string now (`tostring` converts it in place), which
+            // the stack holds alive as PUC's does
+            for slot in a_us + 1..a_us + n_operands {
+                let k = lw.current_kinds[off + slot];
+                if !matches!(k, RegKind::Int | RegKind::Float | RegKind::Unknown)
+                    || slot == out as usize
+                {
+                    continue;
+                }
+                let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
+                let inst = lw.bcx.ins().call(stack_load_ref, &[slot_arg]);
+                let raw = lw.bcx.inst_results(inst)[0];
+                lw.bcx.def_var(regs[slot], raw);
+                if k != RegKind::Unknown {
+                    lw.current_kinds[off + slot] = RegKind::Str;
+                }
+            }
             gc_due_exit(lw, pl, i, rop.pc + 1);
         }
         _ => unreachable!("routed by emit_op"),
