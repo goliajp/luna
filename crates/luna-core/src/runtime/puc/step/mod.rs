@@ -116,6 +116,16 @@ pub(crate) fn gc_steps_to_pause<H: StepHost + ?Sized>(h: &mut H) -> Result<(), L
     Ok(())
 }
 
+/// 5.3 on, a full collection first runs the finalizers left from a cycle
+/// whose finalizer raised, to its pause (`luaC_runtilstate(L,
+/// bitmask(GCSpause))` from `GCScallfin`), before its own cycle.
+pub(crate) fn gc_finish_finalizers<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+    if h.heap().puc.pace.state() == St::CallFin {
+        gc_steps_to_pause(h)?;
+    }
+    Ok(())
+}
+
 /// The instrumented PUC that `LUNA_GC_NOAUTO` compares with skips every
 /// `luaC_step`, the ones `lua_gc` asks for too; 5.2's `lua_gc` runs
 /// `luaC_forcestep`, which it does not skip.

@@ -116,6 +116,7 @@ impl Vm {
             if self.heap.full_calls_pending_first() {
                 self.call_all_pending(true)?;
             } else {
+                crate::runtime::puc::step::gc_finish_finalizers(self)?;
                 self.clear_dead_stack();
             }
             freed = self.full_collect();
