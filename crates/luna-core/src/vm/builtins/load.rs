@@ -1,9 +1,12 @@
 //! `load` and 5.1 `loadstring`.
 
 use super::*;
+use crate::runtime::puc::Deferred;
 use crate::runtime::{Gc, LuaStr};
 
+mod mode;
 mod reader;
+use mode::{before_error, mode_refusal};
 use reader::{Phase, ReaderSlot, next_piece};
 
 /// `load`. 5.1 only loads from a reader function (`loadstring` takes the
@@ -86,6 +89,17 @@ fn read_and_load(
     mode: Option<&[u8]>,
 ) -> Result<u32, LuaError> {
     let fail = |vm: &mut Vm, msg: Value| vm.nat_ret(a.fs, &[Value::Nil, msg]);
+    // an error in `lua_load` past its start: what the reader's calls
+    // counted is counted where they ran, then `luaD_protectedparser`'s
+    // `luaD_pcall` caught the error and shrank the stack
+    let caught = |vm: &mut Vm, msg: Value, splices: &mut Vec<(u32, Deferred)>| {
+        let msg = match before_error(vm, splices) {
+            Ok(()) => msg,
+            Err(e) => e.0,
+        };
+        vm.shrink_caught_error();
+        vm.nat_ret(a.fs, &[Value::Nil, msg])
+    };
     let mut rs = ReaderSlot::new(vm, a)?;
     if let Err(e) = vm.host_load_begin() {
         return fail(vm, e.0);
@@ -95,7 +109,11 @@ fn read_and_load(
     let counted = vm.heap.counting();
     let mut splices = Vec::new();
     let mut fed = 0u32;
-    let mut spliced = |vm: &mut Vm, rs: &mut ReaderSlot, at: u32, phase: Phase| {
+    let spliced = |vm: &mut Vm,
+                   rs: &mut ReaderSlot,
+                   splices: &mut Vec<(u32, Deferred)>,
+                   at: u32,
+                   phase: Phase| {
         let mark = counted.then(|| vm.heap.reader_call_begins());
         let r = next_piece(vm, reader, rs, phase, name);
         if let Some(m) = mark {
@@ -103,17 +121,17 @@ fn read_and_load(
         }
         r
     };
-    let mut first = match spliced(vm, &mut rs, 0, Phase::Start) {
+    let mut first = match spliced(vm, &mut rs, &mut splices, 0, Phase::Start) {
         Ok(p) => p,
-        Err(msg) => return fail(vm, msg),
+        Err(msg) => return caught(vm, msg, &mut splices),
     };
     // 5.1 peeks at the first character and then reads it again, so a
     // reader that signals the end at once is asked a second time
     // (from the scanner, the main function open)
     if first.is_none() && vm.version() == LuaVersion::Lua51 {
-        first = match spliced(vm, &mut rs, 0, Phase::Text(1, b"")) {
+        first = match spliced(vm, &mut rs, &mut splices, 0, Phase::Text(1, b"")) {
             Ok(p) => p,
-            Err(msg) => return fail(vm, msg),
+            Err(msg) => return caught(vm, msg, &mut splices),
         };
     }
     let first = first.unwrap_or_default();
@@ -143,21 +161,22 @@ fn read_and_load(
             ) {
                 Ok(Some(p)) if p.len() > budget.saturating_sub(buf.len()) => {
                     let m = vm.mem_err().0;
-                    return fail(vm, m);
+                    return caught(vm, m, &mut splices);
                 }
                 Ok(Some(p)) => {
                     if let Err(o) = buf.extend_from_slice(&p) {
                         let m = LuaError::from(o).0;
-                        return fail(vm, m);
+                        return caught(vm, m, &mut splices);
                     }
                 }
                 Ok(None) => break,
-                Err(msg) => return fail(vm, msg),
+                Err(msg) => return caught(vm, msg, &mut splices),
             }
         }
         return load_chunk(vm, a, &buf, ChunkName::Bytes(name), mode);
     };
-    if let Some(m) = mode_refusal(vm, mode, false)? {
+    if let Some(m) = mode_refusal(vm, mode, false, &mut splices)? {
+        vm.shrink_caught_error();
         return fail(vm, m);
     }
     let mut failed = None;
@@ -165,6 +184,7 @@ fn read_and_load(
     let parsed = text.parse_open(first, &mut |buf, open, src| match spliced(
         vm,
         &mut rs,
+        &mut splices,
         fed,
         Phase::Text(open, src),
     ) {
@@ -180,32 +200,10 @@ fn read_and_load(
         }
     });
     if let Some(msg) = failed {
-        return fail(vm, msg);
+        return caught(vm, msg, &mut splices);
     }
     let r = vm.load_parsed_spliced(parsed, name, None, splices);
     loaded(vm, a, r, name)
-}
-
-/// PUC `checkmode`: the message `load` returns when `mode` does not allow
-/// a binary or text chunk.
-fn mode_refusal(vm: &mut Vm, mode: Option<&[u8]>, binary: bool) -> Result<Option<Value>, LuaError> {
-    // `strchr`: the mode is a C string, so it ends at the first NUL.
-    let Some(mode) = mode.map(|m| &m[..m.iter().position(|&c| c == 0).unwrap_or(m.len())]) else {
-        return Ok(None);
-    };
-    let kind = if binary { b'b' } else { b't' };
-    if mode.contains(&kind) {
-        return Ok(None);
-    }
-    let what: &[u8] = if binary { b"binary" } else { b"text" };
-    let msg = vm.concat_str(&[
-        b"attempt to load a ",
-        what,
-        b" chunk (mode is '",
-        mode,
-        b"')",
-    ])?;
-    Ok(Some(msg))
 }
 
 /// Compile `src` as chunk `name` and return `load`'s results: the function,
@@ -224,7 +222,8 @@ fn load_chunk(
         ChunkName::Str(s) => (s.as_bytes(), Some(*s)),
     };
     let binary = crate::vm::dump::is_binary_chunk(src);
-    if let Some(m) = mode_refusal(vm, mode, binary)? {
+    if let Some(m) = mode_refusal(vm, mode, binary, &mut Vec::new())? {
+        vm.shrink_caught_error();
         return vm.nat_ret(a.fs, &[Value::Nil, m]);
     }
     let r = vm.load_named(src, name, name_str);

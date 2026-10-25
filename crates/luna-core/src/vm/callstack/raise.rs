@@ -102,7 +102,7 @@ impl Vm {
 
     /// The pcall (`Some(None)`) or xpcall (`Some(Some(handler))`) that will
     /// catch an error raised now, if any is in reach.
-    fn nearest_catcher(&self) -> Option<Option<Value>> {
+    pub(super) fn nearest_catcher(&self) -> Option<Option<Value>> {
         let floor = self.msgh_floor.min(self.frames.len());
         self.frames[floor..]
             .iter()
@@ -229,10 +229,7 @@ impl Vm {
         if self.version() < LuaVersion::Lua54 || e.line != 0 || e.msg != b"C stack overflow" {
             return None;
         }
-        match self.nearest_catcher() {
-            Some(Some(handler)) => Some(self.call_msgh(handler, msg)),
-            _ => None,
-        }
+        Some(self.load_error_handled(msg))
     }
 
     /// The slot `luaG_errormsg` runs the message handler at: where the
