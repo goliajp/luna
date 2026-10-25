@@ -91,7 +91,9 @@ pub(super) fn atomic_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
     h.heap().puc.pace.estimate = h.heap().puc.pace.trav + work;
     h.heap().puc.pace.enter(St::SweepString);
     h.heap().puc.pace.strt_swept = 0;
-    work + swept * sweepcost_52(&s)
+    // `entersweep` counts `sweeptolive` on `finobj` too: one step, its
+    // objects all live once the dead were separated (or none at all)
+    work + (swept + 1) * sweepcost_52(&s)
 }
 
 /// 5.2's `luaC_changemode` into generational mode: the cycle under way
