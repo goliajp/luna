@@ -31,9 +31,9 @@ pub struct GcHeader {
     ///                  both cases to the slow path. Every colour change goes
     ///                  through `with_slow`, which keeps it in step
     ///   bit 4 FINALIZED — already enqueued or finalized once this lifetime
-    ///   bit 5 DEFERRED  — 5.3 cycle-finalize deferral marker (gc.lua :502)
+    ///   bit 5 (unused)
     ///   bit 6 LEAF   — nothing to trace (a string, a native without upvalues)
-    ///   bit 7 FIN    — registered for `__gc` (tracked in `finalize`)
+    ///   bit 7 FIN    — a finalizer to run (on `finobj` or `tobefnz`)
     /// Gray = no white bits, no BLACK; that is the in-stack state between the
     /// time a Marker visits an object and the time it traces it.
     pub(in crate::runtime::heap) flags: u8,
@@ -57,16 +57,12 @@ pub(in crate::runtime) const BLACK: u8 = 4;
 pub(in crate::runtime) const WHITE_BITS: u8 = WHITE0 | WHITE1;
 pub(in crate::runtime) const COLOR_BITS: u8 = WHITE_BITS | BLACK;
 
-/// registered for finalization (`__gc`): the object is tracked in `finalize`.
+/// the object has a finalizer to run: on `finobj` or `tobefnz` (PUC
+/// `tofinalize`; 5.1: a userdata with a metatable, on `all`)
 pub(in crate::runtime) const FIN: u8 = 128;
 /// finalization already scheduled/run: never finalize this object again (PUC
 /// FINALIZEDBIT). Set when it moves to `tobefnz`.
 pub(in crate::runtime) const FINALIZED: u8 = 16;
-/// resurrected once because a reference cycle through a coroutine kept the
-/// finalizable alive (PUC 5.3 gc.lua :502 "two collections are needed to
-/// break cycle"). The next time the object is found unreachable it is moved
-/// to `tobefnz` without re-deferring.
-pub(in crate::runtime) const DEFERRED: u8 = 32;
 /// the object has no children; fixed at creation
 pub(in crate::runtime) const LEAF: u8 = 64;
 
@@ -151,11 +147,15 @@ pub struct Heap {
     all: *mut GcHeader,
     /// PUC `fixedgc`: objects never swept, freed with the heap
     fixed: *mut GcHeader,
-    /// the objects due for their finalizers that a sweep took off `all`
-    /// (see `parked.rs`)
-    parked: *mut GcHeader,
-    /// the last of them
-    parked_end: *mut GcHeader,
+    /// PUC `finobj`: from 5.2 on, the objects with finalizers, newest
+    /// first (see `finobj.rs`)
+    finobj: *mut GcHeader,
+    /// PUC `tobefnz` (5.1 `tmudata`): the objects whose finalizers are
+    /// due, the next one first, and the last
+    tobefnz: *mut GcHeader,
+    tobefnz_end: *mut GcHeader,
+    finobj_len: usize,
+    tobefnz_len: usize,
     /// the head of `all` at the last safe point; objects before it are newer
     young: *mut GcHeader,
     /// `young` as a check where the stack held every live value left it
@@ -175,14 +175,6 @@ pub struct Heap {
     gray: mark::GrayStack,
     /// objects a back barrier sent to gray (PUC `grayagain`)
     grayagain: mark::GrayStack,
-    /// objects registered for finalization (a live `__gc` metamethod was set);
-    /// parallel-tracked — ownership stays on `all` (PUC `finobj`).
-    finalize: crate::runtime::mem::LVec<*mut GcHeader>,
-    /// dead finalizables resurrected this cycle, awaiting their `__gc` call by
-    /// the VM (PUC `tobefnz`); the entries before `tobefnz_head` were handed
-    /// out already (`take_one_tobefnz`).
-    tobefnz: crate::runtime::mem::LVec<*mut GcHeader>,
-    tobefnz_head: usize,
     /// Incremental traversal state. `Some` between `gc_start_propagate` and
     /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
     propagate: Option<PropagateState>,
@@ -254,6 +246,7 @@ mod close;
 mod collect;
 pub(crate) use collect::{Propagated, Running};
 mod finalize;
+mod finobj;
 mod for_vm;
 mod intern;
 mod list;
@@ -265,7 +258,6 @@ use self::new::make_seed;
 mod free;
 mod mark;
 mod pace;
-mod parked;
 mod sweep;
 #[cfg(feature = "gc-trace")]
 mod trace;

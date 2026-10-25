@@ -50,9 +50,13 @@ impl Heap {
 
     /// Mark the objects awaiting their finalizers (`markbeingfnz`, `marktmu`).
     pub(crate) fn mark_tobefnz(&self, m: &mut Marker) {
-        for &h in self.tobefnz_live() {
-            // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_one_tobefnz`)
-            unsafe { m.header(h) };
+        let mut h = self.tobefnz;
+        // SAFETY: `tobefnz` links allocated objects
+        unsafe {
+            while !h.is_null() {
+                m.header(h);
+                h = (*h).next;
+            }
         }
     }
 
@@ -96,7 +100,7 @@ impl Heap {
                 cur = (*cur).next;
             }
         }
-        self.whiten_parked();
+        self.whiten_fin_lists();
         self.puc_sweep_ends();
         self.phase = GcPhase::Pause;
     }

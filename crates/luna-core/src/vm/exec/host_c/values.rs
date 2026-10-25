@@ -129,7 +129,7 @@ impl Vm {
                 self.heap.barrier_back(u);
                 if mt.is_some() {
                     if self.version == LuaVersion::Lua51 {
-                        self.retry_oom(|vm| vm.heap.register_finalizable_userdata(u))?;
+                        self.heap.register_finalizable_userdata(u);
                     } else {
                         self.check_finalizer_userdata(u)?;
                     }

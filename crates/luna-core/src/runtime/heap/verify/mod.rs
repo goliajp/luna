@@ -14,18 +14,12 @@ impl Heap {
         // SAFETY: heap-owned intrusive lists; all elements are live
         // allocations.
         unsafe {
-            for mut cur in [self.all, self.fixed] {
+            for mut cur in self.object_lists() {
                 while !cur.is_null() {
                     live.insert(cur as usize);
                     cur = (*cur).next;
                 }
             }
-        }
-        for &h in &self.finalize {
-            live.insert(h as usize);
-        }
-        for &h in self.tobefnz_live() {
-            live.insert(h as usize);
         }
         live
     }
@@ -121,20 +115,14 @@ impl Heap {
         // heap's own intrusive lists; every element is a live allocation
         // until free_obj unlinks it.
         unsafe {
-            for mut cur in [self.all, self.fixed] {
+            for mut cur in self.object_lists() {
                 while !cur.is_null() {
                     live.insert(cur as usize);
                     cur = (*cur).next;
                 }
             }
-            for &h in &self.finalize {
-                live.insert(h as usize);
-            }
             // and what a load made that PUC has not yet
             live.extend(self.puc_hook_unborn().map(|h| h as usize));
-            for &h in self.tobefnz_live() {
-                live.insert(h as usize);
-            }
             let is_live = |v: Value| -> bool {
                 match value_header(v) {
                     None => true,
@@ -145,7 +133,7 @@ impl Heap {
             // part not swept yet; a dangling reference can live in either
             // while the mutator runs between sweep steps.
             let new_white = self.current_white;
-            for head in [self.all, self.parked] {
+            for head in self.marked_lists() {
                 let mut cur = head;
                 while !cur.is_null() {
                     // Skip dead objects not swept yet:
@@ -187,7 +175,7 @@ impl Heap {
         let mut m = Marker {
             stack: Default::default(),
             overflow: false,
-            scan: [std::ptr::null_mut(); 2],
+            scan: [std::ptr::null_mut(); 3],
             weak: Vec::new(),
             ephemeron: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),

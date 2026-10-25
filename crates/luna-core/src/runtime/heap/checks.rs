@@ -9,7 +9,7 @@ impl Heap {
     /// object lists, and not one a pending sweep frees. Walks every object;
     /// for checks tests turn on.
     pub(crate) fn holds_live(&self, h: *const GcHeader) -> bool {
-        for head in [self.all, self.fixed, self.parked] {
+        for head in self.object_lists() {
             let mut cur = head;
             while !cur.is_null() {
                 if std::ptr::eq(cur, h) {
@@ -39,15 +39,12 @@ impl Heap {
             let (ok, flags) = unsafe { (slow_consistent(&*h), (*h).flags) };
             assert!(ok, "[slow-bit] {ctx}: object {h:p} flags {flags:#x}");
         };
-        for mut cur in [self.all, self.fixed] {
+        for mut cur in self.object_lists() {
             while !cur.is_null() {
                 check(cur);
                 // SAFETY: as above
                 cur = unsafe { (*cur).next };
             }
-        }
-        for &h in self.finalize.iter().chain(self.tobefnz_live()) {
-            check(h);
         }
     }
 }

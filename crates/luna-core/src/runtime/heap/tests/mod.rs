@@ -272,5 +272,5 @@ fn intern_resurrects_dead_white_short_string() {
     drop(heap);
 }
 
+mod finobj;
 mod mark;
-mod parked;

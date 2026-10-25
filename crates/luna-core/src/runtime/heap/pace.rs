@@ -25,11 +25,11 @@ impl Heap {
     /// happen in the caller's bookkeeping).
     ///
     /// The walk visits the `all` list (in a sweep, with the dead objects
-    /// not yet swept), the never-swept fixed list and the parked objects
-    /// due for their finalizers, so a mid-cycle
+    /// not yet swept), the never-swept fixed list and the objects with
+    /// finalizers, so a mid-cycle
     /// invocation reports the same total as [`Heap::live_objects`].
     pub fn walk_objects(&self, mut visit: impl FnMut(ObjTag)) {
-        for head in [self.all, self.fixed, self.parked] {
+        for head in self.object_lists() {
             let mut cur = head;
             while !cur.is_null() {
                 // SAFETY: pointers come from the runtime's

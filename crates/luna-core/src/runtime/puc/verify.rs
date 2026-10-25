@@ -149,7 +149,7 @@ impl Heap {
 
 impl Heap {
     /// Whether PUC keeps the object behind `h` on the list it sweeps
-    /// (`allgc`, 5.1 `rootgc`): one of PUC's, with no finalizer pending,
+    /// (`allgc`, 5.1 `rootgc`): one of PUC's on `all`,
     /// and (`strt`) no string the string table holds.
     ///
     /// # Safety
@@ -167,13 +167,7 @@ impl Heap {
                 }
                 _ => (*h).is_uncounted(),
             };
-            // due for its finalizer: on `tobefnz` (5.1 `tmudata`), or put
-            // back where the sweep, which counts no such object, moves it
-            let pending = (*h).flags() & DEFERRED != 0;
-            if (if d51 { own51 } else { (*h).is_uncounted() })
-                || (*h).flags() & FIN != 0 && !d51
-                || pending
-            {
+            if if d51 { own51 } else { (*h).is_uncounted() } {
                 return false;
             }
             match (*h).tag {
