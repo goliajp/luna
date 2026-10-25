@@ -234,11 +234,12 @@ impl Heap {
 
     /// Take the first object awaiting its `__gc` call (PUC
     /// `udata2finalize`); the caller roots it until the call is made.
+    #[inline]
     pub(crate) fn take_one_tobefnz(&mut self) -> Option<crate::runtime::Value> {
         let &h = self.tobefnz.get(self.tobefnz_head)?;
         self.tobefnz_head += 1;
         // SAFETY: a queued object is allocated until its finalizer has run
-        self.finalizer_taken(unsafe { Gc::from_ptr(h) });
+        self.finalizer_taken(unsafe { Gc::from_ptr_unchecked(h) });
         let n = self.tobefnz.len();
         if self.tobefnz_head == n {
             self.tobefnz.clear();
