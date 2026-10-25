@@ -86,7 +86,7 @@ impl Marker {
             // SAFETY: as above
             unsafe { self.header(f.closure) };
             for &uv in cl.upvals().iter() {
-                self.mark(uv);
+                self.upval(uv);
             }
             let mut todo = vec![cl.proto];
             while let Some(p) = todo.pop() {

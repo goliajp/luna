@@ -17,6 +17,7 @@ pub(crate) fn atomic<H: StepHost + ?Sized>(h: &mut H) -> (i64, i64) {
         run.main_ci = 0;
     }
     let mut m = h.heap().loan_marker();
+    m.enter_atomic();
     if !rules.tobefnz_at_restart {
         h.heap().mark_tobefnz(&mut m);
     }
@@ -29,6 +30,7 @@ pub(crate) fn atomic<H: StepHost + ?Sized>(h: &mut H) -> (i64, i64) {
         h.mark_roots(&mut m, true);
         0
     };
+    h.heap().remark_open_upvals(&mut m);
     h.heap().stash_marker(m);
     h.marking_ends();
     let (work, swept) = h.heap().gc_finish_atomic_work(Some(run));

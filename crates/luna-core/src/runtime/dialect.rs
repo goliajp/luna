@@ -38,7 +38,6 @@ pub(crate) struct Rules {
     refinalize: bool,
     signed_zero_keys: bool,
     hash51: bool,
-    late_thread_cycle_finalize: bool,
 }
 
 impl Rules {
@@ -60,7 +59,6 @@ impl Rules {
             // 5.3 finalizes a table in a cycle through an unreachable
             // coroutine one collection after it finds it unreachable
             // (gc.lua :502); 5.4 and 5.5 in the same one (gc.lua :544)
-            late_thread_cycle_finalize: matches!(d, Dialect::L53),
         }
     }
 
@@ -90,11 +88,6 @@ impl Rules {
     #[inline]
     pub(crate) fn hash51(self) -> bool {
         self.hash51
-    }
-
-    #[inline]
-    pub(crate) fn late_thread_cycle_finalize(self) -> bool {
-        self.late_thread_cycle_finalize
     }
 
     /// 5.2 checks for a collection on every call (`luaD_precall`).

@@ -48,7 +48,7 @@ impl LuaClosure {
         }
         m.mark(self.proto);
         for &uv in self.upvals().iter() {
-            m.mark(uv);
+            m.upval(uv);
         }
     }
 }

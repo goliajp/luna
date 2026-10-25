@@ -41,10 +41,27 @@ impl Heap {
                 }
                 ObjTag::Closure => {
                     self.puc_freed(&*(h as *const LuaClosure));
+                    // the others' upvalues are objects, maybe freed already
+                    if self.puc_rules().upvals_refcounted {
+                        for &uv in (*(h as *const LuaClosure)).upvals() {
+                            self.upval_let_go(uv.as_ptr());
+                        }
+                    }
                     (*(h as *mut LuaClosure)).free_overflow(self.mem());
                     self.free_block(h as *mut LuaClosure);
                 }
                 ObjTag::Upvalue => {
+                    // one still open off its thread's list (PUC `freeupval`),
+                    // that thread not freed yet: freeing one closes these
+                    // (when the heap is dropped, lists and threads go anyway)
+                    if let UpvalState::Open {
+                        thread: Some(co), ..
+                    } = (*(h as *const Upvalue)).state
+                        && !self.dropping
+                    {
+                        let uv = h as *mut Upvalue;
+                        co.as_mut().open_upvals.retain(|&(_, u)| u.as_ptr() != uv);
+                    }
                     self.puc_freed(&*(h as *const Upvalue));
                     self.free_block(h as *mut Upvalue);
                 }
@@ -58,13 +75,7 @@ impl Heap {
                     }
                 }
                 ObjTag::Coro => {
-                    // an open upvalue keeps its thread alive, and the
-                    // marking took the dead ones off its list
-                    debug_assert!(
-                        self.dropping
-                            || !self.puc_rules().open_upvals_on_threads
-                            || (*(h as *const crate::runtime::Coro)).open_upvals.is_empty()
-                    );
+                    self.upvals_of_freed_thread(h as *mut crate::runtime::Coro);
                     self.puc_freed(&*(h as *const crate::runtime::Coro));
                     self.free_block(h as *mut crate::runtime::Coro);
                 }

@@ -225,7 +225,11 @@ impl Heap {
         proto: Gc<Proto>,
         upvals: &[Gc<Upvalue>],
     ) -> Result<Gc<LuaClosure>, Oom> {
-        self.try_new_closure_of(proto, upvals.iter().copied())
+        let g = self.try_new_closure_of(proto, upvals.iter().copied())?;
+        for &uv in upvals {
+            self.upval_held(uv);
+        }
+        Ok(g)
     }
 
     /// [`Heap::try_new_closure`] over the upvalues `upvals` yields.

@@ -135,11 +135,7 @@ impl Vm {
                 });
                 uv = made?;
             }
-            // SAFETY: `nc` was made just now and only this function holds a
-            // reference into it; it is white, the collector having run to
-            // its pause at most since (an emergency collection), so the
-            // store needs no barrier
-            unsafe { nc.as_mut() }.upvals_mut()[i] = uv;
+            self.heap.put_upval(nc, i, uv);
         }
         Ok(())
     }
@@ -163,12 +159,9 @@ impl Vm {
         });
         self.heap.counting_on(off);
         let uv = uv?;
-        // SAFETY: `cl` is a live closure (see `Gc`), and no reference into
-        // it is held across this write
-        unsafe { cl.as_mut() }.upvals_mut()[idx] = uv;
         // a black closure takes the new cell as PUC's takes the table
         // (`luaC_objbarrier`)
-        self.heap.barrier_back(cl);
+        self.heap.set_closure_upval(cl, idx, uv);
         Ok(())
     }
 }

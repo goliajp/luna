@@ -41,36 +41,6 @@ impl Heap {
                     queued = true;
                     continue;
                 }
-                // Two-pass cycle-finalize (PUC 5.3 gc.lua :502): when a
-                // finalizable table holds onto an unreachable coroutine, the
-                // cycle (table → coroutine.stack → closure → table) keeps the
-                // mark phase from reaching the table even though it is still
-                // logically alive for one more GC pass. PUC's mark-sweep wakes
-                // it via `markbeingfnz` *after* sweeping, so the actual `__gc`
-                // call lands one cycle later. luna mirrors this by resurrecting
-                // the table on the first sighting and only enqueuing it for
-                // `__gc` on the second.
-                let in_thread_cycle = self.rules.late_thread_cycle_finalize()
-                    // SAFETY: `h` is a listed header, still allocated (see
-                    // above); only its tag byte is read
-                    && unsafe { (*h).tag } == ObjTag::Table
-                    && {
-                        let t = h as *mut Table;
-                        // SAFETY: the tag says `h` heads a table, still
-                        // allocated (see above); the call only reads it
-                        unsafe { (*t).refs_contain_unmarked_coro() }
-                    };
-                // SAFETY: `h` is a listed header, still allocated (see above);
-                // only its flag byte is read
-                let already_deferred = unsafe { (*h).flags & DEFERRED != 0 };
-                if in_thread_cycle && !already_deferred {
-                    // SAFETY: `h` is the allocated header read above; only its
-                    // flag byte is written
-                    unsafe { (*h).flags |= DEFERRED };
-                    // SAFETY: `h` is the allocated header read above
-                    unsafe { m.header(h) };
-                    continue;
-                }
                 // SAFETY: `h` is the allocated header read above; only its flag
                 // byte is written
                 unsafe { (*h).flags = ((*h).flags & !(FIN | DEFERRED)) | FINALIZED };
@@ -87,10 +57,6 @@ impl Heap {
                 queued = true;
                 // SAFETY: `h` is the allocated header read above
                 unsafe { m.header(h) };
-            } else {
-                // SAFETY: `h` is the allocated header read above; only its flag
-                // byte is written
-                unsafe { (*h).flags &= !DEFERRED };
             }
         }
         // drop the queued ones in place: the survivors keep their order,

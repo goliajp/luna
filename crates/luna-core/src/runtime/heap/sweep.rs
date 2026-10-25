@@ -39,7 +39,17 @@ impl Heap {
                     self.puc_sweep_kept(cur);
                 }
             }
-            self.all = head;
+            // the upvalues a freed thread closed went on the list's head
+            // meanwhile (5.1, 5.2), in front of what was swept
+            let added = std::mem::replace(&mut self.all, head);
+            if !added.is_null() {
+                let mut tail = added;
+                while !(*tail).next.is_null() {
+                    tail = (*tail).next;
+                }
+                (*tail).next = head;
+                self.all = added;
+            }
         }
         self.puc_sweep_ends();
         self.live -= freed;

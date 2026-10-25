@@ -114,6 +114,8 @@ pub(in crate::runtime) struct PropagateState {
     ephemeron: Vec<*mut Table>,
     cached_protos: Vec<*mut Proto>,
     no_ephemeron: bool,
+    /// the atomic step has begun (PUC `GCSinsideatomic`)
+    atomic: bool,
 }
 
 /// luna's incremental mark-sweep GC heap (one per Vm): owns every [`Gc<T>`]
@@ -262,8 +264,10 @@ mod pace;
 mod sweep;
 #[cfg(feature = "gc-trace")]
 mod trace;
+mod upvals;
 pub(crate) use self::mark::Marker;
 use self::mark::{blacken, drain_marker, survived_mark, weak_key_alive};
+pub(in crate::runtime) use upvals::{HELD, ON_THREAD};
 
 #[cfg(feature = "gc-verify")]
 pub(crate) mod verify;

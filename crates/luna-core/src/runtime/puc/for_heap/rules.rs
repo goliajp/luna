@@ -84,6 +84,13 @@ pub(in crate::runtime) struct HeapRules {
     /// 5.1 and 5.2 keep an open upvalue on its thread, off the list, and
     /// put it at the list's head when it closes
     pub(in crate::runtime) open_upvals_on_threads: bool,
+    /// 5.3's upvalues are no collectable objects: never on the list, each
+    /// counting the closures that hold it
+    pub(in crate::runtime) upvals_refcounted: bool,
+    /// what a new open upvalue's `next` takes when it is kept off the
+    /// list (null: it goes on the list), and a new closed one's
+    pub(in crate::runtime) open_upval_mark: *mut GcHeader,
+    pub(in crate::runtime) closed_upval_mark: *mut GcHeader,
 }
 
 impl HeapRules {
@@ -131,6 +138,17 @@ impl HeapRules {
             strt_grows_strictly: d <= Dialect::L53,
             sweeps_string_table: matches!(d, Dialect::L51 | Dialect::L52),
             open_upvals_on_threads: matches!(d, Dialect::L51 | Dialect::L52),
+            upvals_refcounted: d == Dialect::L53,
+            open_upval_mark: match d {
+                Dialect::L51 | Dialect::L52 => crate::runtime::heap::ON_THREAD,
+                Dialect::L53 => crate::runtime::heap::HELD,
+                _ => ptr::null_mut(),
+            },
+            closed_upval_mark: if d == Dialect::L53 {
+                crate::runtime::heap::HELD
+            } else {
+                ptr::null_mut()
+            },
         }
     }
 

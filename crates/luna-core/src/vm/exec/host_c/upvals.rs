@@ -44,9 +44,6 @@ impl Vm {
         let (Some(_), Some(&uv)) = (f1.upvals().get(i1), f2.upvals().get(i2)) else {
             return;
         };
-        // SAFETY: `f1` is a closure the caller holds on its stack; `uv` is a
-        // separate handle read out before the borrow, which covers one store
-        unsafe { f1.as_mut() }.upvals_mut()[i1] = uv;
-        self.heap.barrier_back(f1);
+        self.heap.set_closure_upval(f1, i1, uv);
     }
 }

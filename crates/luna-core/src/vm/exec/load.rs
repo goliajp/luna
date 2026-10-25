@@ -265,10 +265,12 @@ impl Vm {
         } else {
             Value::Nil
         };
-        let mut ups = crate::runtime::mem::LVec::with_capacity(self.heap.mem(), n.max(1))?;
-        for _ in 0..n.max(1) {
-            ups.push(self.heap.try_new_upvalue(UpvalState::Closed(first))?)?;
+        // the closure first, then its upvalues (PUC `luaF_initupvals`)
+        let cl = self.heap.try_new_closure_to_fill(proto, n.max(1))?;
+        for i in 0..n.max(1) {
+            let uv = self.heap.try_new_upvalue(UpvalState::Closed(first))?;
+            self.heap.put_upval(cl, i, uv);
         }
-        Ok(self.heap.try_new_closure(proto, &ups)?)
+        Ok(cl)
     }
 }

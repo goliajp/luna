@@ -143,7 +143,8 @@ impl Coro {
                 }
             }
         }
-        if !matches!(m.dialect(), Dialect::L51 | Dialect::L52) {
+        // 5.1 to 5.3 mark an open upvalue only through its closures
+        if !matches!(m.dialect(), Dialect::L51 | Dialect::L52 | Dialect::L53) {
             for &(_, uv) in self.open_upvals.iter() {
                 m.mark(uv);
             }

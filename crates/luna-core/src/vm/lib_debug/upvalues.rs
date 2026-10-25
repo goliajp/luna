@@ -157,9 +157,7 @@ pub(super) fn d_upvaluejoin(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lua
         return Err(arg_error(vm, argn, "Lua function expected"));
     };
     let uv = f2.upvals()[(n2 - 1) as usize];
-    // SAFETY: `f1` is a Lua closure argument kept alive by its stack slot, and `check_upval` bounded `n1` by its upvalue count; `uv` is a separate handle read out before the borrow, which covers one store
-    unsafe { f1.as_mut() }.upvals_mut()[(n1 - 1) as usize] = uv;
-    // f1's upvalue slice just changed; re-gray it so the collector re-traces
-    vm.heap.barrier_back(f1);
+    // `check_upval` bounded `n1` by its upvalue count
+    vm.heap.set_closure_upval(f1, (n1 - 1) as usize, uv);
     Ok(0)
 }

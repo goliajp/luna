@@ -16,6 +16,9 @@ impl Drop for Vm {
         // heap's list) go there, for the heap to free
         let main = self.main_ctx.as_ref().map(|m| &m.open_upvals);
         for &(_, uv) in self.open_upvals.iter().chain(main.into_iter().flatten()) {
+            // SAFETY: a listed upvalue is allocated, and nothing borrows
+            // it; closed, it no longer reads the stack that goes too
+            unsafe { uv.as_mut() }.set_closed(Value::Nil);
             self.heap.upval_closed(uv);
         }
         let id = self.jit_owner_id;

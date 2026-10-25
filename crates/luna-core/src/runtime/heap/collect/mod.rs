@@ -72,6 +72,7 @@ impl Heap {
             sizer,
             quiet: Vec::new(),
             quiet_mode: false,
+            atomic: false,
             lent,
             verify: Default::default(),
         }
@@ -105,6 +106,11 @@ impl Heap {
             // SAFETY: a queued finalizable stays allocated until its `__gc` has run (`take_tobefnz`)
             unsafe { m.header(h) };
         }
+        drain_marker(m);
+        // the threads it did not reach are known now (PUC `remarkupvals`),
+        // and the rest is the atomic step's
+        m.atomic = true;
+        self.remark_open_upvals(m);
         drain_marker(m);
         // ephemeron convergence: a weak-key entry's value is reachable only if
         // the key is. Marking a value can make another key reachable, so repeat
@@ -321,6 +327,7 @@ impl Heap {
             sizer,
             quiet: std::mem::take(&mut prop.quiet),
             quiet_mode: false,
+            atomic: prop.atomic,
             lent,
             verify: Default::default(),
         }
@@ -337,6 +344,7 @@ impl Heap {
             ephemeron: m.ephemeron,
             cached_protos: m.cached_protos,
             no_ephemeron,
+            atomic: m.atomic,
         });
     }
 }

@@ -29,6 +29,7 @@ impl Heap {
             ephemeron: Vec::new(),
             cached_protos: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),
+            atomic: false,
         });
         self.loan_marker()
     }
