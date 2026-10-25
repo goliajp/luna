@@ -222,9 +222,8 @@ impl Vm {
     }
 
     /// The open lists the VM holds, lent to the collector for the end of
-    /// this marking (see `heap::open_upvals`); in an `emergency` while a
-    /// closure's upvalues are gathered the running thread's are all kept.
-    pub(crate) fn lend_open_lists(&mut self, emergency: bool) {
+    /// this marking (see `heap::open_upvals`).
+    pub(crate) fn lend_open_lists(&mut self) {
         if !self.heap.open_on_threads() {
             return;
         }
@@ -240,7 +239,6 @@ impl Vm {
             running,
             running_co,
             main,
-            keep_running: emergency && self.g.gathering,
         });
     }
 

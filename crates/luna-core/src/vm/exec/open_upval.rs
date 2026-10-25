@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::runtime::function::Upvalue;
+use crate::runtime::mem::LVec;
 
 impl Vm {
     /// The open upvalue of `slot`: listed, or (5.1 / 5.2) one a marking
@@ -33,10 +34,19 @@ impl Vm {
             Err(i) => i,
         };
         let thread = self.current;
-        let uv = self.retry_oom_gathering(|vm| vm.heap.try_new_open_upvalue(slot, thread))?;
+        let listed = self.open_upvals.len();
+        let uv = self.retry_oom(|vm| vm.heap.try_new_open_upvalue(slot, thread))?;
         // the new upvalue is young while it is not listed yet; an emergency
-        // collection meanwhile keeps the list as it is, so `i` holds
-        if let Err(e) = self.retry_oom_gathering(|vm| vm.open_upvals.insert(i, (slot, uv))) {
+        // collection meanwhile may take dead ones off the list (5.1, 5.2)
+        let at = |l: &LVec<(u32, Gc<Upvalue>)>| {
+            if l.len() == listed {
+                i
+            } else {
+                l.partition_point(|&(s, _)| s < slot)
+            }
+        };
+        if let Err(e) = self.retry_oom(|vm| vm.open_upvals.insert(at(&vm.open_upvals), (slot, uv)))
+        {
             self.heap.upval_unlisted(uv);
             return Err(e);
         }

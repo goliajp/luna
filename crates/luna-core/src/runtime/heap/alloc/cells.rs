@@ -55,6 +55,44 @@ impl Heap {
         Ok(g)
     }
 
+    /// A closure of `proto` with its `n` upvalues still to find, each
+    /// place holding a closed upvalue of nil (PUC `luaF_newLclosure`,
+    /// whose places are empty): the VM puts each upvalue in as it finds
+    /// it, the closure holding the ones found if a collection runs.
+    pub(crate) fn try_new_closure_to_fill(
+        &mut self,
+        proto: Gc<crate::runtime::function::Proto>,
+        n: usize,
+    ) -> Result<Gc<crate::runtime::function::LuaClosure>, Oom> {
+        let b = match self.blank_upval {
+            Some(b) => b,
+            None => self.make_blank_upval()?,
+        };
+        self.try_new_closure_of(proto, std::iter::repeat_n(b, n))
+    }
+
+    #[cold]
+    fn make_blank_upval(&mut self) -> Result<Gc<Upvalue>, Oom> {
+        let p = self.alloc_block::<Upvalue>()?;
+        // SAFETY: `p` is a fresh block for one `Upvalue`, which starts with
+        // its header; on the fixed list, colored neither white nor black,
+        // it is never marked or swept, made without PUC's count, and goes
+        // with the heap
+        let g = unsafe {
+            p.write(Upvalue {
+                hdr: GcHeader::new(ObjTag::Upvalue),
+                state: UpvalState::Closed(Value::Nil),
+            });
+            let h = p as *mut GcHeader;
+            (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+            (*h).next = self.fixed;
+            self.fixed = h;
+            Gc::from_ptr(p)
+        };
+        self.blank_upval = Some(g);
+        Ok(g)
+    }
+
     /// Create a userdata (an io file handle — luna's only userdata) with no
     /// metatable yet; the io library installs the shared `FILE*` metatable.
     pub fn new_userdata(&mut self, payload: UserdataPayload, writable: bool) -> Gc<Userdata> {

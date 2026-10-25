@@ -88,33 +88,6 @@ impl Vm {
         f(self).map_err(LuaError::from)
     }
 
-    /// [`Vm::retry_oom`] for what a new closure's upvalues are gathered
-    /// with: its emergency collection keeps the running thread's open
-    /// upvalues (see `CallGuards::gathering`).
-    #[inline(always)]
-    pub(crate) fn retry_oom_gathering<T>(
-        &mut self,
-        mut f: impl FnMut(&mut Vm) -> Result<T, Oom>,
-    ) -> Result<T, LuaError> {
-        match f(self) {
-            Ok(v) => self.refused_while_gathering().map(|()| v),
-            Err(o) => self.retry_oom_gathering_slow(o, f),
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn retry_oom_gathering_slow<T>(
-        &mut self,
-        o: Oom,
-        f: impl FnMut(&mut Vm) -> Result<T, Oom>,
-    ) -> Result<T, LuaError> {
-        self.g.gathering = true;
-        let r = self.retry_oom_slow(o, f);
-        self.g.gathering = false;
-        r
-    }
-
     /// Grow the running stack to at least `need` slots (new ones nil),
     /// collecting in an emergency when memory runs out (PUC
     /// `luaD_growstack`).

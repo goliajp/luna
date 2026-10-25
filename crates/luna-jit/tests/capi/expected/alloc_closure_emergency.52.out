@@ -1,0 +1,6 @@
+ok
+false: 88 true true
+0: -3964 true true
+1: -384 true true
+refused: yes
+every block freed after lua_close: yes

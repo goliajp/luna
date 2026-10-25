@@ -70,31 +70,4 @@ impl Vm {
         }
         Some(uv)
     }
-
-    /// [`Vm::closure_from_proto`] for a helper of compiled code: no
-    /// emergency collection, `None` when the closure cannot be made.
-    pub(crate) fn jit_closure_from_proto(
-        &mut self,
-        proto: Gc<crate::runtime::function::Proto>,
-        ups: &[Gc<Upvalue>],
-    ) -> Option<Gc<LuaClosure>> {
-        let cached = self.version().has_closure_cache();
-        if let Some(c) = proto.cache.get().filter(|c| {
-            cached
-                && c.upvals().len() == ups.len()
-                && c.upvals()
-                    .iter()
-                    .zip(ups)
-                    .all(|(a, b)| a.as_ptr() == b.as_ptr())
-        }) {
-            return Some(c);
-        }
-        let n = self.heap.try_new_closure(proto, ups).ok()?;
-        if cached {
-            // as the interpreter's `CLOSURE` does (`luaC_protobarrier`)
-            self.heap.barrier_back(proto);
-            proto.cache.set(Some(n));
-        }
-        Some(n)
-    }
 }
