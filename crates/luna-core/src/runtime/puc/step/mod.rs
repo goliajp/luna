@@ -20,6 +20,8 @@ mod full;
 mod host;
 mod mode;
 mod pause;
+#[cfg(test)]
+mod tests;
 pub(super) use atomic::atomic;
 use d51::*;
 use d52::*;
