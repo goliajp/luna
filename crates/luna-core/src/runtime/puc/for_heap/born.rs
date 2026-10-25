@@ -212,6 +212,9 @@ impl Born<NativeFunction> for NativeClosure {
         } else if heap.puc.rules.c_function_is_object(how.nup) {
             let size = heap.puc_size(PucObj::CClosure(how.nup));
             heap.acct_new(g.hdr(), PucKind::CClosure, size);
+        } else {
+            // a light value: no object a sweep of PUC's meets
+            heap.set_counted(g.hdr(), false);
         }
     }
 }
