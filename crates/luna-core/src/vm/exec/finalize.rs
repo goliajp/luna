@@ -145,12 +145,30 @@ impl Vm {
             && !matches!(gc, Value::Closure(_) | Value::Native(_))
             && self.get_mm(gc, Mm::Call).is_nil()
         {
+            // `luaG_callerror`: the name part is a string of its own
+            // (`formatvarinfo`), then `typeerror`'s message
+            use crate::runtime::puc::fmt::FmtArg;
             let tn = self.obj_typename(gc);
-            let msg = format!("attempt to call a {tn} value (metamethod '__gc')");
-            let v = match self.alloc_str(msg.as_bytes()) {
-                Ok(s) => Value::Str(s),
-                Err(e) => e.0,
-            };
+            let base = self.lib_roots.mark();
+            let v = self
+                .pushfstring(
+                    b" (%s '%s')",
+                    &[FmtArg::S(b"metamethod"), FmtArg::S(b"__gc")],
+                )
+                .and_then(|extra| {
+                    // on the stack while the message is made
+                    self.lib_roots.push(Value::Str(extra));
+                    let args = [
+                        FmtArg::S(b"call"),
+                        FmtArg::S(tn.as_bytes()),
+                        FmtArg::S(extra.as_bytes()),
+                    ];
+                    self.pushfstring(b"attempt to %s a %s value%s", &args)
+                });
+            self.lib_roots.release(base);
+            let v = v.map_or_else(|e| e.0, Value::Str);
+            // `luaD_pcall` shrinks the stack it caught the error on
+            self.shrink_caught_error();
             self.warn_error("__gc", v);
             return Ok(());
         }
