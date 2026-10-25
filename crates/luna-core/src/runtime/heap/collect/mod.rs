@@ -282,7 +282,7 @@ impl Heap {
         // upcoming sweep and the table left holding a dangling pointer.
         // Nothing is dangling *yet*, so the reporter may safely print
         // string contents to identify the key.
-        self.check_after_atomic("atomic_tail");
+        self.check_after_atomic("atomic_tail", m);
         dead
     }
 

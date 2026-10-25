@@ -47,13 +47,14 @@ impl Heap {
     /// objects' children, the string count; the slow bits (debug builds
     /// too).
     #[inline(always)]
-    pub(crate) fn check_after_atomic(&self, ctx: &'static str) {
+    pub(crate) fn check_after_atomic(&self, ctx: &'static str, m: &crate::runtime::heap::Marker) {
         #[cfg(feature = "gc-verify")]
         {
             self.verify_tricolor(ctx);
             self.verify_black_children(ctx);
-            self.verify_string_count(ctx);
+            self.verify_string_count(ctx, &m.lent.stands);
         }
+        let _ = m;
         self.check_slow_bits(ctx);
     }
 
