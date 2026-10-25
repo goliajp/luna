@@ -30,7 +30,7 @@ impl Vm {
             );
             let r = match parsed.recorded() {
                 Some(rec) => self.acct_failed_compile(src, e, parsed.parsed().0, rec, splices),
-                None => self.splices_stand(splices),
+                None => self.splices_stand_caught(splices),
             };
             self.parse_scratch = parsed;
             return r;
@@ -38,7 +38,7 @@ impl Vm {
         // the construct the load failed on is completed too, and compiles
         let fixed = completed(src, v, depth, failed, true);
         let Some(fixed) = fixed.filter(|_| self.parse_scratch.failed_scan().is_some()) else {
-            return self.splices_stand(splices);
+            return self.splices_stand_caught(splices);
         };
         // the completed source, parsed and compiled without counting
         let mut tree = ParseScratch::new(self.heap.mem_owner());
@@ -83,7 +83,7 @@ impl Vm {
             return self.acct_failed_compile(&fixed, e, tree.parsed().0, rec, splices);
         }
         let (Some(cl), Some((marks, _))) = (built, tree.recorded()) else {
-            return self.splices_stand(splices);
+            return self.splices_stand_caught(splices);
         };
         let chunk = tree.parsed().0;
         let parsed = std::mem::replace(
@@ -170,6 +170,7 @@ impl Vm {
             }
             // `luaD_pcall` shrinks the stack, then the parser's buffers go
             self.shrink_caught_error();
+            self.heap.load_caught(true);
             self.replay_end(&r);
         }
         drop(r);
@@ -188,6 +189,18 @@ impl Vm {
         for (_, d) in splices {
             self.heap.replay_reader_call(d);
         }
+        Ok(())
+    }
+
+    /// [`Vm::splices_stand`] of a load whose parse is not replayed, then
+    /// the shrink of `luaD_pcall` catching its error.
+    pub(in crate::vm::exec) fn splices_stand_caught(
+        &mut self,
+        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+    ) -> Result<(), SyntaxError> {
+        self.splices_stand(splices)?;
+        self.shrink_caught_error();
+        self.heap.load_caught(true);
         Ok(())
     }
 }

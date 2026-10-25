@@ -65,6 +65,9 @@ pub(crate) struct PucModel {
     /// the load about to run was checked for a collection already (5.4+
     /// `lua_load`, before its reader read)
     pub(super) load_checked: bool,
+    /// the failed load's replay shrank the stack where `luaD_pcall` caught
+    /// its error (`Heap::load_caught`)
+    pub(super) load_caught: bool,
     /// a load that must not collect is running (`Vm::load`)
     pub(super) load_holds: bool,
     /// the loads a collection step runs in the middle of
@@ -118,6 +121,7 @@ impl Default for PucModel {
             load_msg: None,
             next_id: 0,
             load_checked: false,
+            load_caught: false,
             load_holds: false,
             parse: Vec::new(),
             unborn: Vec::new(),

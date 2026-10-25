@@ -97,60 +97,64 @@ impl Vm {
                 self.heap.replay_reader_call(d);
             }
         }
-        self.guarded_load(|vm| {
-            let mut parsed = match parsed.0 {
-                Ok(p) => p,
-                Err((e, Some((failed, src)))) if counted => {
-                    return Err(vm.acct_streamed_failure(e, failed, &src, chunkname, name, splices));
-                }
-                Err((e, failed)) => {
+        self.protected_parse(|vm| {
+            vm.guarded_load(|vm| {
+                let mut parsed = match parsed.0 {
+                    Ok(p) => p,
+                    Err((e, Some((failed, src)))) if counted => {
+                        return Err(
+                            vm.acct_streamed_failure(e, failed, &src, chunkname, name, splices)
+                        );
+                    }
+                    Err((e, failed)) => {
+                        let source = match name {
+                            Some(n) => n,
+                            None => vm.heap.try_intern(chunkname)?,
+                        };
+                        return Err(match failed {
+                            Some((failed, src)) => {
+                                vm.error_before(&src, Some(failed), source).unwrap_or(e)
+                            }
+                            None => e,
+                        });
+                    }
+                };
+                if !counted {
                     let source = match name {
                         Some(n) => n,
                         None => vm.heap.try_intern(chunkname)?,
                     };
-                    return Err(match failed {
-                        Some((failed, src)) => {
-                            vm.error_before(&src, Some(failed), source).unwrap_or(e)
-                        }
-                        None => e,
-                    });
+                    let proto = vm.compile_text(parsed, source)?;
+                    return vm.close_chunk(proto);
                 }
-            };
-            if !counted {
-                let source = match name {
-                    Some(n) => n,
-                    None => vm.heap.try_intern(chunkname)?,
+                // made without counting, then counted as PUC's parser makes it
+                let span = vm.heap.load_begins();
+                let building = vm.heap.build_load(true);
+                let made = vm.compile_streamed(&mut parsed, chunkname, name);
+                vm.heap.load_built(building);
+                let cl = match made {
+                    Ok(cl) => cl,
+                    Err(e) => {
+                        let r = match (&parsed.src, parsed.recorded()) {
+                            (Some(src), Some(rec)) if !e.is_memory() => {
+                                vm.acct_failed_compile(src, &e, &parsed.chunk, rec, splices)
+                            }
+                            _ => vm.splices_stand(splices),
+                        };
+                        vm.heap.load_ends(span);
+                        return Err(r.err().unwrap_or(e));
+                    }
                 };
-                let proto = vm.compile_text(parsed, source)?;
-                return vm.close_chunk(proto);
-            }
-            // made without counting, then counted as PUC's parser makes it
-            let span = vm.heap.load_begins();
-            let building = vm.heap.build_load(true);
-            let made = vm.compile_streamed(&mut parsed, chunkname, name);
-            vm.heap.load_built(building);
-            let cl = match made {
-                Ok(cl) => cl,
-                Err(e) => {
-                    let r = match (&parsed.src, parsed.recorded()) {
-                        (Some(src), Some(rec)) if !e.is_memory() => {
-                            vm.acct_failed_compile(src, &e, &parsed.chunk, rec, splices)
-                        }
-                        _ => vm.splices_stand(splices),
-                    };
-                    vm.heap.load_ends(span);
-                    return Err(r.err().unwrap_or(e));
-                }
-            };
-            let src = parsed
-                .src
-                .take()
-                .unwrap_or_else(|| LVec::new(vm.heap.mem()));
-            let rec = parsed.recorded().expect("counted");
-            let r = vm.acct_text_load(&src, &parsed.chunk, rec, cl, splices);
-            vm.heap.load_ends(span);
-            vm.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
-            r.map(|()| cl)
+                let src = parsed
+                    .src
+                    .take()
+                    .unwrap_or_else(|| LVec::new(vm.heap.mem()));
+                let rec = parsed.recorded().expect("counted");
+                let r = vm.acct_text_load(&src, &parsed.chunk, rec, cl, splices);
+                vm.heap.load_ends(span);
+                vm.parse_scratch = crate::frontend::parser::ParseScratch::recycle(parsed);
+                r.map(|()| cl)
+            })
         })
     }
 

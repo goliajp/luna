@@ -75,15 +75,32 @@ impl Vm {
         // is held only by them), so a load that ran out of memory is run
         // once more after an emergency collection, as PUC's allocations
         // inside the parser retry; the source is all in `src`
-        match self.guarded_load(|vm| vm.load_named_inner(src, chunkname, name)) {
-            Err(e) if e.is_memory() && src.len() <= self.loader_input_budget => {
-                if !self.emergency_collect() {
-                    return Err(e);
+        self.protected_parse(|vm| {
+            match vm.guarded_load(|vm| vm.load_named_inner(src, chunkname, name)) {
+                Err(e) if e.is_memory() && src.len() <= vm.loader_input_budget => {
+                    if !vm.emergency_collect() {
+                        return Err(e);
+                    }
+                    vm.guarded_load(|vm| vm.load_named_inner(src, chunkname, name))
                 }
-                self.guarded_load(|vm| vm.load_named_inner(src, chunkname, name))
+                r => r,
             }
-            r => r,
+        })
+    }
+
+    /// `f`, a load run inside `luaD_protectedparser`: `luaD_pcall` shrinks
+    /// the stack when it catches the load's error, here unless the failed
+    /// load's replay did where PUC does.
+    pub(in crate::vm::exec) fn protected_parse<R>(
+        &mut self,
+        f: impl FnOnce(&mut Vm) -> Result<R, SyntaxError>,
+    ) -> Result<R, SyntaxError> {
+        let outer = self.heap.load_caught(false);
+        let r = f(self);
+        if !self.heap.load_caught(outer) && r.is_err() {
+            self.shrink_caught_error();
         }
+        r
     }
 
     fn load_named_inner(
