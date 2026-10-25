@@ -5,10 +5,7 @@ use crate::runtime::heap::Marker;
 use crate::runtime::puc::records::parse::PARSING;
 
 impl Proto {
-    /// `this` is the pointer the marker reached the prototype through, `self`
-    /// reborrowed; the post-mark pass clears the cache through it
-    pub(crate) fn trace(&self, this: *mut Proto, m: &mut Marker) {
-        debug_assert!(std::ptr::eq(this, self));
+    pub(crate) fn trace(&self, m: &mut Marker) {
         if self.hdr.cls & PARSING != 0 && m.trace_parsing_proto(self) {
             return;
         }
@@ -27,14 +24,12 @@ impl Proto {
         for &s in self.puc_names.borrow().iter() {
             m.mark(s);
         }
-        // PUC `traverseproto`: the closure cache is a *weak* reference — if
-        // the cached LClosure is unmarked at sweep time, clear the slot
-        // instead of marking it. Queue self for the post-mark cleanup pass
-        // so a closure whose only remaining live reference is the cache
-        // becomes collectable (gc.lua's `__gc` finalisers inside `do ... end`
-        // blocks rely on this).
-        if self.cache.get().is_some() {
-            m.note_cached_proto(this);
+        // PUC `traverseproto`: the closure cache is a weak reference, let
+        // go of when the closure is white as the prototype is traversed
+        if let Some(c) = self.cache.get()
+            && m.lets_go_of(c.hdr())
+        {
+            self.cache.set(None);
         }
     }
 }

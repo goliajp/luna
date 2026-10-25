@@ -57,9 +57,6 @@ pub(crate) struct Marker {
     /// the atomic step has begun (PUC `GCSinsideatomic`): what a closure
     /// holds open is marked, not touched
     pub(in crate::runtime::heap) atomic: bool,
-    /// Protos with a closure cache (PUC `Proto.cache`), a weak reference:
-    /// a cached closure left unmarked is cleared once marking is done.
-    pub(in crate::runtime::heap) cached_protos: Vec<*mut crate::runtime::Proto>,
     /// `LEAF` or 0, tested against an object's flags: objects without
     /// children go BLACK on sight (only the stop-the-world mark sets it; a
     /// native standing for a C closure has work an incremental step counts).
@@ -124,7 +121,7 @@ pub(super) unsafe fn trace_children(h: *mut GcHeader, m: &mut Marker) {
             ObjTag::Str => {}
             ObjTag::Ghost => m.puc_trace_record(h),
             ObjTag::Table => (*(h as *mut Table)).trace(h as *mut Table, m),
-            ObjTag::Proto => (*(h as *mut Proto)).trace(h as *mut Proto, m),
+            ObjTag::Proto => (*(h as *mut Proto)).trace(m),
             ObjTag::Closure => (*(h as *mut LuaClosure)).trace(m),
             ObjTag::Upvalue => (*(h as *mut Upvalue)).trace(m),
             ObjTag::Native => (*(h as *mut NativeClosure)).trace(m),

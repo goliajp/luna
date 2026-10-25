@@ -122,6 +122,29 @@ impl Heap {
         self.upval_held(uv);
     }
 
+    /// The new closure `nc` of `proto` goes in its cache (5.2, 5.3): PUC
+    /// 5.2's `luaC_barrierproto` marks it for a black prototype the first
+    /// time and sends the prototype back to gray after; 5.3's `pushclosure`
+    /// leaves a black prototype's cache as it is.
+    pub(crate) fn cache_closure(
+        &mut self,
+        proto: Gc<crate::runtime::function::Proto>,
+        nc: Gc<crate::runtime::function::LuaClosure>,
+    ) {
+        if self.puc_rules().cache_only_if_not_black {
+            if !is_black(proto.hdr().flags()) {
+                proto.cache.set(Some(nc));
+            }
+            return;
+        }
+        if proto.cache.get().is_none() {
+            self.barrier_forward(proto, Value::Closure(nc));
+        } else {
+            self.barrier_back(proto);
+        }
+        proto.cache.set(Some(nc));
+    }
+
     /// Closure `cl`'s upvalue `i` replaced by `uv`, with the barrier a
     /// black closure needs.
     pub(crate) fn set_closure_upval(

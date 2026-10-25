@@ -112,7 +112,6 @@ pub(in crate::runtime) struct PropagateState {
     quiet: Vec<*mut GcHeader>,
     weak: Vec<*mut Table>,
     ephemeron: Vec<*mut Table>,
-    cached_protos: Vec<*mut Proto>,
     no_ephemeron: bool,
     /// the atomic step has begun (PUC `GCSinsideatomic`)
     atomic: bool,

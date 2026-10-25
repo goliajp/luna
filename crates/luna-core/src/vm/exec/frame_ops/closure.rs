@@ -63,11 +63,7 @@ impl Vm {
         }
         self.fill_upvals(nc, cl, proto, base, collect)?;
         if cached {
-            // PUC `luaC_protobarrier`: a black prototype is traversed again,
-            // so the atomic step sees its cache (a weak reference) and
-            // clears it if the closure dies
-            self.heap.barrier_back(proto);
-            proto.cache.set(Some(nc));
+            self.heap.cache_closure(proto, nc);
         }
         Ok(nc)
     }
