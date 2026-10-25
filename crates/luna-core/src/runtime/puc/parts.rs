@@ -165,6 +165,9 @@ impl Heap {
     /// [`Heap::acct_part`]), as the strings it holds come and go.
     #[cold]
     fn grow_strtab(&mut self) {
+        if !crate::runtime::puc::step::strt_resize_in_sweep(self) {
+            return;
+        }
         let (old, new) = (self.puc.strt_size, self.puc.strt_size * 2);
         let p = self.puc.sizes.ptr;
         if self.puc.dialect == Dialect::L51 {

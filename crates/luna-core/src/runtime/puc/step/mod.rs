@@ -23,7 +23,9 @@ mod pause;
 pub(super) use atomic::atomic;
 use d51::*;
 use d52::*;
-pub(crate) use d52::{enter_generational_52, full_cycle_52, leave_generational_52};
+pub(crate) use d52::{
+    enter_generational_52, full_cycle_52, leave_generational_52, strt_resize_in_sweep,
+};
 use d53::*;
 use d54::*;
 use d55::*;

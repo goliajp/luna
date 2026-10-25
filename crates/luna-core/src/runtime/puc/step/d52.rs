@@ -135,14 +135,7 @@ pub(super) fn singlestep_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
             heap.puc.pace.strt_swept += i;
             heap.sweep_strings_upto(heap.puc.pace.strt_swept);
             if h.heap().puc.pace.strt_swept >= size {
-                h.heap().end_string_sweep();
-                h.heap().puc.pace.enter(St::SweepUdata);
-                // `entersweep`'s `sweeptolive` sweeps `finobj` up to
-                // its first live object: with no more after it there
-                // is no list left, and the next step moves on at no
-                // cost
-                let n = h.heap().finobj_count();
-                h.heap().puc.pace.fin_left = (n > 1).then_some(n - 1);
+                strings_swept_52(h.heap());
             }
             i * cost
         }
@@ -167,4 +160,32 @@ pub(super) fn singlestep_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
             }
         },
     }
+}
+
+/// 5.2's sweep of the string table is over: the objects with finalizers
+/// come next.
+pub(crate) fn strings_swept_52(heap: &mut Heap) {
+    heap.end_string_sweep();
+    heap.puc.pace.enter(St::SweepUdata);
+    // `entersweep`'s `sweeptolive` sweeps `finobj` up to its first live
+    // object: with no more after it there is no list left, and the next
+    // step moves on at no cost
+    let n = heap.finobj_count();
+    heap.puc.pace.fin_left = (n > 1).then_some(n - 1);
+}
+
+/// `luaS_resize` while the collector sweeps the string table: 5.2 runs
+/// that sweep to its end first (`luaC_runtilstate`), counted in no
+/// step; 5.1 does not resize (false).
+pub(crate) fn strt_resize_in_sweep(heap: &mut Heap) -> bool {
+    if heap.puc.pace.state() != St::SweepString {
+        return true;
+    }
+    if heap.puc.dialect == Dialect::L51 {
+        return false;
+    }
+    heap.puc.pace.strt_swept = heap.puc.strt_size as i64;
+    heap.sweep_strings_upto(heap.puc.pace.strt_swept);
+    strings_swept_52(heap);
+    true
 }
