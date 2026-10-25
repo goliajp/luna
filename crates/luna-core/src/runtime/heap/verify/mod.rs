@@ -192,7 +192,6 @@ impl Heap {
             ephemeron: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),
             rules: *self.puc_rules(),
-            cached_protos: Vec::new(),
             leaf_black: 0,
             leaf_hdr: 0,
             leaf_bytes: 0,

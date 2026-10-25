@@ -27,7 +27,6 @@ impl Heap {
             quiet: Vec::new(),
             weak: Vec::new(),
             ephemeron: Vec::new(),
-            cached_protos: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),
             atomic: false,
         });

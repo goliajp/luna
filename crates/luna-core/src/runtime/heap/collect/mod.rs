@@ -64,7 +64,6 @@ impl Heap {
             ephemeron: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),
             rules: *self.puc_rules(),
-            cached_protos: Vec::new(),
             leaf_black: LEAF,
             leaf_hdr: 0,
             leaf_bytes: 0,
@@ -223,19 +222,6 @@ impl Heap {
                 }
             }
         }
-        // (5) closure-cache weak refs (PUC `traverseproto`): a closure kept
-        // only by a proto's cache is dead, or its upvalues' `__gc` never run
-        for &p in &m.cached_protos {
-            // SAFETY: `p` was pushed onto `m.cached_protos` by `Proto::trace` this cycle (it is marked); its cached closure, white or not, is not freed before this cycle's sweep
-            unsafe {
-                if let Some(c) = (*p).cache.get() {
-                    let h = c.as_ptr() as *mut GcHeader;
-                    if is_white((*h).flags) {
-                        (*p).cache.set(None);
-                    }
-                }
-            }
-        }
         // the VM's watched values and the chunk roots are weak: dead ones
         // are noted or forgotten before they are freed
         for w in &mut self.weak_watch {
@@ -319,7 +305,6 @@ impl Heap {
             ephemeron: std::mem::take(&mut prop.ephemeron),
             no_ephemeron: prop.no_ephemeron,
             rules: *self.puc_rules(),
-            cached_protos: std::mem::take(&mut prop.cached_protos),
             leaf_black: 0,
             leaf_hdr: self.puc_rules().leaf_hdr,
             leaf_bytes: 0,
@@ -342,7 +327,6 @@ impl Heap {
             quiet: m.quiet,
             weak: m.weak,
             ephemeron: m.ephemeron,
-            cached_protos: m.cached_protos,
             no_ephemeron,
             atomic: m.atomic,
         });

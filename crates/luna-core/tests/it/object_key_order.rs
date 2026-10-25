@@ -1,7 +1,10 @@
 //! Tables, functions, coroutines and userdata as table keys hash by the
 //! number each got when it was made, so a program walks such a table in
 //! the same order on every run: ten states running one chunk in one
-//! process (where the objects sit at different addresses) agree.
+//! process (where the objects sit at different addresses) agree. They
+//! share a string hashing seed: with a seed of its own each state walks
+//! the tables of string keys the collector marks in its own order, and
+//! 5.2 and 5.3 keep a cached closure or make another as that order says.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
@@ -26,7 +29,8 @@ return table.concat(out, " ")
 "#;
 
 fn walk(v: LuaVersion) -> String {
-    let mut vm = Vm::new(v);
+    let mut vm = Vm::new_minimal_with_hash_seed(v, 1);
+    vm.open_all_libs().expect("the libraries open");
     match vm.eval(CHUNK).expect("the chunk runs").first() {
         Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
         other => panic!("expected a string, got {other:?}"),

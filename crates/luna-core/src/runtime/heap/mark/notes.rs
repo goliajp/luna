@@ -39,11 +39,11 @@ impl Marker {
         self.ephemeron.push(t);
     }
 
-    /// A marked prototype with a cached closure, cleared once marking is
-    /// done if nothing else marked the closure.
+    /// Whether a weak reference to `h` is let go of as its holder is
+    /// traversed: `h` is white (none while the marking only checks).
     #[inline]
-    pub(crate) fn note_cached_proto(&mut self, p: *mut crate::runtime::Proto) {
-        self.cached_protos.push(p);
+    pub(crate) fn lets_go_of(&self, h: Gc<GcHeader>) -> bool {
+        !self.verify.active() && is_white(h.flags())
     }
 
     /// The loads the marking runs in the middle of.

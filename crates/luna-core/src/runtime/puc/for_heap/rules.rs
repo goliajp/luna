@@ -91,6 +91,9 @@ pub(in crate::runtime) struct HeapRules {
     /// list (null: it goes on the list), and a new closed one's
     pub(in crate::runtime) open_upval_mark: *mut GcHeader,
     pub(in crate::runtime) closed_upval_mark: *mut GcHeader,
+    /// 5.3 caches a new closure in its prototype only when the prototype
+    /// is not black; 5.2 caches it with a barrier (`luaC_barrierproto`)
+    pub(in crate::runtime) cache_only_if_not_black: bool,
 }
 
 impl HeapRules {
@@ -144,6 +147,7 @@ impl HeapRules {
                 Dialect::L53 => crate::runtime::heap::HELD,
                 _ => ptr::null_mut(),
             },
+            cache_only_if_not_black: d == Dialect::L53,
             closed_upval_mark: if d == Dialect::L53 {
                 crate::runtime::heap::HELD
             } else {
