@@ -30,7 +30,7 @@ pub(crate) fn atomic<H: StepHost + ?Sized>(h: &mut H) -> (i64, i64) {
         0
     };
     h.heap().stash_marker(m);
-    h.marking_ends(false);
+    h.marking_ends();
     let (work, swept) = h.heap().gc_finish_atomic_work(Some(run));
     if rules.shrink_at == ShrinkAt::Atomic {
         h.shrink_threads();

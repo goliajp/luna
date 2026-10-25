@@ -24,9 +24,8 @@ pub(crate) trait StepHost {
     /// The stacks of the threads the VM holds.
     fn mark_threads_held(&mut self, m: &mut Marker);
     /// The marking is about to end: the values the VM watches without
-    /// keeping them, and its threads' open upvalues, lent to the heap
-    /// (`emergency`: for a collection an allocation runs).
-    fn marking_ends(&mut self, emergency: bool);
+    /// keeping them, and its threads' open upvalues, lent to the heap.
+    fn marking_ends(&mut self);
     /// The collection is done: the watched values it found dead forgotten.
     fn collection_ends(&mut self);
     /// The running stack's slots above the top are dead.

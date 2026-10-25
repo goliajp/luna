@@ -225,11 +225,21 @@ impl Heap {
         proto: Gc<Proto>,
         upvals: &[Gc<Upvalue>],
     ) -> Result<Gc<LuaClosure>, Oom> {
+        self.try_new_closure_of(proto, upvals.iter().copied())
+    }
+
+    /// [`Heap::try_new_closure`] over the upvalues `upvals` yields.
+    #[inline]
+    pub(crate) fn try_new_closure_of(
+        &mut self,
+        proto: Gc<Proto>,
+        upvals: impl ExactSizeIterator<Item = Gc<Upvalue>> + Clone,
+    ) -> Result<Gc<LuaClosure>, Oom> {
         use crate::runtime::function::INLINE_UPVALS_N;
         self.check_not_dying(proto.hdr(), "a new closure's prototype");
         let n = upvals.len();
         let store = if n > INLINE_UPVALS_N {
-            Some(LSlice::from_slice(self.mem(), upvals)?)
+            Some(LSlice::collect_exact(self.mem(), upvals.clone())?)
         } else {
             None
         };
@@ -257,7 +267,7 @@ impl Heap {
             match store {
                 Some(s) => c.set_overflow(s),
                 None => {
-                    for (i, &uv) in upvals.iter().enumerate() {
+                    for (i, uv) in upvals.enumerate() {
                         (*c.inline_storage.get())[i] = std::mem::MaybeUninit::new(uv);
                     }
                 }

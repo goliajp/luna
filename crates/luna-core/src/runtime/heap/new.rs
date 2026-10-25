@@ -104,6 +104,7 @@ impl Heap {
             slab: Default::default(),
             stdin_ud: ptr::null_mut(),
             udata_after: None,
+            blank_upval: None,
             mem,
         };
         h.make_memerr().ok()?;

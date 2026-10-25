@@ -97,20 +97,6 @@ impl Vm {
         Ok(())
     }
 
-    /// [`Vm::refused_growth`] while a new closure's upvalues are gathered
-    /// ([`Vm::retry_oom_gathering`]).
-    #[inline(always)]
-    pub(crate) fn refused_while_gathering(&mut self) -> Result<(), LuaError> {
-        #[cfg(feature = "gc-trace")]
-        if self.heap.refusal_waits() {
-            self.g.gathering = true;
-            let r = self.answer_refusal();
-            self.g.gathering = false;
-            return r;
-        }
-        Ok(())
-    }
-
     /// [`Vm::refused_growth`] after the stack grew from `old` slots for
     /// room above `top`: 5.4 on reallocate it with emergency collections
     /// stopped, so it stays as it was and the growth is a memory error.

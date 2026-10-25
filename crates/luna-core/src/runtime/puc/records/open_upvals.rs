@@ -28,11 +28,6 @@ pub(crate) struct OpenLend {
     pub(crate) running: *mut OpenList,
     pub(crate) running_co: *mut GcHeader,
     pub(crate) main: *mut OpenList,
-    /// a collection an allocation runs while the VM gathers a new
-    /// closure's upvalues: the running thread's open upvalues are all
-    /// kept. luna gathers them before it makes the closure, which PUC
-    /// makes first, holding the ones it finds; the VM holds them meanwhile.
-    pub(crate) keep_running: bool,
 }
 
 /// The dead open upvalues the sweep has not reached yet.
@@ -72,7 +67,6 @@ impl Heap {
         // sweep does not reach it
         let live_white = self.white() ^ WHITE_BITS;
         let mut lists: Vec<(*mut GcHeader, *mut OpenList)> = vec![(lend.running_co, lend.running)];
-        let mut keep = lend.keep_running;
         if !lend.main.is_null() {
             lists.push((ptr::null_mut(), lend.main));
         }
@@ -92,7 +86,7 @@ impl Heap {
                 let h = uv.as_ptr() as *mut GcHeader;
                 // SAFETY: a listed upvalue is allocated
                 let f = unsafe { (*h).flags() };
-                if !is_white(f) || keep {
+                if !is_white(f) {
                     // SAFETY: as above
                     unsafe { (*h).paint(live_white) };
                     return true;
@@ -107,7 +101,6 @@ impl Heap {
                 false
             });
             self.puc.open_dead.dead[start..].reverse();
-            keep = false;
         }
     }
 

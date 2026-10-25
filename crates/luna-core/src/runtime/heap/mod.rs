@@ -190,6 +190,9 @@ pub struct Heap {
     /// 5.1: the main thread, the list's oldest object, after which each new
     /// userdata goes (`luaS_newudata` links it after `mainthread`)
     udata_after: Option<Gc<GcHeader>>,
+    /// What a closure made before its upvalues are found holds in their
+    /// places: a closed upvalue of nil, fixed, never counted
+    blank_upval: Option<Gc<crate::runtime::function::Upvalue>>,
     /// The main functions of the chunks loaded while `track_chunk_roots`
     /// is set, without keeping them alive: the collector drops each one it
     /// finds dead. Compiled traces taken over from another Vm find the
