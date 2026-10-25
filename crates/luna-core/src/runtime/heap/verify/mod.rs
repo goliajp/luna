@@ -200,6 +200,7 @@ impl Heap {
             sizer: None,
             quiet: Vec::new(),
             quiet_mode: false,
+            atomic: true,
             lent: Default::default(),
             verify: Default::default(),
         };

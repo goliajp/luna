@@ -54,6 +54,9 @@ pub(crate) struct Marker {
     /// the model's rules for the dialect, whose `reallymarkobject` decides
     /// which objects are traversed as soon as they are marked
     pub(in crate::runtime::heap) rules: crate::runtime::puc::for_heap::HeapRules,
+    /// the atomic step has begun (PUC `GCSinsideatomic`): what a closure
+    /// holds open is marked, not touched
+    pub(in crate::runtime::heap) atomic: bool,
     /// Protos with a closure cache (PUC `Proto.cache`), a weak reference:
     /// a cached closure left unmarked is cleared once marking is done.
     pub(in crate::runtime::heap) cached_protos: Vec<*mut crate::runtime::Proto>,
@@ -193,6 +196,30 @@ impl Marker {
         };
         // SAFETY: `h` is the header of the object `v` holds a handle to
         unsafe { self.header(h) }
+    }
+
+    /// The atomic step begins (PUC `GCSinsideatomic`).
+    #[inline]
+    pub(crate) fn enter_atomic(&mut self) {
+        self.atomic = true;
+    }
+
+    /// A closure's upvalue `uv`: marked, or in 5.3, where an upvalue is no
+    /// collectable object, what it holds marked.
+    #[inline(always)]
+    pub(crate) fn upval(&mut self, uv: Gc<crate::runtime::function::Upvalue>) {
+        if self.rules.upvals_refcounted {
+            // touched outside the atomic step, which marks the value
+            // anyway (PUC `traverseLclosure`)
+            if !self.atomic {
+                // SAFETY: a handle's upvalue is allocated; only its
+                // per-type byte is written
+                unsafe { (*uv.header()).sub |= super::upvals::TOUCHED };
+            }
+            uv.trace(self);
+        } else {
+            self.mark(uv);
+        }
     }
 
     /// [`Self::header`] for an object the caller holds a handle to.

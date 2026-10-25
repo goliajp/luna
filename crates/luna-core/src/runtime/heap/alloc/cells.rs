@@ -14,6 +14,10 @@ impl Heap {
     /// [`Heap::new_upvalue`], failing when memory runs out.
     #[inline]
     pub fn try_new_upvalue(&mut self, state: UpvalState) -> Result<Gc<Upvalue>, Oom> {
+        let mark = self.puc_rules().closed_upval_mark;
+        if !mark.is_null() {
+            return self.try_new_upvalue_held(state, mark);
+        }
         let upval = Upvalue {
             hdr: GcHeader::new(ObjTag::Upvalue),
             state,
@@ -23,9 +27,34 @@ impl Heap {
         Ok(g)
     }
 
+    /// [`Heap::try_new_upvalue`] of 5.3's, never on the list.
+    #[cold]
+    fn try_new_upvalue_held(
+        &mut self,
+        state: UpvalState,
+        mark: *mut GcHeader,
+    ) -> Result<Gc<Upvalue>, Oom> {
+        let p = self.alloc_block::<Upvalue>()?;
+        // SAFETY: `p` is a fresh block for one `Upvalue`, which starts with
+        // its header; off the list, the closures holding it own it
+        let g = unsafe {
+            p.write(Upvalue {
+                hdr: GcHeader::new(ObjTag::Upvalue),
+                state,
+            });
+            let h = p as *mut GcHeader;
+            self.hook_reborn(h);
+            (*h).next = mark;
+            (*h).paint(BLACK);
+            Gc::from_ptr(p)
+        };
+        self.puc_born(g, Made);
+        Ok(g)
+    }
+
     /// A new open upvalue of stack slot `slot` of `thread` (`None`: the
     /// main thread). 5.1 and 5.2 keep it off the list until it closes
-    /// ([`Heap::upval_closed`]).
+    /// ([`Heap::upval_closed`]), 5.3 for good.
     #[inline]
     pub(crate) fn try_new_open_upvalue(
         &mut self,
@@ -42,12 +71,16 @@ impl Heap {
                 state: UpvalState::Open { slot, thread },
             });
             let h = p as *mut GcHeader;
-            if self.puc_rules().open_upvals_on_threads {
-                self.hook_reborn(h);
-                (*h).next = list::ON_THREAD;
-                (*h).paint(self.white());
-            } else {
+            let mark = self.puc_rules().open_upval_mark;
+            if mark.is_null() {
                 self.link(h);
+            } else {
+                self.hook_reborn(h);
+                (*h).next = mark;
+                // 5.3's black for good (see `HELD`), and touched, as PUC's
+                // `luaF_findupval` makes it
+                (*h).paint(if mark == HELD { BLACK } else { self.white() });
+                (*h).sub |= u8::from(mark == HELD) * super::super::upvals::TOUCHED;
             }
             Gc::from_ptr(p)
         };

@@ -6,10 +6,6 @@ use super::*;
 /// In the `next` of an object kept off the list: PUC has not made it yet.
 const DETACHED: *mut GcHeader = ptr::without_provenance_mut(1);
 
-/// In the `next` of an open upvalue kept off the list (5.1, 5.2): on its
-/// thread, where PUC keeps it until it closes.
-pub(super) const ON_THREAD: *mut GcHeader = ptr::without_provenance_mut(2);
-
 impl Heap {
     /// A new object `h` kept off the list until PUC makes it ([`Heap::link_now`]
     /// then puts it on), white as a new object for the barriers that reach
@@ -134,36 +130,6 @@ impl Heap {
         self.udata_after
     }
 
-    /// The open upvalue `uv` was closed: one kept off the list (5.1, 5.2)
-    /// goes on its head, as PUC links it (`luaC_linkupval`,
-    /// `luaC_checkupvalcolor`): a marked one stays black while marking
-    /// (the barrier on its value follows), and turns the current white
-    /// after it.
-    #[inline(always)]
-    pub(crate) fn upval_closed(&mut self, uv: Gc<crate::runtime::function::Upvalue>) {
-        let h = uv.header();
-        // SAFETY: `uv` is a handle, so its upvalue is allocated; only its
-        // header is read and written, and one off the list goes on it once
-        unsafe {
-            if (*h).next != ON_THREAD {
-                return;
-            }
-            (*h).next = self.all;
-            if self.phase != GcPhase::Propagate && !is_white((*h).flags()) {
-                (*h).paint(self.current_white);
-            }
-        }
-        self.all = h;
-        self.live += 1;
-    }
-
-    /// A new open upvalue that no open list took: on the list, for the
-    /// sweep to free.
-    #[cold]
-    pub(crate) fn upval_unlisted(&mut self, uv: Gc<crate::runtime::function::Upvalue>) {
-        self.upval_closed(uv);
-    }
-
     /// `h`, off the list, back at its head (a string the string sweep
     /// held and keeps).
     ///
@@ -183,43 +149,5 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe { self.free_obj(h) };
         self.live -= 1;
-    }
-
-    /// Move the object `h` on the list to just before `anchor`; nothing
-    /// when `h` is `anchor`, is not on the list or the sweep stands at it.
-    ///
-    /// # Safety
-    /// `h` and `anchor` head live objects of this heap.
-    pub(in crate::runtime) unsafe fn move_before(
-        &mut self,
-        h: *mut GcHeader,
-        anchor: *mut GcHeader,
-    ) {
-        if h == anchor || h == self.sweep_prev {
-            return;
-        }
-        // SAFETY: the caller's contract; the links walked are the list's
-        unsafe {
-            let mut link: *mut *mut GcHeader = ptr::addr_of_mut!(self.all);
-            while !(*link).is_null() && *link != h {
-                link = ptr::addr_of_mut!((**link).next);
-            }
-            if (*link).is_null() {
-                return;
-            }
-            *link = (*h).next;
-            let mut at: *mut *mut GcHeader = ptr::addr_of_mut!(self.all);
-            while !(*at).is_null() && *at != anchor {
-                at = ptr::addr_of_mut!((**at).next);
-            }
-            if (*at).is_null() {
-                // not found after all: back at the head
-                (*h).next = self.all;
-                self.all = h;
-                return;
-            }
-            (*h).next = anchor;
-            *at = h;
-        }
     }
 }

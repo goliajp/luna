@@ -188,9 +188,10 @@ impl Vm {
             let v = self.stack[s as usize];
             // SAFETY: `uv` is an entry of `open_upvals`, which the collector marks as extra roots, so it is alive; no reference into the cell is live, and the borrow covers one call
             unsafe { uv.as_mut() }.set_closed(v);
-            self.heap.upval_closed(uv);
             self.heap.barrier_forward(uv, v);
             self.open_upvals.pop();
+            // last: 5.3 frees one no closure holds
+            self.heap.upval_closed(uv);
         }
     }
 

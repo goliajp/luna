@@ -49,10 +49,16 @@ impl Upvalue {
             UpvalState::Closed(v) => {
                 m.value(v);
             }
+            // the value in its slot, not the thread, which may die first
+            // (and close it); the running thread's stack, not in it, and
+            // the main thread's are roots
             UpvalState::Open {
-                thread: Some(co), ..
+                slot,
+                thread: Some(co),
             } => {
-                m.mark(co);
+                if let Some(&v) = co.stack.get(slot as usize) {
+                    m.value(v);
+                }
             }
             UpvalState::Open { thread: None, .. } => {}
         }

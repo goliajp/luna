@@ -28,10 +28,12 @@ pub(crate) fn full_collect<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Yo
             h.shrink_stacks();
         }
         let mut m = h.heap().loan_marker();
+        m.enter_atomic();
         h.mark_roots(&mut m, true);
         if let Some(young) = emergency {
             h.heap().mark_young(&mut m, young);
         }
+        h.heap().remark_open_upvals(&mut m);
         h.heap().stash_marker(m);
         h.marking_ends();
         h.heap().gc_finish_atomic();

@@ -85,10 +85,6 @@ impl Vm {
                     } else {
                         self.heap.acct_obj(PucKind::Upval, upval);
                     }
-                    if d == Dialect::L53 {
-                        // SAFETY: both are live objects of this heap
-                        unsafe { self.heap.link_before(h.as_ptr(), cl.as_ptr() as *mut _) };
-                    }
                     self.heap.barrier_new_upval(cl, uv);
                 }
                 None => self.heap.acct_obj(PucKind::Upval, upval),

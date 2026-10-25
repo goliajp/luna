@@ -55,14 +55,15 @@ impl Heap {
             }
             // PUC `luaC_barrierf` in the sweep: no invariant to keep, the
             // parent goes white instead of marking the child, which would
-            // stay black into the next cycle unswept
-            if self.phase == GcPhase::Sweep {
-                (*parent).paint(self.current_white);
+            // stay black into the next cycle unswept; a 5.3 upvalue, no
+            // object, keeps its color
+            if self.phase != GcPhase::Propagate {
+                if self.phase == GcPhase::Sweep && (*parent).next != HELD {
+                    (*parent).paint(self.current_white);
+                }
                 return;
             }
-            if self.phase == GcPhase::Propagate {
-                self.count_marked(ch);
-            }
+            self.count_marked(ch);
             if (*ch).tag == ObjTag::Str {
                 (*ch).flags = (*ch).with_slow((cf & !COLOR_BITS) | BLACK);
                 (*ch).cls &= !model::KEPT;

@@ -120,11 +120,13 @@ impl Vm {
         let source = self.undump_source(src, u)?;
         shown.source = u.src;
         let proto = stand_in::proto(&mut self.heap, source, [line, last], params, vararg)?;
-        let mut ups = LVec::with_capacity(self.heap.mem(), usize::from(nups))?;
-        for _ in 0..nups {
-            ups.push(self.heap.try_new_upvalue(UpvalState::Closed(Value::Nil))?)?;
+        let cl = self
+            .heap
+            .try_new_closure_to_fill(proto, usize::from(nups))?;
+        for i in 0..usize::from(nups) {
+            let uv = self.heap.try_new_upvalue(UpvalState::Closed(Value::Nil))?;
+            self.heap.put_upval(cl, i, uv);
         }
-        let cl = self.heap.try_new_closure(proto, &ups)?;
         // SAFETY: a closure just made; only its class byte is written
         unsafe { (*cl.header()).cls |= LUNA_ONLY };
         shown.closure = Some(cl);

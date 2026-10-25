@@ -27,39 +27,6 @@ impl Table {
         (false, false)
     }
 
-    /// True when this table holds at least one direct reference (array slot,
-    /// hash key, or hash value) to a coroutine whose mark bit is still clear.
-    /// Used by the GC's cycle-finalize check (PUC 5.3 gc.lua :502) to detect
-    /// the table ↔ thread reference cycle that needs an extra GC round before
-    /// `__gc` runs. Tag-level scan avoids walking the full reference graph.
-    pub(crate) fn refs_contain_unmarked_coro(&self) -> bool {
-        use crate::runtime::heap::header_is_marked;
-        let atags = self.atags();
-        let avals = self.avals();
-        for (i, &tag) in atags.iter().enumerate() {
-            if tag == raw::CORO {
-                // SAFETY: the tag at this index is CORO, so the `co` field of the payload is the pointer of a coroutine this live table holds
-                let co = unsafe { Gc::from_ptr_unchecked(avals[i].co) };
-                if !header_is_marked(co) {
-                    return true;
-                }
-            }
-        }
-        for n in self.nodes().iter() {
-            if let Value::Coro(co) = n.key()
-                && !header_is_marked(co)
-            {
-                return true;
-            }
-            if let Value::Coro(co) = n.val
-                && !header_is_marked(co)
-            {
-                return true;
-            }
-        }
-        false
-    }
-
     /// Clear entries whose weak key/value did not survive marking. `is_dead`
     /// reports whether a GC value was left unmarked (about to be swept).
     /// Clear weak-table entries whose key/value no longer carries a live

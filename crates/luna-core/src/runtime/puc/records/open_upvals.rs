@@ -206,7 +206,10 @@ impl Heap {
             .collect();
         if self.open_on_threads() {
             for &co in self.threads() {
-                out.extend(co.open_upvals.iter().map(|&(_, uv)| uv.header()));
+                // SAFETY: the heap is dropped: nothing runs the thread or
+                // borrows it; taken, its free closes none of them again
+                let list = unsafe { co.as_mut() }.open_upvals.take();
+                out.extend(list.iter().map(|&(_, uv)| uv.header()));
             }
         }
         out

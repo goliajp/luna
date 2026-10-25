@@ -107,25 +107,6 @@ impl Heap {
         self.puc.unborn = rest;
     }
 
-    /// Move the object `h` on the list to just before `anchor`, where the
-    /// sweep reaches it right before `anchor`: 5.3's upvalues are not on
-    /// PUC's list but freed with the closure that holds them, before it,
-    /// and a load's closure is older than the upvalues it gets. Both are
-    /// near the head (made by the load that is finishing); `h` stays where
-    /// it is when it is not on the list or the sweep stands at it.
-    ///
-    /// # Safety
-    /// `h` and `anchor` head live objects of this heap.
-    pub(crate) unsafe fn link_before(&mut self, h: *mut GcHeader, anchor: *mut GcHeader) {
-        // SAFETY: the caller's contract
-        unsafe {
-            if Heap::is_detached(h) || Heap::is_detached(anchor) {
-                return;
-            }
-            self.move_before(h, anchor);
-        }
-    }
-
     /// How many objects are set aside, for [`Heap::flush_unborn`].
     pub(in crate::runtime::puc) fn unborn_len(&self) -> usize {
         self.puc.unborn.len()
