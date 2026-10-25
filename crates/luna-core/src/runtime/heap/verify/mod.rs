@@ -145,7 +145,7 @@ impl Heap {
             // part not swept yet; a dangling reference can live in either
             // while the mutator runs between sweep steps.
             let new_white = self.current_white;
-            for head in [self.all] {
+            for head in [self.all, self.parked] {
                 let mut cur = head;
                 while !cur.is_null() {
                     // Skip dead objects not swept yet:
@@ -187,7 +187,7 @@ impl Heap {
         let mut m = Marker {
             stack: Default::default(),
             overflow: false,
-            scan: std::ptr::null_mut(),
+            scan: [std::ptr::null_mut(); 2],
             weak: Vec::new(),
             ephemeron: Vec::new(),
             no_ephemeron: !self.rules.ephemeron(),

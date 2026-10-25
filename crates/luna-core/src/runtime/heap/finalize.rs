@@ -143,15 +143,16 @@ impl Heap {
     /// Every userdata of the heap, as the state closes.
     pub(crate) fn all_userdata(&self) -> Vec<Gc<crate::runtime::Userdata>> {
         let mut out = Vec::new();
-        let mut cur = self.all;
-        // SAFETY: the links of `all` lead to live objects; the tag says
-        // which are userdata
+        // SAFETY: the links of `all` and of the parked list lead to live
+        // objects; the tag says which are userdata
         unsafe {
-            while !cur.is_null() {
-                if (*cur).tag == ObjTag::Userdata {
-                    out.push(Gc::from_ptr(cur as *mut crate::runtime::Userdata));
+            for mut cur in [self.all, self.parked] {
+                while !cur.is_null() {
+                    if (*cur).tag == ObjTag::Userdata {
+                        out.push(Gc::from_ptr(cur as *mut crate::runtime::Userdata));
+                    }
+                    cur = (*cur).next;
                 }
-                cur = (*cur).next;
             }
         }
         out
@@ -236,9 +237,8 @@ impl Heap {
     pub(crate) fn take_one_tobefnz(&mut self) -> Option<crate::runtime::Value> {
         let &h = self.tobefnz.get(self.tobefnz_head)?;
         self.tobefnz_head += 1;
-        // 5.1's `GCTM` puts it back on the list it sweeps
         // SAFETY: a queued object is allocated until its finalizer has run
-        unsafe { (*h).flags &= !DEFERRED };
+        self.finalizer_taken(unsafe { Gc::from_ptr(h) });
         let n = self.tobefnz.len();
         if self.tobefnz_head == n {
             self.tobefnz.clear();

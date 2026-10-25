@@ -151,6 +151,11 @@ pub struct Heap {
     all: *mut GcHeader,
     /// PUC `fixedgc`: objects never swept, freed with the heap
     fixed: *mut GcHeader,
+    /// the objects due for their finalizers that a sweep took off `all`
+    /// (see `parked.rs`)
+    parked: *mut GcHeader,
+    /// the last of them
+    parked_end: *mut GcHeader,
     /// the head of `all` at the last safe point; objects before it are newer
     young: *mut GcHeader,
     /// `young` as a check where the stack held every live value left it
@@ -260,6 +265,7 @@ use self::new::make_seed;
 mod free;
 mod mark;
 mod pace;
+mod parked;
 mod sweep;
 #[cfg(feature = "gc-trace")]
 mod trace;

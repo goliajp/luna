@@ -38,10 +38,10 @@ pub(crate) struct Marker {
     /// and `overflow` is set; [`Marker::refill`] walks `scan` for them.
     pub(in crate::runtime::heap) stack: GrayStack,
     pub(in crate::runtime::heap) overflow: bool,
-    /// The head of the heap's object list when the marker was lent out:
-    /// every object that can be gray is on it (new ones are born white,
-    /// fixed ones live on their own list).
-    pub(in crate::runtime::heap) scan: *mut GcHeader,
+    /// The heads of the heap's object list and of its parked objects when
+    /// the marker was lent out: every object that can be gray is on them
+    /// (new ones are born white, fixed ones live on their own list).
+    pub(in crate::runtime::heap) scan: [*mut GcHeader; 2],
     /// live tables with a weak `__mode`, collected during marking and processed
     /// (dead weak entries cleared) before the sweep
     pub(in crate::runtime::heap) weak: Vec<*mut Table>,
@@ -152,26 +152,25 @@ impl Marker {
         }
     }
 
-    /// Walk the object list for gray objects left off the stack when it
-    /// could not grow, tracing each where it is found (a stack that cannot
-    /// grow could not hold them), until a walk leaves none behind; then the
-    /// next object on the stack.
+    /// Walk the lists for the gray objects a full stack left off, tracing
+    /// each where it is, until a walk leaves none; then the stack's next.
     #[cold]
     #[inline(never)]
     fn refill(&mut self) -> Option<*mut GcHeader> {
         while self.overflow {
             self.overflow = false;
-            let mut cur = self.scan;
-            while !cur.is_null() {
-                // SAFETY: `scan` heads the heap's object list, whose objects
-                // stay allocated while marking (frees happen only in the
-                // sweep), and each `next` is read from a live object
-                let (f, next) = unsafe { ((*cur).flags, (*cur).next) };
-                if !is_white(f) && !is_black(f) {
-                    // SAFETY: `cur` is a gray object on the list (see above)
-                    unsafe { blacken(cur, self) };
+            for mut cur in self.scan {
+                while !cur.is_null() {
+                    // SAFETY: `scan` heads the heap's lists, whose objects stay allocated
+                    // while marking (only a sweep frees); a gray one is blackened in place
+                    unsafe {
+                        let (f, next) = ((*cur).flags, (*cur).next);
+                        if !is_white(f) && !is_black(f) {
+                            blacken(cur, self);
+                        }
+                        cur = next;
+                    }
                 }
-                cur = next;
             }
             if let Some(h) = self.stack.pop() {
                 return Some(h);

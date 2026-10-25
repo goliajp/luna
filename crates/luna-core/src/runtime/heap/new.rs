@@ -86,6 +86,8 @@ impl Heap {
             propagate: None,
             phase: GcPhase::Pause,
             sweep_prev: ptr::null_mut(),
+            parked: ptr::null_mut(),
+            parked_end: ptr::null_mut(),
             dropping: false,
             finalize: crate::runtime::mem::LVec::new(mem.mem()),
             tobefnz: crate::runtime::mem::LVec::new(mem.mem()),
@@ -136,7 +138,7 @@ impl Drop for Heap {
         // detached for an in-flight incremental sweep
         // SAFETY: the heap is being dropped, so nothing uses its objects any more; `all`, `fixed` and the held strings hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list
         unsafe {
-            for mut cur in [self.all, self.fixed] {
+            for mut cur in [self.all, self.fixed, self.parked] {
                 while !cur.is_null() {
                     let next = (*cur).next;
                     self.free_obj_closing(cur);
