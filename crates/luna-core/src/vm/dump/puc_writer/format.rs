@@ -7,10 +7,10 @@ use super::{Dialect, Out};
 use crate::vm::dump::puc::{puc_51, puc_52, puc_53, puc_54, puc_55};
 use std::collections::HashMap;
 
-/// The chunk, and the size of each block PUC's `ldump.c` hands its writer
-/// in turn (one `DumpBlock` / `dumpBlock` call each), so `lua_dump` can
-/// call the host's writer the same way.
-pub(super) fn write(d: Dialect, root: &Out, strip: bool) -> (Vec<u8>, Vec<usize>) {
+/// The chunk, the size of each block PUC's `ldump.c` hands its writer in
+/// turn (one `DumpBlock` / `dumpBlock` call each), so `lua_dump` can call
+/// the host's writer the same way, and how many strings 5.5 saved.
+pub(super) fn write(d: Dialect, root: &Out, strip: bool) -> (Vec<u8>, Vec<usize>, usize) {
     let mut w = W {
         out: Vec::new(),
         strip,
@@ -45,7 +45,8 @@ pub(super) fn write(d: Dialect, root: &Out, strip: bool) -> (Vec<u8>, Vec<usize>
             w.f55(root);
         }
     }
-    (w.out, w.pieces)
+    let saved = w.saved.len();
+    (w.out, w.pieces, saved)
 }
 
 struct W {

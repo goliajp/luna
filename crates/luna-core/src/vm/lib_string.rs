@@ -236,8 +236,14 @@ fn s_dump(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let bytes = if v.is_macro_lua() {
         crate::vm::dump::dump(&cl.proto, strip, v)
     } else {
-        crate::vm::dump::dump_puc(&cl.proto, strip, v)
-            .map_err(|_| raise_str(vm, "unable to dump given function"))?
+        let (bytes, _, saved) = crate::vm::dump::dump_puc(&cl.proto, strip, v)
+            .map_err(|_| raise_str(vm, "unable to dump given function"))?;
+        // 5.5's `luaU_dump` anchors its table of saved strings on the stack
+        if v >= LuaVersion::Lua55 {
+            let t = vm.dump_strings_table(saved)?;
+            vm.native_push_vals(&[Value::Table(t)])?;
+        }
+        bytes
     };
     let r = vm.api_push_string(&bytes)?;
     vm.nat_ret(fs, &[r])

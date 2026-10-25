@@ -96,19 +96,34 @@ impl Vm {
     /// function the dialect's instruction set cannot hold (as one block),
     /// with the size of each block PUC's dumper writes on its own; `None`
     /// for a value that is not a Lua function.
-    pub(crate) fn host_dump(&self, f: Value, strip: bool) -> Option<(Vec<u8>, Vec<usize>)> {
+    pub(crate) fn host_dump(&self, f: Value, strip: bool) -> Option<(Vec<u8>, Vec<usize>, usize)> {
         let Value::Closure(cl) = f else {
             return None;
         };
         let v = self.version;
         if !v.is_macro_lua()
-            && let Ok(b) = crate::vm::dump::dump_puc_blocks(&cl.proto, strip, v)
+            && let Ok(b) = crate::vm::dump::dump_puc(&cl.proto, strip, v)
         {
             return Some(b);
         }
         let b = crate::vm::dump::dump(&cl.proto, strip, v);
         let n = b.len();
-        Some((b, vec![n]))
+        Some((b, vec![n], 0))
+    }
+
+    /// 5.5's `luaU_dump` keeps the strings it writes in a table, each new
+    /// one a key there: the table made and given `saved` keys of its own
+    /// (light userdata, which go to the hash part as strings do).
+    pub(crate) fn dump_strings_table(&mut self, saved: usize) -> Result<Gc<Table>, LuaError> {
+        let t = self.alloc_table()?;
+        for i in 1..=saved {
+            self.raw_set(
+                t,
+                Value::LightUserdata(i as *const ()),
+                Value::Int(i as i64),
+            )?;
+        }
+        Ok(t)
     }
 
     /// Start the collector in incremental mode, as a state made by

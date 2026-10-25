@@ -12,7 +12,7 @@
 //! Public surface (used by `builtins.rs`, `exec.rs`, `lib_os_io.rs`,
 //! `lib_string.rs`):
 //! - [`dump`] — `Proto → Vec<u8>` (luna body format)
-//! - `dump_puc` — `Proto → Vec<u8>` (the running dialect's PUC format)
+//! - `dump_puc` — `Proto → Vec<u8>` (the running dialect's PUC format), its writer blocks and 5.5's saved strings
 //! - [`undump`] — bytes → `Gc<Proto>`, routes by leading magic byte
 //! - [`is_binary_chunk`] — true for any `\x1b`-prefixed input (matches
 //!   both luna and PUC bodies; loader uses this to decide
@@ -42,20 +42,16 @@ pub fn dump(proto: &Proto, strip: bool, version: LuaVersion) -> Vec<u8> {
 }
 
 /// Serialise a function prototype as the running dialect's PUC bytecode,
-/// loadable by the stock interpreter of that version (`string.dump`).
-/// `Err` when the function has no faithful encoding in that dialect's
-/// instruction set, or the dialect (MacroLua) has no PUC format.
-pub(crate) fn dump_puc(proto: &Proto, strip: bool, version: LuaVersion) -> Result<Vec<u8>, String> {
-    puc_writer::dump(proto, strip, version)
-}
-
-/// [`dump_puc`], with the size of each block the dialect's `ldump.c`
-/// hands its writer separately.
-pub(crate) fn dump_puc_blocks(
+/// loadable by the stock interpreter of that version (`string.dump`),
+/// with the size of each block the dialect's `ldump.c` hands its writer
+/// separately, and how many strings 5.5's dumper saved in the table it
+/// keeps them in. `Err` when the function has no faithful encoding in that
+/// dialect's instruction set, or the dialect (MacroLua) has no PUC format.
+pub(crate) fn dump_puc(
     proto: &Proto,
     strip: bool,
     version: LuaVersion,
-) -> Result<(Vec<u8>, Vec<usize>), String> {
+) -> Result<(Vec<u8>, Vec<usize>, usize), String> {
     puc_writer::dump_blocks(proto, strip, version)
 }
 

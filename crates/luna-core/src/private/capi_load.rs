@@ -41,7 +41,9 @@ pub trait VmCApiLoad {
     /// function the dialect's instruction set cannot hold (as one block),
     /// with the size of each block PUC's dumper writes on its own; `None`
     /// for a value that is not a Lua function.
-    fn host_dump(&self, f: Value, strip: bool) -> Option<(Vec<u8>, Vec<usize>)>;
+    fn host_dump(&self, f: Value, strip: bool) -> Option<(Vec<u8>, Vec<usize>, usize)>;
+    /// 5.5's table of the strings a dump saved (see `Vm::dump_strings_table`).
+    fn host_dump_strings_table(&mut self, saved: usize) -> Result<Gc<Table>, LuaError>;
     /// Start the collector in incremental mode, as a state made by
     /// `lua_newstate` is (the stand-alone interpreter switches 5.4 and 5.5
     /// to generational mode, which is a fresh Vm's mode).
@@ -90,8 +92,12 @@ impl VmCApiLoad for crate::vm::Vm {
         crate::vm::Vm::host_set_first_upvalue(self, cl, v)
     }
     #[inline]
-    fn host_dump(&self, f: Value, strip: bool) -> Option<(Vec<u8>, Vec<usize>)> {
+    fn host_dump(&self, f: Value, strip: bool) -> Option<(Vec<u8>, Vec<usize>, usize)> {
         crate::vm::Vm::host_dump(self, f, strip)
+    }
+    #[inline]
+    fn host_dump_strings_table(&mut self, saved: usize) -> Result<Gc<Table>, LuaError> {
+        crate::vm::Vm::dump_strings_table(self, saved)
     }
     #[inline]
     fn host_gc_start_incremental(&mut self) {

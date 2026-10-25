@@ -9,14 +9,14 @@ use super::*;
 /// bytes. An error the writer raises leaves `lua_dump`.
 fn dump(api: &mut Api, writer: LuaWriter, data: *mut c_void, strip: bool) -> c_int {
     let f = api.get_or_nil(-1);
-    let Some((bytes, blocks)) = api.vm.host_dump(f, strip) else {
+    let Some((bytes, blocks, saved)) = api.vm.host_dump(f, strip) else {
         return 1;
     };
     let v55 = api.version() >= LuaVersion::Lua55;
     let at = api.top();
     if v55 {
         // 5.5's dump keeps a table of the strings it wrote on the stack
-        let t = or_raise!(api, api.vm.host_new_table(0, 0), 0);
+        let t = or_raise!(api, api.vm.host_dump_strings_table(saved), 0);
         api.push(Value::Table(t));
     }
     let mut status = 0;
