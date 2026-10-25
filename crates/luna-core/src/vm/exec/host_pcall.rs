@@ -233,7 +233,7 @@ impl Vm {
 }
 
 /// `f`, a native of luna's own: no function of PUC's.
-pub(crate) fn luna_only(f: Value) -> Value {
+fn luna_only(f: Value) -> Value {
     if let Value::Native(n) = f {
         // SAFETY: `n` is a live native; only its class byte is written
         unsafe { (*n.header()).cls |= crate::runtime::heap::LUNA_ONLY };
