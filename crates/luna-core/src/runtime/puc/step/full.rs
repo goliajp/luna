@@ -16,8 +16,10 @@ pub(crate) fn full_collect<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Yo
     let rules = *h.heap().puc_rules();
     let program = emergency.is_none();
     // a sweep (the one in progress, or 5.1's from a pause, which it treats
-    // as marking) ends before the full cycle, with `checkSizes`
-    let swept = !h.heap().gc_phase_is_pause() || rules.full_from_pause_sweeps;
+    // as marking) ends before the full cycle, with `checkSizes`; none when
+    // 5.1's collector is past its sweep, running finalizers
+    let swept = !h.heap().gc_phase_is_pause()
+        || (rules.full_from_pause_sweeps && h.heap().puc.pace.state() != St::Finalize);
     gc_hold_threads(h);
     h.before_step();
     let propagating = h.heap().gc_phase_is_propagate();
