@@ -57,6 +57,12 @@ fn restart<H: StepHost + ?Sized>(h: &mut H) {
 
 /// PUC `luaC_step`: the step that fell due.
 pub(crate) fn puc_step<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+    step_traced(h, true)
+}
+
+/// [`puc_step`]; `traced`: gc-trace logs it as a `luaC_step` (5.2's
+/// `lua_gc` calls `luaC_forcestep`, which the trace does not log).
+fn step_traced<H: StepHost + ?Sized>(h: &mut H, traced: bool) -> Result<(), LuaError> {
     let d = h.heap().puc.dialect;
     if d != Dialect::L51 && !h.heap().gc_steps_run() {
         gc_step_not_running(h);
@@ -64,7 +70,9 @@ pub(crate) fn puc_step<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> 
     }
     gc_hold_threads(h);
     h.before_step();
-    crate::runtime::gc_hooks::hook_step(h, false);
+    if traced {
+        crate::runtime::gc_hooks::hook_step(h, false);
+    }
     let r = match d {
         Dialect::L51 => step_51(h),
         Dialect::L52 => step_52(h),
@@ -75,7 +83,9 @@ pub(crate) fn puc_step<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> 
     h.heap().refresh_gc_limit();
     // a 5.1–5.3 finalizer's error is thrown out of the step
     r?;
-    crate::runtime::gc_hooks::hook_step(h, true);
+    if traced {
+        crate::runtime::gc_hooks::hook_step(h, true);
+    }
     Ok(())
 }
 
@@ -216,7 +226,8 @@ pub(super) fn puc_step_forced<H: StepHost + ?Sized>(h: &mut H) -> Result<(), Lua
     let run = h.heap().gc_run_mark();
     h.heap().gc_set_fin_stop(false);
     h.heap().gc_restore_stopped(false);
-    let r = puc_step(h);
+    let traced = h.heap().puc.dialect != Dialect::L52;
+    let r = step_traced(h, traced);
     if r.is_ok() || h.heap().puc.dialect == Dialect::L52 {
         h.heap().gc_restore_run(run);
     }
