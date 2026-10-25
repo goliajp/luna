@@ -63,17 +63,9 @@ fn searcher_croot_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<
     op.func(vm, id, searcher_croot, Builtin::None, &[p], nup)
 }
 
-/// luna's `loadfile` the Lua searcher loads with: its own, PUC calls
-/// `luaL_loadfilex`, so no sweep of PUC's visits it.
-fn own_loadfile(vm: &mut Vm) -> Result<Value, LuaError> {
-    let f = vm.uncounted(|vm| vm.lib_native(crate::vm::lib_os_io::nat_loadfile))?;
-    Ok(crate::vm::exec::host_pcall::luna_only(f))
-}
-
 fn searcher_lua_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<Value, LuaError> {
     let p = package(vm, op, nup);
-    let lf = op.own(vm, "loadfile", own_loadfile)?;
-    op.func(vm, id, searcher_lua, Builtin::None, &[p, lf], nup)
+    op.func(vm, id, searcher_lua, Builtin::None, &[p], nup)
 }
 
 /// The mark of a module being loaded, to catch loops: a light userdata

@@ -59,12 +59,15 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         Err(msg) => return vm.nat_ret(fs, &[Value::Str(msg)]),
     };
     let file = found.file.clone();
-    let loadfile = vm.nat_upval(fs, 1);
     let fname = super::path::found_string(vm, &found)?;
-    let r = vm.call_value(loadfile, &[fname])?;
-    match r.first() {
-        Some(f @ Value::Closure(_)) => {
-            let f = *f;
+    // `luaL_loadfilex`, a C function the searcher calls (no level of its
+    // own), the name found on the stack meanwhile
+    let base = vm.lib_roots.mark();
+    vm.lib_roots.push(fname);
+    let r = crate::vm::lib_os_io::load_path(vm, Some(&file), None);
+    vm.lib_roots.release(base);
+    match r {
+        Ok(f @ Value::Closure(_)) => {
             // 5.1's loader gets only the name; 5.2+ also the file name,
             // which `checkload` pushes again from the found name's bytes
             if vm.version() == LuaVersion::Lua51 {
@@ -80,11 +83,8 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             vm.lib_roots.pop_n(2);
             vm.nat_ret(fs, &[f, pushed?])
         }
-        _ => {
-            let msg = match r.get(1) {
-                Some(&m) => argcheck::to_str_bytes(vm, m).unwrap_or_default(),
-                None => Vec::new(),
-            };
+        Ok(m) | Err(m) => {
+            let msg = argcheck::to_str_bytes(vm, m).unwrap_or_default();
             Err(load_error(vm, &name, &file, &msg))
         }
     }
