@@ -69,6 +69,38 @@ impl Heap {
         self.stash_marker(m);
     }
 
+    /// PUC `luaC_fullgc` with marking under way (`keepinvariant`): no
+    /// atomic step, `entersweep` and the sweep to its end (5.1 back to the
+    /// string sweep), which with the white not flipped frees nothing and
+    /// turns every object white again, sweeping the threads as it does.
+    /// The marking done so far is dropped; the collection starts over.
+    pub(crate) fn gc_abandon_marking(&mut self) {
+        let mut m = self.loan_marker();
+        self.settle_sizer(&mut m);
+        while m.stack.pop().is_some() {}
+        self.gray = m.stack;
+        self.gray_overflow = false;
+        self.grayagain = super::super::mark::GrayStack::default();
+        // the sweep, keeping every object: the white has not flipped
+        self.phase = GcPhase::Sweep;
+        self.sweep_begins();
+        let white = self.current_white;
+        // SAFETY: the lists link allocated objects, none freed here; only
+        // headers are written and the model's hooks of a kept object run
+        unsafe {
+            let mut cur = self.all;
+            while !cur.is_null() {
+                self.puc_sweep_reach(cur);
+                (*cur).flags = (*cur).with_slow(((*cur).flags & !COLOR_BITS) | white);
+                self.puc_sweep_kept(cur);
+                cur = (*cur).next;
+            }
+        }
+        self.whiten_parked();
+        self.puc_sweep_ends();
+        self.phase = GcPhase::Pause;
+    }
+
     /// Drain up to `budget` gray objects (blacken + trace). Returns true if
     /// the gray queue is now empty (caller should follow up with
     /// `gc_finish_atomic`). PUC `propagatemark` budgeted loop.

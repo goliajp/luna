@@ -36,8 +36,6 @@ pub(crate) trait StepHost {
     fn shrink_threads(&mut self);
     /// Whether a finalizer is running, which no collection interrupts.
     fn finalizing(&self) -> bool;
-    /// Whether this cycle's propagation has shrunk the running thread.
-    fn running_shrunk(&self) -> bool;
     /// An emergency collection's visit of every thread, which 5.2's sweep
     /// shrinks.
     fn shrink_threads_emergency(&mut self);

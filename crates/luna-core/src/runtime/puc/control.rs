@@ -36,11 +36,4 @@ impl Heap {
     pub(in crate::runtime::puc) fn fin51_threshold_back(&mut self, saved: i64) {
         self.puc.pace.set_threshold(saved);
     }
-
-    /// Whether this cycle's propagation shrank thread `h` (5.3), or its
-    /// sweep kept it (5.2).
-    #[inline]
-    pub(crate) fn shrunk_this_cycle(&self, h: *mut GcHeader) -> bool {
-        self.puc.shrunk.contains(&h)
-    }
 }
