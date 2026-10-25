@@ -86,8 +86,8 @@ pub(super) fn shrink_thread(
         }
         return;
     }
-    heap.hook_shrink(sz.stack, inuse);
     let stack = |heap: &mut crate::runtime::heap::Heap, sz: &mut ThreadSizes| {
+        heap.hook_shrink(sz.stack, inuse);
         let s = stack_size::shrink(v, sz.stack, inuse);
         heap.acct_stack(sz.thread, sz.stack, s);
         sz.stack = s;
@@ -100,6 +100,7 @@ pub(super) fn shrink_thread(
                 if at != Shrink::Collector {
                     break;
                 }
+                heap.hook_shrink(sz.stack, inuse - 1);
                 let (s, calls) = halve_51(sz.stack, inuse, sz.frames51, levels.saturating_sub(1));
                 heap.acct_ci51(sz.thread, sz.frames51, calls);
                 heap.acct_stack(sz.thread, sz.stack, s);
@@ -148,7 +149,7 @@ impl Vm {
 
     /// `luaD_pcall` catching an error, the level it is made from current in
     /// luna as in PUC (a load's, a finalizer's).
-    pub(super) fn shrink_caught_error(&mut self) {
+    pub(crate) fn shrink_caught_error(&mut self) {
         let inuse = self.stack_in_use();
         self.shrink_levels(Shrink::Caught, inuse, 0);
     }

@@ -116,13 +116,18 @@ pub(crate) fn gc_steps_to_pause<H: StepHost + ?Sized>(h: &mut H) -> Result<(), L
     Ok(())
 }
 
+/// The instrumented PUC that `LUNA_GC_NOAUTO` compares with skips every
+/// `luaC_step`, the ones `lua_gc` asks for too; 5.2's `lua_gc` runs
+/// `luaC_forcestep`, which it does not skip.
+pub(crate) fn lua_step_skipped(heap: &crate::runtime::heap::Heap) -> bool {
+    heap.no_auto() && heap.puc.dialect != Dialect::L52
+}
+
 /// `lua_gc(L, LUA_GCSTEP, n)` (`collectgarbage("step", n)`) in
 /// incremental mode: the debt it sets and the steps it runs, whether
 /// or not the collector is stopped; true when a cycle ended.
 pub(crate) fn gc_lua_step<H: StepHost + ?Sized>(h: &mut H, n: i64) -> Result<bool, LuaError> {
-    // the instrumented PUC that `LUNA_GC_NOAUTO` compares with skips every
-    // `luaC_step`, the ones `lua_gc` asks for too
-    if h.heap().no_auto() {
+    if lua_step_skipped(h.heap()) {
         return Ok(false);
     }
     let d = h.heap().puc.dialect;
