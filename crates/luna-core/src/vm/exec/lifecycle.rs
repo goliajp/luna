@@ -111,6 +111,7 @@ impl Vm {
                 meta_conts: 0,
                 host_conts: 0,
                 ci_alloc: [0, u32::MAX][usize::from(version == LuaVersion::Lua51)],
+                gathering: false,
             },
             nny: 0,
             msgh_depth: 0,

@@ -67,6 +67,7 @@ mod numeric_for_kinds;
 mod object_key_order;
 mod open_paths;
 mod open_running;
+mod open_upval_lifetimes;
 mod os_time_isdst;
 mod pointer_text;
 mod proto51_value;

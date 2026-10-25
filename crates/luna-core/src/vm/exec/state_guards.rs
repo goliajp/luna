@@ -83,4 +83,9 @@ pub(crate) struct CallGuards {
     /// PUC 5.2+: the `CallInfo`s the running thread has allocated besides
     /// its base one (see `call_info.rs`); `u32::MAX` in 5.1. Per-thread.
     pub(crate) ci_alloc: u32,
+    /// an emergency collection runs from making a new closure, whose
+    /// upvalues are gathered before it is made (PUC makes it first,
+    /// holding the ones it finds): it keeps the running thread's open
+    /// upvalues ([`Vm::retry_oom_gathering`])
+    pub(crate) gathering: bool,
 }

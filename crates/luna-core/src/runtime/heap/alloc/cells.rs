@@ -23,6 +23,38 @@ impl Heap {
         Ok(g)
     }
 
+    /// A new open upvalue of stack slot `slot` of `thread` (`None`: the
+    /// main thread). 5.1 and 5.2 keep it off the list until it closes
+    /// ([`Heap::upval_closed`]).
+    #[inline]
+    pub(crate) fn try_new_open_upvalue(
+        &mut self,
+        slot: u32,
+        thread: Option<Gc<crate::runtime::Coro>>,
+    ) -> Result<Gc<Upvalue>, Oom> {
+        let p = self.alloc_block::<Upvalue>()?;
+        // SAFETY: `p` is a fresh block for one `Upvalue`, which starts with
+        // its header; kept off the list (white as a new object) or linked,
+        // the heap owns it from here
+        let g = unsafe {
+            p.write(Upvalue {
+                hdr: GcHeader::new(ObjTag::Upvalue),
+                state: UpvalState::Open { slot, thread },
+            });
+            let h = p as *mut GcHeader;
+            if self.puc_rules().open_upvals_on_threads {
+                self.hook_reborn(h);
+                (*h).next = list::ON_THREAD;
+                (*h).paint(self.white());
+            } else {
+                self.link(h);
+            }
+            Gc::from_ptr(p)
+        };
+        self.puc_born(g, Made);
+        Ok(g)
+    }
+
     /// Create a userdata (an io file handle — luna's only userdata) with no
     /// metatable yet; the io library installs the shared `FILE*` metatable.
     pub fn new_userdata(&mut self, payload: UserdataPayload, writable: bool) -> Gc<Userdata> {

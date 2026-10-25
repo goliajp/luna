@@ -63,11 +63,11 @@ impl Vm {
             Err(i) => i,
         };
         let thread = self.current;
-        let uv = self
-            .heap
-            .try_new_upvalue(UpvalState::Open { slot, thread })
-            .ok()?;
-        self.open_upvals.insert(i, (slot, uv)).ok()?;
+        let uv = self.heap.try_new_open_upvalue(slot, thread).ok()?;
+        if self.open_upvals.insert(i, (slot, uv)).is_err() {
+            self.heap.upval_unlisted(uv);
+            return None;
+        }
         Some(uv)
     }
 

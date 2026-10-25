@@ -18,9 +18,9 @@ use luna_core::vm::Vm;
 const ALIGN: usize = 16;
 const POISON: u8 = 0xDB;
 
-/// The freed blocks kept, and the growths counted and refused: every one
-/// from the `.1.1`th on.
-struct Held(RefCell<Vec<(*mut u8, usize)>>, Cell<(usize, usize)>);
+/// The freed blocks kept, and the growths counted and refused: the ones
+/// from the `.1.1`th to before the `.1.2`th.
+struct Held(RefCell<Vec<(*mut u8, usize)>>, Cell<(usize, usize, usize)>);
 
 unsafe extern "C" fn quarantine(
     ud: *mut c_void,
@@ -40,9 +40,9 @@ unsafe extern "C" fn quarantine(
         return std::ptr::null_mut();
     }
     if nsize > osize {
-        let (grown, refuse_from) = held.1.get();
-        held.1.set((grown + 1, refuse_from));
-        if grown + 1 >= refuse_from {
+        let (grown, from, until) = held.1.get();
+        held.1.set((grown + 1, from, until));
+        if (from..until).contains(&(grown + 1)) {
             return std::ptr::null_mut();
         }
     }
@@ -64,9 +64,20 @@ unsafe extern "C" fn quarantine(
 /// `source` on a Vm of `version` with its libraries open, every growth
 /// from the `refuse_from`th on (counted from when `source` starts) refused.
 pub(crate) fn run(version: LuaVersion, seed: u32, refuse_from: usize, source: &str) -> String {
+    run_refusing(version, seed, refuse_from..usize::MAX, source)
+}
+
+/// [`run`] with only the growths in `refused` refused: a collection that
+/// a refusal starts is followed by allocations that succeed.
+pub(crate) fn run_refusing(
+    version: LuaVersion,
+    seed: u32,
+    refused: std::ops::Range<usize>,
+    source: &str,
+) -> String {
     let held = Box::into_raw(Box::new(Held(
         RefCell::default(),
-        Cell::new((0, usize::MAX)),
+        Cell::new((0, usize::MAX, usize::MAX)),
     )));
     // SAFETY: `quarantine` follows the `lua_Alloc` contract and `held`
     // outlives the Vm, dropped below before it
@@ -74,7 +85,7 @@ pub(crate) fn run(version: LuaVersion, seed: u32, refuse_from: usize, source: &s
     let mut vm = Vm::try_new_minimal_with_mem_and_seed(version, mem, seed).expect("a Vm");
     vm.open_all_libs().expect("the libraries open");
     // SAFETY: `held` lives until after the Vm is dropped below
-    unsafe { &*held }.1.set((0, refuse_from));
+    unsafe { &*held }.1.set((0, refused.start, refused.end));
     // loaded and called as a host does (`luaL_loadstring`, `lua_pcall`)
     let called = vm
         .load(source.as_bytes(), b"=chunk")

@@ -2,13 +2,13 @@
 //! closures mark them: an open upvalue no live closure holds is freed by
 //! the sweep as it reaches its thread (the main thread after the others),
 //! one a function closes before that is freed as it is closed, and one a
-//! new closure finds is taken back. luna takes the dead ones off the open
-//! lists when the marking ends, keeps their blocks for one more cycle, and
-//! counts each free where PUC frees it.
+//! new closure finds is taken back. The live ones turn white there, and
+//! one goes on the list of objects only as it closes. luna keeps open
+//! upvalues off that list too, takes the dead ones off the open lists when
+//! the marking ends, and frees each where PUC frees it.
 
 use super::*;
 use crate::runtime::Coro;
-use crate::runtime::dialect::Dialect;
 use crate::runtime::function::{UpvalState, Upvalue};
 use crate::runtime::mem::LVec;
 
@@ -28,6 +28,11 @@ pub(crate) struct OpenLend {
     pub(crate) running: *mut OpenList,
     pub(crate) running_co: *mut GcHeader,
     pub(crate) main: *mut OpenList,
+    /// a collection an allocation runs while the VM gathers a new
+    /// closure's upvalues: the running thread's open upvalues are all
+    /// kept. luna gathers them before it makes the closure, which PUC
+    /// makes first, holding the ones it finds; the VM holds them meanwhile.
+    pub(crate) keep_running: bool,
 }
 
 /// The dead open upvalues the sweep has not reached yet.
@@ -49,11 +54,12 @@ impl Heap {
     /// Whether this dialect's collector keeps open upvalues on threads.
     #[inline]
     pub(crate) fn open_on_threads(&self) -> bool {
-        matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
+        self.puc.rules.open_upvals_on_threads
     }
 
     /// The marking is over: the open upvalues it left white are dead, off
-    /// their lists, and kept (black) until their frees are counted.
+    /// their lists, and kept (black) until PUC frees them; the others take
+    /// the white of the sweep to come.
     pub(in crate::runtime::puc) fn doom_open_upvals(&mut self) {
         let Some(lend) = self.puc.open_dead.lend.take() else {
             return;
@@ -61,7 +67,12 @@ impl Heap {
         if !self.open_on_threads() {
             return;
         }
+        // the white of the sweep about to start, which the live ones take
+        // (PUC's sweep of the thread's list); none is on the list, so the
+        // sweep does not reach it
+        let live_white = self.white() ^ WHITE_BITS;
         let mut lists: Vec<(*mut GcHeader, *mut OpenList)> = vec![(lend.running_co, lend.running)];
+        let mut keep = lend.keep_running;
         if !lend.main.is_null() {
             lists.push((ptr::null_mut(), lend.main));
         }
@@ -81,11 +92,13 @@ impl Heap {
                 let h = uv.as_ptr() as *mut GcHeader;
                 // SAFETY: a listed upvalue is allocated
                 let f = unsafe { (*h).flags() };
-                if !is_white(f) {
+                if !is_white(f) || keep {
+                    // SAFETY: as above
+                    unsafe { (*h).paint(live_white) };
                     return true;
                 }
-                // SAFETY: as above; the block is kept through this sweep,
-                // holding nothing (its thread may be freed by it)
+                // SAFETY: as above; the block is kept until PUC frees it,
+                // holding nothing (its thread may be freed first)
                 unsafe {
                     (*h).paint(BLACK);
                     (*uv.as_ptr()).state = UpvalState::Closed(Value::Nil);
@@ -94,6 +107,7 @@ impl Heap {
                 false
             });
             self.puc.open_dead.dead[start..].reverse();
+            keep = false;
         }
     }
 
@@ -157,8 +171,12 @@ impl Heap {
             .iter()
             .position(|&(o, s, _)| o == owner && s == slot)?;
         let uv = self.puc.open_dead.dead.remove(i).2;
-        // SAFETY: a dead open upvalue is kept until its free is counted
-        unsafe { (*uv.as_ptr()).state = UpvalState::Open { slot, thread } };
+        // SAFETY: a dead open upvalue is kept until its free is counted;
+        // it is off the list, and live again in the current white
+        unsafe {
+            (*uv.as_ptr()).state = UpvalState::Open { slot, thread };
+            (*uv.header()).paint(self.white());
+        }
         Some(uv)
     }
 
@@ -174,10 +192,30 @@ impl Heap {
             self.puc.open_dead.dead.remove(i);
             if !uv.hdr().is_uncounted() {
                 self.acct_part(self.puc.sizes.upval, 0);
-                // SAFETY: `uv` is a handle, so its upvalue is live; nothing
-                // borrows the header while its per-type byte is written
-                unsafe { (*uv.header()).set_uncounted(true) };
+            }
+            // SAFETY: the block is on no list, and only dead closures (which
+            // free theirs without reading them) still point at it; counted
+            // above, it is freed uncounted
+            unsafe {
+                (*uv.header()).set_uncounted(true);
+                self.free_obj(uv.header());
             }
         }
+    }
+
+    /// The heap is dropped: the open upvalues off the list, those of the
+    /// threads that are not running and the dead ones not freed yet (the
+    /// VM puts its own lists' on the list as it is dropped).
+    pub(in crate::runtime::puc) fn open_off_list(&mut self) -> Vec<*mut GcHeader> {
+        let mut out: Vec<*mut GcHeader> = std::mem::take(&mut self.puc.open_dead.dead)
+            .into_iter()
+            .map(|(_, _, uv)| uv.header())
+            .collect();
+        if self.open_on_threads() {
+            for &co in self.threads() {
+                out.extend(co.open_upvals.iter().map(|&(_, uv)| uv.header()));
+            }
+        }
+        out
     }
 }

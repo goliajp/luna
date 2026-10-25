@@ -6,6 +6,10 @@ use super::*;
 /// In the `next` of an object kept off the list: PUC has not made it yet.
 const DETACHED: *mut GcHeader = ptr::without_provenance_mut(1);
 
+/// In the `next` of an open upvalue kept off the list (5.1, 5.2): on its
+/// thread, where PUC keeps it until it closes.
+pub(super) const ON_THREAD: *mut GcHeader = ptr::without_provenance_mut(2);
+
 impl Heap {
     /// A new object `h` kept off the list until PUC makes it ([`Heap::link_now`]
     /// then puts it on), white as a new object for the barriers that reach
@@ -128,6 +132,36 @@ impl Heap {
     #[inline]
     pub(in crate::runtime) fn main_thread_51(&self) -> Option<Gc<GcHeader>> {
         self.udata_after
+    }
+
+    /// The open upvalue `uv` was closed: one kept off the list (5.1, 5.2)
+    /// goes on its head, as PUC links it (`luaC_linkupval`,
+    /// `luaC_checkupvalcolor`): a marked one stays black while marking
+    /// (the barrier on its value follows), and turns the current white
+    /// after it.
+    #[inline(always)]
+    pub(crate) fn upval_closed(&mut self, uv: Gc<crate::runtime::function::Upvalue>) {
+        let h = uv.header();
+        // SAFETY: `uv` is a handle, so its upvalue is allocated; only its
+        // header is read and written, and one off the list goes on it once
+        unsafe {
+            if (*h).next != ON_THREAD {
+                return;
+            }
+            (*h).next = self.all;
+            if self.phase != GcPhase::Propagate && !is_white((*h).flags()) {
+                (*h).paint(self.current_white);
+            }
+        }
+        self.all = h;
+        self.live += 1;
+    }
+
+    /// A new open upvalue that no open list took: on the list, for the
+    /// sweep to free.
+    #[cold]
+    pub(crate) fn upval_unlisted(&mut self, uv: Gc<crate::runtime::function::Upvalue>) {
+        self.upval_closed(uv);
     }
 
     /// `h`, off the list, back at its head (a string the string sweep
