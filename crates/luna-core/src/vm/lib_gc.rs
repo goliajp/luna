@@ -169,6 +169,9 @@ fn options(v: LuaVersion) -> &'static [&'static str] {
 /// takes many of them to finish a cycle), and one of the `stepsize`
 /// parameter's size from 5.4 on, where stepsize 0 completes the cycle.
 pub(crate) fn step(vm: &mut Vm, n: i64) -> Result<bool, LuaError> {
+    if crate::runtime::puc::step::lua_step_skipped(&vm.heap) {
+        return Ok(false);
+    }
     if vm.gc_mode_is_generational() {
         vm.collect_garbage();
         return Ok(false);
