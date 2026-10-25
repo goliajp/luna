@@ -77,16 +77,6 @@ impl Vm {
             .map(Value::Native)
     }
 
-    /// A string of `parts` joined, composed in a block of the allocation
-    /// context.
-    pub(crate) fn concat_str(&mut self, parts: &[&[u8]]) -> Result<Value, LuaError> {
-        let mut buf = crate::runtime::mem::LVec::new(self.heap.mem());
-        for p in parts {
-            buf.extend_from_slice(p)?;
-        }
-        self.str_value(&buf)
-    }
-
     /// Room for `extra` more bytes in `buf`, a library's string buffer (PUC
     /// `luaL_Buffer`). When the allocation context refuses, each dialect
     /// fails as its buffer does: 5.1 pushes pieces as strings and 5.2 keeps

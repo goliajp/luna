@@ -45,6 +45,15 @@ impl Vm {
         checked
     }
 
+    /// 5.5's `f_parser` makes its anchor table before it reads anything:
+    /// counted for a load that fails before its replay counts it.
+    pub(crate) fn parser_anchor_55(&mut self) -> Result<(), LuaError> {
+        if self.version >= LuaVersion::Lua55 && self.heap.counting() {
+            self.heap.new_load_tab()?;
+        }
+        Ok(())
+    }
+
     /// The parse of the `lua_load` `Vm::host_load_begin` began has ended.
     pub(crate) fn host_load_end(&mut self) {
         self.heap.set_load_checked(false);

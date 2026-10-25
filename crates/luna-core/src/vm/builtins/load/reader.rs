@@ -132,9 +132,18 @@ pub(super) fn next_piece(
         v => match argcheck::to_str_bytes(vm, v) {
             Some(b) => Some(b),
             None => {
-                return Err(vm
-                    .str_value(b"reader function must return a string")
-                    .unwrap_or_else(|e| e.0));
+                // `luaL_error`, positioned at load's caller; the running
+                // message handler runs on it, a memory error passes it by
+                let oom = vm.heap.mem_ctx().oom_raised();
+                let e = crate::vm::builtins::errors::raise_str(
+                    vm,
+                    "reader function must return a string",
+                )
+                .0;
+                if vm.heap.mem_ctx().oom_raised() != oom {
+                    return Err(e);
+                }
+                return Err(vm.load_error_handled(e));
             }
         },
     };

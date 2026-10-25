@@ -33,6 +33,15 @@ impl Vm {
         self.call_msgh_at(handler, err, None)
     }
 
+    /// `msg` raised with `lua_error` inside `lua_load` (`luaL_error` of the
+    /// reader): the protected parser keeps the running message handler,
+    /// which runs on it (`luaG_errormsg`); the handler's result.
+    pub(crate) fn load_error_handled(&mut self, msg: Value) -> Value {
+        match self.nearest_catcher() {
+            Some(Some(handler)) => self.call_msgh(handler, msg),
+            _ => msg,
+        }
+    }
     /// [`Vm::call_msgh`] with the handler called at stack slot `at` (PUC
     /// `luaG_errormsg`, see `raise_top`).
     pub(crate) fn call_msgh_at(&mut self, handler: Value, err: Value, at: Option<u32>) -> Value {

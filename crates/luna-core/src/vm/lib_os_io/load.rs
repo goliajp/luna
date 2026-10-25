@@ -129,14 +129,17 @@ fn load_named_chunk(
         && !mode.contains(if binary { &b'b' } else { &b't' })
     {
         let kind: &[u8] = if binary { b"binary" } else { b"text" };
-        let msg = vm.concat_str(&[
-            b"attempt to load a ",
-            kind,
-            b" chunk (mode is '",
-            mode,
-            b"')",
-        ]);
-        return Err(msg.unwrap_or_else(|e| e.0));
+        use crate::runtime::puc::fmt::FmtArg;
+        if let Err(e) = vm.parser_anchor_55() {
+            return Err(e.0);
+        }
+        let msg = vm.pushfstring(
+            b"attempt to load a %s chunk (mode is '%s')",
+            &[FmtArg::S(kind), FmtArg::S(mode)],
+        );
+        // `luaD_protectedparser`'s `luaD_pcall` caught it
+        vm.shrink_caught_error();
+        return Err(msg.map_or_else(|e| e.0, Value::Str));
     }
     match vm.load_named(src, chunkname, name) {
         Ok(cl) => Ok(Value::Closure(cl)),
