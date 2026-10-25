@@ -41,25 +41,26 @@ impl Heap {
         // SAFETY: the caller's contract; only `cur`'s header and the links
         // around it are written
         unsafe {
-            let white = self.current_white;
-            (*cur).flags = (*cur).with_slow(((*cur).flags & !(COLOR_BITS | DEFERRED)) | white);
-            let parked = (*cur).cls & PARKED != 0;
-            (*cur).cls ^= PARKED;
+            let cls = (*cur).cls;
+            (*cur).flags &= !DEFERRED;
+            let parked = cls & PARKED != 0;
+            (*cur).cls = cls ^ PARKED;
             if parked && at_head && self.udata_after.is_none() {
                 return Due::Here;
             }
             // off the list: the boundary of the young objects moves on
-            for b in [&mut self.young, &mut self.rooted_young] {
-                if *b == cur {
-                    *b = (*cur).next;
-                }
+            if (self.young == cur) | (self.rooted_young == cur) {
+                self.young_passed_to(cur, (*cur).next);
             }
             *link = (*cur).next;
             if parked {
-                self.put_back(Gc::from_ptr(cur));
+                // where the sweep has been: white as it leaves its survivors
+                (*cur).flags = white_flags((*cur).flags, cls, self.current_white);
+                self.put_back(Gc::from_ptr_unchecked(cur));
             } else {
                 // at the end: the finalizers are taken in the order the
-                // sweep meets their objects, from the front
+                // sweep meets their objects, from the front; its color the
+                // marking's until `whiten_parked`
                 (*cur).next = ptr::null_mut();
                 match self.parked_end.is_null() {
                     true => self.parked = cur,
@@ -84,20 +85,25 @@ impl Heap {
             } else if cls & PARKED != 0 {
                 (*h).cls = cls & !PARKED;
                 // off the parked list, mostly its front
-                let (mut prev, mut at) = (ptr::null_mut::<GcHeader>(), self.parked);
-                while at != h {
-                    (prev, at) = (at, (*at).next);
-                }
-                match prev.is_null() {
-                    true => self.parked = (*h).next,
-                    false => (*prev).next = (*h).next,
-                }
-                if self.parked_end == h {
-                    self.parked_end = prev;
+                let next = (*h).next;
+                if self.parked == h {
+                    self.parked = next;
+                    if next.is_null() {
+                        self.parked_end = next;
+                    }
+                } else {
+                    let mut prev = self.parked;
+                    while (*prev).next != h {
+                        prev = (*prev).next;
+                    }
+                    (*prev).next = next;
+                    if next.is_null() {
+                        self.parked_end = prev;
+                    }
                 }
                 // marking keeps its color (`keepinvariant`)
                 if self.phase != GcPhase::Propagate {
-                    (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
+                    (*h).flags = white_flags((*h).flags, cls, self.current_white);
                 }
                 self.put_back(g);
             }
@@ -115,8 +121,18 @@ impl Heap {
         // headers are written
         unsafe {
             while !cur.is_null() {
-                (*cur).flags = (*cur).with_slow(((*cur).flags & !COLOR_BITS) | white);
+                (*cur).flags = white_flags((*cur).flags, (*cur).cls, white);
                 cur = (*cur).next;
+            }
+        }
+    }
+
+    /// The young objects' boundaries at `from` move to `to`.
+    #[cold]
+    fn young_passed_to(&mut self, from: *mut GcHeader, to: *mut GcHeader) {
+        for b in [&mut self.young, &mut self.rooted_young] {
+            if *b == from {
+                *b = to;
             }
         }
     }
@@ -136,12 +152,16 @@ impl Heap {
             (*h).next = head;
             self.all = h;
             // no object made since the last safe point: still none
-            if self.young == head {
-                self.young = h;
-            }
-            if self.rooted_young == head {
-                self.rooted_young = h;
+            if (self.young == head) | (self.rooted_young == head) {
+                self.young_passed_to(head, h);
             }
         }
     }
+}
+
+/// The flags of a table or userdata turned white: SLOW only for a
+/// read-only table (`GcHeader::with_slow`), its `cls` read already.
+#[inline(always)]
+fn white_flags(flags: u8, cls: u8, white: u8) -> u8 {
+    (flags & !(COLOR_BITS | SLOW)) | white | ((cls & RO_CLS) << 1)
 }
