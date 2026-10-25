@@ -179,20 +179,6 @@ impl Vm {
 
     // ---- open upvalues ----
 
-    /// The open upvalue of stack slot `slot`, made and listed when there
-    /// is none; a memory error when it cannot be.
-    pub(crate) fn try_find_or_create_upval(&mut self, slot: u32) -> Result<Gc<Upvalue>, LuaError> {
-        let i = match self.open_upval(slot) {
-            Ok(uv) => return Ok(uv),
-            Err(i) => i,
-        };
-        let thread = self.current;
-        let uv = self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Open { slot, thread }))?;
-        // the new upvalue is young while it is not listed yet
-        self.retry_oom(|vm| vm.open_upvals.insert(i, (slot, uv)))?;
-        Ok(uv)
-    }
-
     pub(crate) fn close_from(&mut self, slot: u32) {
         self.heap.close_dead_open(self.current, slot);
         while let Some(&(s, uv)) = self.open_upvals.last() {
@@ -202,6 +188,7 @@ impl Vm {
             let v = self.stack[s as usize];
             // SAFETY: `uv` is an entry of `open_upvals`, which the collector marks as extra roots, so it is alive; no reference into the cell is live, and the borrow covers one call
             unsafe { uv.as_mut() }.set_closed(v);
+            self.heap.upval_closed(uv);
             self.heap.barrier_forward(uv, v);
             self.open_upvals.pop();
         }

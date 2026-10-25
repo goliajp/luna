@@ -115,7 +115,7 @@ impl Vm {
                 let cur = self.read_slot(slot, thread);
                 // young until the closure holds it
                 uv = if collect {
-                    self.retry_oom(|vm| vm.heap.try_new_upvalue(UpvalState::Closed(cur)))?
+                    self.retry_oom_gathering(|vm| vm.heap.try_new_upvalue(UpvalState::Closed(cur)))?
                 } else {
                     self.heap
                         .try_new_upvalue(UpvalState::Closed(cur))
@@ -154,7 +154,7 @@ impl Vm {
         }) {
             return Ok(c);
         }
-        let n = self.retry_oom(|vm| vm.heap.try_new_closure(proto, ups))?;
+        let n = self.retry_oom_gathering(|vm| vm.heap.try_new_closure(proto, ups))?;
         if cached {
             // PUC `luaC_protobarrier`: a black prototype is traversed again,
             // so the atomic step sees its cache (a weak reference) and

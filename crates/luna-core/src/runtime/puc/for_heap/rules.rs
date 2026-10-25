@@ -81,6 +81,9 @@ pub(in crate::runtime) struct HeapRules {
     /// PUC keeps the strings (5.1: every one, 5.2: the short ones) in its
     /// string table, swept apart from the list
     pub(in crate::runtime) sweeps_string_table: bool,
+    /// 5.1 and 5.2 keep an open upvalue on its thread, off the list, and
+    /// put it at the list's head when it closes
+    pub(in crate::runtime) open_upvals_on_threads: bool,
 }
 
 impl HeapRules {
@@ -127,6 +130,7 @@ impl HeapRules {
             },
             strt_grows_strictly: d <= Dialect::L53,
             sweeps_string_table: matches!(d, Dialect::L51 | Dialect::L52),
+            open_upvals_on_threads: matches!(d, Dialect::L51 | Dialect::L52),
         }
     }
 

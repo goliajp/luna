@@ -33,9 +33,9 @@ impl StepHost for Vm {
     fn mark_threads_held(&mut self, m: &mut Marker) {
         Vm::mark_threads_held(self, m);
     }
-    fn marking_ends(&mut self) {
+    fn marking_ends(&mut self, emergency: bool) {
         self.watch_errors();
-        self.lend_open_lists();
+        self.lend_open_lists(emergency);
     }
     fn collection_ends(&mut self) {
         self.forget_dead_errors();

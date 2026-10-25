@@ -58,6 +58,13 @@ impl Heap {
                     }
                 }
                 ObjTag::Coro => {
+                    // an open upvalue keeps its thread alive, and the
+                    // marking took the dead ones off its list
+                    debug_assert!(
+                        self.dropping
+                            || !self.puc_rules().open_upvals_on_threads
+                            || (*(h as *const crate::runtime::Coro)).open_upvals.is_empty()
+                    );
                     self.puc_freed(&*(h as *const crate::runtime::Coro));
                     self.free_block(h as *mut crate::runtime::Coro);
                 }

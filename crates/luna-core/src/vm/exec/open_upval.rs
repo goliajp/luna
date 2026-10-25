@@ -24,4 +24,22 @@ impl Vm {
             None => Err(i),
         }
     }
+
+    /// The open upvalue of stack slot `slot`, made and listed when there
+    /// is none; a memory error when it cannot be.
+    pub(crate) fn try_find_or_create_upval(&mut self, slot: u32) -> Result<Gc<Upvalue>, LuaError> {
+        let i = match self.open_upval(slot) {
+            Ok(uv) => return Ok(uv),
+            Err(i) => i,
+        };
+        let thread = self.current;
+        let uv = self.retry_oom_gathering(|vm| vm.heap.try_new_open_upvalue(slot, thread))?;
+        // the new upvalue is young while it is not listed yet; an emergency
+        // collection meanwhile keeps the list as it is, so `i` holds
+        if let Err(e) = self.retry_oom_gathering(|vm| vm.open_upvals.insert(i, (slot, uv))) {
+            self.heap.upval_unlisted(uv);
+            return Err(e);
+        }
+        Ok(uv)
+    }
 }

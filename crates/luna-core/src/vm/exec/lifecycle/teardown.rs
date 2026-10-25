@@ -12,6 +12,12 @@ impl Drop for Vm {
         self.run_finalizers_closing();
         // a stream left open writes out its buffers before its memory goes
         crate::vm::lib_io::flush_all_closing(self);
+        // the open upvalues the VM lists (5.1 and 5.2 keep them off the
+        // heap's list) go there, for the heap to free
+        let main = self.main_ctx.as_ref().map(|m| &m.open_upvals);
+        for &(_, uv) in self.open_upvals.iter().chain(main.into_iter().flatten()) {
+            self.heap.upval_closed(uv);
+        }
         let id = self.jit_owner_id;
         // SAFETY: the finalizers were the last Lua code this Vm runs, and
         // its functions (the only holders of entry points compiled for it)

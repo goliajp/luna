@@ -213,7 +213,10 @@ impl Heap {
         false
     }
 
-    /// The sweep reached the end of the list.
+    /// The sweep reached the end of the list (once a cycle: kept out of the
+    /// sweep's loop).
+    #[cold]
+    #[inline(never)]
     fn end_sweep(&mut self) {
         self.puc_sweep_ends();
         self.sweep_prev = ptr::null_mut();
