@@ -85,9 +85,12 @@ impl Heap {
         }
     }
 
-    /// Sweep up to `budget` objects after `sweep_prev` (`to_live`: to the first kept); returns the count.
+    /// Sweep up to `budget` objects of PUC's list after `sweep_prev`
+    /// (`to_live`: to the first of them kept); returns how many it met.
     pub(super) fn sweep_objects(&mut self, budget: usize, to_live: bool) -> usize {
         self.sweep_begins();
+        // a heap that counts nothing has every object on PUC's list
+        let counting = self.counting();
         let mut n = 0;
         let new_white = self.current_white;
         // SAFETY: `sweep_prev`, when not null, is an object on `all` kept by
@@ -107,7 +110,10 @@ impl Heap {
                     self.end_sweep();
                     break;
                 }
-                n += 1;
+                // the objects of PUC's list are what it counts and where
+                // a sweep to the first kept one stops
+                let listed = !counting || self.puc_counts_in_sweep(cur);
+                n += usize::from(listed);
                 self.puc_sweep_reach(cur);
                 let f = (*cur).flags;
                 let fate = if is_white(f) && (f & new_white) == 0 {
@@ -129,13 +135,12 @@ impl Heap {
                             && let parked::Due::Moved =
                                 self.sweep_meets_due(link, cur, self.sweep_prev.is_null())
                         {
-                            n -= 1;
                             continue;
                         }
                         (*cur).flags = (*cur).with_slow((f & !(COLOR_BITS | DEFERRED)) | new_white);
                         self.sweep_prev = cur;
                         self.puc_sweep_kept(cur);
-                        if to_live {
+                        if to_live && listed {
                             break;
                         }
                     }
