@@ -17,6 +17,7 @@ use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
 use std::ffi::c_void;
 
+use luna_core::__private::VmJitState;
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::runtime::mem::MemOwner;
@@ -79,8 +80,8 @@ fn run(version: LuaVersion, seed: u32, hot: u32, source: &str) -> String {
     if hot == 0 {
         vm.set_trace_jit_enabled(false);
     } else {
-        vm.jit().trace_hot_threshold = hot;
-        vm.jit().call_hot_threshold = hot;
+        vm.jit_mut().trace_hot_threshold = hot;
+        vm.jit_mut().call_hot_threshold = hot;
         vm.set_trace_tier(TraceTier::Auto);
         vm.set_trace_tier_up_at(37);
     }
