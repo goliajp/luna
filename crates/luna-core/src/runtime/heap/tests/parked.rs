@@ -150,3 +150,23 @@ fn a_finalized_5_1_userdata_goes_back_after_the_main_thread() {
         "right after the main thread"
     );
 }
+
+#[test]
+fn a_marking_dropped_for_a_full_collection_frees_nothing_and_finds_nothing_due() {
+    let mut heap = Heap::new();
+    heap.set_version(LuaVersion::Lua52).unwrap();
+    let fin = finalizable(&mut heap);
+    let garbage = heap.new_table();
+    let keep = heap.new_table();
+    heap.gc_start_propagate(&[Value::Table(keep)], &[]);
+    let _ = heap.gc_step_propagate(1);
+    let live = heap.live_objects();
+    heap.gc_abandon_marking();
+    assert!(heap.phase() == GcPhase::Pause);
+    assert_eq!(heap.live_objects(), live, "nothing freed");
+    assert!(!heap.has_tobefnz(), "no atomic step: nothing found due");
+    for t in [fin, garbage, keep] {
+        let f = t.hdr().flags();
+        assert!(is_white(f) && f & heap.current_white != 0, "{f:#x}");
+    }
+}

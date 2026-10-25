@@ -52,9 +52,6 @@ impl StepHost for Vm {
     fn finalizing(&self) -> bool {
         self.gc_finalizing
     }
-    fn running_shrunk(&self) -> bool {
-        Vm::running_shrunk(self)
-    }
     fn shrink_threads_emergency(&mut self) {
         self.emergency_shrinks_threads();
     }

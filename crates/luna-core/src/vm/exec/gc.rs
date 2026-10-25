@@ -72,12 +72,6 @@ impl Vm {
         self.clear_saved_main();
     }
 
-    /// Whether this cycle's propagation has shrunk the running thread.
-    pub(super) fn running_shrunk(&self) -> bool {
-        let co = self.current.or(self.main_coro);
-        co.is_some_and(|c| self.heap.shrunk_this_cycle(c.as_ptr() as *mut _))
-    }
-
     /// A full stop-the-world collection with the VM's roots (PUC
     /// `luaC_fullgc`), finishing an incremental cycle in progress first.
     /// Returns the number of objects freed.

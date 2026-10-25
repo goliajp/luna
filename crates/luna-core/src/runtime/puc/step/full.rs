@@ -23,12 +23,10 @@ pub(crate) fn full_collect<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Yo
     gc_hold_threads(h);
     h.before_step();
     let propagating = h.heap().gc_phase_is_propagate();
-    if propagating {
-        // 5.3 shrinks the running thread as it traverses it, if this cycle
-        // has not yet
-        if program && rules.shrink_at == ShrinkAt::Traverse && !h.running_shrunk() {
-            h.shrink_stacks();
-        }
+    if propagating && program {
+        h.heap().gc_abandon_marking();
+    } else if propagating {
+        // an emergency finishes the marking in progress
         let mut m = h.heap().loan_marker();
         m.enter_atomic();
         h.mark_roots(&mut m, true);
@@ -39,9 +37,6 @@ pub(crate) fn full_collect<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Yo
         h.heap().stash_marker(m);
         h.marking_ends();
         h.heap().gc_finish_atomic();
-        if program && rules.shrink_at != ShrinkAt::Sweep {
-            h.shrink_threads();
-        }
         h.collection_ends();
     }
     h.heap().gc_finish_sweep();
