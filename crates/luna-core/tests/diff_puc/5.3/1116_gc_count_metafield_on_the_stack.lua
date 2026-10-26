@@ -1,7 +1,9 @@
 -- luaL_getmetafield pushes the metatable, then the name it looks up, and
 -- the push of the name checks for a collection: a finalizer the step runs
 -- inside setmetatable finds both on setmetatable's stack, after its two
--- arguments
+-- arguments. Whether a step lands there at all depends on the string
+-- hash seed, which both pick at random, so only a stack seen in another
+-- shape is printed
 local seen = {}
 local function look()
   for level = 2, 12 do
@@ -27,6 +29,8 @@ for i = 1, 200000 do
   setmetatable(t, {})
 end
 local out = {}
-for k in pairs(seen) do out[#out + 1] = k end
+for k in pairs(seen) do
+  if k ~= "table table table __metatable" then out[#out + 1] = k end
+end
 table.sort(out)
-print(#out > 0, table.concat(out, " | "))
+print(table.concat(out, " | "))
