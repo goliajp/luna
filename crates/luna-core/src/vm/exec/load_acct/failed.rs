@@ -156,6 +156,10 @@ impl Vm {
                     self.grow_buff(&mut r, n);
                 }
                 unclosed(&mut r);
+                // a reader's error was made where it raised it
+                if e.is_reader_failed() {
+                    return Ok(());
+                }
                 self.replay_syntax_error(&mut r, e, failed.near, source.as_bytes())
             });
         self.compile_scratch.puc_log = log;

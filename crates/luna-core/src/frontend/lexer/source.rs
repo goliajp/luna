@@ -18,6 +18,11 @@ pub trait Source {
     fn out_of_memory(&self) -> Option<Oom> {
         None
     }
+    /// Whether reading stopped because the reader failed (raised an error
+    /// or returned what is no piece): the scan stops where it was.
+    fn reader_failed(&self) -> bool {
+        false
+    }
     /// The parse opened (`true`) or closed a function, where PUC's
     /// `open_func` / `close_func` run.
     fn opened(&mut self, _open: bool) {}
@@ -34,12 +39,24 @@ impl Source for Whole<'_> {
     }
 }
 
-/// A reader of the next piece: it appends one piece to the buffer and
-/// returns true, or returns false at the end of the input (PUC's
-/// `lua_Reader` returning no bytes); an error when the buffer cannot grow.
-/// It is told how many functions the parse has open, PUC's `FuncState`s
-/// (main included), whose objects PUC holds on the stack meanwhile.
-pub(crate) type Feed<'f> = dyn FnMut(&mut LVec<u8>, u32) -> Result<bool, Oom> + 'f;
+/// What a reader did when asked for the next piece.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fed {
+    /// appended a piece
+    More,
+    /// signalled the end of the input (PUC's `lua_Reader` returning no
+    /// bytes)
+    End,
+    /// failed: PUC's reader raised an error where the scanner called it
+    Failed,
+}
+
+/// A reader of the next piece: it appends one piece to the buffer, or
+/// tells the end of the input or its failure; an error when the buffer
+/// cannot grow. It is told how many functions the parse has open, PUC's
+/// `FuncState`s (main included), whose objects PUC holds on the stack
+/// meanwhile.
+pub(crate) type Feed<'f> = dyn FnMut(&mut LVec<u8>, u32) -> Result<Fed, Oom> + 'f;
 
 /// A source read piece by piece. Once the reader has signalled the end it
 /// is not called again: PUC's scanner stops at the end of input.
@@ -49,6 +66,8 @@ pub(crate) struct Stream<'f> {
     ended: bool,
     /// reading stopped because `buf` could not grow
     oom: Option<Oom>,
+    /// reading stopped because the reader failed
+    failed: bool,
     /// the functions the parse has open
     open: u32,
 }
@@ -63,6 +82,7 @@ impl<'f> Stream<'f> {
             feed,
             ended,
             oom: None,
+            failed: false,
             open: 1,
         }
     }
@@ -95,7 +115,11 @@ impl Source for Stream<'_> {
         }
         let before = self.buf.len();
         match (self.feed)(&mut self.buf, self.open) {
-            Ok(more) if more && self.buf.len() > before => {}
+            Ok(Fed::More) if self.buf.len() > before => {}
+            Ok(Fed::Failed) => {
+                self.ended = true;
+                self.failed = true;
+            }
             Ok(_) => self.ended = true,
             // the scan sees the end of the input; the parse then reports
             // the memory error instead of what it found there
@@ -110,6 +134,10 @@ impl Source for Stream<'_> {
 
     fn out_of_memory(&self) -> Option<Oom> {
         self.oom
+    }
+
+    fn reader_failed(&self) -> bool {
+        self.failed
     }
 
     fn opened(&mut self, open: bool) {

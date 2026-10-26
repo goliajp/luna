@@ -35,6 +35,17 @@ impl SyntaxError {
         SyntaxError::unpositioned(&b"not enough memory"[..])
     }
 
+    /// The scan of a streamed source stopped because its reader failed:
+    /// the load fails with the reader's error, not this.
+    pub(crate) fn reader_failed() -> SyntaxError {
+        SyntaxError::unpositioned(&b"reader failed"[..])
+    }
+
+    /// Whether this is [`SyntaxError::reader_failed`].
+    pub(crate) fn is_reader_failed(&self) -> bool {
+        self.line == 0 && self.msg == b"reader failed"
+    }
+
     /// Whether this is the memory error a load raises.
     pub fn is_memory(&self) -> bool {
         self.line == 0 && self.msg == b"not enough memory"

@@ -1,6 +1,7 @@
 //! A text chunk parsed piece by piece from a reader.
 
 use super::*;
+use crate::frontend::lexer::Fed;
 
 /// A text chunk being loaded from a reader (see `Vm::text_load`).
 pub struct TextLoad {
@@ -12,6 +13,14 @@ pub struct TextLoad {
 
 /// The outcome of `TextLoad::parse`, for `Vm::load_parsed`.
 pub struct ParsedText(pub(super) Result<crate::frontend::parser::Parsed, Failure>);
+
+impl ParsedText {
+    /// Whether the parse stopped because its reader failed, where it was
+    /// (see [`TextLoad::parse_open`]).
+    pub(crate) fn reader_failed(&self) -> bool {
+        matches!(&self.0, Err((e, Some(_))) if e.is_reader_failed())
+    }
+}
 
 /// A parse error, with where the parse failed and the source it read.
 pub(super) type Failure = (
@@ -26,15 +35,19 @@ impl TextLoad {
     /// the end. Input past the loader's byte budget fails the load with
     /// "not enough memory", as [`Vm::load`] does.
     pub fn parse(self, first: Vec<u8>, feed: &mut dyn FnMut(&mut Vec<u8>) -> bool) -> ParsedText {
-        self.parse_open(first, &mut |buf, _, _| feed(buf))
+        self.parse_open(first, &mut |buf, _, _| match feed(buf) {
+            true => Fed::More,
+            false => Fed::End,
+        })
     }
 
     /// [`TextLoad::parse`], `feed` told as well how many functions the
-    /// parse has open (main included) and shown the source read so far.
+    /// parse has open (main included) and shown the source read so far,
+    /// and able to fail: the scan stops where it was, and the parse fails.
     pub(crate) fn parse_open(
         self,
         first: Vec<u8>,
-        feed: &mut dyn FnMut(&mut Vec<u8>, u32, &[u8]) -> bool,
+        feed: &mut dyn FnMut(&mut Vec<u8>, u32, &[u8]) -> Fed,
     ) -> ParsedText {
         let oom = || SyntaxError {
             line: 0,
@@ -53,13 +66,13 @@ impl TextLoad {
         drop(first);
         let mut over = false;
         let mut piece = Vec::new();
-        let mut capped = |buf: &mut LVec<u8>, open: u32| -> Result<bool, Oom> {
+        let mut capped = |buf: &mut LVec<u8>, open: u32| -> Result<Fed, Oom> {
             piece.clear();
             // the reader runs Lua code, outside the load's unwinding
             let more = outside_load(|| feed(&mut piece, open, &buf[..]));
             if buf.len() + piece.len() > budget {
                 over = true;
-                return Ok(false);
+                return Ok(Fed::End);
             }
             buf.extend_from_slice(&piece)?;
             Ok(more)

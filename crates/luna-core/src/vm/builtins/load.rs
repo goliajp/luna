@@ -1,6 +1,7 @@
 //! `load` and 5.1 `loadstring`.
 
 use super::*;
+use crate::frontend::lexer::Fed;
 use crate::runtime::puc::Deferred;
 use crate::runtime::{Gc, LuaStr};
 
@@ -191,15 +192,21 @@ fn read_and_load(
         Ok(Some(p)) => {
             fed += p.len() as u32;
             buf.extend_from_slice(&p);
-            true
+            Fed::More
         }
-        Ok(None) => false,
+        Ok(None) => Fed::End,
         Err(msg) => {
             failed = Some(msg);
-            false
+            Fed::Failed
         }
     });
     if let Some(msg) = failed {
+        // what PUC's parser made of the text read so far is counted, its
+        // error the reader's
+        if vm.heap.counting() && parsed.reader_failed() {
+            let _ = vm.load_parsed_spliced(parsed, name, None, splices);
+            return fail(vm, msg);
+        }
         return caught(vm, msg, &mut splices);
     }
     let r = vm.load_parsed_spliced(parsed, name, None, splices);

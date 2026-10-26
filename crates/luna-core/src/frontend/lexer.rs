@@ -17,7 +17,7 @@ mod number;
 pub(crate) mod source;
 mod strings;
 
-pub(crate) use source::{Feed, Stream};
+pub(crate) use source::{Fed, Feed, Stream};
 pub(crate) use source::{Source, Whole};
 
 /// Streaming Lua lexer. Holds the source bytes (borrowed whole, or read
