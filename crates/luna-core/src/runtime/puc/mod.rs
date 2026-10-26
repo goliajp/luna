@@ -30,7 +30,7 @@ mod obj;
 pub(crate) mod pace;
 mod params;
 pub(crate) use obj::PucObj;
-pub(crate) use params::{GcParams, Param};
+pub(crate) use params::{GcParams, LUNA_PAUSE, LUNA_STEPMUL, Param};
 mod parts;
 mod proto;
 pub(crate) use proto::ENV51;

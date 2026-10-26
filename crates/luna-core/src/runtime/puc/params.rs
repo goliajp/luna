@@ -168,10 +168,14 @@ fn apply_param(p: u8, x: i64) -> i64 {
     if e >= 0 { (x * m) << e } else { (x * m) >> -e }
 }
 
+/// luna's own pacing defaults: heap growth before a new cycle (%) and
+/// sweep work per safe point (see `Vm::checkpoint`).
+pub(crate) const LUNA_PAUSE: i64 = 200;
+pub(crate) const LUNA_STEPMUL: i64 = 100;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vm::lib_gc::{LUNA_PAUSE, LUNA_STEPMUL};
 
     // Values measured on stock PUC 5.5.1: collectgarbage("param", "pause", v)
     // followed by a read.

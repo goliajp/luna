@@ -263,7 +263,7 @@ impl Opener {
                     return Ok(Value::Native(n));
                 }
                 let n = vm.retry_oom(|vm| vm.heap.try_new_light(g, b))?;
-                vm.heap.set_light(id, n);
+                vm.heap.set_light(id, super::FN_COUNT, n);
                 Ok(Value::Native(n))
             }
             // 5.1's C closure of no upvalues, in its environment

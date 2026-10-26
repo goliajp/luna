@@ -127,8 +127,7 @@ impl Vm {
             let uv = self.heap.try_new_upvalue(UpvalState::Closed(Value::Nil))?;
             self.heap.put_upval(cl, i, uv);
         }
-        // SAFETY: a closure just made; only its class byte is written
-        unsafe { (*cl.header()).cls |= LUNA_ONLY };
+        self.heap.mark_luna_only(cl);
         shown.closure = Some(cl);
         Ok(cl)
     }

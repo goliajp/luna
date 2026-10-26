@@ -39,9 +39,9 @@ pub struct GcHeader {
     pub(in crate::runtime::heap) flags: u8,
     /// Per-type byte in what would otherwise be padding: a table keeps the
     /// dialect whose table rules it follows here (`crate::runtime::dialect::Dialect`).
-    pub(crate) sub: u8,
+    pub(in crate::runtime) sub: u8,
     /// Class bits, in padding: `UNLISTED`, `STANDS`, `RO_CLS`, `SLAB`, ...
-    pub(crate) cls: u8,
+    pub(in crate::runtime) cls: u8,
     /// Per-type word in what would otherwise be padding: a table keeps its
     /// absent-metamethod bits here. Zero for a new object.
     pub(crate) aux: u32,
@@ -183,8 +183,12 @@ pub struct Heap {
     table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
     /// the blocks the fixed natives are made in
     slab: slab::NativeSlab,
-    /// `io.stdin` as made, which the host reads lines through; null once freed
-    stdin_ud: *mut GcHeader,
+    /// A userdata the VM refers to without keeping it alive; null once
+    /// freed
+    weak_userdata: *mut GcHeader,
+    /// What the VM does with each userdata the collector frees, before it
+    /// goes
+    userdata_freed: Option<fn(Gc<Userdata>)>,
     /// 5.1: the main thread, the list's oldest object, after which each new
     /// userdata goes (`luaS_newudata` links it after `mainthread`)
     udata_after: Option<Gc<GcHeader>>,

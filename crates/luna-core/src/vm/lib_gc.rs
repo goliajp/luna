@@ -18,13 +18,11 @@ use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
-/// luna's own pacing defaults: heap growth before a new cycle (%), sweep work
-/// per safe point (see `Vm::checkpoint`), and objects per step.
-pub(crate) const LUNA_PAUSE: i64 = 200;
-pub(crate) const LUNA_STEPMUL: i64 = 100;
+/// luna's own step size: objects per step.
 const LUNA_STEPSIZE: i64 = 13;
 
 pub(crate) use crate::runtime::puc::Param;
+use crate::runtime::puc::{LUNA_PAUSE, LUNA_STEPMUL};
 
 /// `collectgarbage([opt [, ...]])`.
 pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

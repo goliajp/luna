@@ -62,7 +62,7 @@ impl Vm {
     ) -> Result<Vec<Value>, LuaError> {
         let level = self
             .uncounted(|vm| vm.builtin(builtins::nat_host_pcall_in_c, &[], Builtin::HostPcallInC));
-        let level = luna_only(level?);
+        let level = luna_only(&mut self.heap, level?);
         let mut call_args = Vec::with_capacity(args.len() + 1);
         call_args.push(f);
         call_args.extend_from_slice(args);
@@ -125,7 +125,10 @@ impl Vm {
         // closure of PUC's, makes `docall`'s
         let level = match self.stack.first() {
             Some(&v @ Value::Native(n)) if docall && n.builtin == builtin => v,
-            _ => luna_only(self.uncounted(|vm| vm.builtin(level, &[], builtin))?),
+            _ => {
+                let f = self.uncounted(|vm| vm.builtin(level, &[], builtin))?;
+                luna_only(&mut self.heap, f)
+            }
         };
         let mut results = if docall {
             // lua.c's `docall`: the native takes `pmain`'s place, its
@@ -233,10 +236,9 @@ impl Vm {
 }
 
 /// `f`, a native of luna's own: no function of PUC's.
-fn luna_only(f: Value) -> Value {
+fn luna_only(heap: &mut crate::runtime::Heap, f: Value) -> Value {
     if let Value::Native(n) = f {
-        // SAFETY: `n` is a live native; only its class byte is written
-        unsafe { (*n.header()).cls |= crate::runtime::heap::LUNA_ONLY };
+        heap.mark_luna_only(n);
     }
     f
 }

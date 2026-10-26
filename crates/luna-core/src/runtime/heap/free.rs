@@ -80,10 +80,12 @@ impl Heap {
                     self.free_block(h as *mut crate::runtime::Coro);
                 }
                 ObjTag::Userdata => {
-                    if h == self.stdin_ud {
-                        self.stdin_ud = ptr::null_mut();
+                    if h == self.weak_userdata {
+                        self.weak_userdata = ptr::null_mut();
                     }
-                    crate::vm::lib_io::write_out_freed(Gc::from_ptr(h as *mut Userdata));
+                    if let Some(f) = self.userdata_freed {
+                        f(Gc::from_ptr(h as *mut Userdata));
+                    }
                     self.puc_freed(&*(h as *const Userdata));
                     self.free_block(h as *mut Userdata);
                 }

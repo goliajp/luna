@@ -234,7 +234,7 @@ impl Opener {
             };
             vm.heap.set_native_puc_nup(n, 0);
             if upvals.is_empty() {
-                vm.heap.set_light(id as usize, n);
+                vm.heap.set_light(id as usize, super::FN_COUNT, n);
             }
             return Ok(Value::Native(n));
         }

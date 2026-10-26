@@ -17,6 +17,8 @@ pub(super) fn new_file(
     let size = vm.heap.puc_size(crate::runtime::puc::PucObj::Stream);
     vm.api_check_before()?;
     let u = vm.lib_userdata(UserdataPayload::File(fh), writable, size)?;
+    // a stream the collector frees writes out what it buffered
+    vm.heap.on_userdata_freed(write_out_freed);
     // 5.1: the environment of the io function that opens it
     if vm.version() == LuaVersion::Lua51 {
         vm.heap
@@ -91,7 +93,7 @@ pub(crate) fn flush_all_closing(vm: &mut Vm) {
 /// A stream the collector frees without closing it (its `__gc` taken
 /// away): C's `FILE` stays until `exit` flushes it, so what it holds is
 /// written out now.
-pub(crate) fn write_out_freed(u: Gc<Userdata>) {
+pub(super) fn write_out_freed(u: Gc<Userdata>) {
     if matches!(u.payload, UserdataPayload::File(ref fh) if !fh.is_closed()) {
         // as `exit`'s flush, a failure reports nothing
         let _ = drain_write_buf(u);
@@ -228,7 +230,7 @@ pub(super) fn f_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let s = if u.file().is_closed() {
         "file (closed)".to_string()
     } else {
-        format!("file ({})", crate::vm::cfmt::c_pointer(u.as_ptr() as usize))
+        format!("file ({})", crate::numeric::c_pointer(u.as_ptr() as usize))
     };
     let v = vm.api_push_string(s.as_bytes())?;
     vm.nat_ret(fs, &[v])
