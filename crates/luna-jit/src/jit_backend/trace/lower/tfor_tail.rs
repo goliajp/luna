@@ -28,29 +28,11 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     } = lw.h.rt;
     // the caller window: see `emit_tail`
     let caller_regs: &[Variable] = &lw.regs_full[..max_stack];
-    // generic-for back-edge:
-    //
-    //   tag = tforcall_tag_var  // from TForCall's
-    //                           //     batched helper
-    //                           //     return value
-    //   if tag == NIL:  side-exit at tforloop.pc + 1
-    //   elif the key's (and value's) tag is the one the
-    //        body was compiled for: R[A+2]=R[A+4] +
-    //        back-edge
-    //   else: deopt (the interpreter runs the TForLoop)
-    //
-    // The Nil branch reuses the existing dispatcher
-    // restore path; push a per_exit_kinds snapshot with
-    // [A+4] = RegKind::Nil so the Nil side-exit repacks
-    // correctly (entry's tag for A+4 was Int, so
-    // dispatcher without override would restore as Int
-    // — wrong for Nil).
+    // the back edge: a nil key exits after the loop (its kinds snapshot
+    // says the slot is nil, not the entry's int); a key (and value) of the
+    // tags the body was compiled for loops (R[A+2] = R[A+4]); another tag
+    // deopts (a pairs loop over string keys meeting an integer one)
     let tag = lw.bcx.use_var(tforcall_tag_var);
-    // The body was lowered for the head's entry tags; the
-    // back-edge runs it again only with a key (and, when the
-    // loop has one, a value) of those tags. A pairs loop
-    // over string keys meeting an integer key (or the
-    // reverse) stored the new key under the old tag.
     // a side trace can begin at the loop instruction itself, with no call
     // recorded before it
     let call = for_loop_idx.checked_sub(1).map(|k| record.ops[k].inst)?;

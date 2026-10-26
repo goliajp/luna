@@ -60,9 +60,8 @@ impl Vm {
         if !ct.has_any_side_wired.get() || self.jit.gc_exit.is_some() {
             return parent_only;
         }
-        // The side trace wired to the exit taken runs here rather than
-        // from the parent's code: a test at every exit of the parent cost
-        // more than it saved.
+        // the side trace wired to the exit taken runs here, not from the
+        // parent's code (a test at every exit cost more than it saved)
         let tentative = crate::jit::trace::decode_exit_shape(
             raw_ret,
             &ct.per_exit_inline,

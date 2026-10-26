@@ -12,8 +12,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
     } = *pl;
     let Lower { body_loop, .. } = *lw;
     lw.bcx.switch_to_block(body_loop);
-    // Intentionally NOT sealed: the tail's clean-close back-edge
-    // adds a second predecessor below.
+    // not sealed: the tail's back edge adds a second predecessor below
     commit_start(lw, pl);
     // the virtual registers of an op (see `vconsts`)
     let kvars: [Variable; NVIRT] = std::array::from_fn(|_| lw.bcx.declare_var(types::I64));

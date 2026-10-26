@@ -44,15 +44,10 @@ impl CompiledTrace {
         per_exit_tags: Vec<(u32, TArc<[ExitTag]>)>,
         per_exit_inline: Vec<crate::jit::trace_types::InlineSideExit>,
     ) -> Self {
-        // `inline_n` non-zero when
-        // the AOT trace ships depth>0 inlined cmp side-exits. The
-        // chain pointers baked into the trace mcode are populated by
-        // the deploy-side `aot_inline_chain_resolver`; the
-        // `per_exit_inline` entries here own a separate Rc<[...]>
-        // rebuilt from the v3 wire format's `chain_bytes`, used by
-        // the dispatcher for side-exit shape decode + side-trace
-        // routing. Neither side compares pointers — both consume the
-        // metadata they own.
+        // `inline_n` > 0 for inlined side exits at depth > 0: the chains the
+        // code holds come from `aot_inline_chain_resolver`, the copies here
+        // from the wire format's `chain_bytes` (for shape decode and side
+        // trace routing); no side compares the other's pointers
         //
         // `exit_hit_counts` / `exit_side_trace_ptrs` sized to
         // `inline_n + tags_n + 1` (matches the dispatcher's

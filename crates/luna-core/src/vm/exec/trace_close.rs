@@ -88,16 +88,9 @@ impl Vm {
     fn trace_compile_closed(&mut self) {
         let rec = self.jit.active_trace.as_mut().expect("recording");
         rec.closed = true;
-        // Detach the closed record, then try
-        // to compile it. Dedup by `head_pc`: a Proto
-        // already carrying a CompiledTrace for this PC
-        // skips recompile (the hot counter caps
-        // re-recording at `u32::MAX / 2` anyway, but
-        // explicit dedup keeps `Proto.traces` short
-        // for the dispatcher's linear scan).
-        //
-        // On failure we just bump the failed counter
-        // and drop the record.
+        // the closed record compiled, unless the proto has a trace at its
+        // head pc already (`Proto.traces` stays short for the dispatcher's
+        // scan); a failure is counted and the record dropped
         let head_pc_val = rec.head_pc;
         let closed_record = self
             .jit
@@ -109,18 +102,8 @@ impl Vm {
             .counters
             .closed_lens
             .push((closed_record.is_call_triggered, closed_record.ops.len()));
-        // Cache the trace on the
-        // recorder's *head proto*, not the current
-        // closure's proto. For non-recursive
-        // call-triggered traces, close fires after
-        // `Return1` pops the callee frame — `cl` at
-        // that point is the CALLER's closure, while
-        // `closed_record.head_proto` is the CALLEE's
-        // proto (the one we actually want the trace
-        // to be discoverable from on the next call).
-        // Self-recursive fib closed via depth-cap
-        // mid-recursion, so `cl.proto == head_proto`
-        // there, but only by coincidence.
+        // kept on the record's head proto, not `cl`'s: a call trace closes
+        // after `Return1` popped the callee, so `cl` is the caller's
         let head_proto = closed_record.head_proto;
         let already_cached = head_proto
             .traces
@@ -128,14 +111,8 @@ impl Vm {
             .iter()
             .any(|t| t.head_pc == head_pc_val);
         if !already_cached && !native_stack::is_low(native_stack::COMPILE_RESERVE) {
-            // Internal-loop = true: the trace runs in
-            // a native loop until a cmp side-exits, so
-            // the dispatcher's per-entry marshal cost
-            // amortizes across the whole run of
-            // iterations the loop's recorded direction
-            // stays valid. The lowerer auto-downgrades
-            // to one-shot for cmp-less or Call-truncating
-            // traces.
+            // an internal loop, run until a comparison exits, so one entry
+            // pays for many iterations (one-shot without a comparison)
             // Side traces MUST NOT
             // internal-loop. The parent's recorded prefix
             // (ops at PCs < side trace's head_pc) defines
