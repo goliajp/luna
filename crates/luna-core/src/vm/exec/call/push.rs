@@ -82,26 +82,7 @@ impl Vm {
         let (top, max) = (func_slot + 1 + nargs, p.max_stack as u32);
         self.check_lua_stack(top, max, true)?;
         if p.is_vararg {
-            // a vararg function's stack is checked again: 5.2 above the
-            // missing parameters (`adjust_varargs`), 5.4 and 5.5 for the
-            // function's copy too (`luaT_adjustvarargs`, unless 5.5 builds
-            // a vararg table instead)
-            match self.version {
-                // 5.1 makes the `arg` table of an old-style vararg function
-                LuaVersion::Lua51 if p.has_compat_vararg_arg => {
-                    let missing = u32::from(p.num_params).saturating_sub(nargs);
-                    self.check_lua_stack(top + missing, max, false)?;
-                }
-                LuaVersion::Lua52 => {
-                    let missing = u32::from(p.num_params).saturating_sub(nargs);
-                    self.check_lua_stack(top + missing, max, false)?;
-                }
-                LuaVersion::Lua54 => self.check_lua_stack(top, max + 1, false)?,
-                LuaVersion::Lua55 if !vararg_table_55(p) => {
-                    self.check_lua_stack(top, max + 1, false)?
-                }
-                _ => {}
-            }
+            self.check_vararg_stack(p, top, max, nargs)?;
         }
         // PUC 5.1 `inc_ci`, after `luaD_checkstack`
         if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
@@ -194,33 +175,8 @@ impl Vm {
                 .fill(Value::Nil)
         };
         self.precall_checkpoint(base + max)?;
-        // PUC 5.1 `LUAI_COMPAT_VARARG`: the hidden `arg` local (the slot at
-        // `base + nparams`) gets `{ n = n_varargs, e1, e2, … }` from the extras
-        // just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
         if proto.has_compat_vararg_arg {
-            // `adjust_varargs` checks for a collection first, the missing
-            // parameters on the stack; the fixed ones are already copied up
-            // to the new frame here (PUC copies them after), and stay live
-            self.checkpoint((func_slot + 1 + nargs.max(nparams)).max(base + nparams))?;
-            let arg_slot = (base + nparams) as usize;
-            // young until stored in its slot below; `luaH_new(L, nvar, 1)`:
-            // an array part of exactly the extras' count (bounded by the
-            // stack, well below `MAX_ASIZE`), nil ones included
-            let t = self.alloc_table()?;
-            self.table_op(|vm| {
-                // SAFETY: `t` was allocated above and is held only by this
-                // local; the borrow covers the resize, which does not collect
-                unsafe { t.as_mut() }.resize(&mut vm.heap, n_varargs as usize, 1)
-            })?;
-            for i in 0..n_varargs {
-                let v = self.stack[(base - n_varargs + i) as usize];
-                // SAFETY: `t` was allocated above and is held only by this
-                // local; the reference lives for this one store
-                unsafe { t.as_mut() }.set_list_slot(i as usize, v);
-            }
-            let nk = self.str_value(b"n")?;
-            self.raw_set(t, nk, Value::Int(n_varargs as i64))?;
-            self.stack[arg_slot] = Value::Table(t);
+            self.compat_arg_51(func_slot, nargs, nparams, base, n_varargs)?;
         }
         // PUC luaD_precall fires the "call" hook with the new frame current, so
         // a hook calling debug.getinfo(2) sees the entered function. For a Lua
@@ -235,6 +191,67 @@ impl Vm {
             .is_some_and(|f| f.tailcalls > 0);
         self.hook_call_with(false, nparams, is_tail)?;
         Ok(())
+    }
+
+    /// PUC 5.1 `LUAI_COMPAT_VARARG`: the hidden `arg` local (the slot at
+    /// `base + nparams`) gets `{ n = n_varargs, e1, e2, … }` from the extras
+    /// just below `base` (5.1 db.lua :279 reads `arg.n` from a line hook).
+    fn compat_arg_51(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        nparams: u32,
+        base: u32,
+        n_varargs: u32,
+    ) -> Result<(), LuaError> {
+        // `adjust_varargs` checks for a collection first, the missing
+        // parameters on the stack; the fixed ones are already copied up
+        // to the new frame here (PUC copies them after), and stay live
+        self.checkpoint((func_slot + 1 + nargs.max(nparams)).max(base + nparams))?;
+        let arg_slot = (base + nparams) as usize;
+        // young until stored in its slot below; `luaH_new(L, nvar, 1)`:
+        // an array part of exactly the extras' count (bounded by the
+        // stack, well below `MAX_ASIZE`), nil ones included
+        let t = self.alloc_table()?;
+        self.table_op(|vm| {
+            // SAFETY: `t` was allocated above and is held only by this
+            // local; the borrow covers the resize, which does not collect
+            unsafe { t.as_mut() }.resize(&mut vm.heap, n_varargs as usize, 1)
+        })?;
+        for i in 0..n_varargs {
+            let v = self.stack[(base - n_varargs + i) as usize];
+            // SAFETY: `t` was allocated above and is held only by this
+            // local; the reference lives for this one store
+            unsafe { t.as_mut() }.set_list_slot(i as usize, v);
+        }
+        let nk = self.str_value(b"n")?;
+        self.raw_set(t, nk, Value::Int(n_varargs as i64))?;
+        self.stack[arg_slot] = Value::Table(t);
+        Ok(())
+    }
+
+    /// A vararg function's stack, checked again: 5.1 for the `arg` table of
+    /// an old-style one and 5.2 above the missing parameters
+    /// (`adjust_varargs`), 5.4 and 5.5 for the function's copy
+    /// (`luaT_adjustvarargs`, unless 5.5 builds a vararg table instead).
+    #[cfg_attr(luna_hot, inline(always))]
+    fn check_vararg_stack(
+        &mut self,
+        p: Gc<Proto>,
+        top: u32,
+        max: u32,
+        nargs: u32,
+    ) -> Result<(), LuaError> {
+        let missing = u32::from(p.num_params).saturating_sub(nargs);
+        match self.version {
+            LuaVersion::Lua51 if p.has_compat_vararg_arg => {
+                self.check_lua_stack(top + missing, max, false)
+            }
+            LuaVersion::Lua52 => self.check_lua_stack(top + missing, max, false),
+            LuaVersion::Lua54 => self.check_lua_stack(top, max + 1, false),
+            LuaVersion::Lua55 if !vararg_table_55(p) => self.check_lua_stack(top, max + 1, false),
+            _ => Ok(()),
+        }
     }
 }
 

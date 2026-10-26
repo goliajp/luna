@@ -44,31 +44,8 @@ impl Vm {
             }
             return Ok(None);
         }
-        // __pairs returned: normalize its results to exactly the
-        // dialect's count (iterator, state, control, and on 5.5 the
-        // closing value) at pairs's slot, where the metamethod was
-        // called, and hand them to pairs's caller.
         if let ContKind::Pairs { at } = nc.kind {
-            frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-            self.cont_popped(false, true);
-            let total = crate::vm::builtins::pairs_mm_results(self) as u32;
-            let need = (nc.func_slot + total) as usize;
-            self.grow_stack(need)?;
-            // where the metamethod ran, above pairs's arguments
-            let first = nc.func_slot + at;
-            let n = (self.top - first).min(total);
-            for i in 0..n {
-                self.stack[(nc.func_slot + i) as usize] = self.stack[(first + i) as usize];
-            }
-            for s in (nc.func_slot + n)..(nc.func_slot + total) {
-                self.stack[s as usize] = Value::Nil;
-            }
-            self.top = nc.func_slot + total;
-            if self.frames.len() < entry_depth {
-                return Ok(Some(self.take_results(nc.func_slot)));
-            }
-            self.finish_results(nc.func_slot, total, nc.nresults);
-            return Ok(None);
+            return self.finish_pairs(nc, at, entry_depth);
         }
         if let ContKind::Host(hc) = nc.kind {
             frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
@@ -100,6 +77,38 @@ impl Vm {
         }
         self.stack[nc.func_slot as usize] = Value::Bool(true);
         let total = 1 + nret;
+        self.top = nc.func_slot + total;
+        if self.frames.len() < entry_depth {
+            return Ok(Some(self.take_results(nc.func_slot)));
+        }
+        self.finish_results(nc.func_slot, total, nc.nresults);
+        Ok(None)
+    }
+
+    /// `__pairs` returned: its results, cut or padded to the dialect's
+    /// count (iterator, state, control, and on 5.5 the closing value),
+    /// moved from where it ran, above `pairs`'s arguments (`at`), to
+    /// `pairs`'s slot, for `pairs`'s caller.
+    fn finish_pairs(
+        &mut self,
+        nc: NativeCont,
+        at: u32,
+        entry_depth: usize,
+    ) -> Result<Option<Vec<Value>>, LuaError> {
+        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+        self.cont_popped(false, true);
+        let total = crate::vm::builtins::pairs_mm_results(self) as u32;
+        let need = (nc.func_slot + total) as usize;
+        self.grow_stack(need)?;
+        // where the metamethod ran, above pairs's arguments
+        let first = nc.func_slot + at;
+        let n = (self.top - first).min(total);
+        for i in 0..n {
+            self.stack[(nc.func_slot + i) as usize] = self.stack[(first + i) as usize];
+        }
+        for s in (nc.func_slot + n)..(nc.func_slot + total) {
+            self.stack[s as usize] = Value::Nil;
+        }
         self.top = nc.func_slot + total;
         if self.frames.len() < entry_depth {
             return Ok(Some(self.take_results(nc.func_slot)));

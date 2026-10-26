@@ -114,9 +114,8 @@ impl Table {
                 return Err(e.into());
             }
         };
-        // the old array part: its slab stays allocated until its entries
-        // are moved over; inline entries are copied out first, since the
-        // inline storage may become the new backing
+        // the old array part: its slab kept until its entries move over,
+        // inline entries copied out (the inline storage may be reused)
         let old_asize = self.asize as usize;
         // copied as `MaybeUninit` words, not `u64`s: an integer copy drops
         // the provenance of the object pointers the payloads hold
@@ -135,20 +134,17 @@ impl Table {
         } else {
             old_slab
         };
-        // growing keeps every array entry at its index, so the old backing
-        // is copied as is (PUC `luaH_resize` reallocates in place);
-        // shrinking re-inserts entry by entry below
+        // growing copies the old backing as is (PUC `luaH_resize`
+        // reallocates in place); shrinking re-inserts each entry below
         let grow = new_asize >= old_asize && old_asize > 0;
         let (old_nodes, old_nodes_len) = self.take_hash_part();
 
-        // Install the new array backing before anything reads it, so the JIT
-        // never observes a stale pointer.
+        // the new backing first: the JIT never sees a stale pointer
         self.asize = new_asize as u32;
         self.reset_hints();
         if new_slab.is_null() {
-            // SAFETY: exclusive &mut self; write through the cell to
-            // stay on the raw-pointer access path (no &mut borrow of
-            // the array contents is ever formed).
+            // SAFETY: exclusive &mut self; written through the cell, the raw
+            // pointer path (no &mut of the array contents is ever formed)
             unsafe {
                 *self.inline_storage.get() = [0; INLINE_U64S];
             }
@@ -218,8 +214,7 @@ impl Table {
             unsafe { Self::free_slab(mem, old_slab, old_asize) };
         }
         // 5.1–5.3 put the old nodes back last to first, 5.4 / 5.5 first to
-        // last; the order decides which keys collide, and so when the
-        // table next rehashes
+        // last: the order decides the collisions, and when it next rehashes
         let backwards = self.dialect() <= Dialect::L53;
         for j in 0..old_nodes_len {
             let i = if backwards { old_nodes_len - 1 - j } else { j };

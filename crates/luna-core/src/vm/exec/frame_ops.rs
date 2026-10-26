@@ -68,11 +68,9 @@ impl Vm {
                 } else {
                     inst.c() as i64
                 };
-                // one barrier covers every store this op does, as PUC's
-                // `luaC_barrierback` per value would; taken first, its flag
-                // test also refuses a read-only table (only one marked from
-                // outside between its constructor and this op, by a debug
-                // hook, can be)
+                // one barrier for every store, as PUC's per value would;
+                // taken first, its flag test also refuses a read-only table
+                // (one a debug hook marked after its constructor)
                 let from = (abs_a + 1) as usize;
                 if !self
                     .heap
@@ -173,10 +171,9 @@ impl Vm {
                 }
             }
             Op::GetVarg => {
-                // materialize the vararg table (PUC table.pack shape) from the
-                // stack varargs — used when the named vararg is written /
-                // escapes / is `_ENV`. It is kept BOTH in func_slot (so `...`
-                // sees later writes) and in the local register R[A].
+                // the vararg table (table.pack's shape) of a named vararg
+                // written, escaping or `_ENV`: in func_slot (where `...` sees
+                // later writes) and in R[A]
                 let n = n_varargs;
                 // the table is young until it is stored below, so an
                 // emergency collection keeps it; PUC `createvarargtab`: an

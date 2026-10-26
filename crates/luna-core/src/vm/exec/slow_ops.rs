@@ -51,16 +51,10 @@ impl Vm {
                 }
             }
             Op::Close => {
-                // Yieldable: drive __close handlers through the
-                // interpreter loop so a coroutine.yield() inside a
-                // handler suspends cleanly (locals.lua block-end yield).
-                // `drive_close` parks the handler call at `self.top`, so
-                // raise `top` past this frame's full register window
-                // first — a goto out of a nested for-loop can fire
-                // OP_Close while `self.top` still sits at the inner
-                // body's working top, which would let `push_frame`'s
-                // wipe clobber the outer tbc slot before it could be
-                // closed (locals.lua:1219 nested-for goto regression).
+                // the handlers run through the interpreter loop, so one
+                // can yield, above the whole register window: a goto out
+                // of a nested loop leaves the top at the inner body's,
+                // below a variable still to close (locals.lua:1219)
                 self.top = self.top.max(base + cl.proto.max_stack as u32);
                 let _ = self.begin_close(base + inst.a(), None, AfterClose::Block, entry_depth)?;
             }
@@ -115,14 +109,9 @@ impl Vm {
                 (abs_a, nret)
             }
         };
-        // close before moving results: __close handlers run above
-        // the stack top, so the result region [abs_a..abs_a+nret)
-        // stays intact across any yields the close performs.
-        // Fixed-count returns may leave `self.top` below the last
-        // result slot (the compiler does not always re-bump it);
-        // raise it past the result region so `drive_close` parks
-        // the handler call *above* — landing at `self.top` would
-        // otherwise clobber a result with the handler closure.
+        // `__close` handlers run above the top, which a fixed-count return
+        // may leave below its results: raised past them, so no handler call
+        // clobbers one (and the results survive a yield in the close)
         self.top = self.top.max(abs_a + nret);
         // a return that closes raises PUC's top to `ci->top` first, where
         // `luaF_close` calls the methods

@@ -77,25 +77,10 @@ impl Vm {
             return Unwound::CaughtReturn(self.take_results(nc.func_slot));
         }
         self.finish_results(nc.func_slot, 2, nc.nresults);
-        // reinstate the caller windows the unwind truncated into,
-        // clamped to the catcher's caller window + a `MIN_STACK`
-        // reserve. The clamp is a no-op for normal pcall catches
-        // (saved_len lies within the caller's max_stack window),
-        // and prevents the stack from staying near `MAX_LUA_STACK`
-        // after an overflow-recovery catch — which would make the
-        // next `call_value_impl` (e.g. a `__close` in the catcher's
-        // errorh, locals.lua:659) pick `func_slot = stack.len()`
-        // above the limit and re-overflow.
-        // Restore the caller's full register window: opcodes
-        // index it directly. The cap covers caller's base +
-        // `max_stack` + a small reserve. We always resize to
-        // exactly this window — previously this clamped
-        // `saved_len` from above to prevent staying near
-        // `MAX_LUA_STACK` after an overflow-recovery catch, and
-        // a yieldable-unwind re-entry adds the dual case where
-        // `saved_len` is *below* the window (a prior
-        // `ResumeUnwind` truncated). Using the window directly
-        // covers both.
+        // the caller's whole register window back (opcodes index it), and
+        // no more: a catch after a stack overflow must not leave the stack
+        // near its limit (the next call would overflow again, locals.lua
+        // :659), and an unwind a yield re-entered may have cut below it
         // every frame below keeps its window, and the results just placed
         // (PUC `luaD_shrinkstack` keeps the stack in use by any frame and
         // up to `L->top`); protected calls nested above a frame's window
