@@ -169,16 +169,7 @@ pub(super) fn emit_get_upval<M: Module>(
                 let call_inst = bcx.ins().call(r, &[idx_arg]);
                 let v = bcx.inst_results(call_inst)[0];
                 // anything but a float: the interpreter reads it
-                let parked_id = module
-                    .declare_function("luna_jit_no_deopt_parked", Linkage::Import, &{
-                        let mut s = module.make_signature();
-                        s.returns.push(AbiParam::new(types::I64));
-                        s
-                    })
-                    .ok()?;
-                let parked_ref = module.declare_func_in_func(parked_id, bcx.func);
-                let ok_call = bcx.ins().call(parked_ref, &[]);
-                let ok = bcx.inst_results(ok_call)[0];
+                let ok = no_deopt_parked(module, bcx)?;
                 emit_hand_if_zero(module, bcx, st, f, pc, ok)?;
                 aligned_def(bcx, regs, reg_kinds, a, v);
                 st.current_kinds[a] = reg_kinds[a];
@@ -198,6 +189,19 @@ pub(super) fn emit_get_upval<M: Module>(
         _ => unreachable!("dispatched by op"),
     }
     Some(())
+}
+
+/// `luna_jit_no_deopt_parked()`: nonzero while no helper has parked a
+/// deopt.
+fn no_deopt_parked<M: Module>(module: &mut M, bcx: &mut FunctionBuilder<'_>) -> Option<Value> {
+    let mut sig = module.make_signature();
+    sig.returns.push(AbiParam::new(types::I64));
+    let id = module
+        .declare_function("luna_jit_no_deopt_parked", Linkage::Import, &sig)
+        .ok()?;
+    let r = module.declare_func_in_func(id, bcx.func);
+    let call = bcx.ins().call(r, &[]);
+    Some(bcx.inst_results(call)[0])
 }
 
 pub(super) fn emit_self_call<M: Module>(
@@ -226,20 +230,7 @@ pub(super) fn emit_self_call<M: Module>(
             );
             let a = ins.a() as usize;
             let nargs = (ins.b() - 1) as usize;
-            let mut arg_vals: Vec<Value> = Vec::with_capacity(nargs);
-            for i in 0..nargs {
-                let slot_idx = a + 1 + i;
-                let v = bcx.use_var(regs[slot_idx]);
-                // The cranelift call sig matches the entry sig
-                // (all i64). Bitcast Float args back to i64 at
-                // the call boundary.
-                let v_i64 = if matches!(a_kind(reg_kinds, slot_idx as u32), RegKind::Float) {
-                    bcx.ins().bitcast(types::I64, MemFlagsData::new(), v)
-                } else {
-                    v
-                };
-                arg_vals.push(v_i64);
-            }
+            let mut arg_vals = self_call_args(bcx, regs, reg_kinds, a, nargs);
             let sc = self_calls?;
             // the callee's level: its frame above this one's register `a`
             arg_vals.push(bcx.ins().iadd_imm_s(sc.base, a as i64 + 1));
@@ -272,4 +263,27 @@ pub(super) fn emit_self_call<M: Module>(
         _ => unreachable!("dispatched by op"),
     }
     Some(())
+}
+
+/// The `nargs` arguments of a self call at register `a`, as the entry's
+/// signature takes them: every one an i64, a float bitcast.
+fn self_call_args(
+    bcx: &mut FunctionBuilder<'_>,
+    regs: &[Variable],
+    reg_kinds: &[RegKind],
+    a: usize,
+    nargs: usize,
+) -> Vec<Value> {
+    let mut vals = Vec::with_capacity(nargs + 2);
+    for slot in a + 1..a + 1 + nargs {
+        let v = bcx.use_var(regs[slot]);
+        vals.push(
+            if matches!(a_kind(reg_kinds, slot as u32), RegKind::Float) {
+                bcx.ins().bitcast(types::I64, MemFlagsData::new(), v)
+            } else {
+                v
+            },
+        );
+    }
+    vals
 }

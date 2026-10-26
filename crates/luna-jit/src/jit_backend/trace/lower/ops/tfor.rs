@@ -1,5 +1,6 @@
 use super::tfor_ipairs::emit_ipairs_tfor_call;
 use super::*;
+use luna_core::__private::Builtin;
 
 /// The generic-for iterator call.
 pub(super) fn emit_tfor_call_op<E: Emit>(
@@ -38,8 +39,7 @@ pub(super) fn emit_tfor_call_op<E: Emit>(
             // `R[A]`'s library tag if Native; `ipairs`'s iterator
             // specialises emit into inline Table aget IR (skip the
             // `op_tforcall` C call entirely on the hot path).
-            let is_ipairs_trace =
-                record.tfor_iter == Some(luna_core::__private::Builtin::IpairsIter);
+            let is_ipairs_trace = record.tfor_iter == Some(Builtin::IpairsIter);
 
             // spill discipline:
             // - non-ipairs case: spill R[A..=A+2] upfront (helper
@@ -108,13 +108,7 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
     let OpHelpers { op_tforcall_id, .. } = lw.h.op;
     let OpCx { i, rop, .. } = *oc;
     let regs: &[Variable] = oc.regs;
-    let out_ss = lw
-        .bcx
-        .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-            24,
-            3,
-        ));
+    let out_ss = lw.bcx.create_sized_stack_slot(out_slot());
     let ctrl_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 0);
     let key_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 8);
     let val_addr = lw.bcx.ins().stack_addr(types::I64, out_ss, 16);
@@ -141,13 +135,7 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
         .ins()
         .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
     guard!(lw, pl, ok, i, rop.pc);
-    // 5.1's `luaD_call` checks for a collection when the iterator returns:
-    // a step due is noted for whichever exit the loop takes next
-    if pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua51) {
-        let fref = lw.bcx.import_func(lw.h.rt.gc_due_id);
-        let pc = lw.bcx.ins().iconst(types::I64, i64::from(rop.pc));
-        lw.bcx.ins().call(fref, &[pc]);
-    }
+    note_return_check_51(lw, pl, rop.pc);
     // key tag | value tag << 8 (Vm::jit_op_tforcall)
     let key_tag = lw.bcx.ins().band_imm_u(status_or_tag, 0xff);
     let val_tag = lw.bcx.ins().ushr_imm_u(status_or_tag, 8);
@@ -162,5 +150,24 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
     lw.bcx.def_var(regs[first], key_raw);
     if (nvars as usize) >= 2 && first + 1 < max_stack {
         lw.bcx.def_var(regs[first + 1], val_raw);
+    }
+}
+
+/// The slot for the control, key and value the tforcall helper writes.
+fn out_slot() -> cranelift_codegen::ir::StackSlotData {
+    cranelift_codegen::ir::StackSlotData::new(
+        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+        24,
+        3,
+    )
+}
+
+/// 5.1's `luaD_call` checks for a collection when the iterator returns: a
+/// step due is noted for whichever exit the loop takes next.
+fn note_return_check_51<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32) {
+    if pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua51) {
+        let fref = lw.bcx.import_func(lw.h.rt.gc_due_id);
+        let pc = lw.bcx.ins().iconst(types::I64, i64::from(pc));
+        lw.bcx.ins().call(fref, &[pc]);
     }
 }

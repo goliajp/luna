@@ -38,16 +38,7 @@ pub(super) fn emit_new_table<M: Module>(
             let call_inst = bcx.ins().call(r, &[ops_v, presized_v]);
             let g = bcx.inst_results(call_inst)[0];
             // 0: the interpreter runs this `NewTable`, from this level on
-            let made = bcx.create_block();
-            let hand = bcx.create_block();
-            bcx.set_cold_block(hand);
-            bcx.ins().brif(g, made, &[], hand, &[]);
-            bcx.switch_to_block(hand);
-            bcx.seal_block(hand);
-            let at = bcx.ins().iconst(types::I64, i64::from(f.c.old_pc[pc]));
-            super::handoff::emit_handoff(module, bcx, st, f, at)?;
-            bcx.switch_to_block(made);
-            bcx.seal_block(made);
+            emit_hand_if_zero(module, bcx, st, f, pc, g)?;
             aligned_def(bcx, regs, reg_kinds, ins.a() as usize, g);
             st.current_kinds[ins.a() as usize] = RegKind::Table;
             st.current_is_nil[ins.a() as usize] = false;

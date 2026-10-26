@@ -1,4 +1,5 @@
 use super::*;
+use luna_core::version::LuaVersion;
 
 /// A `string.sub` fold at its call: on a string and numbers the trace
 /// knows as such; anything else is not compiled. A float position equal
@@ -15,13 +16,8 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     let Plan { record, .. } = *pl;
     let off = oc.off;
     let regs: &[Variable] = oc.regs;
-    let kind = |r: u32| k_op(&lw.current_kinds, off as u32 + r);
     let a = fold.dst_reg;
-    let number = |k| matches!(k, RegKind::Int | RegKind::Float);
-    if kind(a + 1) != RegKind::Str
-        || !number(kind(a + 2))
-        || fold.nargs == 3 && !number(kind(a + 3))
-    {
+    if !sub_operands_fit(&lw.current_kinds, off as u32, fold) {
         return None;
     }
     let s = lw.bcx.use_var(regs[a as usize + 1]);
@@ -51,13 +47,19 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     lw.bcx.def_var(regs[a as usize], r);
     lw.current_kinds[off + a as usize] = RegKind::Str;
     // 5.3 on check after `lua_pushlstring` pushed it
-    if !matches!(
-        pl.opts.dialect,
-        Some(luna_core::version::LuaVersion::Lua51 | luna_core::version::LuaVersion::Lua52)
-    ) {
+    if !pl.opts.dialect.is_some_and(|d| d <= LuaVersion::Lua52) {
         gc_due_exit(lw, pl, oc.i, oc.rop.pc + 1);
     }
     Some(())
+}
+
+/// Whether `string.sub`'s operands of `fold` (in the frame at `off`) are
+/// a string and one or two numbers.
+fn sub_operands_fit(kinds: &[RegKind], off: u32, fold: &TraceMathFold) -> bool {
+    let kind = |r: u32| k_op(kinds, off + r);
+    let a = fold.dst_reg;
+    let number = |k| matches!(k, RegKind::Int | RegKind::Float);
+    kind(a + 1) == RegKind::Str && number(kind(a + 2)) && (fold.nargs != 3 || number(kind(a + 3)))
 }
 
 /// A two-argument `math.min` / `math.max` fold at its call.
