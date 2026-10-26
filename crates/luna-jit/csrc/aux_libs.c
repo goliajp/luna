@@ -37,52 +37,31 @@ OPENER(luaopen_math, "math")
 OPENER(luaopen_utf8, "utf8")
 OPENER(luaopen_debug, "debug")
 
+/* 5.1, 5.2 and 5.4 leave the table of loaded C libraries (5.1: its
+   metatable) the opening made below the package table */
+LUNA_HIDDEN int luna_c_luaopen_package(lua_State *L) {
+  int n = openlib(L, "package");
+  switch (VNUM(L)) {
+    case 501:
+      lua_getfield(L, REGIDX(L), "_LOADLIB");
+      break;
+    case 502:
+    case 504:
+      lua_getfield(L, REGIDX(L), "_CLIBS");
+      break;
+    default:
+      return n;
+  }
+  lua_insert(L, -2);
+  return n;
+}
+
 int luna_io_open51(lua_State *L);
 int luna_io_open52(lua_State *L);
 
 /* io is C, over the C library's stdio (io_*.c) */
 LUNA_HIDDEN int luna_c_luaopen_io(lua_State *L) {
   return VNUM(L) == 501 ? luna_io_open51(L) : luna_io_open52(L);
-}
-
-/* the finalizer of the table of loaded C libraries; luna loads none */
-static int gctm(lua_State *L) {
-  (void)L;
-  return 0;
-}
-
-static const int clibs53 = 0;
-
-/* the table of loaded C libraries luaopen_package makes in the registry:
-   5.1's "_LOADLIB" metatable, "_CLIBS" (5.3: a light userdata key) with a
-   finalizer; 5.1, 5.2 and 5.4 leave it on the stack */
-LUNA_HIDDEN int luna_c_luaopen_package(lua_State *L) {
-  switch (VNUM(L)) {
-    case 501:
-      luna_c_luaL_newmetatable(L, "_LOADLIB");
-      lua_pushcfunction(L, gctm);
-      lua_setfield(L, -2, "__gc");
-      break;
-    case 503:
-      lua_newtable(L);
-      lua_createtable(L, 0, 1);
-      lua_pushcfunction(L, gctm);
-      lua_setfield(L, -2, "__gc");
-      lua_setmetatable(L, -2);
-      lua_rawsetp(L, REGIDX(L), &clibs53);
-      break;
-    case 505:
-      luna_c_luaL_getsubtable(L, REGIDX(L), "_CLIBS");
-      lua_pop(L, 1);
-      break;
-    default:
-      luna_c_luaL_getsubtable(L, REGIDX(L), "_CLIBS");
-      lua_createtable(L, 0, 1);
-      lua_pushcfunction(L, gctm);
-      lua_setfield(L, -2, "__gc");
-      lua_setmetatable(L, -2);
-  }
-  return openlib(L, "package");
 }
 
 /* each version's luaL_openlibs list, in its order */
