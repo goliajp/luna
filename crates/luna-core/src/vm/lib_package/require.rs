@@ -13,23 +13,10 @@ pub(super) fn find_loader(
     name: Value,
 ) -> Result<(Value, Value), LuaError> {
     let v = vm.version();
-    let field = if v == LuaVersion::Lua51 {
-        "loaders"
-    } else {
-        "searchers"
-    };
     // the searchers, the message (a string in 5.1, a buffer in 5.4+) and
     // the searcher being tried are pushed; each searcher is called where
     // it is pushed
-    let Value::Table(searchers) = vm.native_getfield(Value::Table(pkg), None, field.as_bytes())?
-    else {
-        // a literal: the name is part of the format
-        return Err(crate::vm::builtins::raise_fmt(
-            vm,
-            0,
-            &format!("'package.{field}' must be a table"),
-        ));
-    };
+    let searchers = searchers_of(vm, pkg)?;
     // 5.1's message is a string on the stack, which each miss replaces
     // with the two concatenated (`lua_concat`)
     let mut acc = Value::Nil;
@@ -55,23 +42,7 @@ pub(super) fn find_loader(
         }
         let s = searchers.get(Value::Int(i));
         if s.is_nil() {
-            // 5.1 keeps the nil; later the message made from the buffer
-            // is pushed (5.4+ in the buffer's place)
-            match buf.take() {
-                None => vm.native_push_vals(&[Value::Nil])?,
-                Some(mut b) => {
-                    if v >= LuaVersion::Lua54 {
-                        msg.truncate(msg.len() - 2);
-                        b.sub(2);
-                    }
-                    let m = b.finish(vm, &msg)?;
-                    if v <= LuaVersion::Lua53 {
-                        vm.native_push_vals(&[Value::Str(m)])?;
-                    } else {
-                        made = Some(m);
-                    }
-                }
-            }
+            made = searched_all(vm, buf.take(), &mut msg)?;
             break;
         }
         // `lua_pushstring(L, name)` for the call: a long name is the string
@@ -92,16 +63,69 @@ pub(super) fn find_loader(
         });
         r?;
     }
+    Err(not_found(vm, name, made, &msg))
+}
+
+/// `package.searchers` (5.1 `package.loaders`), which must be a table.
+fn searchers_of(vm: &mut Vm, pkg: Gc<Table>) -> Result<Gc<Table>, LuaError> {
+    let field = if vm.version() == LuaVersion::Lua51 {
+        "loaders"
+    } else {
+        "searchers"
+    };
+    match vm.native_getfield(Value::Table(pkg), None, field.as_bytes())? {
+        Value::Table(t) => Ok(t),
+        // a literal: the name is part of the format
+        _ => Err(crate::vm::builtins::raise_fmt(
+            vm,
+            0,
+            &format!("'package.{field}' must be a table"),
+        )),
+    }
+}
+
+/// No searcher is left: 5.1 keeps the nil it found; later the message
+/// made from the buffer is pushed, 5.4 on in the buffer's place (and
+/// returned, for the error to hold).
+fn searched_all(
+    vm: &mut Vm,
+    buf: Option<PucBuffer>,
+    msg: &mut Vec<u8>,
+) -> Result<Option<Gc<crate::runtime::LuaStr>>, LuaError> {
+    let v = vm.version();
+    let Some(mut b) = buf else {
+        vm.native_push_vals(&[Value::Nil])?;
+        return Ok(None);
+    };
+    if v >= LuaVersion::Lua54 {
+        msg.truncate(msg.len() - 2);
+        b.sub(2);
+    }
+    let m = b.finish(vm, msg)?;
+    if v <= LuaVersion::Lua53 {
+        vm.native_push_vals(&[Value::Str(m)])?;
+        return Ok(None);
+    }
+    Ok(Some(m))
+}
+
+/// `luaL_error(L, "module '%s' not found:%s", name, msg)`, with 5.4's
+/// message `made` on the stack.
+fn not_found(
+    vm: &mut Vm,
+    name: Value,
+    made: Option<Gc<crate::runtime::LuaStr>>,
+    msg: &[u8],
+) -> LuaError {
     let Value::Str(n) = name else {
         unreachable!("require passes the name as a string");
     };
-    // `luaL_error(L, "module '%s' not found:%s", name, msg)`
     let at = vm.lib_roots.mark();
     vm.lib_roots.extend(made.map(Value::Str));
-    let args = [FmtArg::S(c_str(n.as_bytes())), FmtArg::S(&msg)];
+    let args = [FmtArg::S(c_str(n.as_bytes())), FmtArg::S(msg)];
     let e = crate::vm::builtins::raise_lib(vm, b"module '%s' not found:%s", &args, 2);
     vm.lib_roots.release(at);
-    Err(e)
+    e
 }
 
 /// A searcher's message `first` (rooted by the caller) added to the
@@ -200,6 +224,24 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         &[arg, data]
     };
     let r = vm.call_value(loader, args)?;
+    let value = store_loaded(vm, loaded, name_s, sentinel, &r)?;
+    // 5.4 also returns the loader data
+    if v >= LuaVersion::Lua54 {
+        return vm.nat_ret(fs, &[value, data]);
+    }
+    vm.nat_ret(fs, &[value])
+}
+
+/// The loader returned `r`: its first value, when not nil, goes in
+/// `LOADED[name]`; what `LOADED[name]` then holds is the result, `true`
+/// when the loader set nothing there (5.1: left the sentinel).
+fn store_loaded(
+    vm: &mut Vm,
+    loaded: Gc<Table>,
+    name_s: Gc<crate::runtime::LuaStr>,
+    sentinel: Value,
+    r: &[Value],
+) -> Result<Value, LuaError> {
     let res = r.first().copied().unwrap_or(Value::Nil);
     // the result is pushed, and `lua_setfield` sets it from there
     vm.native_push(1);
@@ -215,26 +257,20 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     // `lua_getfield(L, 2, name)` and `lua_setfield(L, 2, name)`: keys
     // `luaS_new` makes of the name
     let key = vm.field_key(Some(name_at(name_s)), name_s.as_bytes())?;
-    let value = vm.rooted(&[key], |vm| vm.index_value(Value::Table(loaded), key));
-    let mut value = value?;
-    let unset = if v == LuaVersion::Lua51 {
+    let value = vm.rooted(&[key], |vm| vm.index_value(Value::Table(loaded), key))?;
+    let unset = if vm.version() == LuaVersion::Lua51 {
         same(value, sentinel)
     } else {
         value.is_nil()
     };
-    if unset {
-        value = Value::Bool(true);
-        let key = vm.field_key(Some(name_at(name_s)), name_s.as_bytes())?;
-        let set = vm.rooted(&[key], |vm| {
-            vm.newindex_value(Value::Table(loaded), key, value)
-        });
-        set?;
+    if !unset {
+        return Ok(value);
     }
-    // 5.4 also returns the loader data
-    if v >= LuaVersion::Lua54 {
-        return vm.nat_ret(fs, &[value, data]);
-    }
-    vm.nat_ret(fs, &[value])
+    let key = vm.field_key(Some(name_at(name_s)), name_s.as_bytes())?;
+    vm.rooted(&[key], |vm| {
+        vm.newindex_value(Value::Table(loaded), key, Value::Bool(true))
+    })?;
+    Ok(Value::Bool(true))
 }
 
 /// Where `luaS_new` finds the characters of `name`, a string argument

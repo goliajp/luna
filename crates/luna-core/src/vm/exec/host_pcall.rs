@@ -131,18 +131,7 @@ impl Vm {
             }
         };
         let mut results = if docall {
-            // lua.c's `docall`: the native takes `pmain`'s place, its
-            // arguments above it, then the handler below the function
-            let saved: Vec<Value> = self.stack[..k].to_vec();
-            let mut call_args = Vec::with_capacity(k + 1 + args.len());
-            call_args.extend_from_slice(&saved[1..]);
-            call_args.push(msgh);
-            call_args.push(f);
-            call_args.extend_from_slice(args);
-            let r = self.call_value_host_level_at(level, &call_args, 0);
-            self.stack[..k].copy_from_slice(&saved);
-            self.top = k as u32;
-            r?
+            self.host_docall(level, k, f, args, msgh)?
         } else {
             let mut call_args = Vec::with_capacity(args.len() + 2);
             call_args.push(f);
@@ -161,6 +150,29 @@ impl Vm {
             }
             Err(LuaError(results.get(1).copied().unwrap_or(Value::Nil)))
         }
+    }
+
+    /// lua.c's `docall`: the native `level` takes `pmain`'s place at the
+    /// bottom of the `k` slots, its arguments above it, then the handler
+    /// below the function.
+    fn host_docall(
+        &mut self,
+        level: Value,
+        k: usize,
+        f: Value,
+        args: &[Value],
+        msgh: Value,
+    ) -> Result<Vec<Value>, LuaError> {
+        let saved: Vec<Value> = self.stack[..k].to_vec();
+        let mut call_args = Vec::with_capacity(k + 1 + args.len());
+        call_args.extend_from_slice(&saved[1..]);
+        call_args.push(msgh);
+        call_args.push(f);
+        call_args.extend_from_slice(args);
+        let r = self.call_value_host_level_at(level, &call_args, 0);
+        self.stack[..k].copy_from_slice(&saved);
+        self.top = k as u32;
+        r
     }
 
     /// lua.c's `docall` from `pmain`, whose place the native at the bottom
