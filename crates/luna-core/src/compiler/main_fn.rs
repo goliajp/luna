@@ -41,37 +41,7 @@ fn compile_main_body(
     heap: &mut Heap,
     scratch: &mut CompileScratch,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let mem = heap.mem();
-    let mut c = Compiler {
-        ast,
-        end_lines,
-        heap,
-        version,
-        source,
-        levels: scratch.open.take().recycle(),
-        depth: 0,
-        pool: scratch.levels.take(),
-        sym_strs: scratch.sym_strs.take(),
-        last_line: 0,
-        force_line: None,
-        str_cache: LMap::new(mem),
-        spine: scratch.spine.take(),
-        lvs: scratch.lvs.take(),
-        operands: scratch.operands.take(),
-        cur: TokRef::Start,
-        early_emit: false,
-        next_pending: false,
-        err_tok: None,
-        puc_log: {
-            let mut log = scratch.puc_log.take();
-            log.clear();
-            log
-        },
-        puc_state: super::puc_log::LogState {
-            lenient: scratch.replay.lenient,
-            ..Default::default()
-        },
-    };
+    let mut c = compiler_from(ast, end_lines, version, source, heap, scratch);
     c.sym_strs.clear();
     c.sym_strs.resize_or_abort(ast.names.len(), None);
     c.open_level(0, true, 0);
@@ -106,6 +76,55 @@ fn compile_main_body(
     }
     let last_target = c.lr().last_target;
     let proto = c.finish_level(0, 0);
+    keep_scratch(c, scratch);
+    Ok((proto, last_target))
+}
+
+/// A compiler over `ast`, its vectors taken from `scratch`.
+fn compiler_from<'a>(
+    ast: &'a Chunk,
+    end_lines: &'a [u32],
+    version: LuaVersion,
+    source: Gc<LuaStr>,
+    heap: &'a mut Heap,
+    scratch: &mut CompileScratch,
+) -> Compiler<'a> {
+    let mem = heap.mem();
+    Compiler {
+        ast,
+        end_lines,
+        heap,
+        version,
+        source,
+        levels: scratch.open.take().recycle(),
+        depth: 0,
+        pool: scratch.levels.take(),
+        sym_strs: scratch.sym_strs.take(),
+        last_line: 0,
+        force_line: None,
+        str_cache: LMap::new(mem),
+        spine: scratch.spine.take(),
+        lvs: scratch.lvs.take(),
+        operands: scratch.operands.take(),
+        cur: TokRef::Start,
+        early_emit: false,
+        next_pending: false,
+        err_tok: None,
+        puc_log: {
+            let mut log = scratch.puc_log.take();
+            log.clear();
+            log
+        },
+        puc_state: super::puc_log::LogState {
+            lenient: scratch.replay.lenient,
+            ..Default::default()
+        },
+    }
+}
+
+/// The vectors of `c`, which compiled a chunk, kept in `scratch` for the
+/// next load.
+fn keep_scratch(mut c: Compiler<'_>, scratch: &mut CompileScratch) {
     for lvl in c.levels.drain_all() {
         c.pool.push_or_abort(lvl.into_bufs());
     }
@@ -117,5 +136,4 @@ fn compile_main_body(
     scratch.operands = c.operands;
     scratch.puc_log = c.puc_log;
     scratch.open = c.levels.recycle();
-    Ok((proto, last_target))
 }

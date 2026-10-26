@@ -62,6 +62,18 @@ impl Compiler<'_> {
         };
         // `luaK_self` is coded once the method's name is read
         self.last_line = method.line;
+        self.emit_self(base, o, c)?;
+        let (nfixed, open) = self.args_onto_stack(id, self.ls(args), base + 2)?;
+        self.last_line = line;
+        let b = if open { 0 } else { nfixed + 2 };
+        let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
+        self.set_freereg(base + 1);
+        Ok(Exp::Open { pc, base })
+    }
+
+    /// `luaK_self` of the object in register `o` and the method name, the
+    /// constant `c`, into `base` and `base + 1`.
+    fn emit_self(&mut self, base: u32, o: u32, c: u32) -> Result<(), SyntaxError> {
         if c <= 0xFF {
             self.emit(Inst::iabc(Op::SelfOp, base, o, c, true));
         } else if self.version >= LuaVersion::Lua55 {
@@ -86,12 +98,7 @@ impl Compiler<'_> {
             self.reserve(2)?;
             self.emit(Inst::iabc(Op::SelfOp, base, o, kr, false));
         }
-        let (nfixed, open) = self.args_onto_stack(id, self.ls(args), base + 2)?;
-        self.last_line = line;
-        let b = if open { 0 } else { nfixed + 2 };
-        let pc = self.emit(Inst::iabc(Op::Call, base, b, 2, false));
-        self.set_freereg(base + 1);
-        Ok(Exp::Open { pc, base })
+        Ok(())
     }
 
     /// Stack the arguments of call `call` at consecutive registers from

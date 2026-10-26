@@ -4,6 +4,9 @@
 use super::*;
 use crate::runtime::mem::{LVec, MemRef};
 
+mod scratch;
+pub(crate) use scratch::CompileScratch;
+
 pub(super) struct Level<'a> {
     pub(super) code: LVec<Inst>,
     pub(super) lines: LVec<u32>,
@@ -181,6 +184,13 @@ impl<'a> Level<'a> {
             ),
             trace_call_head_settled: std::cell::Cell::new(false),
         };
+        self.clear_scopes();
+        proto
+    }
+
+    /// The constants' index and the scopes of a function compiled, emptied
+    /// for the next.
+    fn clear_scopes(&mut self) {
         self.const_map.clear();
         self.num_first.clear();
         self.locals.clear();
@@ -189,7 +199,6 @@ impl<'a> Level<'a> {
         self.labels.clear();
         self.gotos.clear();
         self.jexps.clear();
-        proto
     }
 
     /// This level's vectors, emptied, to keep for a later load.
@@ -252,49 +261,5 @@ impl LevelBufs {
             locvars: LVec::new(mem),
             jexps: LVec::new(mem),
         }
-    }
-}
-
-/// What the compiler keeps between loads: the vectors of finished
-/// functions ([`LevelBufs`]), one per nesting level reached so far.
-pub(crate) struct CompileScratch {
-    pub(super) levels: LVec<LevelBufs>,
-    /// the stack of functions being compiled, empty
-    pub(super) open: LVec<Level<'static>>,
-    pub(super) sym_strs: LVec<Option<Gc<LuaStr>>>,
-    pub(super) spine: LVec<super::expr::Pending>,
-    pub(super) lvs: LVec<super::lvalue::Lv>,
-    pub(super) operands: LVec<ExprId>,
-    /// the token of the last error the compiler returned, and its message
-    /// (see [`super::TokRef`])
-    pub(crate) err_tok: Option<(super::TokRef, Vec<u8>, bool)>,
-    /// the last compile's log of what PUC allocates (see [`super::puc_log`])
-    pub(crate) puc_log: LVec<(super::TokRef, super::puc_log::PEv)>,
-    /// see [`super::ReplayOpts`]
-    pub(crate) replay: super::ReplayOpts,
-}
-
-impl CompileScratch {
-    /// Empty vectors on `mem`, nothing allocated.
-    pub(crate) fn new(mem: MemRef) -> CompileScratch {
-        CompileScratch {
-            levels: LVec::new(mem),
-            open: LVec::new(mem),
-            sym_strs: LVec::new(mem),
-            spine: LVec::new(mem),
-            lvs: LVec::new(mem),
-            operands: LVec::new(mem),
-            err_tok: None,
-            puc_log: LVec::new(mem),
-            replay: Default::default(),
-        }
-    }
-
-    /// The token PUC reports `e`, the error the last compile returned, at.
-    pub(crate) fn error_token(&mut self, e: &SyntaxError) -> Option<(super::TokRef, bool)> {
-        self.err_tok
-            .take()
-            .filter(|(_, m, _)| *m == e.msg)
-            .map(|(t, _, near)| (t, near))
     }
 }

@@ -70,27 +70,10 @@ impl<'a> Compiler<'a> {
         self.log_for_names(sid, hidden, &names)?;
         let base = self.explist_adjust(exprs, values)?;
         let last = *exprs.last().expect("an expression list");
-        // 5.1 and 5.2 keep the extra values' registers until the statement
-        // ends: the room to call the iterator is counted past them
-        let extra = match self.version {
-            LuaVersion::Lua51 | LuaVersion::Lua52 => (exprs.len() as u32).saturating_sub(values),
-            _ => 0,
-        };
-        self.set_freereg(base + values + extra);
-        self.reserve(layout.call_end() - values)?;
-        self.set_freereg(base + values);
+        self.forlist_room(base, values, exprs.len() as u32, layout.call_end())?;
         self.enter_block(true);
         self.declare_hidden(base, hidden)?;
-        // the closing value: a `return f()` in the body is no tail call,
-        // and a `goto` leaving the loop closes it
-        // PUC enters the loop's block before the expressions: its level is
-        // the base
-        let b = self.l().blocks.last_mut().expect("no block");
-        b.reg_floor = base;
-        if layout.closing().is_some() {
-            b.tbc_scope = true;
-            b.has_tbc = true;
-        }
+        self.forlist_block(base, layout.closing().is_some());
         let vbase = base + layout.var();
         self.set_freereg(vbase);
         // `forbody`, once `do` is read
@@ -132,6 +115,38 @@ impl<'a> Compiler<'a> {
         self.leave_block()?;
         self.set_freereg(base);
         Ok(())
+    }
+
+    /// `luaK_checkstack`'s room to call the iterator, past the `values`
+    /// registers from `base` (5.1 and 5.2: past the extra values of the
+    /// `nexprs` expressions too, kept until the statement ends).
+    fn forlist_room(
+        &mut self,
+        base: u32,
+        values: u32,
+        nexprs: u32,
+        call_end: u32,
+    ) -> Result<(), SyntaxError> {
+        let extra = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 => nexprs.saturating_sub(values),
+            _ => 0,
+        };
+        self.set_freereg(base + values + extra);
+        self.reserve(call_end - values)?;
+        self.set_freereg(base + values);
+        Ok(())
+    }
+
+    /// The generic loop's block: PUC enters it before the expressions, so
+    /// its level is the base; with a closing value, a `return f()` in the
+    /// body is no tail call and a `goto` leaving the loop closes it.
+    fn forlist_block(&mut self, base: u32, closing: bool) {
+        let b = self.l().blocks.last_mut().expect("no block");
+        b.reg_floor = base;
+        if closing {
+            b.tbc_scope = true;
+            b.has_tbc = true;
+        }
     }
 
     pub(super) fn numeric_for(
@@ -188,10 +203,7 @@ impl<'a> Compiler<'a> {
                 } else {
                     Value::Int(1)
                 };
-                match self.number_const_before_54(one) {
-                    Some(c) => self.load_const(base + 2, c),
-                    None => _ = self.emit(Inst::iasbx(Op::LoadI, base + 2, 1)),
-                }
+                self.load_imm(base + 2, one, Op::LoadI, 1);
             }
         }
         // 5.5 keeps the index in the loop variable: its `forprep` drops one
