@@ -5,6 +5,10 @@
 # leaks. Way slower (10-100× wall-clock vs ASAN, which is itself
 # slower than vanilla `cargo test`). Nightly-only.
 #
+# The library's tests run in parallel shards, each with its own time
+# budget; `.github/miri-shards.json` names them, and the partition job
+# fails when a test falls in no shard or in two.
+#
 # Scope is intentionally narrow (luna-core --lib only):
 # - JIT / AOT crates use Cranelift / inkwell which call into
 #   native code that Miri can't model.
@@ -19,12 +23,61 @@ on:
   workflow_dispatch:
 
 jobs:
-  miri:
-    name: Miri (nightly)
+  partition:
+    name: Miri shards cover every test once
     runs-on: ubuntu-latest
-    # 4h budget. Miri's stack-borrow model
-    # makes some loops O(N²) — keep a generous ceiling.
-    timeout-minutes: 240
+    outputs:
+      shards: ${{ steps.check.outputs.shards }}
+    env:
+      MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-disable-isolation
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install nightly + miri
+        run: |
+          rustup toolchain install nightly --profile minimal --component miri
+          cargo +nightly miri setup
+
+      - name: List the tests and check the shards
+        id: check
+        run: |
+          cargo +nightly miri test -p luna-core --lib --no-default-features -- --list \
+            | sed -n 's/: test$//p' > tests.txt
+          python3 - <<'PY'
+          import json, os
+          tests = [t for t in open("tests.txt").read().split("\n") if t]
+          shards = json.load(open(".github/miri-shards.json"))
+          # libtest's selection: any filter a substring of the name (all
+          # names without filters), and no `--skip` one
+          def picks(shard, name):
+              hit = not shard["filters"] or any(f in name for f in shard["filters"])
+              return hit and not any(s in name for s in shard["skips"])
+          bad = 0
+          for t in tests:
+              n = [s["name"] for s in shards if picks(s, t)]
+              if len(n) != 1:
+                  print(f"{t}: in {n or 'no shard'}")
+                  bad += 1
+          print(f"{len(tests)} tests, {len(shards)} shards")
+          for s in shards:
+              print(f"  {s['name']}: {sum(picks(s, t) for t in tests)}")
+          if not tests or bad:
+              raise SystemExit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("shards=" + json.dumps(shards) + "\n")
+          PY
+
+  miri:
+    name: Miri (${{ matrix.shard.name }})
+    needs: partition
+    runs-on: ubuntu-latest
+    # Miri's stack-borrow model makes some loops O(N²); each shard keeps
+    # within three hours
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.partition.outputs.shards) }}
     env:
       # Strict Stacked Borrows (more aggressive UB detection
       # than the default Tree Borrows). luna-core's `Gc<T> =
@@ -34,8 +87,11 @@ jobs:
       MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-disable-isolation
       RUST_BACKTRACE: full
       CARGO_TERM_COLOR: always
+      SHARD: ${{ toJSON(matrix.shard) }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
 
       - name: Install nightly + miri
         run: |
@@ -44,12 +100,16 @@ jobs:
           rustc +nightly --version
           cargo +nightly miri --version
 
-      - name: Miri — luna-core --lib (no default features)
+      - name: Miri — luna-core --lib (no default features), one shard
         # `--no-default-features` keeps the run focused on the
         # 0-third-party-dep core. The `send` feature (host roots
         # behind Arc<RwLock<Vm>>) is not covered here.
         run: |
+          args=$(python3 -c 'import json, os, shlex
+          s = json.loads(os.environ["SHARD"])
+          print(" ".join(shlex.quote(a) for a in s["filters"] + [x for k in s["skips"] for x in ("--skip", k)]))')
+          eval "set -- $args"
           cargo +nightly miri test \
             -p luna-core --lib \
             --no-default-features \
-            -- --nocapture
+            -- --nocapture "$@"

@@ -1,0 +1,6 @@
+[
+  {"name": "table-hash", "filters": ["runtime::table::hash::"], "skips": []},
+  {"name": "runtime", "filters": ["runtime::"], "skips": ["runtime::table::hash::"]},
+  {"name": "vm", "filters": ["vm::"], "skips": []},
+  {"name": "rest", "filters": [], "skips": ["runtime::", "vm::"]}
+]
