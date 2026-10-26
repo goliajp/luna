@@ -17,6 +17,9 @@ pub(crate) fn atomic<H: StepHost + ?Sized>(h: &mut H) -> (i64, i64) {
         run.main_ci = 0;
     }
     let mut m = h.heap().loan_marker();
+    if rules.gray_left_uncounted {
+        h.heap().drain_work(&mut m, Some(run));
+    }
     m.enter_atomic();
     if !rules.tobefnz_at_restart {
         h.heap().mark_tobefnz(&mut m);

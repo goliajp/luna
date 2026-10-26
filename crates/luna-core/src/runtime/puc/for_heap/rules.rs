@@ -75,6 +75,11 @@ pub(in crate::runtime) struct HeapRules {
     /// the atomic step counts the work of what the barriers sent gray
     /// again (`grayagain`); 5.2 and 5.3 do not
     pub(in crate::runtime) atomic_counts_again: bool,
+    /// 5.3's step into the atomic phase first traverses, uncounted, what
+    /// the program turned gray since marking ran out of gray objects
+    /// (`singlestep`'s `propagateall` before `atomic`); 5.4 on count it in
+    /// `atomic`, 5.1 and 5.2 run `atomic` as marking runs out
+    pub(crate) gray_left_uncounted: bool,
     /// what the atomic step's `entersweep` sweeps: 5.1 nothing, 5.3 one
     /// object, the others to the first object kept
     pub(in crate::runtime) enter_sweep: Option<(usize, bool)>,
@@ -137,6 +142,7 @@ impl HeapRules {
             roots_counted_apart: matches!(d, Dialect::L52 | Dialect::L53),
             full_from_pause_sweeps: l51,
             atomic_counts_again: !matches!(d, Dialect::L52 | Dialect::L53),
+            gray_left_uncounted: d == Dialect::L53,
             enter_sweep: match d {
                 Dialect::L51 => None,
                 Dialect::L53 => Some((1, false)),
