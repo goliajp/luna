@@ -12,13 +12,23 @@ use std::alloc::Layout;
 use std::cell::Cell;
 use std::ptr::NonNull;
 
-/// The block and how much of it is used: `[start, end)`, cut up to `next`;
-/// all 0 without one.
-#[derive(Default)]
+/// The block and how much of it is used: `len` bytes from `start`, cut up
+/// to offset `next`; a null `start` and 0 without one. The block is kept
+/// as a pointer, not an address, so the pieces carry its provenance.
 pub(super) struct Arena {
-    start: Cell<usize>,
-    end: Cell<usize>,
+    start: Cell<*mut u8>,
+    len: Cell<usize>,
     next: Cell<usize>,
+}
+
+impl Default for Arena {
+    fn default() -> Self {
+        Arena {
+            start: Cell::new(std::ptr::null_mut()),
+            len: Cell::new(0),
+            next: Cell::new(0),
+        }
+    }
 }
 
 /// The alignment of the block, and of every piece cut from it.
@@ -34,13 +44,13 @@ impl Arena {
         let bytes = ARENA;
         let layout = Layout::from_size_align(bytes, ALIGN).expect("an arena's size");
         // SAFETY: the size is not 0
-        let Some(p) = NonNull::new(unsafe { std::alloc::alloc(layout) }) else {
+        let p = unsafe { std::alloc::alloc(layout) };
+        if p.is_null() {
             return;
-        };
-        let p = p.as_ptr() as usize;
+        }
         self.start.set(p);
-        self.next.set(p);
-        self.end.set(p + bytes);
+        self.next.set(0);
+        self.len.set(bytes);
     }
 
     /// A piece of `layout` (8-byte aligned, a multiple of 8 bytes) cut from
@@ -49,29 +59,29 @@ impl Arena {
     pub(super) fn cut(&self, layout: Layout) -> Option<NonNull<u8>> {
         let at = self.next.get();
         let end = at + layout.size();
-        if end > self.end.get() {
+        if end > self.len.get() {
             return None;
         }
         self.next.set(end);
-        NonNull::new(at as *mut u8)
+        // the offset is within the block, or 0 with none (a null start)
+        NonNull::new(self.start.get().wrapping_add(at))
     }
 
     /// Whether `p` was cut from the block.
     #[inline(always)]
     pub(super) fn holds(&self, p: NonNull<u8>) -> bool {
-        let a = p.as_ptr() as usize;
-        a >= self.start.get() && a < self.end.get()
+        p.as_ptr().addr().wrapping_sub(self.start.get().addr()) < self.len.get()
     }
 }
 
 impl Drop for Arena {
     fn drop(&mut self) {
-        let (start, end) = (self.start.get(), self.end.get());
-        if start != 0 {
-            let layout = Layout::from_size_align(end - start, ALIGN).expect("an arena's size");
+        let start = self.start.get();
+        if !start.is_null() {
+            let layout = Layout::from_size_align(self.len.get(), ALIGN).expect("an arena's size");
             // SAFETY: the block came from `open` with this layout, and the
             // context, whose pieces are all that point into it, goes now
-            unsafe { std::alloc::dealloc(start as *mut u8, layout) };
+            unsafe { std::alloc::dealloc(start, layout) };
         }
     }
 }

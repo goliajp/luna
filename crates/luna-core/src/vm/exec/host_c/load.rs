@@ -119,7 +119,7 @@ impl Vm {
         for i in 1..=saved {
             self.raw_set(
                 t,
-                Value::LightUserdata(i as *const ()),
+                Value::LightUserdata(std::ptr::without_provenance(i)),
                 Value::Int(i as i64),
             )?;
         }
