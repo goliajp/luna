@@ -45,12 +45,6 @@ mod frames_sync;
 mod open_upval;
 use frames_sync::{frames_pop_known, frames_pop_sync, frames_push_sync};
 mod gc;
-mod gc_hooks;
-#[cfg(feature = "gc-trace")]
-mod gc_refuse;
-mod gc_step;
-#[cfg(feature = "gc-stress")]
-mod gc_stress;
 mod hooks;
 mod hooks_exec;
 mod host_api;
@@ -59,13 +53,6 @@ mod host_ops;
 pub(crate) mod host_pcall;
 mod host_rng;
 mod index;
-mod index_fast;
-mod index_miss;
-mod index_pushed;
-mod index_raw;
-mod index_set;
-#[cfg(feature = "gc-verify")]
-mod index_verify;
 mod jit_call;
 mod jit_handoff;
 pub(crate) mod jit_levels;

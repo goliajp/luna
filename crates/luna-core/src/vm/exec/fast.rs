@@ -12,7 +12,7 @@ use fast_arith::{
     arith_arm, arith_imm_arm, cold_path, is_num_tag, put_flt, put_int, raw_flt, raw_gc, raw_int,
     raw_num, raw_tag, raw_truthy, reg_a,
 };
-use index_fast::self_key;
+use index::fast::self_key;
 use num_words::put_words;
 #[cfg(all(target_arch = "aarch64", not(miri)))]
 use num_words::{first, raw_tag_words3, raw_words3};

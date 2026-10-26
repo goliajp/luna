@@ -6,7 +6,7 @@ impl Vm {
     /// Panics when `key`, a string, was freed: what the dereference that
     /// follows would read is gone. The freed-pointer log is exact under a
     /// quarantining allocator (ASAN).
-    pub(super) fn verify_index_key(&self, key: Value) {
+    pub(in crate::vm::exec) fn verify_index_key(&self, key: Value) {
         if matches!(key, Value::Str(_)) {
             let h = match key {
                 Value::Str(s) => s.as_ptr() as usize,
@@ -64,7 +64,7 @@ impl Vm {
 
     /// A dead key at a write site, attributed to the instruction that made
     /// it.
-    pub(super) fn verify_written_key(&self, key: Value) {
+    pub(in crate::vm::exec) fn verify_written_key(&self, key: Value) {
         if let Some(p) = match key {
             Value::Str(s) => Some(s.as_ptr() as usize),
             Value::Table(t2) => Some(t2.as_ptr() as usize),

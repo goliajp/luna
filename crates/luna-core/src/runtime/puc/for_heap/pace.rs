@@ -22,7 +22,7 @@ impl Heap {
     /// What a memory cap is held against: the bytes the allocation context
     /// has handed out, when it counts them (a host function or a policy),
     /// else PUC's count ([`Heap::bytes`]).
-    pub fn cap_bytes(&self) -> usize {
+    pub(crate) fn cap_bytes(&self) -> usize {
         self.mem_ctx().in_use().unwrap_or(self.puc.bytes)
     }
 
@@ -34,6 +34,7 @@ impl Heap {
     }
 
     /// [`Heap::gc_due`] once `more` bytes more are counted.
+    #[inline]
     pub(crate) fn gc_due_after(&self, more: usize) -> bool {
         self.puc_due_after(more) && !self.no_gc() && !self.no_auto()
     }

@@ -59,6 +59,9 @@ pub trait HeapInternals {
         c: u32,
         k: bool,
     ) -> Result<Option<Gc<Table>>, crate::runtime::table::TableError>;
+    /// The write barrier for `vals` just stored into `t` (see
+    /// `Heap::barrier_store`).
+    fn barrier_store<T: crate::runtime::heap::GcObject>(&mut self, t: Gc<T>, vals: &[Value]);
 }
 
 impl HeapInternals for crate::runtime::Heap {
@@ -70,6 +73,10 @@ impl HeapInternals for crate::runtime::Heap {
         k: bool,
     ) -> Result<Option<Gc<Table>>, crate::runtime::table::TableError> {
         crate::runtime::Heap::try_new_table_presized(self, b, c, k)
+    }
+    #[inline]
+    fn barrier_store<T: crate::runtime::heap::GcObject>(&mut self, t: Gc<T>, vals: &[Value]) {
+        crate::runtime::Heap::barrier_store(self, t, vals);
     }
 }
 

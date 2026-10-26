@@ -9,7 +9,11 @@ impl Vm {
     /// [`Vm::refused_stack`] when a refusal waits.
     #[cold]
     #[inline(never)]
-    pub(super) fn answer_refused_stack(&mut self, old: u32, top: u32) -> Result<(), LuaError> {
+    pub(in crate::vm::exec) fn answer_refused_stack(
+        &mut self,
+        old: u32,
+        top: u32,
+    ) -> Result<(), LuaError> {
         if self.version >= LuaVersion::Lua54 {
             let (_, bytes) = self.heap.hooks.trace.take_refused();
             self.heap.adjust_count(-bytes);
@@ -33,7 +37,7 @@ impl Vm {
     /// PUC's).
     #[cold]
     #[inline(never)]
-    pub(super) fn answer_refusal(&mut self) -> Result<(), LuaError> {
+    pub(in crate::vm::exec) fn answer_refusal(&mut self) -> Result<(), LuaError> {
         let (lines, bytes) = self.heap.hooks.trace.take_refused();
         self.heap.adjust_count(-bytes);
         // a `luaL_Buffer` box's block (5.3 on) is asked of the allocation

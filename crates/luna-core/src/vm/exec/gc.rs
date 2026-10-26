@@ -3,7 +3,13 @@
 use super::*;
 #[cfg(feature = "gc-verify")]
 mod gc_verify;
+pub(super) mod hooks;
+#[cfg(feature = "gc-trace")]
+mod refuse;
 mod roots;
+mod step_host;
+#[cfg(feature = "gc-stress")]
+mod stress;
 pub(crate) use roots::fixed_names;
 #[cfg(feature = "gc-trace")]
 mod trace_k;

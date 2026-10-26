@@ -57,7 +57,7 @@ thread_local! {
 pub(super) fn stressed(vm: &mut luna_core::vm::Vm) {
     #[cfg(feature = "gc-stress")]
     if let Some((every, offset)) = INTERVAL.get() {
-        vm.gc_stress_interval(every, offset);
+        luna_core::__private::VmGcStress::gc_stress_interval(vm, every, offset);
     }
     let _ = vm;
 }
