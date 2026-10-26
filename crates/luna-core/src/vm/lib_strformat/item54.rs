@@ -116,41 +116,56 @@ pub(super) fn item54(
                 vm.buf_push(out, s.as_bytes())?;
                 return Ok((p + 1, Added::Value(s)));
             }
-            // a `__tostring` runs above the buffer's slot; its result stays
-            // pushed over the errors that follow
-            let buf = vm.buffer_slot(out.len());
-            vm.native_hold_top(&[Vm::buffer_box()][..buf as usize])?;
-            let v = a.get(vm, arg);
-            let gs = vm.tolstring(v, buf)?;
-            let s = gs.as_bytes().to_vec();
-            if form.len() == 2 {
-                vm.buf_push(out, &s)?;
-                added = Added::Value(gs);
-            } else {
-                if s.contains(&0) {
-                    vm.native_push(1);
-                    return Err(arg_error(vm, arg + 1, "string contains zeros"));
-                }
-                if let Err(e) = checkformat(vm, form, b"-", true) {
-                    vm.native_push(1);
-                    return Err(e);
-                }
-                if !form.contains(&b'.') && s.len() >= 100 {
-                    vm.buf_push(out, &s)?;
-                    added = Added::Value(gs);
-                } else {
-                    cfmt::cstr(out, &sp, &s);
-                }
-            }
+            added = string_item(vm, a, arg, out, form, &sp)?;
         }
-        _ => {
-            // the message prints 'form' as a C string
-            let shown = &form[..form.iter().position(|&b| b == 0).unwrap_or(form.len())];
-            let mut msg = b"invalid conversion '".to_vec();
-            msg.extend_from_slice(shown);
-            msg.extend_from_slice(b"' to 'format'");
-            return Err(raise_bytes(vm, &msg));
-        }
+        _ => return Err(invalid_conversion(vm, form)),
     }
     Ok((p + 1, added))
+}
+
+/// `%s` of a value not taken as it is: `luaL_tolstring` (whose
+/// `__tostring` runs above the buffer's slot, its result left pushed over
+/// the errors that follow), then the bytes formatted by `form`.
+fn string_item(
+    vm: &mut Vm,
+    a: Args,
+    arg: u32,
+    out: &mut LVec<u8>,
+    form: &[u8],
+    sp: &Spec,
+) -> Result<Added, LuaError> {
+    // a `__tostring` runs above the buffer's slot; its result stays
+    // pushed over the errors that follow
+    let buf = vm.buffer_slot(out.len());
+    vm.native_hold_top(&[Vm::buffer_box()][..buf as usize])?;
+    let v = a.get(vm, arg);
+    let gs = vm.tolstring(v, buf)?;
+    let s = gs.as_bytes().to_vec();
+    if form.len() == 2 {
+        vm.buf_push(out, &s)?;
+        return Ok(Added::Value(gs));
+    }
+    if s.contains(&0) {
+        vm.native_push(1);
+        return Err(arg_error(vm, arg + 1, "string contains zeros"));
+    }
+    if let Err(e) = checkformat(vm, form, b"-", true) {
+        vm.native_push(1);
+        return Err(e);
+    }
+    if !form.contains(&b'.') && s.len() >= 100 {
+        vm.buf_push(out, &s)?;
+        return Ok(Added::Value(gs));
+    }
+    cfmt::cstr(out, sp, &s);
+    Ok(Added::Sized)
+}
+
+/// The error for the conversion `form`, printed as a C string.
+fn invalid_conversion(vm: &mut Vm, form: &[u8]) -> LuaError {
+    let shown = &form[..form.iter().position(|&b| b == 0).unwrap_or(form.len())];
+    let mut msg = b"invalid conversion '".to_vec();
+    msg.extend_from_slice(shown);
+    msg.extend_from_slice(b"' to 'format'");
+    raise_bytes(vm, &msg)
 }

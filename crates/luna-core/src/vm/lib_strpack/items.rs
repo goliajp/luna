@@ -62,28 +62,9 @@ pub(super) fn unpack_items(
                 results.push(Value::Str(s))?;
             }
             KOption::Str => {
-                let len = unpack_int(vm, &data[p..], h.islittle, size as usize, false)? as u64;
-                // 5.3 and 5.4 read it as a `size_t`
-                let len = if v <= LuaVersion::Lua54 {
-                    len as usize as u64
-                } else {
-                    len
-                };
-                if len > ld - *pos - size {
-                    // 5.3's `*pos + len + size <= ld` wraps (in `size_t`) for
-                    // a huge length and lets it through to the allocation
-                    let end = (*pos as usize)
-                        .wrapping_add(len as usize)
-                        .wrapping_add(size as usize);
-                    if v == LuaVersion::Lua53 && end as u64 <= ld {
-                        return Err(vm.runerror_in_c("memory allocation error: block too big"));
-                    }
-                    return Err(arg_error(vm, 2, "data string too short"));
-                }
-                let st = p + size as usize;
-                let s = vm.alloc_str(&data[st..st + len as usize])?;
+                let s = unpack_str(vm, data, *pos, size, h.islittle)?;
+                *pos += s.len() as u64;
                 results.push(Value::Str(s))?;
-                *pos += len;
             }
             KOption::Zstr => {
                 // strlen stops at the string's terminating zero at worst;
@@ -102,6 +83,56 @@ pub(super) fn unpack_items(
         *pos += size;
     }
     Ok(())
+}
+
+/// The error for the missing argument `arg` an option `opt` wants: the
+/// nil mark makes it read as nil (`luaL_typeerror` on it: its `__name`
+/// looked up, then the message pushed before `luaL_argerror` adds to it).
+fn missing_arg(vm: &mut Vm, opt: KOption, arg: u32) -> LuaError {
+    let expected = match opt {
+        KOption::Char | KOption::Str | KOption::Zstr => "string",
+        _ => "number",
+    };
+    if let Err(e) = vm.metafield_check(Value::Nil, b"__name") {
+        return e;
+    }
+    let fmt = b"%s expected, got %s";
+    let args = [FmtArg::S(expected.as_bytes()), FmtArg::S(b"nil")];
+    match argcheck::pushed_extra(vm, 2, fmt, &args) {
+        Ok(m) => arg_error(vm, arg, &m),
+        Err(e) => e,
+    }
+}
+
+/// Option `s`: the string argument `i` after its length in `size` bytes;
+/// how many bytes the string added.
+fn pack_str(
+    vm: &mut Vm,
+    a: Args,
+    i: u32,
+    size: u64,
+    little: bool,
+    out: &mut LVec<u8>,
+) -> Result<u64, LuaError> {
+    let s = argcheck::check_string(vm, a, i)?;
+    let len = s.len() as u64;
+    // `sizeof(size_t)` before 5.5, `sizeof(lua_Unsigned)` after
+    let whole = if vm.version() >= LuaVersion::Lua55 {
+        SZINT
+    } else {
+        crate::vm::c_abi::SIZEOF_SIZE_T
+    };
+    if !(size >= whole || len < (1u64 << (size * 8))) {
+        return Err(arg_error(
+            vm,
+            i + 1,
+            "string length does not fit in given size",
+        ));
+    }
+    reserve(vm, out, size + len)?;
+    pack_int(vm, out, len, little, size as usize, false)?;
+    vm.buf_push(out, s.as_bytes())?;
+    Ok(len)
 }
 
 /// The items of `string.pack`, packed into `out`.
@@ -128,19 +159,7 @@ pub(super) fn pack_items(
         let i = *arg - 1;
         // the nil mark makes the first missing argument read as nil
         if a.is_none(i) && !matches!(opt, KOption::Padding | KOption::PadAlign | KOption::Nop) {
-            let expected = match opt {
-                KOption::Char | KOption::Str | KOption::Zstr => "string",
-                _ => "number",
-            };
-            // `luaL_typeerror` on the nil mark: its `__name` looked up,
-            // then the message pushed before `luaL_argerror` adds to it
-            vm.metafield_check(Value::Nil, b"__name")?;
-            let fmt = b"%s expected, got %s";
-            let args = [FmtArg::S(expected.as_bytes()), FmtArg::S(b"nil")];
-            return Err(match argcheck::pushed_extra(vm, 2, fmt, &args) {
-                Ok(m) => arg_error(vm, *arg, &m),
-                Err(e) => e,
-            });
+            return Err(missing_arg(vm, opt, *arg));
         }
         match opt {
             KOption::Int => {
@@ -178,27 +197,7 @@ pub(super) fn pack_items(
                 vm.buf_push(out, s.as_bytes())?;
                 zeros(vm, out, (size - len) as usize)?;
             }
-            KOption::Str => {
-                let s = argcheck::check_string(vm, a, i)?;
-                let len = s.len() as u64;
-                // `sizeof(size_t)` before 5.5, `sizeof(lua_Unsigned)` after
-                let whole = if vm.version() >= LuaVersion::Lua55 {
-                    SZINT
-                } else {
-                    crate::vm::c_abi::SIZEOF_SIZE_T
-                };
-                if !(size >= whole || len < (1u64 << (size * 8))) {
-                    return Err(arg_error(
-                        vm,
-                        *arg,
-                        "string length does not fit in given size",
-                    ));
-                }
-                reserve(vm, out, size + len)?;
-                pack_int(vm, out, len, h.islittle, size as usize, false)?;
-                vm.buf_push(out, s.as_bytes())?;
-                *totalsize += len;
-            }
+            KOption::Str => *totalsize += pack_str(vm, a, i, size, h.islittle, out)?,
             KOption::Zstr => {
                 let s = argcheck::check_string(vm, a, i)?;
                 if s.as_bytes().contains(&0) {
@@ -217,4 +216,37 @@ pub(super) fn pack_items(
         }
     }
     Ok(())
+}
+
+/// Option `s` at `pos`: a length in `size` bytes, then that many bytes of
+/// string.
+fn unpack_str(
+    vm: &mut Vm,
+    data: &[u8],
+    pos: u64,
+    size: u64,
+    little: bool,
+) -> Result<crate::runtime::Gc<crate::runtime::LuaStr>, LuaError> {
+    let p = pos as usize;
+    let ld = data.len() as u64;
+    let len = unpack_int(vm, &data[p..], little, size as usize, false)? as u64;
+    // 5.3 and 5.4 read it as a `size_t`
+    let len = if vm.version() <= LuaVersion::Lua54 {
+        len as usize as u64
+    } else {
+        len
+    };
+    if len > ld - pos - size {
+        // 5.3's `*pos + len + size <= ld` wraps (in `size_t`) for
+        // a huge length and lets it through to the allocation
+        let end = (pos as usize)
+            .wrapping_add(len as usize)
+            .wrapping_add(size as usize);
+        if vm.version() == LuaVersion::Lua53 && end as u64 <= ld {
+            return Err(vm.runerror_in_c("memory allocation error: block too big"));
+        }
+        return Err(arg_error(vm, 2, "data string too short"));
+    }
+    let st = p + size as usize;
+    Ok(vm.alloc_str(&data[st..st + len as usize])?)
 }

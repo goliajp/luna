@@ -82,18 +82,10 @@ fn getoption(
 ) -> Result<(KOption, u64), LuaError> {
     let opt = fmt[*pos];
     *pos += 1;
+    if let Some(o) = fixed_option(opt) {
+        return Ok(o);
+    }
     Ok(match opt {
-        b'b' => (KOption::Int, 1),
-        b'B' => (KOption::Uint, 1),
-        b'h' => (KOption::Int, 2),
-        b'H' => (KOption::Uint, 2),
-        b'l' => (KOption::Int, c_abi::SIZEOF_LONG),
-        b'j' => (KOption::Int, 8),
-        b'L' => (KOption::Uint, c_abi::SIZEOF_LONG),
-        b'J' => (KOption::Uint, 8),
-        b'T' => (KOption::Uint, c_abi::SIZEOF_SIZE_T),
-        b'f' => (KOption::Float, 4),
-        b'n' | b'd' => (KOption::Number, 8),
         b'i' => (KOption::Int, getnumlimit(vm, fmt, pos, 4)?),
         b'I' => (KOption::Uint, getnumlimit(vm, fmt, pos, 4)?),
         b's' => (
@@ -107,10 +99,6 @@ fn getoption(
             }
             (KOption::Char, size)
         }
-        b'z' => (KOption::Zstr, 0),
-        b'x' => (KOption::Padding, 1),
-        b'X' => (KOption::PadAlign, 0),
-        b' ' => (KOption::Nop, 0),
         b'<' => {
             h.islittle = true;
             (KOption::Nop, 0)
@@ -128,14 +116,32 @@ fn getoption(
             (KOption::Nop, 0)
         }
         _ => {
+            let args = [crate::runtime::puc::fmt::FmtArg::C(opt)];
             let fmt = b"invalid format option '%c'";
-            return Err(crate::vm::builtins::raise_lib(
-                vm,
-                fmt,
-                &[crate::runtime::puc::fmt::FmtArg::C(opt)],
-                1,
-            ));
+            return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
         }
+    })
+}
+
+/// An option of a size of its own, read from no digits.
+fn fixed_option(opt: u8) -> Option<(KOption, u64)> {
+    Some(match opt {
+        b'b' => (KOption::Int, 1),
+        b'B' => (KOption::Uint, 1),
+        b'h' => (KOption::Int, 2),
+        b'H' => (KOption::Uint, 2),
+        b'l' => (KOption::Int, c_abi::SIZEOF_LONG),
+        b'j' => (KOption::Int, 8),
+        b'L' => (KOption::Uint, c_abi::SIZEOF_LONG),
+        b'J' => (KOption::Uint, 8),
+        b'T' => (KOption::Uint, c_abi::SIZEOF_SIZE_T),
+        b'f' => (KOption::Float, 4),
+        b'n' | b'd' => (KOption::Number, 8),
+        b'z' => (KOption::Zstr, 0),
+        b'x' => (KOption::Padding, 1),
+        b'X' => (KOption::PadAlign, 0),
+        b' ' => (KOption::Nop, 0),
+        _ => return None,
     })
 }
 

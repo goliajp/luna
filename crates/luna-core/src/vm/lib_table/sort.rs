@@ -15,17 +15,18 @@ mod auxsort_int;
 mod snapshot;
 use snapshot::pure_snapshot;
 
-pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    let a = Args::new(fs, nargs);
+/// `table.sort`'s table, its length and the comparator, if any; none for
+/// an array 5.3 on leave as it is without looking at the comparator.
+#[allow(clippy::type_complexity)]
+fn sort_args(vm: &mut Vm, a: Args) -> Result<Option<(Value, i64, Option<Value>)>, LuaError> {
     let ver = vm.version();
     let (tv, n) = aux_getn(vm, a, TAB_RW)?;
     if ver <= V::Lua52 {
         // "assume array is smaller than 2^40"
         argcheck::check_stack(vm, a, 40, "")?;
     }
-    // 5.3+ checks the size and the comparator only for a non-trivial array.
     if ver >= V::Lua53 && n <= 1 {
-        return Ok(0);
+        return Ok(None);
     }
     if ver >= V::Lua53 && n >= i64::from(i32::MAX) {
         return Err(arg_error(vm, 1, "array too big"));
@@ -34,6 +35,15 @@ pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
         None
     } else {
         Some(argcheck::check_function(vm, a, 1)?)
+    };
+    Ok(Some((tv, n, comp)))
+}
+
+pub(super) fn t_sort(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let a = Args::new(fs, nargs);
+    let ver = vm.version();
+    let Some((tv, n, comp)) = sort_args(vm, a)? else {
+        return Ok(0);
     };
     // PUC `lua_settop(L, 2)`, then every element it holds goes on the
     // stack: this frame of `sort_scratch` is that stack, traced by
