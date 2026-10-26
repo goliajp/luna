@@ -28,24 +28,16 @@ type Helper = (&'static str, usize, u32, bool);
 /// `h!(helper, n_args, returns_i64)`: one registry entry.
 macro_rules! h {
     ($f:ident, $n:expr, $r:expr) => {
-        (stringify!($f), $f as *const () as usize, $n, $r)
+        (
+            stringify!($f),
+            luna_jit_helpers::$f as *const () as usize,
+            $n,
+            $r,
+        )
     };
 }
 
 fn helper_registry() -> Vec<Helper> {
-    use luna_jit_helpers::{
-        luna_jit_enter_ctx, luna_jit_handoff_frame, luna_jit_materialize_sunk_table,
-        luna_jit_new_table, luna_jit_new_table_sized, luna_jit_no_deopt_parked, luna_jit_op_close,
-        luna_jit_op_closure, luna_jit_op_concat, luna_jit_op_get_tab_up, luna_jit_op_tforcall,
-        luna_jit_park_deopt, luna_jit_self_level, luna_jit_self_upval_check,
-        luna_jit_spill_to_stack, luna_jit_stack_load, luna_jit_stack_tag,
-        luna_jit_stack_update_raw, luna_jit_str_buf_acquire, luna_jit_str_buf_extend,
-        luna_jit_str_buf_intern, luna_jit_str_buf_release, luna_jit_table_get_field,
-        luna_jit_table_get_float, luna_jit_table_get_int, luna_jit_table_len,
-        luna_jit_table_set_field, luna_jit_table_set_float_float, luna_jit_table_set_int,
-        luna_jit_table_set_nil, luna_jit_table_set_raw, luna_jit_trace_materialize_frames,
-        luna_jit_upval_get, luna_jit_upval_is_int,
-    };
     vec![
         h!(luna_jit_new_table, 0, true),
         h!(luna_jit_new_table_sized, 1, true),

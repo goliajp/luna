@@ -133,13 +133,8 @@ impl<'a> ChunkPlan<'a> {
 
         let consumed_jmp = whitelist(proto, code, consts)?;
 
-        // Pre-pass — classify each `Op::GetUpval` PC as ValueRead vs
-        // SelfMarker. Mirrors Cranelift's `determine_getupval_roles`:
-        // a SelfMarker is one whose destination register is consumed
-        // ONLY as the function slot of a subsequent `Op::Call` (within
-        // a short lookahead window, with Moves carrying the tag).
-        // Anything else (arith / cmp / Return / table-access read of
-        // R[A]) is a ValueRead.
+        // each `GetUpval` a value read or a self marker (only the function
+        // slot of a later `Call`), as Cranelift's lowering classifies them
         let is_upval_value_read = determine_getupval_roles(code);
 
         let (self_call_pcs, tail_call_pcs, self_upval_idx) =
