@@ -65,3 +65,54 @@ fn the_5_3_atomic_step_counts_nothing_of_what_was_turned_gray_since_marking_ende
     )));
     assert_eq!(gray.expect("the step runs"), none.expect("the step runs"));
 }
+
+/// A state whose marking has reached everything (`keep` included) and is
+/// still in its propagate phase, then dropped `keep`, the collector
+/// stopped; `weak` holds `keep` weakly.
+fn marking_then_dropped(version: LuaVersion, start: fn(&mut Vm)) -> Vm {
+    let mut vm = Vm::new_minimal_with_hash_seed(version, 1);
+    vm.open_all_libs().expect("the libraries open");
+    vm.eval(
+        "collectgarbage('stop') collectgarbage()
+         keep = {} weak = setmetatable({keep}, {__mode = 'v'})",
+    )
+    .expect("the script runs");
+    start(&mut vm);
+    let run = vm.running();
+    let mut work = i64::MAX;
+    while !vm.propagate(&mut work, i64::MIN, run) {}
+    vm.eval("keep = nil").expect("the script runs");
+    assert!(vm.heap.gc_phase_is_propagate());
+    vm
+}
+
+#[test]
+fn an_emergency_while_marking_starts_the_collection_over() {
+    // `luaC_fullgc` drops the marking (`entersweep`) and runs a whole
+    // cycle: what was marked and then dropped is freed
+    let starts: [(LuaVersion, fn(&mut Vm)); 4] = [
+        (LuaVersion::Lua52, |vm| {
+            // 5.2 runs none while its collector is stopped
+            vm.heap.puc.stopped = false;
+            singlestep_52(vm);
+        }),
+        (LuaVersion::Lua53, |vm| {
+            singlestep_53(vm).expect("the cycle starts");
+        }),
+        (LuaVersion::Lua54, |vm| {
+            singlestep_54(vm).expect("the cycle starts");
+        }),
+        (LuaVersion::Lua55, |vm| {
+            singlestep_55(vm, false).expect("the cycle starts");
+        }),
+    ];
+    for (version, start) in starts {
+        let mut vm = marking_then_dropped(version, start);
+        assert!(vm.emergency_collect());
+        let left = vm.eval("return weak[1] == nil").expect("the script runs");
+        assert!(
+            matches!(left[0], crate::runtime::Value::Bool(true)),
+            "{version:?}"
+        );
+    }
+}

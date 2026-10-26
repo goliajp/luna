@@ -8,9 +8,8 @@ use crate::runtime::puc::for_heap::ShrinkAt;
 /// The objects made since the last safe point (see `Heap::young_len`).
 pub(crate) type Young = (Option<usize>, bool);
 
-/// A full collection, finishing an incremental cycle in progress first;
-/// `emergency` with the young objects for one an allocation runs, which
-/// only finishes a cycle in progress when there is one. Returns the number
+/// A full collection, a marking in progress dropped first; `emergency`
+/// with the young objects for one an allocation runs. Returns the number
 /// of objects freed (counted for the program's only).
 pub(crate) fn full_collect<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Young>) -> usize {
     let rules = *h.heap().puc_rules();
@@ -22,25 +21,13 @@ pub(crate) fn full_collect<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Yo
         || (rules.full_from_pause_sweeps && h.heap().puc.pace.state() != St::Finalize);
     gc_hold_threads(h);
     h.before_step();
-    let propagating = h.heap().gc_phase_is_propagate();
-    if propagating && program {
+    // a marking under way is dropped, the objects back to white, and the
+    // collection starts over (`entersweep`), the program's or an
+    // emergency's alike
+    if h.heap().gc_phase_is_propagate() {
         h.heap().gc_abandon_marking();
-    } else if propagating {
-        // an emergency finishes the marking in progress
-        let mut m = h.heap().loan_marker();
-        m.enter_atomic();
-        h.mark_roots(&mut m, true);
-        if let Some(young) = emergency {
-            h.heap().mark_young(&mut m, young);
-        }
-        h.heap().remark_open_upvals(&mut m);
-        h.heap().stash_marker(m);
-        h.marking_ends();
-        h.heap().gc_finish_atomic();
-        h.collection_ends();
     }
     h.heap().gc_finish_sweep();
-    // an emergency finishes the cycle in progress and no more
     let freed = if program {
         if swept {
             h.heap().acct_check_sizes();
@@ -50,14 +37,10 @@ pub(crate) fn full_collect<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Yo
         } else {
             full_mark_and_sweep(h, None)
         }
-    } else if !propagating {
-        full_mark_and_sweep(h, emergency)
     } else {
-        0
+        full_mark_and_sweep(h, emergency)
     };
-    if program || !propagating {
-        h.collection_ends();
-    }
+    h.collection_ends();
     if !program && rules.shrink_at == ShrinkAt::Sweep {
         h.shrink_threads_emergency();
     }
