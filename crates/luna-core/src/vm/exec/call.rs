@@ -128,8 +128,11 @@ macro_rules! native_call {
     ) => {{
         let (nc, func_slot, nargs, nresults) = ($nc, $func_slot, $nargs, $nresults);
         let (tail_ccmt, chain) = ($tail_ccmt, $chain);
-        // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`)
-        $vm.check_lua_stack(func_slot + 1 + nargs, 20, true)?;
+        // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`); the
+        // host's protected calls luna makes are no functions of PUC's
+        if !matches!(nc.kind, NativeKind::HostPcall | NativeKind::HostXpcall) {
+            $vm.check_lua_stack(func_slot + 1 + nargs, 20, true)?;
+        }
         // `pcall`, `xpcall` and an async native are C functions
         // too: 5.2's `luaD_precall` checks before running them
         if matches!(
