@@ -105,23 +105,7 @@ fn io_readline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let vals = match g_read(vm, u, &fmts, 2, top)? {
         ReadOut::Values(v) => v,
         // the read's error message is raised
-        ReadOut::Error(e) => {
-            note_failure(&e);
-            // the line read so far is pushed, then 5.2+ `luaL_fileresult`'s
-            // nil, message and errno
-            vm.native_push(if vm.version() >= LuaVersion::Lua52 {
-                4
-            } else {
-                1
-            });
-            let msg = strerror(&e);
-            return Err(crate::vm::builtins::raise_lib(
-                vm,
-                b"%s",
-                &[crate::runtime::puc::fmt::FmtArg::S(msg.as_bytes())],
-                1,
-            ));
-        }
+        ReadOut::Error(e) => return Err(readline_error(vm, &e)),
     };
     // ≤5.2 continue on a non-nil first value, 5.3+ on a true one; the only
     // false-ish value a read produces is nil, so the tests agree
@@ -132,4 +116,18 @@ fn io_readline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         let _ = close_stream(u); // aux_close's results are dropped here too
     }
     vm.nat_ret(fs, &[])
+}
+
+/// The error a line iterator's read failed with, raised: the line read so
+/// far is pushed, then 5.2+ `luaL_fileresult`'s nil, message and errno.
+fn readline_error(vm: &mut Vm, e: &std::io::Error) -> LuaError {
+    note_failure(e);
+    vm.native_push(if vm.version() >= LuaVersion::Lua52 {
+        4
+    } else {
+        1
+    });
+    let msg = strerror(e);
+    let args = [crate::runtime::puc::fmt::FmtArg::S(msg.as_bytes())];
+    crate::vm::builtins::raise_lib(vm, b"%s", &args, 1)
 }

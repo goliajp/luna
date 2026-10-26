@@ -132,4 +132,40 @@ impl Vm {
             Err(e) => Err((e.0, raised_by)),
         }
     }
+
+    /// An error nothing in this thread catches: a coroutine it kills keeps
+    /// its frames, as PUC keeps the dead thread's stack, taken at the
+    /// deepest point; on the main thread the traceback is kept for the
+    /// host (not for a memory error).
+    pub(super) fn keep_uncaught_frames(&mut self, mem: bool) {
+        if self.current.is_some() {
+            if self.keep_error_traceback && self.dead_snapshot.is_none() {
+                self.dead_snapshot = self.dead_stack();
+            }
+        } else if !mem && self.keep_error_traceback && self.error_traceback.is_none() {
+            let ars = self.level_ars();
+            self.error_traceback = Some(self.lines_of(&ars));
+        }
+    }
+
+    /// Whether `err` is a memory error (LUA_ERRMEM, its message raised
+    /// since the last error came here): thrown past the handler too, and
+    /// leaving no traceback for the host.
+    pub(super) fn is_new_memory_error(&mut self, err: Value) -> bool {
+        let oom = std::mem::replace(&mut self.oom_seen, self.heap.mem_ctx().oom_raised());
+        oom != self.oom_seen && matches!(err, Value::Str(s) if s.as_bytes() == b"not enough memory")
+    }
+
+    /// The natives that raised `err`, listed as running again (their
+    /// block kept the room) for the handler's stack: where the handler
+    /// goes, and how many natives were listed before them.
+    pub(super) fn relist_raisers(&mut self, err: Value) -> (Option<u32>, usize) {
+        let raised_by = self.take_errored_natives(err);
+        let at = self.raise_top(&raised_by);
+        let base = self.running_natives.len();
+        for e in raised_by.iter().rev() {
+            self.running_natives.push_or_abort(e.act);
+        }
+        (at, base)
+    }
 }

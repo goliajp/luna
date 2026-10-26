@@ -112,27 +112,7 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         return vm.nat_ret(fs, &[r]);
     }
     let n = n as u128;
-    // each dialect's own "too large" test; 5.1 has none
-    let too_large = if v == LuaVersion::Lua51 {
-        false
-    } else if v == LuaVersion::Lua52 {
-        l + lsep >= (usize::MAX >> 1) as u128 / n
-    } else if v < LuaVersion::Lua55 {
-        l + lsep > i32::MAX as u128 / n
-    } else {
-        l + lsep > u128::from(crate::vm::c_abi::MAX_SIZE_55) / n
-    };
-    if too_large {
-        return Err(raise_str(vm, "resulting string too large"));
-    }
-    let total = n * (l + lsep) - lsep;
-    if total > u128::from(MAX_STR) {
-        // 5.3's buffer reports a refused allocation as an ordinary error
-        if v == LuaVersion::Lua53 {
-            return Err(raise_str(vm, "not enough memory for buffer allocation"));
-        }
-        return Err(vm.mem_err());
-    }
+    let total = rep_size(vm, n, l, lsep)?;
     let mut out = vm.new_buf();
     // PUC asks for the whole size at once (`luaL_buffinitsize`); from 5.3
     // on a box is made first, which a refused block leaves behind
@@ -155,6 +135,33 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let r = vm.buffer_result(&out)?;
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
+}
+
+/// The size of `n` copies of `l` bytes with `lsep` between them, under
+/// each dialect's "too large" test (5.1 has none) and luna's limit.
+fn rep_size(vm: &mut Vm, n: u128, l: u128, lsep: u128) -> Result<u128, LuaError> {
+    let v = vm.version();
+    let too_large = if v == LuaVersion::Lua51 {
+        false
+    } else if v == LuaVersion::Lua52 {
+        l + lsep >= (usize::MAX >> 1) as u128 / n
+    } else if v < LuaVersion::Lua55 {
+        l + lsep > i32::MAX as u128 / n
+    } else {
+        l + lsep > u128::from(crate::vm::c_abi::MAX_SIZE_55) / n
+    };
+    if too_large {
+        return Err(raise_str(vm, "resulting string too large"));
+    }
+    let total = n * (l + lsep) - lsep;
+    if total > u128::from(MAX_STR) {
+        // 5.3's buffer reports a refused allocation as an ordinary error
+        if v == LuaVersion::Lua53 {
+            return Err(raise_str(vm, "not enough memory for buffer allocation"));
+        }
+        return Err(vm.mem_err());
+    }
+    Ok(total)
 }
 
 fn s_byte(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

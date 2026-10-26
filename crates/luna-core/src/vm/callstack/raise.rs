@@ -59,7 +59,7 @@ impl Vm {
 
     /// The natives recorded for `err` that were running at the top of the
     /// stack, innermost first.
-    fn take_errored_natives(&mut self, err: Value) -> LVec<ErroredNative> {
+    pub(super) fn take_errored_natives(&mut self, err: Value) -> LVec<ErroredNative> {
         let list = self.errored_natives.take();
         self.raised_at_top(list, err)
     }
@@ -132,19 +132,8 @@ impl Vm {
             self.msgh_applied = Some(err);
             return err;
         }
-        // so is a memory error (LUA_ERRMEM, its message raised since the
-        // last error came here), which leaves no traceback for the host
-        let oom = std::mem::replace(&mut self.oom_seen, self.heap.mem_ctx().oom_raised());
-        let mem = oom != self.oom_seen
-            && matches!(err, Value::Str(s) if s.as_bytes() == b"not enough memory");
-        let raised_by = self.take_errored_natives(err);
-        let at = self.raise_top(&raised_by);
-        let base = self.running_natives.len();
-        for e in raised_by.iter().rev() {
-            // these were popped from `running_natives` just before, whose
-            // block kept their room
-            self.running_natives.push_or_abort(e.act);
-        }
+        let mem = self.is_new_memory_error(err);
+        let (at, base) = self.relist_raisers(err);
         self.g.ci_hint = 0;
         let catcher = self.nearest_catcher();
         let to_host = catcher.is_none() && self.current.is_none() && self.keep_error_traceback;
@@ -159,16 +148,7 @@ impl Vm {
                 }
             }
             None => {
-                if self.current.is_some() {
-                    // a coroutine it kills keeps its frames, as PUC keeps
-                    // the dead thread's stack, taken at the deepest point
-                    if self.keep_error_traceback && self.dead_snapshot.is_none() {
-                        self.dead_snapshot = self.dead_stack();
-                    }
-                } else if !mem && self.keep_error_traceback && self.error_traceback.is_none() {
-                    let ars = self.level_ars();
-                    self.error_traceback = Some(self.lines_of(&ars));
-                }
+                self.keep_uncaught_frames(mem);
                 err
             }
             Some(_) => err,
@@ -241,7 +221,7 @@ impl Vm {
     /// before 5.4 the positioned message as well, which it does not pop;
     /// 5.3+'s `varinfo` has pushed the operand's name before them. Where
     /// the error came from no frame, the handler runs where the stack ends.
-    fn raise_top(&mut self, raised_by: &[ErroredNative]) -> Option<u32> {
+    pub(super) fn raise_top(&mut self, raised_by: &[ErroredNative]) -> Option<u32> {
         if let Some(at) = self.overflow_top.take() {
             return Some(at);
         }

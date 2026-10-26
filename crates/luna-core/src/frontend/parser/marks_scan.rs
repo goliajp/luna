@@ -22,34 +22,13 @@ impl Recording {
             self.peak(version, src, ix, span);
         }
         self.last_end = end;
-        let reserved = |i: u8| (ScanText::Reserved(i, span), ScanKind::Reserved);
         let (text, kind) = match tok.tok {
             T::Name(()) => (ScanText::Sym(sym), ScanKind::Name),
             T::Str(()) => (ScanText::Sym(sym), ScanKind::Str),
-            T::And => reserved(0),
-            T::Break => reserved(1),
-            T::Do => reserved(2),
-            T::Else => reserved(3),
-            T::Elseif => reserved(4),
-            T::End => reserved(5),
-            T::False => reserved(6),
-            T::For => reserved(7),
-            T::Function => reserved(8),
-            T::Global => reserved(9),
-            T::Goto => reserved(10),
-            T::If => reserved(11),
-            T::In => reserved(12),
-            T::Local => reserved(13),
-            T::Nil => reserved(14),
-            T::Not => reserved(15),
-            T::Or => reserved(16),
-            T::Repeat => reserved(17),
-            T::Return => reserved(18),
-            T::Then => reserved(19),
-            T::True => reserved(20),
-            T::Until => reserved(21),
-            T::While => reserved(22),
-            _ => return,
+            ref t => match reserved_index(t) {
+                Some(i) => (ScanText::Reserved(i, span), ScanKind::Reserved),
+                None => return,
+            },
         };
         if version >= LuaVersion::Lua53 {
             // names are numbered as they first appear
@@ -72,4 +51,36 @@ impl Recording {
             self.scanned.peaks.push((ix, peak as u32));
         }
     }
+}
+
+/// The reserved word `t`'s index in PUC's `luaX_tokens`, or none.
+#[inline(always)]
+fn reserved_index<A, B, C>(t: &crate::frontend::token::Token<A, B, C>) -> Option<u8> {
+    use crate::frontend::token::Token as T;
+    Some(match t {
+        T::And => 0,
+        T::Break => 1,
+        T::Do => 2,
+        T::Else => 3,
+        T::Elseif => 4,
+        T::End => 5,
+        T::False => 6,
+        T::For => 7,
+        T::Function => 8,
+        T::Global => 9,
+        T::Goto => 10,
+        T::If => 11,
+        T::In => 12,
+        T::Local => 13,
+        T::Nil => 14,
+        T::Not => 15,
+        T::Or => 16,
+        T::Repeat => 17,
+        T::Return => 18,
+        T::Then => 19,
+        T::True => 20,
+        T::Until => 21,
+        T::While => 22,
+        _ => return None,
+    })
 }
