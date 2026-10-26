@@ -200,7 +200,10 @@ impl<'s> Parser<'s> {
             let nvars = (self.stk.exprs.len() - mark) as u32;
             let t = self.suffixed_expr()?;
             self.stk.exprs.push_or_abort(t);
+            // a completion (lenient) takes any number: PUC's parse up to
+            // the error is what is counted
             match self.version {
+                LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 if self.stk.lenient => {}
                 LuaVersion::Lua51 => {
                     let limit = MAX_DEPTH.saturating_sub(self.depth);
                     if nvars > limit {
