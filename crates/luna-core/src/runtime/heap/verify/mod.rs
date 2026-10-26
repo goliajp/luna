@@ -208,4 +208,6 @@ impl Heap {
 }
 
 mod freed;
+#[cfg(all(test, feature = "gc-verify"))]
+mod freed_tests;
 pub(crate) use freed::dead_child;
