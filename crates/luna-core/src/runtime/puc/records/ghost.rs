@@ -165,13 +165,17 @@ impl Heap {
 
     /// luna made `h`, without counting, for the table of `t` after all (a
     /// trace leaving with it): the record neither frees nor sweeps it, and
-    /// `h` is counted from now on.
+    /// `h` is counted from now on, as it grows and when it is freed (made
+    /// uncounted, it was one of luna's own tables).
     pub(crate) fn ghost_table_made(&mut self, t: GhostRef, h: Gc<GcHeader>) {
         for e in &mut self.record(t)[t.at..t.at + 3] {
             *e |= TAKEN;
         }
         // SAFETY: as in `ghost_made`
-        unsafe { (*h.as_ptr()).set_uncounted(false) };
+        unsafe {
+            (*h.as_ptr()).set_uncounted(false);
+            (*h.as_ptr()).cls &= !UNLISTED;
+        }
     }
 
     /// The objects of PUC's a record holds, as a sweep counts them.
