@@ -9,7 +9,7 @@ use luna_core::runtime::NativeClosure;
 use luna_core::vm::exec::host_c::HostContHooks;
 
 mod results;
-pub(super) use results::{pcall_outcome, push_results, status_code};
+pub(super) use results::{pcall_failed, pcall_outcome, push_results, status_code};
 
 /// PUC `lua_Hook`.
 pub type LuaHook = extern "C" fn(*mut LuaState, *mut c_void);

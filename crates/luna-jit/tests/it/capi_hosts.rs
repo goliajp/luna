@@ -244,3 +244,8 @@ fn c_stack_recursion() {
 fn stack_depth() {
     check("stack_depth");
 }
+
+#[test]
+fn pcall_error_shrinks() {
+    check("pcall_error_shrinks");
+}

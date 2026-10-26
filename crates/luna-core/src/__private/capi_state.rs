@@ -116,6 +116,9 @@ pub trait VmCApiState {
     /// Whether the running coroutine is closing itself (the `Err` a call
     /// returned is that, not an error).
     fn host_terminating(&self) -> bool;
+    /// A protected call of the C API caught an error, its object set: from
+    /// 5.2 `luaD_pcall` shrinks the stack then.
+    fn host_pcall_caught(&mut self);
     /// Close the running coroutine from inside it (PUC 5.5
     /// `lua_closethread(L, L)`): run its pending `__close` handlers; the
     /// returned value is what the C function leaves with, and the resume
@@ -258,6 +261,11 @@ impl VmCApiState for crate::vm::Vm {
     #[inline]
     fn host_terminating(&self) -> bool {
         crate::vm::Vm::host_terminating(self)
+    }
+    fn host_pcall_caught(&mut self) {
+        if self.version() >= crate::version::LuaVersion::Lua52 {
+            self.shrink_caught_error();
+        }
     }
     #[inline]
     fn host_close_running(&mut self) -> LuaError {
