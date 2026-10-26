@@ -174,25 +174,26 @@ impl Vm {
             self.stack.regrow(len, Value::Nil);
         }
         if r.is_err() && !self.control_in_flight() {
-            // A `coroutine.yield` in flight raises a sentinel error to unwind the
-            // Rust stack, but the suspended coroutine's frames/registers (which
-            // sit at/above `func_slot`) must survive for the next resume — so we
-            // only truncate on a real error. A self-close termination is in the
-            // same boat: the dying thread's state is discarded wholesale.
-            // A `host_yield_pending` cooperative yield is in
-            // the same boat as `yielding`: the next `EvalFuture::poll`
-            // resumes the same call, so the in-flight frames must
-            // survive.
-            // the frames below a native that called back run on
-            let keep = if callback {
-                len.max(func_slot as usize)
-            } else {
-                func_slot as usize
-            };
-            self.stack.truncate(keep);
-            self.top = func_slot;
+            self.drop_failed_call(callback, len, func_slot);
         }
         r
+    }
+
+    /// A call at `func_slot` failed with a real error: its slots go (the
+    /// frames below a native that called back, at `len`, run on). A yield
+    /// in flight (`coroutine.yield`'s sentinel, a host's cooperative yield)
+    /// or a self-close is no such error: the suspended frames above
+    /// `func_slot` survive for the next resume, or the dying thread's state
+    /// is discarded whole.
+    #[cold]
+    fn drop_failed_call(&mut self, callback: bool, len: usize, func_slot: u32) {
+        let keep = if callback {
+            len.max(func_slot as usize)
+        } else {
+            func_slot as usize
+        };
+        self.stack.truncate(keep);
+        self.top = func_slot;
     }
 
     /// A nested call at the C level limit or with less than [`RESERVE`] of

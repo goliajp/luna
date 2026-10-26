@@ -34,20 +34,9 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // `l_popen` flushes every output stream first (`fflush(NULL)`), so the
     // child sees what the parent wrote before it.
     flush_all(vm);
-    let mut cmd = shell_command(&prog);
-    if read {
-        cmd.stdout(std::process::Stdio::piped());
-    } else {
-        cmd.stdin(std::process::Stdio::piped());
-    }
-    let mut child = match cmd.spawn() {
+    let (child, file) = match spawn_piped(&prog, read) {
         Ok(c) => c,
         Err(e) => return failed_handle(vm, |vm| file_fail(vm, fs, Some(&prog), &e)),
-    };
-    let file = if read {
-        pipe_file(child.stdout.take().expect("stdout was piped"))
-    } else {
-        pipe_file(child.stdin.take().expect("stdin was piped"))
     };
     let spec = fopen::libc_mode(if read { b"r" } else { b"w" }).expect("a valid mode");
     let o = Opened {
@@ -63,6 +52,25 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // SAFETY: `u` was created by `opened` just above and is held only by this local; the borrow covers one field store
     unsafe { u.as_mut() }.popen_child = Some(child);
     vm.nat_ret(fs, &[Value::Userdata(u)])
+}
+
+/// `prog` run by the shell, its stdout (`read`) or stdin piped: the child
+/// and the pipe's end.
+#[cfg(any(unix, windows))]
+fn spawn_piped(prog: &[u8], read: bool) -> std::io::Result<(std::process::Child, std::fs::File)> {
+    let mut cmd = shell_command(prog);
+    if read {
+        cmd.stdout(std::process::Stdio::piped());
+    } else {
+        cmd.stdin(std::process::Stdio::piped());
+    }
+    let mut child = cmd.spawn()?;
+    let file = if read {
+        pipe_file(child.stdout.take().expect("stdout was piped"))
+    } else {
+        pipe_file(child.stdin.take().expect("stdin was piped"))
+    };
+    Ok((child, file))
 }
 
 /// A child's pipe end as a plain file, so reads and writes share one path.
