@@ -228,6 +228,38 @@ macro_rules! fast_load_arms {
                 resume_same!()
             }};
         }
+        // the table reads and writes whose key is in a register or a
+        // constant
+        macro_rules! op_get_table {
+            () => {
+                get_arm!($regs.wrapping_add($inst.c() as usize), index_raw_at)
+            };
+        }
+        macro_rules! op_set_table {
+            () => {
+                set_arm!($regs.wrapping_add($inst.b() as usize), newindex_raw_at)
+            };
+        }
+        macro_rules! op_get_table_k {
+            () => {
+                get_arm!($kptr.wrapping_add($inst.c() as usize), index_raw_at)
+            };
+        }
+        macro_rules! op_set_table_k {
+            () => {
+                set_arm!($kptr.wrapping_add($inst.b() as usize), newindex_raw_at)
+            };
+        }
+        macro_rules! op_set_tab_up_r {
+            () => {
+                op_set_tab_up_x!($regs.wrapping_add($inst.b() as usize))
+            };
+        }
+        macro_rules! op_set_tab_up_k {
+            () => {
+                op_set_tab_up_x!($kptr.wrapping_add($inst.b() as usize))
+            };
+        }
         macro_rules! op_self_op {
             () => {{
                 let pb = $regs.wrapping_add($inst.b() as usize);

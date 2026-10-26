@@ -31,7 +31,7 @@ macro_rules! fast_cmp_arms {
                         // the recording sees the next instruction from
                         // the loop head
                         store_pc!();
-                        return Ok(FastExit::Reload);
+                        exit!(FastExit::Reload)
                     }
                 }
                 next_jumped!()

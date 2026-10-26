@@ -90,7 +90,7 @@ macro_rules! fast_call_arms {
                         let n = nargs.unwrap_or_else(|| $vm.top - (abs + 1));
                         if let Some(nf) = $vm.push_lua_frame_fast(callee, abs, n, wanted) {
                             $fr = nf;
-                            continue $frames;
+                            frames!()
                         }
                     } else if let Some(nc) = native
                         && nc.kind == NativeKind::Plain

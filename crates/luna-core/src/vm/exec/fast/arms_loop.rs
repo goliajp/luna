@@ -248,7 +248,7 @@ macro_rules! fast_loop_arms {
                 }
                 if slow {
                     store_pc!();
-                    return Ok(FastExit::Reload);
+                    exit!(FastExit::Reload)
                 }
                 next_jumped!()
             }};
@@ -340,7 +340,7 @@ macro_rules! fast_loop_arms {
                     // instruction from the loop head
                     if $trace_on && $vm.jit.active_trace.is_some() {
                         store_pc!();
-                        return Ok(FastExit::Reload);
+                        exit!(FastExit::Reload)
                     }
                 }
                 next_jumped!()

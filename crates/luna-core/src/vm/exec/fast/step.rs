@@ -53,35 +53,6 @@ macro_rules! fast_step_macros {
                 unsafe { raw_truthy($regs.add(i as usize)) }
             }};
         }
-        macro_rules! next {
-            () => {{
-                // nothing in a fast arm sets `trap`, so `stay` holds for the
-                // whole loop
-                if WATCH && !$stay {
-                    store_pc!();
-                    return Ok(FastExit::Reload);
-                }
-                $inst = fetch!($npc);
-                $npc += 1;
-                if WATCH {
-                    store_pc!();
-                }
-                continue;
-            }};
-        }
-        // after a jump: with a trace this function could enter, stop where
-        // one starts, for the dispatcher. Trace heads are loop heads, and a
-        // loop entered by falling into it is caught at its first back-edge;
-        // checking every instruction cost a call-heavy loop 5%.
-        macro_rules! next_jumped {
-            () => {{
-                if WATCH && $heads.contains(&$npc) {
-                    store_pc!();
-                    return Ok(FastExit::Reload);
-                }
-                next!()
-            }};
-        }
         // The end of a comparison or a test: the `Jmp` after it runs when
         // the outcome equals `k`, and is skipped otherwise. Without anything
         // to watch the jump is taken here (PUC `donextjump`), which saves its
@@ -134,3 +105,25 @@ macro_rules! fast_step_macros {
     };
 }
 pub(super) use fast_step_macros;
+
+/// `cl!()` and `base!()`: the running closure and the base of its frame,
+/// read through `fr`.
+// rustfmt does not keep the nested macro bodies stable
+#[rustfmt::skip]
+macro_rules! fast_frame_macros {
+    ($d:tt, $fr:ident) => {
+        macro_rules! cl {
+            () => {
+                // SAFETY: `fr` is the running frame
+                unsafe { (*$fr).closure }
+            };
+        }
+        macro_rules! base {
+            () => {
+                // SAFETY: as above
+                unsafe { (*$fr).base }
+            };
+        }
+    };
+}
+pub(super) use fast_frame_macros;
