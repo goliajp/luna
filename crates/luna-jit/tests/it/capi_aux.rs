@@ -70,3 +70,8 @@ fn io_stream() {
 fn io_posix() {
     check("io_posix");
 }
+
+#[test]
+fn openlibs_count() {
+    check("openlibs_count");
+}
