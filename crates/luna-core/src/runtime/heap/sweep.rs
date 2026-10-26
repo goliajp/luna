@@ -170,8 +170,10 @@ impl Heap {
                     self.check_no_dangling("sweep_counted");
                     return (n, true);
                 }
+                // the check for dangling references waits for the end of
+                // the sweep: it walks the whole heap, and a step of the
+                // sweep is a small part of it
                 if n >= quota && self.puc_has_more(cur) {
-                    self.check_no_dangling("sweep_counted");
                     return (n, false);
                 }
                 n += self.puc_sweep_reach(cur);
