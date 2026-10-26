@@ -85,40 +85,7 @@ impl Vm {
             } else if v >= LuaVersion::Lua52 && matches!(x, Value::Str(s) if s.is_empty()) {
                 self.stack[(top - 2) as usize] = Value::Str(y);
             } else {
-                let mut tl = y.len();
-                n = 1;
-                while n < total && self.tostring_in_place(top - n - 1)? {
-                    let Value::Str(s) = self.stack[(top - n - 1) as usize] else {
-                        unreachable!("converted above")
-                    };
-                    if s.len() > i32::MAX as usize - tl {
-                        return Err(self.rt_err("string length overflow"));
-                    }
-                    tl += s.len();
-                    n += 1;
-                }
-                if v <= LuaVersion::Lua52 {
-                    // made in the buffer kept for every concatenation
-                    self.retry_oom(|vm| vm.heap.open_gbuff(tl))?;
-                }
-                let r = self.retry_oom(|vm| {
-                    let mut parts: [&[u8]; 16] = [&[]; 16];
-                    let from = (top - n) as usize;
-                    let strs = vm.stack[from..top as usize].iter().map(|v| match v {
-                        Value::Str(s) => s.as_bytes(),
-                        _ => unreachable!("converted above"),
-                    });
-                    if n as usize <= parts.len() {
-                        for (p, b) in parts.iter_mut().zip(strs) {
-                            *p = b;
-                        }
-                        vm.heap.try_intern_parts(&parts[..n as usize])
-                    } else {
-                        let parts: Vec<&[u8]> = strs.collect();
-                        vm.heap.try_intern_parts(&parts)
-                    }
-                })?;
-                self.stack[(top - n) as usize] = Value::Str(r);
+                n = self.concat_join(top, total, y.len())?;
             }
             self.top -= n - 1;
         }
@@ -126,6 +93,50 @@ impl Vm {
             self.stack[out as usize] = self.stack[base_a as usize];
         }
         Ok(true)
+    }
+
+    /// The longest run of strings (or numbers, made strings in place)
+    /// below the top `top`, at most `total` of them, the topmost `y_len`
+    /// bytes long, joined into one string in the run's lowest slot: how
+    /// many it joined.
+    #[inline(always)]
+    fn concat_join(&mut self, top: u32, total: u32, y_len: usize) -> Result<u32, LuaError> {
+        let v = self.version;
+        let mut tl = y_len;
+        let mut n = 1;
+        while n < total && self.tostring_in_place(top - n - 1)? {
+            let Value::Str(s) = self.stack[(top - n - 1) as usize] else {
+                unreachable!("converted above")
+            };
+            if s.len() > i32::MAX as usize - tl {
+                return Err(self.rt_err("string length overflow"));
+            }
+            tl += s.len();
+            n += 1;
+        }
+        if v <= LuaVersion::Lua52 {
+            // made in the buffer kept for every concatenation
+            self.retry_oom(|vm| vm.heap.open_gbuff(tl))?;
+        }
+        let r = self.retry_oom(|vm| {
+            let mut parts: [&[u8]; 16] = [&[]; 16];
+            let from = (top - n) as usize;
+            let strs = vm.stack[from..top as usize].iter().map(|v| match v {
+                Value::Str(s) => s.as_bytes(),
+                _ => unreachable!("converted above"),
+            });
+            if n as usize <= parts.len() {
+                for (p, b) in parts.iter_mut().zip(strs) {
+                    *p = b;
+                }
+                vm.heap.try_intern_parts(&parts[..n as usize])
+            } else {
+                let parts: Vec<&[u8]> = strs.collect();
+                vm.heap.try_intern_parts(&parts)
+            }
+        })?;
+        self.stack[(top - n) as usize] = Value::Str(r);
+        Ok(n)
     }
 
     /// The checkpoint after `CONCAT` finished in the running Lua function,

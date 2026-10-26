@@ -28,6 +28,7 @@ mod raise;
 mod raise_protected;
 mod runerror;
 mod temporaries;
+mod thread_stack;
 mod traceback;
 mod traceback_puc;
 

@@ -37,35 +37,18 @@ fn getfield_pushed(
     delta: i64,
 ) -> Result<i32, LuaError> {
     let v = vm.native_getfield(Value::Table(t), None, key.as_bytes())?;
-    let missing = |vm: &mut Vm| {
-        let fmt = b"field '%s' missing in date table";
-        crate::vm::builtins::raise_lib(
-            vm,
-            fmt,
-            &[crate::runtime::puc::fmt::FmtArg::S(key.as_bytes())],
-            1,
-        )
-    };
     if vm.version() <= LuaVersion::Lua52 {
         return match argcheck::to_num(vm, v) {
             // (int)lua_tointeger: truncate, then wrap to 32 bits
             Some(n) => Ok((c_abi::tointeger52(vm.version(), n) as i32).wrapping_sub(delta as i32)),
-            None if d < 0 => Err(missing(vm)),
+            None if d < 0 => Err(field_error(vm, "field '%s' missing in date table", key)),
             None => Ok(d),
         };
     }
     let res = match argcheck::to_num(vm, v).and_then(num_exact) {
         Some(i) => i,
-        None if !v.is_nil() => {
-            let fmt = b"field '%s' is not an integer";
-            return Err(crate::vm::builtins::raise_lib(
-                vm,
-                fmt,
-                &[crate::runtime::puc::fmt::FmtArg::S(key.as_bytes())],
-                1,
-            ));
-        }
-        None if d < 0 => return Err(missing(vm)),
+        None if !v.is_nil() => return Err(field_error(vm, "field '%s' is not an integer", key)),
+        None if d < 0 => return Err(field_error(vm, "field '%s' missing in date table", key)),
         None => return Ok(d),
     };
     let in_range = if vm.version() == LuaVersion::Lua53 {
@@ -77,15 +60,15 @@ fn getfield_pushed(
         i32::MIN as i64 + delta <= res
     };
     if !in_range {
-        let fmt = b"field '%s' is out-of-bound";
-        return Err(crate::vm::builtins::raise_lib(
-            vm,
-            fmt,
-            &[crate::runtime::puc::fmt::FmtArg::S(key.as_bytes())],
-            1,
-        ));
+        return Err(field_error(vm, "field '%s' is out-of-bound", key));
     }
     Ok((res - delta) as i32)
+}
+
+/// `luaL_error(L, fmt, key)` for a field of the date table.
+fn field_error(vm: &mut Vm, fmt: &str, key: &str) -> LuaError {
+    let args = [crate::runtime::puc::fmt::FmtArg::S(key.as_bytes())];
+    crate::vm::builtins::raise_lib(vm, fmt.as_bytes(), &args, 1)
 }
 
 /// `lua_tointegerx` from 5.3: only an integral value converts.
@@ -162,36 +145,7 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     let t = argcheck::check_table(vm, a, 0)?;
     vm.native_settop(1);
     let v = vm.version();
-    // ≤5.3 read the fields from seconds upwards, 5.4 from the year down; the
-    // order decides which bad field is reported
-    let (mut year, mut mon, mut mday, mut hour, mut min, mut sec) = (0, 0, 0, 0, 0, 0);
-    if v >= LuaVersion::Lua54 {
-        year = getfield(vm, t, "year", -1, 1900)?;
-        mon = getfield(vm, t, "month", -1, 1)?;
-        mday = getfield(vm, t, "day", -1, 0)?;
-        hour = getfield(vm, t, "hour", 12, 0)?;
-        min = getfield(vm, t, "min", 0, 0)?;
-        sec = getfield(vm, t, "sec", 0, 0)?;
-    } else {
-        for (key, d, delta) in [
-            ("sec", 0, 0),
-            ("min", 0, 0),
-            ("hour", 12, 0),
-            ("day", -1, 0),
-            ("month", -1, 1),
-            ("year", -1, 1900),
-        ] {
-            let x = getfield(vm, t, key, d, delta)?;
-            match key {
-                "sec" => sec = x,
-                "min" => min = x,
-                "hour" => hour = x,
-                "day" => mday = x,
-                "month" => mon = x,
-                _ => year = x,
-            }
-        }
-    }
+    let [year, mon, mday, hour, min, sec] = date_fields(vm, t)?;
     let isdst = vm.native_getfield(Value::Table(t), None, b"isdst")?;
     vm.native_pop(1);
     // a true isdst (`tm_isdst > 0`; nil is -1, false 0) in a zone without
@@ -253,6 +207,32 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
             "time result cannot be represented in this installation",
         )),
     }
+}
+
+/// The date table's fields year, month, day, hour, min and sec as
+/// `os.time` reads them: up to 5.3 from seconds upwards, 5.4 from the year
+/// down, which decides which bad field is reported.
+fn date_fields(vm: &mut Vm, t: Gc<Table>) -> Result<[i32; 6], LuaError> {
+    // (field, default, offset), in the order of the result
+    let spec = [
+        ("year", -1, 1900),
+        ("month", -1, 1),
+        ("day", -1, 0),
+        ("hour", 12, 0),
+        ("min", 0, 0),
+        ("sec", 0, 0),
+    ];
+    let mut out = [0; 6];
+    let order: [usize; 6] = if vm.version() >= LuaVersion::Lua54 {
+        [0, 1, 2, 3, 4, 5]
+    } else {
+        [5, 4, 3, 2, 1, 0]
+    };
+    for i in order {
+        let (key, d, delta) = spec[i];
+        out[i] = getfield(vm, t, key, d, delta)?;
+    }
+    Ok(out)
 }
 
 /// The Universal CRT's `mktime` in a zone at UTC: `None` for a time

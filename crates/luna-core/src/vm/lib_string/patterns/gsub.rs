@@ -21,38 +21,7 @@ pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
 fn gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
-    let s = argcheck::check_string(vm, a, 0)?;
-    let p = argcheck::check_string(vm, a, 1)?;
-    let repl = a.get(vm, 2);
-    let srcl = s.len() as i64;
-    let max_s: i128 = match v {
-        LuaVersion::Lua51 => i128::from(argcheck::opt_int(vm, a, 3, (srcl + 1) as i32)?),
-        // 5.2 keeps the count in a size_t: a negative one is huge
-        LuaVersion::Lua52 => i128::from(argcheck::opt_integer(vm, a, 3, srcl + 1)? as u64),
-        _ => i128::from(argcheck::opt_integer(vm, a, 3, srcl + 1)?),
-    };
-    let repl_ok = matches!(
-        repl,
-        Value::Str(_)
-            | Value::Int(_)
-            | Value::Float(_)
-            | Value::Table(_)
-            | Value::Closure(_)
-            | Value::Native(_)
-    );
-    if !repl_ok {
-        return Err(if v >= LuaVersion::Lua54 {
-            argcheck::type_error(vm, a, 2, "string/function/table")
-        } else {
-            arg_error(vm, 3, "string/function/table expected")
-        });
-    }
-    // a string or number replacement is a template
-    let template = match repl {
-        Value::Str(t) => Some(t),
-        Value::Int(_) | Value::Float(_) => Some(argcheck::check_string(vm, a, 2)?),
-        _ => None,
-    };
+    let (s, p, repl, max_s, template) = gsub_args(vm, a)?;
     let src = s.as_bytes();
     let (anchor, body) = pattern::anchor_split(pattern_bytes(v, p.as_bytes()));
     let mut ms = MatchState::new(src, body, flavor(v));
@@ -114,6 +83,50 @@ fn gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.nat_ret(fs, &[res, Value::Int(n as i64)])
 }
 
+/// `gsub`'s arguments: the subject, the pattern, the replacement (its
+/// text when it is a template: a string or a number), and the most
+/// replacements to make.
+#[allow(clippy::type_complexity)]
+fn gsub_args(
+    vm: &mut Vm,
+    a: Args,
+) -> Result<(Gc<LuaStr>, Gc<LuaStr>, Value, i128, Option<Gc<LuaStr>>), LuaError> {
+    let v = vm.version();
+    let s = argcheck::check_string(vm, a, 0)?;
+    let p = argcheck::check_string(vm, a, 1)?;
+    let repl = a.get(vm, 2);
+    let srcl = s.len() as i64;
+    let max_s: i128 = match v {
+        LuaVersion::Lua51 => i128::from(argcheck::opt_int(vm, a, 3, (srcl + 1) as i32)?),
+        // 5.2 keeps the count in a size_t: a negative one is huge
+        LuaVersion::Lua52 => i128::from(argcheck::opt_integer(vm, a, 3, srcl + 1)? as u64),
+        _ => i128::from(argcheck::opt_integer(vm, a, 3, srcl + 1)?),
+    };
+    let repl_ok = matches!(
+        repl,
+        Value::Str(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Table(_)
+            | Value::Closure(_)
+            | Value::Native(_)
+    );
+    if !repl_ok {
+        return Err(if v >= LuaVersion::Lua54 {
+            argcheck::type_error(vm, a, 2, "string/function/table")
+        } else {
+            arg_error(vm, 3, "string/function/table expected")
+        });
+    }
+    // a string or number replacement is a template
+    let template = match repl {
+        Value::Str(t) => Some(t),
+        Value::Int(_) | Value::Float(_) => Some(argcheck::check_string(vm, a, 2)?),
+        _ => None,
+    };
+    Ok((s, p, repl, max_s, template))
+}
+
 /// PUC `add_value`: append the replacement for the match `[s, e)`; false
 /// when a function or table kept the original text.
 #[allow(clippy::too_many_arguments)]
@@ -170,10 +183,24 @@ pub(crate) fn add_value(
     // the value may be held by nothing else now; the scratch frame keeps it
     // rooted while it is copied (a 5.2 buffer collects when it cannot grow)
     vm.sort_scratch.last_mut().expect("gsub frame")[0] = r;
-    let kept = match r {
+    add_replacement(vm, r, &src[s..e], buf, (out, b))
+}
+
+/// The replacement value `r` added for the match `orig`: a string or a
+/// number as text, the match itself for nil or false (false returned);
+/// anything else is an error.
+#[inline]
+fn add_replacement(
+    vm: &mut Vm,
+    r: Value,
+    orig: &[u8],
+    buf: u32,
+    (out, b): (&mut LVec<u8>, &mut PucBuffer),
+) -> Result<bool, LuaError> {
+    Ok(match r {
         // up to 5.3 the original text is pushed as a string first
         Value::Nil | Value::Bool(false) if vm.version() <= LuaVersion::Lua53 => {
-            let k = vm.api_push_string(&src[s..e])?;
+            let k = vm.api_push_string(orig)?;
             let Value::Str(k) = k else {
                 unreachable!("a pushed string")
             };
@@ -182,8 +209,8 @@ pub(crate) fn add_value(
             false
         }
         Value::Nil | Value::Bool(false) => {
-            vm.buf_push(out, &src[s..e])?;
-            b.add(vm, out, e - s)?;
+            vm.buf_push(out, orig)?;
+            b.add(vm, out, orig.len())?;
             false
         }
         Value::Str(x) => {
@@ -205,6 +232,5 @@ pub(crate) fn add_value(
             let fmt = b"invalid replacement value (a %s)";
             return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
         }
-    };
-    Ok(kept)
+    })
 }

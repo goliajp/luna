@@ -44,45 +44,61 @@ impl Vm {
         }
         let level = by != ProtectedBy::Host;
         let shift = self.callee_shift(by, false);
-        // `pcall` from Lua takes its `CallInfo` on entry, before its callee
-        // checks for stack (5.1 grows its array for it then)
-        let lua = by == ProtectedBy::Lua;
-        if lua && self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
-            self.grow_frames()?;
-        }
-        // the room first: once the level is taken nothing may fail before
-        // the continuation that gives it back is pushed
-        self.pcall_room(func_slot + 1, nargs, shift)?;
-        // its `CallInfo` is there when its call is refused at the C level
-        // limit
-        if lua {
-            self.note_c_calls(1);
-        }
+        self.pcall_entry(by, func_slot, nargs, shift)?;
         let entered = self.refusable_level(level);
         let callee = self.shift_callee(func_slot + 1, nargs, shift);
         let ci_top = self.c_frame_top(by, func_slot, nargs);
-        frames_push_sync(
-            &mut self.frames,
-            &mut self.frames_top,
-            &mut self.trap,
-            CallFrame::Cont(NativeCont {
-                kind: ContKind::Pcall {
-                    level,
-                    shift,
-                    ci_top,
-                },
-                func_slot,
-                nresults,
-            }),
-        );
-        // a host's `lua_pcall` takes no `CallInfo` of PUC's
-        self.g.host_conts += u32::from(ci_top == 0);
+        let kind = ContKind::Pcall {
+            level,
+            shift,
+            ci_top,
+        };
+        self.push_protected(kind, ci_top, func_slot, nresults);
         entered?;
         // call f with the remaining args, asking for all results; a yield or
         // error inside propagates with the continuation kept on the stack
         // (caught by `unwind` / preserved across a yield).
         self.begin_call(callee, Some(nargs - 1), -1, true)?;
         Ok(true)
+    }
+
+    /// `pcall`'s entry: from Lua its `CallInfo` (5.1: grown for), then the
+    /// room, as nothing may fail once the level is taken until the
+    /// continuation is pushed, then the `CallInfo` counted as a C call.
+    #[inline(always)]
+    fn pcall_entry(
+        &mut self,
+        by: ProtectedBy,
+        func_slot: u32,
+        nargs: u32,
+        shift: i8,
+    ) -> Result<(), LuaError> {
+        let lua = by == ProtectedBy::Lua;
+        if lua && self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
+            self.grow_frames()?;
+        }
+        self.pcall_room(func_slot + 1, nargs, shift)?;
+        if lua {
+            self.note_c_calls(1);
+        }
+        Ok(())
+    }
+
+    /// The continuation `kind` of a protected call; a host's `lua_pcall`
+    /// (`ci_top` 0) takes no `CallInfo` of PUC's.
+    #[inline(always)]
+    fn push_protected(&mut self, kind: ContKind, ci_top: u32, func_slot: u32, nresults: i32) {
+        frames_push_sync(
+            &mut self.frames,
+            &mut self.frames_top,
+            &mut self.trap,
+            CallFrame::Cont(NativeCont {
+                kind,
+                func_slot,
+                nresults,
+            }),
+        );
+        self.g.host_conts += u32::from(ci_top == 0);
     }
 
     /// PUC's `ci->top` of the `pcall` / `xpcall` at `func_slot` called with
@@ -175,23 +191,13 @@ impl Vm {
         }
         self.top = callee + 1 + nfargs;
         let ci_top = self.c_frame_top(by, func_slot, nargs);
-        frames_push_sync(
-            &mut self.frames,
-            &mut self.frames_top,
-            &mut self.trap,
-            CallFrame::Cont(NativeCont {
-                kind: ContKind::Xpcall {
-                    handler,
-                    level,
-                    shift,
-                    ci_top,
-                },
-                func_slot,
-                nresults,
-            }),
-        );
-        // a host's `lua_pcall` takes no `CallInfo` of PUC's
-        self.g.host_conts += u32::from(ci_top == 0);
+        let kind = ContKind::Xpcall {
+            handler,
+            level,
+            shift,
+            ci_top,
+        };
+        self.push_protected(kind, ci_top, func_slot, nresults);
         entered?;
         self.begin_call(callee, Some(nfargs), -1, true)?;
         Ok(true)
