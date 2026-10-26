@@ -10,7 +10,7 @@ impl Vm {
     /// but clear registers of the callee's, to leave the call to
     /// `begin_call` (which grows a frame stack with no room left, where
     /// running out of memory can be raised).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn push_lua_frame_fast(
         &mut self,
         cl: Gc<LuaClosure>,
@@ -104,7 +104,7 @@ impl Vm {
     /// fast loop leaves for its head before running anything else.
     /// `close` is the return's `k`: only then can the frame have open
     /// upvalues or to-be-closed slots (see `mark_closing_returns`).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn return_fast<const WATCH: bool>(
         &mut self,
         base: u32,

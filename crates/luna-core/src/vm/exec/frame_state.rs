@@ -7,7 +7,7 @@ impl Vm {
     /// Re-sync `frames_top` after a bulk `frames: Vec`
     /// swap (take_ctx, put_ctx, load_coro_ctx). Must be called after
     /// the Vec replacement to keep the shadow valid.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn frames_resync(&mut self) {
         // a thread switch swaps in that thread's hook
         self.trap = true;
@@ -220,7 +220,7 @@ impl Vm {
 
     // ---- register / error helpers ----
 
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn r(&self, base: u32, i: u32) -> Value {
         // SAFETY: the compiler reserves `proto.max_stack` slots above `base`
         // at frame entry (`push_frame` sizes the stack up to base + max_stack),
@@ -231,7 +231,7 @@ impl Vm {
         unsafe { *self.stack.get_unchecked((base + i) as usize) }
     }
 
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn set_r(&mut self, base: u32, i: u32, v: Value) {
         // SAFETY: see `r` — `base + i < base + max_stack <= stack.len()` by
         // frame-entry contract.
@@ -240,12 +240,12 @@ impl Vm {
         }
     }
 
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn pc_of_top(&self) -> u32 {
         self.top_frame().pc
     }
 
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn bump_pc(&mut self) {
         // Inline `top_frame_mut`: top is guaranteed Lua (continuation frames
         // drained at dispatch loop head). Avoids the and_then/lua_mut Option
@@ -258,7 +258,7 @@ impl Vm {
         }
     }
 
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn add_pc(&mut self, d: i32) {
         // SAFETY: as in `bump_pc`: the running Lua frame is the top of `frames`, so it is not empty
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
@@ -269,7 +269,7 @@ impl Vm {
 
     /// PUC conditional-skip convention: the JMP that follows is executed when
     /// `cond == k`; otherwise it is skipped.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn cond_skip(&mut self, cond: bool, k: bool) {
         if cond != k {
             self.bump_pc();

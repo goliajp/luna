@@ -69,7 +69,7 @@ impl Vm {
     ///
     /// # Safety
     /// `pt` and `pk` point at initialised values.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) unsafe fn index_miss_at(
         &mut self,
         pt: *const Value,
@@ -132,7 +132,7 @@ impl Vm {
 
     /// A read opcode that [`Self::index_raw_at`] could not finish: continues the
     /// `__index` chain without repeating the raw probe.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn index_miss(&mut self, t: Value, key: Value, dst: u32) -> Result<(), LuaError> {
         if crate::runtime::gc_hooks::VERIFY {
             return self.op_index_from(t, key, dst, false);
@@ -146,7 +146,7 @@ impl Vm {
 
     /// A write opcode that [`Self::newindex_raw_at`] could not finish: runs the
     /// `__newindex` chain without repeating that probe.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn newindex_miss(&mut self, t: Value, key: Value, v: Value) -> Result<(), LuaError> {
         // the fast path's raw set ran out of memory: that was the first
         // attempt, so what is left is the emergency collection and one more

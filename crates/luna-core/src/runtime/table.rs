@@ -232,7 +232,7 @@ impl Table {
 
     /// The dialect whose table rules this table follows (`Heap::new_table`
     /// sets it; a bare table made without a heap follows 5.5).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn dialect(&self) -> Dialect {
         match self.hdr.sub {
             1 => Dialect::L51,
@@ -244,7 +244,7 @@ impl Table {
     }
 
     /// The absent-metamethod bits (see `hdr`).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn absent_mm(&self) -> u32 {
         self.hdr.aux
     }
@@ -255,7 +255,7 @@ impl Table {
     /// a readonly table", and [`Table::set`] / [`Table::set_int`] return
     /// [`TableError::ReadOnly`]. Reads are unaffected. Set it with
     /// [`crate::vm::Vm::set_readonly`].
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn is_readonly(&self) -> bool {
         self.hdr.aux & crate::runtime::heap::READONLY_AUX != 0
     }
@@ -269,7 +269,7 @@ impl Table {
     /// Record that the metamethod behind `bit` is absent from `mt`. A
     /// lookup that finds nothing records it while it holds no reference
     /// into the table, so it takes the handle rather than `&mut self`.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn note_absent_mm(mt: Gc<Table>, bit: u32) {
         // SAFETY: a `Gc` handle points at a live object (see `Gc`); the
         // runtime is single-threaded, and no reference into `mt` is used

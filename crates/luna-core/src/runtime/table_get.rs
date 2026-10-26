@@ -26,7 +26,7 @@ impl Table {
     /// The array slot of integer key `i`, if the array part has one. An
     /// index past `alimit` (only a 5.4 table's can be) raises it, as PUC
     /// 5.4 `luaH_getint` does.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn array_index(&self, i: i64) -> Option<usize> {
         let idx = (i as u64).wrapping_sub(1);
         if idx < u64::from(self.alimit.get()) {

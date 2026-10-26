@@ -147,7 +147,7 @@ impl Value {
     ///
     /// Use [`tag`] constants instead of literal numbers at call
     /// sites — see the module-level `tag` constants below.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn tag_byte(&self) -> u8 {
         // SAFETY: `#[repr(C, u8)]` on `Value` guarantees the
         // discriminant occupies the first byte. Reading it as `u8` is
@@ -158,7 +158,7 @@ impl Value {
     /// Fast tag-only check for Lua function-call sites. Returns true
     /// iff the value's discriminant is `Closure` or `Native` (the
     /// callable types). Avoids matching the entire enum.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn is_callable(self) -> bool {
         let t = self.tag_byte();
         t == tag::CLOSURE || t == tag::NATIVE
@@ -168,7 +168,7 @@ impl Value {
     /// have verified `tag_byte() == tag::CLOSURE` first.
     ///
     /// SAFETY: the value's discriminant MUST be Closure. UB otherwise.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) unsafe fn as_closure_unchecked(self) -> Gc<crate::runtime::LuaClosure> {
         debug_assert_eq!(self.tag_byte(), tag::CLOSURE);
         // SAFETY: `#[repr(C, u8)]` Value with Closure discriminant has
@@ -186,7 +186,7 @@ impl Value {
     /// have verified `tag_byte() == tag::INT` first.
     ///
     /// SAFETY: the value's discriminant MUST be Int. UB otherwise.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) unsafe fn as_int_unchecked(self) -> i64 {
         debug_assert_eq!(self.tag_byte(), tag::INT);
         // SAFETY: the caller's contract: `self` is a `Value::Int`, whose
@@ -226,7 +226,7 @@ impl Value {
     /// inlined: a table's chain walk compares every key with it, and left
     /// to the heuristics it stops being inlined there when code elsewhere
     /// moves between codegen units.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn raw_eq(self, other: Value) -> bool {
         match (self, other) {
             (Value::Nil, Value::Nil) => true,

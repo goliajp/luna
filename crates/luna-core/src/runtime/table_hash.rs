@@ -11,7 +11,7 @@ impl Table {
     /// [`Self::main_position`] with a string's taken in line: the common
     /// key, and the one insertion asks about twice (the new key and the
     /// key it collides with).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn main_position_inline(&self, k: Value) -> usize {
         match k {
             Value::Str(s) => s.hash() as usize & self.node_mask as usize,
@@ -51,7 +51,7 @@ impl Table {
     /// does; `false`, having changed nothing but the free-node cursor, when
     /// no node is free. The hash part is not empty; `khash` is
     /// [`node::khash_of`] the key.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn place_new(&mut self, k: Value, v: Value, khash: u16) -> bool {
         let mp = match k {
             Value::Str(_) if self.node_mask <= KHASH_MASK => {
@@ -206,7 +206,7 @@ pub(super) fn dead_key_hash(k: Value) -> (u32, bool) {
 }
 
 /// Whether PUC hashes key `k` by its address (`hashpointer`).
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn hashed_by_address(tag: u8) -> bool {
     use crate::runtime::value::tag;
     !matches!(tag, tag::NIL | tag::BOOL | tag::INT | tag::FLOAT | tag::STR)

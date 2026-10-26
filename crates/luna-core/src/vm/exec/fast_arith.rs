@@ -12,7 +12,7 @@ use crate::runtime::value::{Value, tag};
 ///
 /// # Safety
 /// `p` points at an initialised `Value`.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_tag(p: *const Value) -> u8 {
     // SAFETY: the caller's contract; the tag is the first byte
     unsafe { *(p as *const u8) }
@@ -25,7 +25,7 @@ pub(super) unsafe fn raw_tag(p: *const Value) -> u8 {
 /// # Safety
 /// `p` points at an initialised `Value`.
 #[cfg(all(any(target_arch = "x86_64", target_arch = "x86"), not(miri)))]
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_tag_again(p: *const Value) -> u8 {
     // SAFETY: the caller's contract; the tag is the first byte
     unsafe { std::ptr::read_volatile(p as *const u8) }
@@ -35,7 +35,7 @@ pub(super) unsafe fn raw_tag_again(p: *const Value) -> u8 {
 /// register's byte offset is one shift and one mask of the instruction (`A`
 /// sits at bit 7 and a `Value` is 16 bytes); aarch64 extracts `A` and
 /// scales it in the add.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn reg_a(regs: *mut Value, inst: crate::vm::isa::Inst) -> *mut Value {
     // 16 bytes on every target (`Gc` is 8-aligned)
     const _: () = assert!(size_of::<Value>() == 16);
@@ -50,7 +50,7 @@ pub(super) fn reg_a(regs: *mut Value, inst: crate::vm::isa::Inst) -> *mut Value 
 ///
 /// # Safety
 /// `p` points at a `Value::Int`.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_int(p: *const Value) -> i64 {
     // SAFETY: the caller's contract; the payload is the second word
     unsafe { *(p as *const i64).add(1) }
@@ -60,7 +60,7 @@ pub(super) unsafe fn raw_int(p: *const Value) -> i64 {
 ///
 /// # Safety
 /// `p` points at a `Value::Float`.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_flt(p: *const Value) -> f64 {
     // SAFETY: as for `raw_int`
     unsafe { *(p as *const f64).add(1) }
@@ -70,7 +70,7 @@ pub(super) unsafe fn raw_flt(p: *const Value) -> f64 {
 ///
 /// # Safety
 /// `p` points at a `Value::Int` or a `Value::Float`, and `t` is its tag.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_num(p: *const Value, t: u8) -> f64 {
     // SAFETY: the caller's contract
     unsafe {
@@ -86,7 +86,7 @@ pub(super) unsafe fn raw_num(p: *const Value, t: u8) -> f64 {
 ///
 /// # Safety
 /// `p` points at a `Value::Int`.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn put_int(p: *mut Value, v: i64) {
     // SAFETY: the caller's contract
     unsafe { *(p as *mut i64).add(1) = v }
@@ -96,7 +96,7 @@ pub(super) unsafe fn put_int(p: *mut Value, v: i64) {
 ///
 /// # Safety
 /// `p` points at a `Value::Float`.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn put_flt(p: *mut Value, v: f64) {
     // SAFETY: the caller's contract
     unsafe { *(p as *mut f64).add(1) = v }
@@ -106,7 +106,7 @@ pub(super) unsafe fn put_flt(p: *mut Value, v: f64) {
 ///
 /// # Safety
 /// `p` points at an initialised `Value`.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_truthy(p: *const Value) -> bool {
     // SAFETY: the caller's contract; a `Bool`'s payload byte is initialised
     unsafe {
@@ -122,7 +122,7 @@ pub(super) unsafe fn raw_truthy(p: *const Value) -> bool {
 pub(super) fn cold_path() {}
 
 /// True when the tag is a number's.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn is_num_tag(t: u8) -> bool {
     (t | 1) == tag::FLOAT
 }
@@ -260,7 +260,7 @@ pub(super) use arith_result;
 ///
 /// # Safety
 /// `p` points at a value whose tag says it holds a `Gc` pointer.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_gc(p: *const Value) -> *mut u8 {
     // SAFETY: the caller's contract; the pointer starts the payload word
     // (byte 8, on 32-bit targets too)

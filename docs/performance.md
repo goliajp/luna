@@ -105,6 +105,22 @@ For workload-shape-specific tuning, see
 | `vm.set_trace_tier(tier)` | `TraceTier::Auto` (`LUNA_TRACE_TIER`) | `Auto` compiles a trace with the baseline code generator first and with Cranelift once it is hot; `Baseline` / `Optimizing` keep one of them |
 | `vm.set_trace_tier_up_at(n)` | 16384 | Loop iterations in baseline code before Cranelift recompiles the trace, a quarter of that once the trace's function is called again (`0`: never) |
 
+### 2.1 Unoptimised builds
+
+The interpreter loop's small helpers are inlined into it by force only
+where `luna-core` is built with optimisation (any `opt-level` but 0, whether
+or not debug assertions are on). At `opt-level = 0`, the default of a debug
+build, they are calls: each would otherwise keep stack slots of its own in
+the loop's frame, so that deep nesting of Lua and native calls ran out of a
+small thread stack before the C level limit. Such a build runs the loop
+much slower; an embedder that wants a fast debug build can raise
+`luna-core`'s level alone:
+
+```toml
+[profile.dev.package.luna-core]
+opt-level = 1
+```
+
 ## 3. The benchmark harnesses
 
 The `cross_dialect` and `redis_lua_shape` bench harnesses in

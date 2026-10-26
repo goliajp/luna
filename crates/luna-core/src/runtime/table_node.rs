@@ -44,7 +44,7 @@ const DEAD_STR: u8 = 4;
 pub(super) const KHASH_MASK: u32 = u16::MAX as u32;
 
 /// What [`Node::khash`] holds for `key`.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn khash_of(key: Value) -> u16 {
     match key {
         Value::Str(s) => s.hash() as u16,
@@ -63,7 +63,7 @@ impl Node {
     };
 
     /// A live entry; `khash` is [`khash_of`] the key.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn new(key: Value, val: Value, next: i32, khash: u16) -> Node {
         let mut n = Node {
             val,
@@ -76,7 +76,7 @@ impl Node {
     }
 
     /// See [`DEAD_KEY`].
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn dead_key(&self) -> bool {
         self.flags & DEAD_KEY != 0
     }
@@ -109,7 +109,7 @@ impl Node {
     }
 
     /// The key.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn key(&self) -> Value {
         // SAFETY: `#[repr(C)]` puts `key_tag` and `key_payload` where a
         // `Value` has its tag and payload, and `set_key` stores them as
@@ -128,7 +128,7 @@ impl Node {
     }
 
     /// Store `key`, leaving the flags, `khash` and `next` as they are.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn set_key(&mut self, key: Value) {
         let src = &key as *const Value as *const u8;
         // SAFETY: a `Value`'s tag is its first byte and its payload (which
@@ -140,7 +140,7 @@ impl Node {
     }
 
     /// True when the key is the string `key` (the same object).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn key_is_str(&self, key: Gc<crate::runtime::string::LuaStr>) -> bool {
         self.key_tag == crate::runtime::value::tag::STR
             // SAFETY: a string key's payload starts with its pointer (on a
@@ -149,7 +149,7 @@ impl Node {
     }
 
     /// True when the slot holds no key and sits in no chain.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn is_free(&self) -> bool {
         self.key_tag == crate::runtime::value::tag::NIL && !self.dead_key()
     }
@@ -159,7 +159,7 @@ impl super::Table {
     /// The node holding the string key `key`, found by pointer (PUC
     /// `luaH_getshortstr`). Exact for a short (interned) string; for a long
     /// one a hit is exact and a miss proves nothing.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn str_node_by_ptr(&self, key: Gc<crate::runtime::string::LuaStr>) -> Option<usize> {
         self.hook_find_node(Value::Str(key));
         let mask = self.node_mask;
@@ -184,7 +184,7 @@ impl super::Table {
     }
 
     /// The value slot of string key `key`; see [`Self::str_node_by_ptr`].
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn str_slot_by_ptr(
         &self,
         key: Gc<crate::runtime::string::LuaStr>,
@@ -195,7 +195,7 @@ impl super::Table {
     }
 
     /// [`Self::str_slot_by_ptr`] for a write.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn str_slot_by_ptr_mut(
         &mut self,
         key: Gc<crate::runtime::string::LuaStr>,
@@ -206,7 +206,7 @@ impl super::Table {
     }
 
     /// The hash part.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn nodes(&self) -> &[Node] {
         // SAFETY: `nodes` holds `node_mask + 1` nodes (0 when the mask is
         // `u32::MAX`; the pointer is then dangling, which a zero-length
@@ -215,7 +215,7 @@ impl super::Table {
     }
 
     /// The hash part, for a write.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn nodes_mut(&mut self) -> &mut [Node] {
         // SAFETY: as in `nodes`; `&mut self` makes the access exclusive
         unsafe {

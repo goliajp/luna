@@ -112,7 +112,7 @@ impl Inst {
     }
 
     /// Decode the opcode field.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn op(self) -> Op {
         let raw = (self.0 & 0x7F) as u8;
         debug_assert!((raw as usize) < NUM_OPS, "corrupt opcode {raw}");
@@ -122,13 +122,13 @@ impl Inst {
     }
 
     /// Decode the `A` field.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn a(self) -> u32 {
         (self.0 >> POS_A) & 0xFF
     }
 
     /// Decode the `k` flag (constant-vs-register selector for some ops).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn k(self) -> bool {
         (self.0 >> POS_K) & 1 != 0
     }
@@ -147,25 +147,25 @@ impl Inst {
     }
 
     /// Decode the `B` field.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn b(self) -> u32 {
         (self.0 >> POS_B) & 0xFF
     }
 
     /// Decode the `C` field.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn c(self) -> u32 {
         self.0 >> POS_C
     }
 
     /// Decode the signed `sB` field.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn sb(self) -> i32 {
         self.b() as i32 - OFFSET_SC
     }
 
     /// Decode the signed `sC` field.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn sc(self) -> i32 {
         self.c() as i32 - OFFSET_SC
     }
@@ -218,25 +218,25 @@ impl Inst {
     }
 
     /// Decode the unsigned `Bx` field.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn bx(self) -> u32 {
         self.0 >> POS_BX
     }
 
     /// Decode the signed `sBx` field.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn sbx(self) -> i32 {
         self.bx() as i32 - MAX_SBX
     }
 
     /// Decode the unsigned `Ax` field.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn ax(self) -> u32 {
         self.0 >> POS_A
     }
 
     /// Decode the signed jump offset `sJ`.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub fn sj(self) -> i32 {
         self.ax() as i32 - MAX_SJ
     }

@@ -192,7 +192,7 @@ pub(crate) fn arith_num(
 
 /// `a ^ b`. 5.4+ `luai_numpow` squares by multiplying, which can differ
 /// from the C library's `pow` in the last bit.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn num_pow(v54: bool, a: f64, b: f64) -> f64 {
     if b == 2.0 && v54 {
         a * a
@@ -203,7 +203,7 @@ pub(super) fn num_pow(v54: bool, a: f64, b: f64) -> f64 {
 
 /// Floor division of integers, `b != 0` (PUC `luaV_idiv`; `MIN // -1`
 /// wraps to `MIN`).
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn int_idiv(a: i64, b: i64) -> i64 {
     let q = a.wrapping_div(b);
     if (a ^ b) < 0 && q.wrapping_mul(b) != a {
@@ -214,7 +214,7 @@ pub(super) fn int_idiv(a: i64, b: i64) -> i64 {
 }
 
 /// Floor modulo of integers, `b != 0` (PUC `luaV_mod`; `MIN % -1` is 0).
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn int_mod(a: i64, b: i64) -> i64 {
     let m = a.wrapping_rem(b);
     if m != 0 && (m ^ b) < 0 { m + b } else { m }
@@ -223,7 +223,7 @@ pub(super) fn int_mod(a: i64, b: i64) -> i64 {
 /// [`int_mod`] for the interpreter's `%` handlers, `None` when `b == 0`.
 /// One unsigned compare sets aside both 0 and -1 ahead of the division,
 /// as PUC `luaV_mod` does; past it the remainder cannot trap or overflow.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn int_mod_or_zero_div(a: i64, b: i64) -> Option<i64> {
     if (b as u64).wrapping_add(1) <= 1 {
         super::fast_arith::cold_path();

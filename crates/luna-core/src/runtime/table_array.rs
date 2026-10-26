@@ -9,7 +9,7 @@ impl Table {
     ///
     /// # Safety
     /// `idx < asize`, and `pv` points at an initialised `Value`.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) unsafe fn aset_at(&mut self, idx: usize, pv: *const Value) {
         let p = pv as *const u8;
         // SAFETY: the caller's contract; a `Bool`'s byte and, from `Int`

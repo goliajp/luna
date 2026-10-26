@@ -208,7 +208,7 @@ impl Table {
     /// (`set_inlined`). Left to the compiler, the body goes out of line once
     /// `set_norm` has a few callers, which puts a call on every `rawset` and
     /// every swap of `table.sort`.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn set_norm_inlined(&mut self, heap: &mut Heap, k: Value, v: Value) -> Result<(), TableError> {
         if let Value::Int(i) = k
             && let Some(idx) = self.array_index(i)
