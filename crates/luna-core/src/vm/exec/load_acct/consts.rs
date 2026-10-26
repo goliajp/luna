@@ -43,16 +43,7 @@ impl Vm {
         key: Option<crate::compiler::const_map::ConstKey>,
         v: Value,
     ) -> Result<(), SyntaxError> {
-        // a long string constant is the string the scanner made (luna's
-        // compiler made its own)
-        if let Value::Str(cs) = v
-            && let Some(i) = r.longs.iter().position(|l| l.as_bytes() == cs.as_bytes())
-        {
-            let ss = r.longs.swap_remove(i);
-            if r.rec.is_none() {
-                self.heap.acct_move_long(ss, cs);
-            }
-        }
+        self.take_scanned_long(r, v);
         // the constant's index, the value its key gets
         let index = r.fs.last().map_or(0, |f| f.a.k.n);
         let k_first = r.d == Dialect::L55;
@@ -60,27 +51,7 @@ impl Vm {
             self.heap.parser_push(&mut f.a.k, ParserArray::Consts);
         }
         if let Some(key) = key {
-            let id = match r.d {
-                Dialect::L53 | Dialect::L54 => r.h.as_ref().map(|t| t.id),
-                _ => r.fs.last().and_then(|f| f.h.as_ref()).map(|t| t.id),
-            };
-            if let Some(id) = id {
-                let (k, kv) = self.puc_const_key(r, id, key, v)?;
-                let t = match r.d {
-                    Dialect::L53 | Dialect::L54 => r.h.as_mut(),
-                    _ => r.fs.last_mut().and_then(|f| f.h.as_mut()),
-                };
-                // a string is an object of PUC's; nil is keyed by the
-                // table itself
-                let obj = match kv {
-                    PVal::V(Value::Str(s)) => Some(s.hdr()),
-                    _ => None,
-                };
-                if let Some(t) = t {
-                    t.insert(&mut self.heap, r.d, k, obj)?;
-                }
-                r.note(id, kv, Some(PVal::V(Value::Int(index as i64))));
-            }
+            self.key_const(r, key, v, index)?;
         }
         if !k_first && let Some(f) = r.fs.last_mut() {
             self.heap.parser_push(&mut f.a.k, ParserArray::Consts);
@@ -92,6 +63,53 @@ impl Vm {
             r.kstr.push(cs);
             self.proto_barrier(r, r.fs.len().wrapping_sub(1), cs.hdr());
         }
+        Ok(())
+    }
+
+    /// A long string constant is the string the scanner made (luna's
+    /// compiler made its own): the count moves to luna's.
+    fn take_scanned_long(&mut self, r: &mut Replay, v: Value) {
+        if let Value::Str(cs) = v
+            && let Some(i) = r.longs.iter().position(|l| l.as_bytes() == cs.as_bytes())
+        {
+            let ss = r.longs.swap_remove(i);
+            if r.rec.is_none() {
+                self.heap.acct_move_long(ss, cs);
+            }
+        }
+    }
+
+    /// Constant `v` (luna's key `key`, index `index`) entered in the table
+    /// the dialect keys constants in: 5.3 and 5.4 the load's, the others
+    /// the function's.
+    fn key_const(
+        &mut self,
+        r: &mut Replay,
+        key: crate::compiler::const_map::ConstKey,
+        v: Value,
+        index: usize,
+    ) -> Result<(), SyntaxError> {
+        let id = match r.d {
+            Dialect::L53 | Dialect::L54 => r.h.as_ref().map(|t| t.id),
+            _ => r.fs.last().and_then(|f| f.h.as_ref()).map(|t| t.id),
+        };
+        let Some(id) = id else {
+            return Ok(());
+        };
+        let (k, kv) = self.puc_const_key(r, id, key, v)?;
+        let t = match r.d {
+            Dialect::L53 | Dialect::L54 => r.h.as_mut(),
+            _ => r.fs.last_mut().and_then(|f| f.h.as_mut()),
+        };
+        // a string is an object of PUC's; nil is keyed by the table itself
+        let obj = match kv {
+            PVal::V(Value::Str(s)) => Some(s.hdr()),
+            _ => None,
+        };
+        if let Some(t) = t {
+            t.insert(&mut self.heap, r.d, k, obj)?;
+        }
+        r.note(id, kv, Some(PVal::V(Value::Int(index as i64))));
         Ok(())
     }
 
@@ -141,11 +159,13 @@ impl Vm {
                     Value::Float(f)
                 }
             }
-            (Dialect::L53, Value::Int(i)) => Value::LightUserdata(i as usize as *const ()),
-            // 5.5 keys every zero of a function by the function
-            (_, _) if key == K::Zero => {
-                Value::LightUserdata((usize::MAX - r.fs.last().map_or(0, |f| f.shape)) as *const ())
+            (Dialect::L53, Value::Int(i)) => {
+                Value::LightUserdata(std::ptr::without_provenance(i as usize))
             }
+            // 5.5 keys every zero of a function by the function
+            (_, _) if key == K::Zero => Value::LightUserdata(std::ptr::without_provenance(
+                usize::MAX - r.fs.last().map_or(0, |f| f.shape),
+            )),
             (_, _) => match key {
                 K::Int(i) => Value::Int(i),
                 K::Float(b) => Value::Float(f64::from_bits(b)),
