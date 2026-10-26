@@ -55,7 +55,11 @@ macro_rules! fast_dispatch_macros {
                     fr: $fr, regs: $regs, npc: $npc, inst: $inst, code: $code, kptr: $kptr,
                     trace_on: $trace_on, entry_depth: $entry_depth, stay: $stay, heads: $heads,
                 };
+                #[cfg(test)]
+                let op = $inst.op();
                 let flow = arm($vm, &mut st)?;
+                #[cfg(test)]
+                coverage::note(op, &flow);
                 ($fr, $regs, $npc, $inst, $code, $kptr) =
                     (st.fr, st.regs, st.npc, st.inst, st.code, st.kptr);
                 match flow {

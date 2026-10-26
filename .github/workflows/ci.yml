@@ -67,6 +67,14 @@ jobs:
         run: cargo build --workspace --all-targets --exclude llvm-jit-probe --exclude luna-jit-llvm
       - name: cargo test --workspace --lib
         run: cargo test --workspace --lib --exclude llvm-jit-probe --exclude luna-jit-llvm
+      # luna-core's own tests in an unoptimised build, where the fast loop's
+      # arms are functions of their own and the dispatch after them is a
+      # different piece of code; a target dir of its own keeps the build
+      # above from being redone for the steps below
+      - name: cargo test -p luna-core --lib (opt-level 0)
+        run: cargo test -p luna-core --lib --config profile.dev.package.luna-core.opt-level=0
+        env:
+          CARGO_TARGET_DIR: target/o0
       - name: cargo test --workspace --release
         # `--nocapture` propagates test-side eprintln + println straight
         # to the CI log so a process-level abort (SIGSEGV / SIGILL / signal:

@@ -25,6 +25,8 @@ use num_words::{raw_word, tag_word};
 #[cfg(not(luna_hot))]
 mod arm_fns;
 mod arm_helpers;
+#[cfg(test)]
+mod arm_tests;
 mod arms_arith;
 mod arms_call;
 mod arms_cmp;
@@ -32,6 +34,8 @@ mod arms_for_prep;
 mod arms_load;
 mod arms_loop;
 mod arms_loop_a64;
+#[cfg(all(test, not(luna_hot)))]
+mod coverage;
 mod dispatch;
 mod flow;
 #[cfg(not(luna_hot))]
