@@ -40,11 +40,9 @@ impl Vm {
         // A side trace is entered only through its parent's exit, never by
         // the dispatcher's lookup at its head pc.
         let (parent_proto, parent_head_pc, parent_exit_idx) = side_trace_parent?;
-        // The lowerer's own verdict: a trace it compiled but would not
-        // dispatch (an untyped table read, an inline abort) is not safe to
-        // enter from the parent's exit either, unless the only reason was
-        // the length gate, which weighs dispatch overhead, not soundness
-        // (the lowerer records the other reasons first).
+        // a trace the lowerer would not dispatch (an untyped table read, an
+        // inline abort) is no safer from the parent's exit, unless only the
+        // length gate (overhead, not soundness; recorded last) refused it
         let runnable = ct.dispatchable || ct.dispatch_off_reason == Some("length-gate");
         ct.dispatchable = false;
         ct.dispatch_off_reason = Some(SIDE_TRACE);

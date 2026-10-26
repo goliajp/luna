@@ -15,16 +15,10 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
     } = *oc;
     let regs: &[Variable] = oc.regs;
     match oc.op {
-        // inline self-recursive Call: emit nothing.
-        // The recorder's depth bump (next op at depth+1) drives the
-        // op_offsets shift; subsequent emit lands in the callee's
-        // register window via the `off` shadow.
-        //
-        // push the callee frame onto `call_chain`
-        // so subsequent cmp@d>0 sites can snapshot the chain. The
-        // pushed `pc` is the caller's resume PC (Call.pc + 1); the
-        // innermost frame's pc is overwritten with the side-exit PC
-        // at snapshot time.
+        // an inlined call emits nothing but its frame on `call_chain` (for
+        // the exits inside it to snapshot; its pc, the caller's resume pc,
+        // is the exit's in the innermost frame); the next ops' offsets put
+        // their emit in the callee's window
         Op::Call => {
             let callee_reg = ins.a() as usize;
             if !matches!(lw.current_kinds[off + callee_reg], RegKind::Closure) {
@@ -74,14 +68,9 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 let same = lw.bcx.ins().icmp(IntCC::Equal, proto, want);
                 guard!(lw, pl, same, i, rop.pc);
             }
-            // SelfLink close: the LAST recorded op is the
-            // Op::Call whose "next" op (the tripping deepest-depth
-            // entry) was never captured. Skip the call_chain push
-            // for that trailing Call — the SelfLink tail emit
-            // computes its bump_off from this Call's offset + A + 1
-            // directly. No FrameMaterializeInfo needed because no
-            // side-exit can fire inside the tripping callee (it has
-            // no recorded body).
+            // a SelfLink close's last op is a call whose callee was never
+            // recorded: no frame for it (no exit can fire inside it), the
+            // tail taking its offset from the call directly
             if self_link_idx_opt.is_some() && i + 1 == effective_end {
                 return Some(());
             }

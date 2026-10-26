@@ -55,9 +55,7 @@ impl Vm {
             };
             jit.trace_compiler.adopt_traces(jit.storage.as_mut(), &req)
         };
-        if adopted.is_empty() {
-            return false;
-        }
+        let any = !adopted.is_empty();
         for a in adopted {
             let mut ct = a.trace;
             self.tally_compiled_trace(&ct);
@@ -68,6 +66,6 @@ impl Vm {
             self.heap.barrier_back(proto);
             self.jit.counters.adopted += 1;
         }
-        true
+        any
     }
 }

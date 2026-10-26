@@ -102,9 +102,8 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     let mut fbc = FunctionBuilderContext::new();
     let mut bcx = FunctionBuilder::new(&mut ctx.func, &mut fbc);
 
-    // Create one cranelift Block per Lua basic block, indexed by the
-    // BB's leading PC. The entry block also gets the Variable-declaration
-    // prelude so the chunk has well-defined register values from PC 0.
+    // one block per basic block, by its first pc; the entry block declares
+    // the variables, so every register has a value from pc 0
     let mut pc_to_block: Vec<Option<Block>> = vec![None; n];
     for pc_i in 0..n {
         if bb_starts[pc_i] {
@@ -118,9 +117,7 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
     } else {
         pc_to_block[0].expect("entry block exists")
     };
-    // Append the entry block's function-param block params before
-    // switching in, so the params arrive as block args we can read
-    // straight into the register Variables.
+    // the parameters as the entry block's arguments, read into registers
     bcx.append_block_params_for_function_params(entry);
     bcx.switch_to_block(entry);
 
@@ -140,9 +137,8 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
             regs.push(bcx.declare_var(ty));
         }
     }
-    // each register's kind as the emit goes, from the argument masks:
-    // `SetList` tags each element by it, and the arithmetic and
-    // comparisons read it where `reg_kinds` holds an Int and a Table
+    // each register's kind as the emit goes, from the argument masks (for
+    // `SetList`'s tags, and where `reg_kinds` holds an Int and a Table)
     let mut current_kinds: Vec<RegKind> = vec![RegKind::Unset; max_stack];
     for i in 0..num_params {
         current_kinds[i] = if (arg_float_mask >> i) & 1 == 1 {

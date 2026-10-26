@@ -23,13 +23,8 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
     let regs: &[Variable] = oc.regs;
     let lay = oc.ins.op().for_layout().expect("a loop op");
     let (ctl, first) = (a_us + lay.control() as usize, a_us + lay.var() as usize);
-    // Inline aget fast path. The recorder confirmed
-    // R[A] = ipairs_iter at trace start. The standard
-    // ipairs loop has R[A+1] = Table (state) and
-    // R[A+2] = Int (control = last seen index).
-    // Per iter: next_i = ctrl + 1; val = t[next_i].
-    // If val is Nil → loop ends; else key = next_i,
-    // val_raw = val's payload.
+    // the recorder saw R[A] = ipairs_iter, R[A+1] the table, R[A+2] the
+    // last index: each step reads t[ctrl + 1], nil ending the loop
     let ctrl = lw.bcx.use_var(regs[ctl]);
     let t_raw = lw.bcx.use_var(regs[a_us + 1]);
     let one = lw.bcx.ins().iconst(types::I64, 1);

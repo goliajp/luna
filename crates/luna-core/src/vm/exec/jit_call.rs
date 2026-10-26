@@ -76,14 +76,9 @@ impl Vm {
         wanted: i32,
     ) -> JitRun {
         use crate::runtime::function::JitProtoState;
-        // (compiled self-recursion checks the native stack itself, before
-        // its first self call)
-        if !self.jit.gate {
-            return JitRun::NotRun;
-        }
-        // Any active debug hook means the interpreter has to run the
-        // call so the hook gets the expected events.
-        if self.hook.func.is_some() || self.hook.rust_func.is_some() {
+        // a debug hook gets its events from the interpreter (compiled
+        // self-recursion checks the native stack itself)
+        if !self.jit.gate || self.hook.func.is_some() || self.hook.rust_func.is_some() {
             return JitRun::NotRun;
         }
         let proto = cl.proto;
@@ -111,23 +106,14 @@ impl Vm {
         if num_args as u32 != nargs {
             return JitRun::NotRun;
         }
-        // Pack args into i64 bit-patterns per the per-slot expected
-        // kind. A Float-typed slot accepts Value::Float verbatim (and on
-        // 5.1/5.2 promotes Value::Int(x) via i64 → f64); a Table-typed slot
-        // accepts only Value::Table and passes the raw Gc ptr; an
-        // Int-typed slot accepts only Value::Int. Any other shape
-        // bails to the interpreter so the call's actual dynamics
-        // (metamethod dispatch / type-coerce) take over. So does a
-        // read-only table: compiled code stores into the tables it is
-        // given without testing them, and nothing it runs can mark one
-        // (it calls no host code), so this one test per call covers all
-        // its stores.
+        // each argument as the i64 its slot's kind takes (a float, an int,
+        // a table's pointer), any other shape left to the interpreter; a
+        // read-only table too, as compiled code stores without testing (and
+        // runs nothing that could mark one)
         let mut args: [i64; crate::jit::MAX_JIT_ARITY as usize] =
             [0; crate::jit::MAX_JIT_ARITY as usize];
-        // From 5.3 an integer is its own subtype: turned into a float for
-        // a float-typed parameter, it would come back out (returned,
-        // stored, printed) as a float. Only 5.1/5.2, where every number
-        // is a float, may convert it.
+        // only 5.1/5.2 (every number a float) may pass an integer as a
+        // float: from 5.3 it would come back out as one
         let int_as_float = self.version() <= crate::version::LuaVersion::Lua52;
         for i in 0..num_args as usize {
             let v = self.stack[(func_slot + 1) as usize + i];
@@ -141,8 +127,7 @@ impl Vm {
                 _ => return JitRun::NotRun,
             };
         }
-        // the level the call makes, as `push_frame` would count it; an
-        // error there is the call's
+        // the call's level, as `push_frame` counts it (an error is the call's)
         let levels = match self.jit_enter_levels(cl, func_slot, nargs) {
             Ok(Some(l)) => l,
             // the interpreter makes the call: its check finds a step due
@@ -152,9 +137,8 @@ impl Vm {
                 return JitRun::Done;
             }
         };
-        // the Vm and closure the helpers the code calls work on, until
-        // the guard drops (a raw pointer: the compiler is borrowed from
-        // `self` meanwhile)
+        // the Vm and closure the helpers work on, until the guard drops (a
+        // raw pointer: the compiler borrows `self` meanwhile)
         let vm_ptr: *mut Vm = self;
         let _jit_vm_guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
         // SAFETY: the source `*const u8` is a JIT-compiled function entry pointer produced by Cranelift with the target `fn`-pointer signature (IntChunkFn / IntFnN); the JitVmGuard above keeps the JIT_VM TLS slot live across the call.
@@ -180,8 +164,7 @@ impl Vm {
         if self.jit.pending_raise.is_some() {
             return JitRun::Done;
         }
-        // A helper flagged a metatable on a table operand; bail to the
-        // interpreter so `push_frame` runs the call from scratch.
+        // a helper met a metatable: the interpreter runs the call afresh
         if self.jit.pending_err.take().is_some() {
             self.jit.handoff.clear();
             return JitRun::NotRun;
