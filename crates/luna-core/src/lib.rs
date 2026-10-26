@@ -103,7 +103,6 @@
 // `docs/threading.md` for the embedder-facing usage patterns.
 
 #[doc(hidden)]
-#[path = "private/mod.rs"]
 pub mod __private;
 pub(crate) mod cerrno;
 pub mod compiler;

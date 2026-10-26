@@ -22,7 +22,6 @@ pub(crate) enum UEv<'a> {
     Buff(u32),
 }
 
-#[path = "shape/stream.rs"]
 mod stream;
 pub(crate) use stream::Undumping;
 

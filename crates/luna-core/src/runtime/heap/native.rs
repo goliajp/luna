@@ -3,8 +3,9 @@
 
 use super::*;
 use crate::runtime::Builtin;
-use crate::runtime::mem::Oom;
+use crate::runtime::mem::{LSlice, Oom, oom_abort};
 use crate::runtime::value::NativeFn;
+use std::alloc::Layout;
 
 impl Heap {
     /// A [`NativeClosure`] calling host function `f` over `upvals`.

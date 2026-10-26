@@ -1,10 +1,8 @@
-//! String interning, native functions, and the objects the heap fixes.
+//! String interning and the objects the heap fixes.
 
 use super::*;
-use crate::runtime::mem::{LSlice, Oom, oom_abort};
+use crate::runtime::mem::{Oom, oom_abort};
 use std::alloc::Layout;
-
-mod native;
 
 impl Heap {
     /// Create (or find) a string. Short strings (≤ 40 bytes) are interned,

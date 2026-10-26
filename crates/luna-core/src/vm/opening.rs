@@ -13,17 +13,11 @@ use crate::vm::exec::Vm;
 
 #[allow(clippy::all)]
 #[rustfmt::skip]
-#[path = "opening/data.rs"]
 mod data;
-#[path = "opening/api.rs"]
 mod api;
-#[path = "opening/aux.rs"]
 mod aux;
-#[path = "opening/fenv51.rs"]
 mod fenv51;
-#[path = "opening/run.rs"]
 mod run;
-#[path = "opening/step.rs"]
 mod step;
 
 pub(crate) use run::{Ix, Opener};

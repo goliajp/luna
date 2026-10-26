@@ -257,6 +257,7 @@ mod finobj;
 mod for_vm;
 mod intern;
 mod list;
+mod native;
 mod new;
 mod slab;
 use self::intern::oom_abort_heap;

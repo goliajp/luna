@@ -2,7 +2,6 @@
 
 use super::*;
 
-#[path = "registry.rs"]
 mod registry;
 pub(crate) use registry::{CLIBS_KEY, HOOK_KEY, light_key};
 

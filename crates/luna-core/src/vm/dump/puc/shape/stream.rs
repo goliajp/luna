@@ -5,10 +5,8 @@
 
 use super::UEv;
 
-#[path = "layouts.rs"]
 mod layouts;
 use layouts::*;
-#[path = "stream_steps.rs"]
 mod steps;
 use steps::Reader;
 
