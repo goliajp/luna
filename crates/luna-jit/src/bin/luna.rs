@@ -299,22 +299,25 @@ fn main() {
     if opts.version == LuaVersion::Lua51 {
         let _ = interp.vm().host_check_gc();
     }
-    if opts.profile {
+    exit_as_lua_c(interp, opts.profile, ok)
+}
+
+/// The end of `lua.c`'s `main`: the state closed (to-be-closed variables
+/// closed and finalizers run, so open files write out their buffers) but
+/// its memory not handed back one object at a time, as the process ends
+/// and the system takes it (the state stays reachable to the end, for
+/// leak checkers); then stdout and stderr flushed, as C's exit does.
+fn exit_as_lua_c(mut interp: Interp, profile: bool, ok: bool) -> ! {
+    if profile {
         print_profile(interp.host.vm_ref());
     }
     counters::append(interp.host.vm_ref());
-    // lua.c closes the state before it exits: to-be-closed variables are
-    // closed and finalizers run, so open files write out their buffers.
-    // The memory is not handed back one object at a time: the process ends
-    // here and the system takes it (the state stays reachable to the end,
-    // for leak checkers)
     interp.vm().trace_mark("close");
     interp.vm().host_close_state();
     AT_EXIT.store(
         Box::into_raw(Box::new(interp)),
         std::sync::atomic::Ordering::Relaxed,
     );
-    // C's exit flushes stdout (and stderr, if setvbuf buffered it)
     let _ = luna_core::stdio::flush_stdout();
     let _ = luna_core::stdio::flush_stderr();
     std::process::exit(if ok { 0 } else { 1 });

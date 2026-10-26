@@ -123,18 +123,17 @@ static NEVER_TRIP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// The `luna_jit_*` calls below sit behind a branch on `NEVER_TRIP`,
 /// which is never taken, so calling this function is safe although it
 /// names those `unsafe` helpers.
+///
+/// It reads every address of `LUNA_AOT_HELPER_PIN`, keeping the table
+/// live, then calls each helper behind a branch on an atomic load LTO
+/// cannot fold: the branch never runs (`NEVER_TRIP` is never written),
+/// but the call edges survive into the staticlib bundling.
 #[allow(unreachable_code)]
 pub fn force_link_jit_helpers() -> usize {
-    // Address-table touch keeps `LUNA_AOT_HELPER_PIN` live.
     let mut sum: usize = 0;
     for slot in LUNA_AOT_HELPER_PIN.iter() {
         sum = sum.wrapping_add(std::hint::black_box(slot.0 as usize));
     }
-
-    // Call-graph anchor — gated by an atomic load LTO can't
-    // constant-fold. Branch never executes at run time
-    // (`NEVER_TRIP` is never written), but the call edges to each
-    // `luna_jit_*` helper survive into the staticlib bundling.
     if NEVER_TRIP.load(std::sync::atomic::Ordering::Relaxed) {
         // SAFETY: never runs: nothing stores to `NEVER_TRIP`, so this
         // branch is dead at run time and the calls are only link-time
