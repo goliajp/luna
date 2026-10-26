@@ -13,15 +13,7 @@ impl Vm {
         let root = if self.version() == LuaVersion::Lua52 {
             self.globals()
         } else {
-            let pkg_k = self.str_value(b"package").ok()?;
-            let Value::Table(pkg) = self.globals().get(pkg_k) else {
-                return None;
-            };
-            let loaded_k = self.str_value(b"loaded").ok()?;
-            let Value::Table(loaded) = pkg.get(loaded_k) else {
-                return None;
-            };
-            loaded
+            self.loaded_modules()?
         };
         let name = find_field(root, f, 2)?;
         Some(match name.strip_prefix("_G.") {
