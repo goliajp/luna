@@ -72,6 +72,15 @@ pub trait VmHostInternals {
         upvals: &[Value],
         builtin: crate::runtime::Builtin,
     ) -> Result<Value, LuaError>;
+    /// [`VmHostInternals::builtin`] standing for a C function of PUC's with
+    /// `puc_nup` upvalues.
+    fn builtin_puc(
+        &mut self,
+        f: crate::runtime::value::NativeFn,
+        upvals: &[Value],
+        builtin: crate::runtime::Builtin,
+        puc_nup: usize,
+    ) -> Result<Value, LuaError>;
     /// `luaL_checkstack(L, n, msg)` in lua.c's `pmain` with `values` values
     /// on its stack (above its function at slot 0): `pmain`'s level
     /// reserves that room from then on.
@@ -154,6 +163,16 @@ impl VmHostInternals for crate::vm::Vm {
         builtin: crate::runtime::Builtin,
     ) -> Result<Value, LuaError> {
         crate::vm::Vm::builtin(self, f, upvals, builtin)
+    }
+    #[inline]
+    fn builtin_puc(
+        &mut self,
+        f: crate::runtime::value::NativeFn,
+        upvals: &[Value],
+        builtin: crate::runtime::Builtin,
+        puc_nup: usize,
+    ) -> Result<Value, LuaError> {
+        crate::vm::Vm::builtin_puc(self, f, upvals, builtin, puc_nup)
     }
     #[inline]
     fn host_check_stack(&mut self, values: u32, n: u32, msg: &str) -> Result<(), LuaError> {
