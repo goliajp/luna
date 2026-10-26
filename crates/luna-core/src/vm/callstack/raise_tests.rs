@@ -16,9 +16,11 @@ local ok3 = xpcall(error, function(m) error(m) end)
 return ok1, ok2, ok3
 "#;
 
-/// A message handler that recurses until the stack overflows: in 5.2 and
-/// 5.3, whose Lua calls no call count stops, a million slots of calls,
-/// which Miri does not get through in hours.
+/// A message handler that recurses until the stack overflows: from 5.2
+/// on, whose Lua calls no call count stops, a million slots of calls,
+/// which Miri does not get through in hours (the overflow and the
+/// handler's own overflow are covered there by `call_limits`' test, which
+/// fills the stack with one call's results).
 const OVERFLOWS: &str = r#"
 local function h(m) return h(m) .. '' end
 return xpcall(error, h)
@@ -40,7 +42,7 @@ fn a_collection_forgets_the_error_values_it_frees() {
         LuaVersion::Lua55,
     ] {
         let mut vm = Vm::new(v);
-        let scripts: &[&str] = if cfg!(miri) && matches!(v, LuaVersion::Lua52 | LuaVersion::Lua53) {
+        let scripts: &[&str] = if cfg!(miri) && v != LuaVersion::Lua51 {
             &[ERRORS]
         } else {
             &[OVERFLOWS, ERRORS]
