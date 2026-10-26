@@ -140,9 +140,28 @@ impl Default for PucModel {
 
 /// Counting stopped once (luna builds objects PUC made elsewhere, or not
 /// at all), until [`Heap::counting_on`] takes the token back. Only
-/// [`Heap::counting_off`] makes one.
+/// [`Heap::counting_off`] makes one. A token dropped any other way is
+/// reported as the load tokens are (see `load_session`), unless
+/// [`CountingOff::abandon`] says counting stays off for good.
 #[must_use = "counting stays off until the token goes back to `Heap::counting_on`"]
-pub(crate) struct CountingOff(());
+pub(crate) struct CountingOff {
+    back: bool,
+}
+
+impl CountingOff {
+    /// Counting stays off: the heap goes with it.
+    pub(crate) fn abandon(mut self) {
+        self.back = true;
+    }
+}
+
+impl Drop for CountingOff {
+    fn drop(&mut self) {
+        if !self.back {
+            super::load_session::unpaired("counting turned off");
+        }
+    }
+}
 
 /// How far counting was off at some point, for a caller to return
 /// to it whatever happened since (a load unwound by running out of memory).
@@ -160,12 +179,13 @@ impl Heap {
     #[inline]
     pub(crate) fn counting_off(&mut self) -> CountingOff {
         self.puc.silent += 1;
-        CountingOff(())
+        CountingOff { back: false }
     }
 
     /// Count again what [`Heap::counting_off`] stopped.
     #[inline]
-    pub(crate) fn counting_on(&mut self, _: CountingOff) {
+    pub(crate) fn counting_on(&mut self, mut off: CountingOff) {
+        off.back = true;
         self.puc.silent -= 1;
     }
 

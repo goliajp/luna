@@ -7,6 +7,7 @@ use crate::vm::exec::state::CallGuards;
 
 mod jit_install;
 mod libs;
+mod minimal;
 mod teardown;
 pub(crate) use libs::{CLIBS_KEY, HOOK_KEY, light_key};
 
@@ -314,31 +315,5 @@ impl Vm {
     /// counted.
     pub fn memory_in_use(&self) -> Option<usize> {
         self.heap.mem().ctx().in_use()
-    }
-
-    fn new_minimal_on(version: LuaVersion, heap: Heap) -> Vm {
-        Vm::try_new_minimal_on(version, heap)
-            .unwrap_or_else(|| crate::runtime::mem::oom_abort(std::alloc::Layout::new::<Vm>()))
-    }
-
-    fn try_new_minimal_on(version: LuaVersion, mut heap: Heap) -> Option<Vm> {
-        heap.set_version(version).ok()?;
-        // luna's own objects PUC made at other points, or not at all
-        let off = heap.counting_off();
-        let mut vm = Vm::new_inner(version, heap)?;
-        let mc = vm.heap.try_new_coro(Value::Nil, vm.globals).ok()?;
-        vm.heap.main_thread_made(mc);
-        vm.main_coro = Some(mc);
-        // PUC's `init_registry`, counted with the state
-        vm.host_make_registry().ok()?;
-        let (a, b) = vm.rng_auto_seed();
-        vm.rng_seed(a as u64, b as u64);
-        vm.buf_spare
-            .reserve_exact(Vm::lual_buffersize(version))
-            .ok()?;
-        vm.state_complete = true;
-        vm.heap.counting_on(off);
-        vm.heap.refresh_gc_limit();
-        Some(vm)
     }
 }
