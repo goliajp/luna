@@ -4,6 +4,9 @@ use super::*;
 #[cfg(feature = "gc-verify")]
 mod gc_verify;
 pub(super) mod hooks;
+mod open_lend;
+#[cfg(test)]
+mod open_lend_tests;
 #[cfg(feature = "gc-trace")]
 mod refuse;
 mod roots;

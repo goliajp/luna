@@ -38,6 +38,7 @@ impl StepHost for Vm {
         self.lend_open_lists();
     }
     fn collection_ends(&mut self) {
+        self.take_back_open_lists();
         self.forget_dead_errors();
     }
     fn clear_dead_stack(&mut self) {
@@ -87,7 +88,7 @@ impl Vm {
     }
 
     /// The running thread, whose stack the VM holds.
-    pub(in crate::vm::exec) fn gc_running(&self) -> Running {
+    pub(in super::super) fn gc_running(&self) -> Running {
         let co = self.current.or(self.main_coro);
         let count = self.heap.puc_ci_count();
         let main = match (&self.main_ctx, self.main_coro) {
@@ -127,7 +128,7 @@ impl Vm {
     /// PUC's propagation with `work` to do (down to `floor`): when it
     /// traverses a thread whose values the VM holds, the VM marks them and
     /// it goes on. True when no object is gray.
-    pub(in crate::vm::exec) fn gc_propagate(
+    pub(in super::super) fn gc_propagate(
         &mut self,
         work: &mut i64,
         floor: i64,
@@ -156,7 +157,7 @@ impl Vm {
     }
 
     /// The collector visiting thread `h` as it traverses it (5.3).
-    pub(in crate::vm::exec) fn collector_shrinks_thread(&mut self, co: Gc<crate::runtime::Coro>) {
+    pub(in super::super) fn collector_shrinks_thread(&mut self, co: Gc<crate::runtime::Coro>) {
         let running = self.current.or(self.main_coro);
         if running.is_some_and(|c| c.ptr_eq(co)) {
             let inuse = self.stack_in_use();
@@ -170,7 +171,7 @@ impl Vm {
 
     /// The list sweep of a state that sweeps `quota` objects: how many
     /// it swept and the bytes it freed; `None` once the list is done.
-    pub(in crate::vm::exec) fn sweep_quota(&mut self, quota: i64) -> Option<(i64, i64)> {
+    pub(in super::super) fn sweep_quota(&mut self, quota: i64) -> Option<(i64, i64)> {
         if !self.heap.gc_phase_is_sweep() {
             return None;
         }
