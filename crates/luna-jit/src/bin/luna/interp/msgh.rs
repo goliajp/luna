@@ -35,8 +35,12 @@ pub(super) fn msghandler(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
                     // a string from `__tostring` is the message, as it is
                     Some(s @ Value::Str(_)) => s,
                     _ => {
-                        let msg = format!("(error object is a {} value)", err.type_name());
-                        traceback(vm, msg.as_bytes())?
+                        // on the stack as PUC's is, while the traceback is made
+                        let msg = vm.error_object_message(err)?;
+                        let held = vm.pin_host(Value::Str(msg));
+                        let tb = traceback(vm, msg.as_bytes());
+                        let _ = vm.unpin(held);
+                        tb?
                     }
                 }
             }

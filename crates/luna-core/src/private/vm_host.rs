@@ -15,6 +15,10 @@ pub trait VmHostInternals {
     /// `luaL_traceback(L, L, msg, level)` (5.2 on) as the standalone
     /// interpreter's message handler calls it: the string PUC makes.
     fn traceback_string(&mut self, msg: Option<&[u8]>, level: i64) -> Result<Value, LuaError>;
+    /// lua.c's message for an error object that is no string (5.2 on):
+    /// `lua_pushfstring(L, "(error object is a %s value)", luaL_typename(L, 1))`,
+    /// made as each dialect's `lua_pushfstring` makes it.
+    fn error_object_message(&mut self, e: Value) -> Result<Gc<crate::runtime::LuaStr>, LuaError>;
 
     /// How many errors have taken a status of their own so far; see
     /// `Vm::error_status`.
@@ -90,6 +94,12 @@ impl VmHostInternals for crate::vm::Vm {
     #[inline]
     fn traceback_string(&mut self, msg: Option<&[u8]>, level: i64) -> Result<Value, LuaError> {
         crate::vm::Vm::traceback_string(self, msg, level)
+    }
+    fn error_object_message(&mut self, e: Value) -> Result<Gc<crate::runtime::LuaStr>, LuaError> {
+        let ty = e.type_name().as_bytes();
+        let fmt = b"(error object is a %s value)";
+        let args = [crate::runtime::puc::fmt::FmtArg::S(ty)];
+        self.pushfstring(fmt, &args)
     }
     #[inline]
     fn special_errors(&self) -> SpecialErrors {
