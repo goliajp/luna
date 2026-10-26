@@ -151,7 +151,14 @@ impl Vm {
                         .and_then(|p| self.hold_puc_names(p).map(|()| p))
                         .and_then(|p| self.close_chunk(p));
                 self.heap.counting_on(off);
-                let cl = made?;
+                let cl = match made {
+                    Ok(cl) => cl,
+                    Err(e) if e.is_memory() => return Err(e),
+                    Err(e) => {
+                        self.acct_failed_undump(src, chunkname, &e)?;
+                        return Err(e);
+                    }
+                };
                 self.acct_undump(src, cl)?;
                 return Ok(cl);
             }
