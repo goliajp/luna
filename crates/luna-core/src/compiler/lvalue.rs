@@ -170,20 +170,7 @@ impl Compiler<'_> {
             t => t,
         };
         if self.version < LuaVersion::Lua54 {
-            // an `RK` key; a small integer one still takes `GetI` / `SetI`
-            return Ok(match self.exp_rk(key)? {
-                Rk::K(c) => match key {
-                    Exp::Int(i)
-                        if (0..=255).contains(&i)
-                            && (self.version < LuaVersion::Lua53
-                                || self.first_num_const(&Value::Int(i), c)) =>
-                    {
-                        (t, KeyRef::Int(i as u32))
-                    }
-                    _ => (t, KeyRef::K(c)),
-                },
-                Rk::Reg(r) => (t, KeyRef::Reg(r)),
-            });
+            return Ok((t, self.rk_key(key)?));
         }
         if let Exp::Int(i) = key
             && (0..=255).contains(&i)
@@ -191,6 +178,24 @@ impl Compiler<'_> {
             return Ok((t, KeyRef::Int(i as u32)));
         }
         Ok((t, KeyRef::Reg(self.held_reg(key)?)))
+    }
+
+    /// Before 5.4, an `RK` key; a small integer one still takes `GetI` /
+    /// `SetI` (from 5.3, only as the first constant of its value).
+    fn rk_key(&mut self, key: Exp) -> Result<KeyRef, SyntaxError> {
+        Ok(match self.exp_rk(key)? {
+            Rk::K(c) => match key {
+                Exp::Int(i)
+                    if (0..=255).contains(&i)
+                        && (self.version < LuaVersion::Lua53
+                            || self.first_num_const(&Value::Int(i), c)) =>
+                {
+                    KeyRef::Int(i as u32)
+                }
+                _ => KeyRef::K(c),
+            },
+            Rk::Reg(r) => KeyRef::Reg(r),
+        })
     }
 
     /// The read of an indexing, its destination pending.

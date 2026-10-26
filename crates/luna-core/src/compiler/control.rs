@@ -195,32 +195,7 @@ impl<'a> Compiler<'a> {
     pub(super) fn break_stat(&mut self, line: u32) -> Result<(), SyntaxError> {
         self.jump_line(line);
         match self.version {
-            LuaVersion::Lua51 => {
-                // the blocks left up to the loop: a CLOSE when one of them
-                // has a captured local
-                let mut upval = false;
-                let mut li = None;
-                for (i, b) in self.lr().blocks.iter().enumerate().rev() {
-                    if b.is_loop != 0 {
-                        li = Some(i);
-                        break;
-                    }
-                    upval |= self.lr().locals[b.first_local..].iter().any(|l| l.captured);
-                }
-                // a lenient compile (see `ReplayOpts`) takes one with no loop
-                let Some(li) = li else {
-                    return Ok(());
-                };
-                if upval {
-                    let level = self.reg_level(self.lr().blocks[li].first_avar);
-                    self.emit(Inst::iabc(Op::Close, level, 0, 0, false));
-                }
-                let j = self.jump()?;
-                let mut list = self.lr().blocks[li].breaklist;
-                self.concat_list(&mut list, j)?;
-                self.l().blocks[li].breaklist = list;
-                Ok(())
-            }
+            LuaVersion::Lua51 => self.break_51(),
             LuaVersion::Lua52 | LuaVersion::Lua53 => {
                 let j = self.jump()?;
                 // `break` is a goto, looked up once the keyword is read
@@ -245,5 +220,34 @@ impl<'a> Compiler<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// 5.1's `breakstat`: a jump on the loop's break list, after a CLOSE
+    /// when a block it leaves has a captured local.
+    fn break_51(&mut self) -> Result<(), SyntaxError> {
+        // the blocks left up to the loop: a CLOSE when one of them
+        // has a captured local
+        let mut upval = false;
+        let mut li = None;
+        for (i, b) in self.lr().blocks.iter().enumerate().rev() {
+            if b.is_loop != 0 {
+                li = Some(i);
+                break;
+            }
+            upval |= self.lr().locals[b.first_local..].iter().any(|l| l.captured);
+        }
+        // a lenient compile (see `ReplayOpts`) takes one with no loop
+        let Some(li) = li else {
+            return Ok(());
+        };
+        if upval {
+            let level = self.reg_level(self.lr().blocks[li].first_avar);
+            self.emit(Inst::iabc(Op::Close, level, 0, 0, false));
+        }
+        let j = self.jump()?;
+        let mut list = self.lr().blocks[li].breaklist;
+        self.concat_list(&mut list, j)?;
+        self.l().blocks[li].breaklist = list;
+        Ok(())
     }
 }

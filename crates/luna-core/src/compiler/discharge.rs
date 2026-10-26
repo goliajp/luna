@@ -77,10 +77,7 @@ impl Compiler<'_> {
             }
             Exp::Int(i) => {
                 if (-65535..=65536).contains(&i) {
-                    match self.number_const_before_54(Value::Int(i)) {
-                        Some(c) => self.load_const(reg, c),
-                        None => _ = self.emit(Inst::iasbx(Op::LoadI, reg, i as i32)),
-                    }
+                    self.load_imm(reg, Value::Int(i), Op::LoadI, i as i32);
                 } else {
                     let c = self.const_idx(Value::Int(i));
                     self.load_const(reg, c);
@@ -94,10 +91,7 @@ impl Compiler<'_> {
                 // bit-compare so the LoadF fast path doesn't fold -0.0 to +0.0
                 // (`-0.0 == 0.0` but their bit patterns differ)
                 if (-65535..=65536).contains(&as_int) && (as_int as f64).to_bits() == f.to_bits() {
-                    match self.number_const_before_54(Value::Float(f)) {
-                        Some(c) => self.load_const(reg, c),
-                        None => _ = self.emit(Inst::iasbx(Op::LoadF, reg, as_int)),
-                    }
+                    self.load_imm(reg, Value::Float(f), Op::LoadF, as_int);
                 } else {
                     let c = self.const_idx(Value::Float(f));
                     self.load_const(reg, c);
@@ -183,6 +177,16 @@ impl Compiler<'_> {
                 self.exp_to_nextreg(e)
             }
             e => self.exp_to_nextreg(e),
+        }
+    }
+
+    /// The number `v` into `reg` by `op` with the immediate `imm`, or from
+    /// the constant the code must name instead (see
+    /// [`Self::number_const_before_54`]).
+    pub(super) fn load_imm(&mut self, reg: u32, v: Value, op: Op, imm: i32) {
+        match self.number_const_before_54(v) {
+            Some(c) => self.load_const(reg, c),
+            None => _ = self.emit(Inst::iasbx(op, reg, imm)),
         }
     }
 
