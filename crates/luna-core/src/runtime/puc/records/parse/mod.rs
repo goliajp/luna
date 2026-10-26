@@ -12,6 +12,8 @@ mod arrays;
 mod mark;
 mod table;
 mod unborn;
+#[cfg(test)]
+mod unborn_tests;
 pub(crate) use arrays::{FuncArrays, GrowVec, ParserArray, ParserSizes};
 pub(crate) use table::{PKey, PTab};
 pub(in crate::runtime) use unborn::LoadsAside;

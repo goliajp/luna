@@ -1,9 +1,10 @@
 //! The collector driven one basic step at a time: each script in
 //! `tests/gc_steps/<dialect>/` prints the count after each step and when
-//! its finalizers ran, and the luna command must print what PUC printed
-//! (the recorded `.out`). PUC 5.2 seeds its string hashes from the time
-//! and its addresses; its recordings are from a PUC whose seed is fixed at
-//! 1, the seed luna takes from `LUNA_HASH_SEED`. Both run as `lua`, from
+//! its finalizers ran (or after a number of rounds), and the luna command
+//! must print what PUC printed (the recorded `.out`). PUC 5.2 and 5.3 seed
+//! their string hashes from the time and their addresses; their recordings
+//! are from a PUC whose seed is fixed at 1, the seed luna takes from
+//! `LUNA_HASH_SEED`, run without address randomisation. Both run as `lua`, from
 //! the scripts' directory: the program's name and the script's path are
 //! strings the collector counts. The scripts in `tests/lua_c/<dialect>/`
 //! count what lua.c itself makes, the same way.
@@ -63,6 +64,18 @@ fn steps_5_1() {
 #[test]
 fn steps_5_2() {
     check("5.2", &[false, true]);
+}
+
+/// 5.3 and 5.4 make some names of luna's (`"__metatable"`, `"__pairs"`)
+/// where a function first uses them and again after a sweep freed them.
+#[test]
+fn steps_5_3() {
+    check("5.3", &[false]);
+}
+
+#[test]
+fn steps_5_4() {
+    check("5.4", &[false]);
 }
 
 /// What lua.c's message handler makes counts as PUC's does: an error

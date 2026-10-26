@@ -72,11 +72,7 @@ impl Vm {
         // 5.1's `luaH_new(L, 0, 2)`, later ones' `luaH_new(L)`
         let nrec = usize::from(version == LuaVersion::Lua51) * 2;
         let globals = Heap::boot_table(heap.try_create_table(0, nrec).ok()?);
-        let mut names = [None; MM_NAMES.len()];
-        for (slot, name) in names.iter_mut().zip(MM_NAMES) {
-            *slot = Some(heap.try_intern(name.as_bytes()).ok()?);
-        }
-        let mm_names = names.map(|n| n.expect("every name was made above"));
+        let mm_names = make_names(&mut heap, version)?;
         if version == LuaVersion::Lua51 {
             heap.set_gc_event_51(mm_names[Mm::Gc as usize]);
         }

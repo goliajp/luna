@@ -75,6 +75,9 @@ pub(crate) struct PucModel {
     /// what loads made before PUC does, off the list (`Heap::set_aside`)
     pub(super) unborn: Vec<*mut GcHeader>,
     pub(super) unborn_on: bool,
+    /// the first of `unborn`: luna's names PUC makes when first used
+    /// (`Heap::try_intern_name`)
+    pub(super) names_aside: usize,
     /// 5.1's io library opening: records of its environments are on the
     /// stack (see `vm/opening/fenv51.rs`)
     pub(super) phantoms: bool,
@@ -126,6 +129,7 @@ impl Default for PucModel {
             parse: Vec::new(),
             unborn: Vec::new(),
             unborn_on: false,
+            names_aside: 0,
             phantoms: false,
             set_aside: 0,
             lights: Vec::new(),

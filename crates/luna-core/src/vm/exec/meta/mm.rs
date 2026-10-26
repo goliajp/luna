@@ -120,3 +120,21 @@ pub(crate) fn mm_event_name(op: crate::vm::isa::Op) -> Option<&'static str> {
         _ => return None,
     })
 }
+
+/// The names of the events, made for a new state of `version`: the ones
+/// PUC fixes, and the others as PUC makes them, where the program first
+/// uses each (`Heap::try_intern_name`).
+pub(crate) fn make_names(
+    heap: &mut Heap,
+    version: LuaVersion,
+) -> Option<[Gc<crate::runtime::LuaStr>; MM_NAMES.len()]> {
+    let fixed = super::super::gc::fixed_names(version);
+    let mut names = [None; MM_NAMES.len()];
+    for (i, (slot, name)) in names.iter_mut().zip(MM_NAMES).enumerate() {
+        *slot = Some(
+            heap.try_intern_name(name.as_bytes(), fixed >> i & 1 == 0)
+                .ok()?,
+        );
+    }
+    Some(names.map(|n| n.expect("every name was made above")))
+}
