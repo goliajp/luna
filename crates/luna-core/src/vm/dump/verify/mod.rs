@@ -67,7 +67,7 @@ mod operands;
 use header::check_header;
 
 use crate::runtime::function::Proto;
-use crate::vm::isa::{Inst, NUM_OPS, Op};
+use crate::vm::isa::{Inst, Op};
 
 /// Check `proto` and every function nested in it; `Err` says where and
 /// what (the caller words it for the running dialect).
@@ -102,15 +102,14 @@ fn decode_ops(p: &Proto) -> Result<Vec<Op>, String> {
         .iter()
         .enumerate()
         .map(|(pc, inst)| {
-            let raw = inst.0 & 0x7F;
-            if raw as usize >= NUM_OPS {
-                return Err(format!(
-                    "{}, instruction {}: invalid opcode {raw}",
+            inst.try_op().ok_or_else(|| {
+                format!(
+                    "{}, instruction {}: invalid opcode {}",
                     describe(p),
-                    pc + 1
-                ));
-            }
-            Ok(inst.op())
+                    pc + 1,
+                    inst.0 & 0x7F
+                )
+            })
         })
         .collect()
 }

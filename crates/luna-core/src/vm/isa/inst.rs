@@ -105,6 +105,12 @@ impl Inst {
         Inst::iax(op, (sj + MAX_SJ) as u32)
     }
 
+    /// The opcode, or `None` where the field names no `Op`: code loaded
+    /// from a binary chunk before the verifier has seen it.
+    pub fn try_op(self) -> Option<Op> {
+        ((self.0 & 0x7F) as usize).lt(&NUM_OPS).then(|| self.op())
+    }
+
     /// Decode the opcode field.
     #[inline(always)]
     pub fn op(self) -> Op {
