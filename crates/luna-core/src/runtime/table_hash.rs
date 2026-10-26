@@ -246,7 +246,12 @@ mod tests {
                     t.set(heap, k, Value::Int(i)).unwrap();
                 }
                 assert_eq!(t.nodes().len() > 1 << 16, n > 1 << 16);
-                for (i, node) in t.nodes().iter().enumerate() {
+                // every key is inserted, each placement reading its string
+                // past 2^16 nodes; under Miri, where the whole check would
+                // take most of an hour more, a fixed stride of the nodes and
+                // keys is checked
+                let stride = if cfg!(miri) { 61 } else { 1 };
+                for (i, node) in t.nodes().iter().enumerate().step_by(stride) {
                     let Value::Str(s) = node.key() else { continue };
                     assert_eq!(node.khash, s.hash() as u16);
                     let mut at = t.main_position(node.key());
@@ -255,7 +260,7 @@ mod tests {
                         at = t.nodes()[at].next as usize;
                     }
                 }
-                for i in 0..n {
+                for i in (0..n).step_by(stride) {
                     let k = Value::Str(heap.intern(format!("k{i:05}").as_bytes()));
                     assert!(matches!(t.get(k), Value::Int(v) if v == i));
                 }
