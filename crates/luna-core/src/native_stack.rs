@@ -13,12 +13,26 @@
 //! Where the bounds cannot be read (other targets, Miri, or code running
 //! on a stack the thread did not start with), nothing is reported as low and
 //! only the counts apply.
+//!
+//! A reserve must cover the deepest stack the code uses between two
+//! checks: from a nested entry that found enough left down to the next
+//! entry that checks, through the interpreter, a library function and a
+//! collection step it runs. Otherwise the stack overflows before any
+//! check can report it. That depth depends on the build: an unoptimised
+//! build keeps every local of the interpreter loop in a slot of its own,
+//! and AddressSanitizer pads each one, so the reserves are larger there.
 
 use std::cell::Cell;
 
 /// Bytes a nested entry leaves free below it: enough to raise the error,
-/// unwind, and run a message handler and the library code it calls.
-pub const RESERVE: usize = 96 * 1024;
+/// unwind, and run a message handler and the library code it calls. An
+/// optimised build needs a few kilobytes of it between two checks; an
+/// unoptimised one about 60 KiB, 150 KiB with AddressSanitizer.
+pub const RESERVE: usize = if cfg!(debug_assertions) {
+    512 * 1024
+} else {
+    96 * 1024
+};
 
 /// What an error handler may still use of [`RESERVE`] (PUC gives a
 /// handler a few more C levels than the code that failed).
@@ -46,12 +60,36 @@ thread_local! {
     static LOW: Cell<usize> = const { Cell::new(0) };
 }
 
-/// The address of a local in the caller's frame: the stack pointer, near
-/// enough for a check that keeps tens of kilobytes free.
+/// The stack pointer. Read from its register where luna knows the
+/// instruction: the address of a local can be elsewhere (AddressSanitizer
+/// moves locals whose address is taken to a stack of its own, on the heap).
+/// Elsewhere that address, near enough for a check that keeps tens of
+/// kilobytes free.
 #[inline(always)]
 pub fn sp() -> usize {
-    let b = 0u8;
-    std::ptr::addr_of!(b) as usize
+    #[cfg(all(target_arch = "x86_64", not(miri)))]
+    {
+        let sp: usize;
+        // SAFETY: copies the stack pointer register to `sp`; touches no memory
+        unsafe {
+            std::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags))
+        };
+        sp
+    }
+    #[cfg(all(target_arch = "aarch64", not(miri)))]
+    {
+        let sp: usize;
+        // SAFETY: copies the stack pointer register to `sp`; touches no memory
+        unsafe {
+            std::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags))
+        };
+        sp
+    }
+    #[cfg(any(not(any(target_arch = "x86_64", target_arch = "aarch64")), miri))]
+    {
+        let b = 0u8;
+        std::ptr::addr_of!(b) as usize
+    }
 }
 
 /// The lowest address of the running thread's stack, or 1 when it is not
@@ -89,6 +127,8 @@ thread_local! {
 #[inline(always)]
 pub fn nested_call_low() -> bool {
     let sp = sp();
+    #[cfg(test)]
+    tests::checked_at(sp);
     if sp >= NOT_LOW_AT.with(Cell::get) {
         return false;
     }
@@ -104,7 +144,10 @@ pub fn nested_call_low() -> bool {
 /// stack of its own) is never low.
 #[inline]
 pub fn is_low(reserve: usize) -> bool {
-    sp().wrapping_sub(low()) < reserve
+    let sp = sp();
+    #[cfg(test)]
+    tests::checked_at(sp);
+    sp.wrapping_sub(low()) < reserve
 }
 
 #[cfg(all(any(target_os = "linux", target_os = "android"), not(miri)))]
@@ -283,3 +326,7 @@ mod os {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "native_stack_tests.rs"]
+mod tests;
