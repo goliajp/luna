@@ -152,12 +152,17 @@ impl Heap {
         self.puc.lights.get(id).copied().flatten()
     }
 
-    /// Function `id` of the opening is the light function `g`: one value
-    /// however often pushed.
-    pub(crate) fn set_light(&mut self, id: usize, g: Gc<crate::runtime::NativeClosure>) {
+    /// Function `id` of the opening's `count` is the light function `g`:
+    /// one value however often pushed.
+    pub(crate) fn set_light(
+        &mut self,
+        id: usize,
+        count: usize,
+        g: Gc<crate::runtime::NativeClosure>,
+    ) {
         let l = &mut self.puc.lights;
         if l.len() <= id {
-            l.resize(crate::vm::opening::FN_COUNT.max(id + 1), None);
+            l.resize(count.max(id + 1), None);
         }
         l[id] = Some(g);
     }

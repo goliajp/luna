@@ -9,6 +9,7 @@
 //! One libc bug is not reproduced: its `%.Na` rounds a half by the parity
 //! of the digit after the rounding position; here it rounds half to even.
 
+use crate::numeric::c_pointer;
 use crate::runtime::mem::LVec;
 
 mod hex;
@@ -324,33 +325,4 @@ fn general(x: f64, prec: Option<usize>, hash: bool, upper: bool) -> Vec<u8> {
 /// `%p`: the libc's pointer rendering.
 pub(crate) fn pointer<O: Out + ?Sized>(out: &mut O, sp: &Spec, p: usize) {
     pad(out, sp, false, b"", c_pointer(p).as_bytes());
-}
-
-/// `p` as the target's C library writes it for `printf("%p")`, where every
-/// pointer text of PUC's comes from (`tostring`, `string.format("%p")`,
-/// `file (%p)`): glibc writes NULL as `(nil)`, musl as `0`, MSVC's runtime
-/// writes every pointer as fixed-width upper-case hex without `0x`, and the
-/// BSD libcs (macOS) write `0x0`.
-pub(crate) fn c_pointer(p: usize) -> String {
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    let s = if p == 0 {
-        "(nil)".to_string()
-    } else {
-        format!("{p:#x}")
-    };
-    #[cfg(target_env = "musl")]
-    let s = if p == 0 {
-        "0".to_string()
-    } else {
-        format!("{p:#x}")
-    };
-    #[cfg(windows)]
-    let s = format!("{p:0w$X}", w = 2 * std::mem::size_of::<usize>());
-    #[cfg(not(any(
-        all(target_os = "linux", target_env = "gnu"),
-        target_env = "musl",
-        windows
-    )))]
-    let s = format!("{p:#x}");
-    s
 }

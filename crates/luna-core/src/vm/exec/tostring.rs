@@ -2,9 +2,9 @@
 //! make the strings PUC makes.
 
 use super::*;
+use crate::numeric::c_pointer;
 use crate::runtime::LuaStr;
 use crate::runtime::puc::fmt::FmtArg;
-use crate::vm::cfmt::c_pointer;
 
 impl Vm {
     /// `luaL_tolstring`: `__tostring` (whose result must be a string or a

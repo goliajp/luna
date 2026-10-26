@@ -88,7 +88,7 @@ pub(crate) fn puc_createstdfile(
         op.after(vm)
     })?;
     if stdin {
-        vm.heap.set_stdin_ud(h.as_ptr() as *mut _);
+        vm.heap.set_weak_userdata(h);
         if crate::stdio::text_mode() {
             use std::io::IsTerminal;
             let tty = std::io::stdin().is_terminal();

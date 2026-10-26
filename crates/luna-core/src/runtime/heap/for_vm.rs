@@ -107,14 +107,32 @@ impl Heap {
         self.gc_event_51 = Some(s);
     }
 
-    /// `io.stdin` as made.
+    /// Refer to `u` without keeping it alive (see [`Heap::weak_userdata`]).
     #[inline]
-    pub(crate) fn set_stdin_ud(&mut self, h: *mut GcHeader) {
-        self.stdin_ud = h;
+    pub(crate) fn set_weak_userdata(&mut self, u: Gc<Userdata>) {
+        self.weak_userdata = u.as_ptr().cast();
     }
 
+    /// The userdata [`Heap::set_weak_userdata`] named, while it lives.
     #[inline]
-    pub(crate) fn stdin_ud(&self) -> *mut GcHeader {
-        self.stdin_ud
+    pub(crate) fn weak_userdata(&self) -> Option<Gc<Userdata>> {
+        let h = self.weak_userdata;
+        // SAFETY: the heap clears it when it frees the userdata
+        (!h.is_null()).then(|| unsafe { Gc::from_ptr(h.cast::<Userdata>()) })
+    }
+
+    /// Have `f` see each userdata the collector frees.
+    #[inline]
+    pub(crate) fn on_userdata_freed(&mut self, f: fn(Gc<Userdata>)) {
+        self.userdata_freed = Some(f);
+    }
+
+    /// Mark `o` as an object of luna's own, which stands for nothing of
+    /// PUC's: the model neither counts nor records it.
+    #[inline]
+    pub(crate) fn mark_luna_only<T: GcObject>(&mut self, o: Gc<T>) {
+        // SAFETY: `o` is a live object of this heap; only its class byte is
+        // written, and no reference to the header is held across this
+        unsafe { (*o.header()).cls |= LUNA_ONLY };
     }
 }

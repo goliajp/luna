@@ -13,7 +13,6 @@ pub(crate) use undump::UndumpShown;
 
 use super::load_acct::{PVal, ReaderView};
 use super::*;
-use crate::runtime::heap::LUNA_ONLY;
 use crate::runtime::mem::LVec;
 use crate::runtime::puc::records::env51::ENV_PROTO;
 
@@ -150,9 +149,8 @@ impl Vm {
         &mut self,
         view: &ReaderView,
     ) -> Result<std::collections::HashMap<u32, Gc<Table>>, LuaError> {
-        // SAFETY: the closure stands for PUC's, an object of luna's own;
-        // only its class byte is written
-        unsafe { (*view.main.header()).cls |= LUNA_ONLY };
+        // the closure stands for PUC's, an object of luna's own
+        self.heap.mark_luna_only(view.main);
         let mut tabs = std::collections::HashMap::new();
         let named = |v: &Option<PVal>| match v {
             Some(PVal::Tab(id)) => Some(*id),

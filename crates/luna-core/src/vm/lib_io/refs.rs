@@ -58,8 +58,6 @@ impl Vm {
     /// does to the `io` table, while it lives: the stream a host's line
     /// reads share.
     pub(crate) fn io_stdin(&self) -> Option<Gc<Userdata>> {
-        let h = self.heap.stdin_ud();
-        // SAFETY: the heap clears it when it frees the userdata
-        (!h.is_null()).then(|| unsafe { Gc::from_ptr(h as *mut Userdata) })
+        self.heap.weak_userdata()
     }
 }

@@ -96,7 +96,7 @@ impl Heap {
                 (_, Some(&FmtArg::D(i) | &FmtArg::I(i))) => self.fmt_number(Num::Int(i))?,
                 (_, Some(&FmtArg::F(f))) => self.fmt_number(Num::Float(f))?,
                 (_, Some(&FmtArg::P(p))) => {
-                    let t = crate::vm::cfmt::c_pointer(p);
+                    let t = crate::numeric::c_pointer(p);
                     Value::Str(self.try_intern(t.as_bytes())?)
                 }
                 (_, Some(&FmtArg::U(u))) => {

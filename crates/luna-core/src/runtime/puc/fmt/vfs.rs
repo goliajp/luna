@@ -44,7 +44,7 @@ impl Heap {
                 }
                 (_, Some(&FmtArg::P(p))) => {
                     b.get(self, 3 * std::mem::size_of::<usize>() + 8)?;
-                    let t = crate::vm::cfmt::c_pointer(p);
+                    let t = crate::numeric::c_pointer(p);
                     b.space.extend_from_slice(t.as_bytes());
                 }
                 (_, Some(&FmtArg::U(u))) => {
@@ -102,7 +102,7 @@ impl Heap {
                     add(self, &mut out, t.as_bytes());
                 }
                 (_, Some(&FmtArg::P(p))) => {
-                    let t = crate::vm::cfmt::c_pointer(p);
+                    let t = crate::numeric::c_pointer(p);
                     add(self, &mut out, t.as_bytes());
                 }
                 (_, Some(&FmtArg::U(u))) => {
