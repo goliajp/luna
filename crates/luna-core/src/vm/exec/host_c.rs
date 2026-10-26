@@ -264,19 +264,6 @@ impl Vm {
         self.resume_coro(co, args)
     }
 
-    /// The function a C API protected call (`lua_pcallk`) calls, which is
-    /// not a level of the stack: with a handler it takes `(f, msgh,
-    /// args...)`, without `(f, args...)`; it returns `true, results...` or
-    /// `false, error`.
-    pub(crate) fn host_protected_fn(&mut self, handler: bool) -> Result<Value, LuaError> {
-        use crate::{runtime::Builtin, vm::builtins::*};
-        if handler {
-            self.builtin(nat_host_xpcall, &[], Builtin::HostXpcall)
-        } else {
-            self.builtin(nat_host_pcall, &[], Builtin::HostPcall)
-        }
-    }
-
     /// Fire the return hook of the running C function now, while its own
     /// stack still holds its arguments, what it pushed and its `n` results,
     /// the first of them at transfer index `ftransfer` (PUC `rethook` runs

@@ -79,6 +79,21 @@ impl Vm {
         }
     }
 
+    /// The function a C API protected call (`lua_pcallk`) calls, which is
+    /// not a level of the stack: with a handler it takes `(f, msgh,
+    /// args...)`, without `(f, args...)`; it returns `true, results...` or
+    /// `false, error`. Like the stand-ins above it is no function of
+    /// PUC's, so it is not counted.
+    pub(crate) fn host_protected_fn(&mut self, handler: bool) -> Result<Value, LuaError> {
+        let (f, b): (crate::runtime::value::NativeFn, _) = if handler {
+            (builtins::nat_host_xpcall, Builtin::HostXpcall)
+        } else {
+            (builtins::nat_host_pcall, Builtin::HostPcall)
+        };
+        let level = self.uncounted(|vm| vm.builtin(f, &[], b))?;
+        Ok(luna_only(&mut self.heap, level))
+    }
+
     /// Call `level`, the native standing in for a protected call PUC's
     /// host makes from C, which takes no level of PUC's (on the main
     /// thread, the only one a host's call runs on).
