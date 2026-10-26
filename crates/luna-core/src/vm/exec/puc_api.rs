@@ -56,8 +56,9 @@ impl Vm {
     }
 
     /// PUC `luaL_getmetafield(L, idx, event)` on `v`: when `v` has a
-    /// metatable it pushes the event's name (`lua_pushstring`, which makes
-    /// the string and checks for a collection), the string given back.
+    /// metatable it pushes the metatable, then the event's name
+    /// (`lua_pushstring`, which makes the string and checks for a
+    /// collection), the string given back.
     #[inline]
     #[track_caller]
     pub(crate) fn metafield_name(
@@ -65,9 +66,29 @@ impl Vm {
         v: Value,
         event: &[u8],
     ) -> Result<Option<Gc<LuaStr>>, LuaError> {
-        if self.metatable_of(v).is_none() {
+        let Some(mt) = self.metatable_of(v) else {
             return Ok(None);
+        };
+        // the metatable on the running C function's stack, where a
+        // collection the checks run finds it (a table that just lost it as
+        // its metatable holds it no more)
+        let mt = [Value::Table(mt)];
+        let on_stack = self.native_on_top();
+        if on_stack {
+            self.native_push_vals(&mt)?;
         }
+        let held: &[Value] = if on_stack { &[] } else { &mt };
+        let r = self.rooted(held, |vm| vm.metafield_name_pushed(event));
+        if on_stack {
+            self.native_pop(1);
+        }
+        r.map(Some)
+    }
+
+    /// [`Vm::metafield_name`] with the metatable pushed: the name made and
+    /// pushed, as `lua_pushstring` makes it.
+    #[track_caller]
+    fn metafield_name_pushed(&mut self, event: &[u8]) -> Result<Gc<LuaStr>, LuaError> {
         self.api_check_before()?;
         // by the name's address, as PUC's string cache is; emptied when a
         // collection step begins, so a string found here is not dead
@@ -81,8 +102,10 @@ impl Vm {
                 s
             }
         };
-        self.api_check_after(Value::Str(s))?;
-        Ok(Some(s))
+        // pushed on the running C function's stack, where a collection the
+        // check runs finds it (5.3 counts it with the thread)
+        self.api_check_pushed(Value::Str(s))?;
+        Ok(s)
     }
 
     /// [`Vm::metafield_name`] where only the push matters.
