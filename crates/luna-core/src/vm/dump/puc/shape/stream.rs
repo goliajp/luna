@@ -52,6 +52,9 @@ pub(crate) struct Undumping {
     /// where its bytes start
     pub(crate) long: Option<usize>,
     pub(crate) long_at: usize,
+    /// the length of a long string the bytes ran out in (5.3 on make it
+    /// before they read its bytes)
+    pub(crate) cut_long: Option<usize>,
     /// the main function's source, where it is in the bytes, and its first
     /// fields (line defined, last line, parameters, vararg), once read
     pub(crate) src: Option<(usize, usize)>,
@@ -78,6 +81,7 @@ impl Undumping {
             closure: None,
             long: None,
             long_at: 0,
+            cut_long: None,
             src: None,
             head: None,
             saved: Vec::new(),
@@ -87,10 +91,17 @@ impl Undumping {
 
     /// The events of a walk of `b` that kept them and got to the end.
     pub(crate) fn events<'a>(&self, b: &'a [u8]) -> Option<Vec<UEv<'a>>> {
-        let evs = self.events.as_ref().filter(|_| self.done)?;
+        self.events.as_ref().filter(|_| self.done)?;
+        self.events_so_far(b)
+    }
+
+    /// The events of a walk of `b` that kept them, as far as it got.
+    pub(crate) fn events_so_far<'a>(&self, b: &'a [u8]) -> Option<Vec<UEv<'a>>> {
+        let evs = self.events.as_ref()?;
         let mut out = Vec::with_capacity(evs.len() + 1);
-        // 5.1's `luaU_undump` makes the name of a function with no source
-        if self.ver == 0x51 {
+        // 5.1's `luaU_undump` makes the name of a function with no source,
+        // once it has read the header
+        if self.ver == 0x51 && self.top > 0 {
             out.push(UEv::Str(b"=?"));
         }
         for &e in evs {

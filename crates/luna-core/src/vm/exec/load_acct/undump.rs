@@ -4,6 +4,7 @@
 //! PUC's, or a record of one luna does not have.
 
 use super::*;
+use crate::runtime::puc::fmt::FmtArg;
 use crate::vm::dump::{Arr, UEv};
 
 /// `LUA_MINBUFFER`: the least a load buffer grows to.
@@ -61,18 +62,7 @@ impl Vm {
                     open.pop();
                 }
                 UEv::Vec(a, n) => {
-                    let b = self.heap.parser_bytes(
-                        match a {
-                            Arr::Code => ParserArray::Code,
-                            Arr::Protos => ParserArray::Protos,
-                            Arr::Consts => ParserArray::Consts,
-                            Arr::Lines => ParserArray::LineInfo,
-                            Arr::AbsLines => ParserArray::AbsLines,
-                            Arr::LocVars => ParserArray::LocVars,
-                            Arr::Upvals => ParserArray::Upvals,
-                        },
-                        n as usize,
-                    );
+                    let b = self.heap.parser_bytes(parser_array(a), n as usize);
                     self.heap.acct_block(0, b);
                     if let Some(p) = open.last() {
                         let mut arrays = p.puc_arrays.get();
@@ -108,6 +98,122 @@ impl Vm {
         }
         self.heap.acct_block(buff, 0);
         Ok(())
+    }
+
+    /// Count the load of the binary chunk `bytes` that luna refused (cut
+    /// short, or bad past some point): what PUC's undumper made before it
+    /// met the end of the bytes or the bad one, all of it garbage now.
+    /// Its message `e`, for the chunk `chunkname`, is made last.
+    pub(in crate::vm::exec) fn acct_failed_undump(
+        &mut self,
+        bytes: &[u8],
+        chunkname: &[u8],
+        e: &SyntaxError,
+    ) -> Result<(), SyntaxError> {
+        let mut u = crate::vm::dump::Undumping::new(true);
+        u.feed(bytes);
+        let Some(evs) = u.events_so_far(bytes) else {
+            return Ok(());
+        };
+        let d = self.heap.dialect();
+        let mut h = match d {
+            Dialect::L55 => Some(PTab::new(&mut self.heap, 0, 16, true)?),
+            _ => None,
+        };
+        let (mut buff, mut saved) = (0, 0);
+        for (i, ev) in evs.iter().enumerate() {
+            match *ev {
+                UEv::Closure(n) | UEv::Reclose(n) => {
+                    let size = self
+                        .heap
+                        .puc_size(crate::runtime::puc::PucObj::LuaClosure(n as usize));
+                    self.heap.acct_ghost(PucKind::LuaClosure, size)?;
+                    if let Some(h) = h.as_mut() {
+                        h.insert(&mut self.heap, d, PKey::Ptr(1), None)?;
+                    }
+                }
+                // a prototype and the arrays read for it, freed with it
+                UEv::Proto => {
+                    let size = self.heap.puc_size(crate::runtime::puc::PucObj::Proto)
+                        + self.arrays_of(&evs[i + 1..]);
+                    self.heap.acct_ghost(PucKind::Proto, size)?;
+                }
+                UEv::End | UEv::Vec(..) => {}
+                UEv::Buff(n) if n as usize > buff => {
+                    let new = (n as usize).max(MIN_BUFFER);
+                    self.heap.acct_block(buff, new);
+                    buff = new;
+                }
+                UEv::Buff(_) => {}
+                UEv::Str(s) => {
+                    self.undump_string(s, None)?;
+                    if let Some(h) = h.as_mut() {
+                        saved += 1;
+                        h.insert(&mut self.heap, d, PKey::Int(saved), None)?;
+                    }
+                }
+            }
+        }
+        // a long string is made before its bytes are read
+        if let Some(len) = u.cut_long {
+            let size = self
+                .heap
+                .puc_size(crate::runtime::puc::PucObj::Str { len, long: true });
+            self.heap.acct_ghost(PucKind::LongStr, size)?;
+        }
+        self.heap.acct_block(buff, 0);
+        self.undump_error(chunkname, e)
+    }
+
+    /// 5.1 to 5.3 make the message of a refused binary chunk with
+    /// `luaO_pushfstring`, a string for each piece; it is the load's error.
+    fn undump_error(&mut self, chunkname: &[u8], e: &SyntaxError) -> Result<(), SyntaxError> {
+        let (fmt, suffix): (&[u8], &[u8]) = match self.version {
+            LuaVersion::Lua51 => (b"%s: %s in precompiled chunk", b" in precompiled chunk"),
+            LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                (b"%s: %s precompiled chunk", b" precompiled chunk")
+            }
+            _ => return Ok(()),
+        };
+        // `luaU_undump`'s name of the chunk
+        let name: &[u8] = match chunkname.first() {
+            Some(b'@' | b'=') => &chunkname[1..],
+            Some(0x1b) => b"binary string",
+            _ => chunkname,
+        };
+        let why = e
+            .msg
+            .strip_prefix(name)
+            .and_then(|m| m.strip_prefix(b": "))
+            .and_then(|m| m.strip_suffix(suffix));
+        let Some(why) = why else {
+            return Ok(());
+        };
+        let args = [FmtArg::S(name), FmtArg::S(why)];
+        let m = self
+            .pushfstring(fmt, &args)
+            .map_err(|_| SyntaxError::memory())?;
+        self.heap.set_load_msg(m);
+        Ok(())
+    }
+
+    /// PUC's bytes of the arrays the events read for the prototype they
+    /// start in, up to its end (its inner functions' are theirs).
+    fn arrays_of(&self, evs: &[UEv]) -> usize {
+        let mut depth = 0usize;
+        let mut bytes = 0;
+        for ev in evs {
+            match *ev {
+                UEv::Proto => depth += 1,
+                UEv::End if depth == 0 => break,
+                UEv::End => depth -= 1,
+                UEv::Vec(a, n) if depth == 0 => {
+                    bytes += self.heap.parser_bytes(parser_array(a), n as usize)
+                }
+                _ => {}
+            }
+        }
+        bytes
     }
 
     /// A string the undumper makes for the function `p`: a short one is
@@ -147,5 +253,18 @@ impl Vm {
                 Ok(Value::Bool(true))
             }
         }
+    }
+}
+
+/// The parser's array an undumped array of `a` is.
+fn parser_array(a: Arr) -> ParserArray {
+    match a {
+        Arr::Code => ParserArray::Code,
+        Arr::Protos => ParserArray::Protos,
+        Arr::Consts => ParserArray::Consts,
+        Arr::Lines => ParserArray::LineInfo,
+        Arr::AbsLines => ParserArray::AbsLines,
+        Arr::LocVars => ParserArray::LocVars,
+        Arr::Upvals => ParserArray::Upvals,
     }
 }

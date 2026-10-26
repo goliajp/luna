@@ -165,10 +165,11 @@ impl Undumping {
         if r.take(bytes).is_none() {
             // a long string is on 5.3's and 5.4's stack while it is read
             self.long = (matches!(sv, Sv::S53 | Sv::S54) && len > 40).then_some(len);
+            self.cut_long = (!matches!(sv, Sv::S51) && len > 40).then_some(len);
             self.long_at = at;
             return None;
         }
-        self.long = None;
+        (self.long, self.cut_long) = (None, None);
         if matches!(sv, Sv::S51) {
             self.ev(UEv::Buff(u32::try_from(n).ok()?));
         }
