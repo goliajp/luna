@@ -1,7 +1,7 @@
 //! The PUC model: PUC's `totalbytes` and what changes it, PUC's sizes of
 //! its structures, its collector's pace and steps, and the records of
 //! objects PUC has and luna does not. luna's own collector (`heap`) calls
-//! into it only through the entries listed in the refactor plan.
+//! into it only through `for_heap`.
 
 use std::ptr;
 

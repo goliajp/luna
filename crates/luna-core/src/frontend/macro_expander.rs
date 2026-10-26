@@ -35,9 +35,8 @@
 //!
 //! **Gensym-only.** Macro authors who need a fresh local explicitly
 //! invoke `@gensym` and bind to it. The expander does **not** rewrite
-//! `local <name>` declarations inside quote bodies. This matches the
-//! audit's §5 stretch-goal deferral (implicit quote-body hygiene needs
-//! a mini scope analyser; defer until dogfood asks).
+//! `local <name>` declarations inside quote bodies: implicit hygiene
+//! would need a scope analysis of the quote body.
 //!
 //! Nested expansion order: **inside-out**. Arg-position macro calls
 //! (`@double(@gensym)`) are expanded *before* the outer macro receives
