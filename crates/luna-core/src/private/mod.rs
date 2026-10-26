@@ -38,3 +38,28 @@ pub use vm_jit::VmJitFrames;
 pub fn check_recordings_after_collections(on: bool) {
     crate::vm::Vm::check_recordings_after_collections(on)
 }
+
+/// The `gc-stress` controls of a [`Vm`](crate::vm::Vm) luna's tests use.
+#[cfg(feature = "gc-stress")]
+pub trait VmGcStress {
+    /// Collect at checkpoints `offset`, `offset + every`, … from the next
+    /// one on, instead of at each.
+    fn gc_stress_interval(&mut self, every: u64, offset: u64);
+    /// Start keeping the numbers of the checkpoints that collect.
+    fn gc_stress_log(&mut self);
+    /// The numbers kept.
+    fn gc_stress_collected(&self) -> &[u64];
+}
+
+#[cfg(feature = "gc-stress")]
+impl VmGcStress for crate::vm::Vm {
+    fn gc_stress_interval(&mut self, every: u64, offset: u64) {
+        crate::vm::Vm::gc_stress_interval(self, every, offset);
+    }
+    fn gc_stress_log(&mut self) {
+        crate::vm::Vm::gc_stress_log(self);
+    }
+    fn gc_stress_collected(&self) -> &[u64] {
+        crate::vm::Vm::gc_stress_collected(self)
+    }
+}

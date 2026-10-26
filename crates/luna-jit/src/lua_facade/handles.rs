@@ -4,7 +4,7 @@ use luna_core::runtime::Value;
 use luna_core::vm::{FromLuaValue, HostRootTicket, IntoValue, LuaError, Vm};
 
 use super::{Lua, PinnedHandle};
-use luna_core::__private::GcInternals;
+use luna_core::__private::{GcInternals, HeapInternals};
 
 /// Handle to a Lua-callable value (`Value::Closure` or
 /// `Value::Native`) pinned in the host root pool. `Copy`-able —

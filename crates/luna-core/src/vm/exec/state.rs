@@ -334,7 +334,7 @@ pub struct Vm {
     /// `os.setlocale`: bit `i` set when category `i` is "POSIX", else "C".
     pub(crate) posix_locales: u8,
     /// `gc-stress`: which checkpoints collect.
-    pub(super) stress: super::gc_hooks::StressState,
+    pub(super) stress: super::gc::hooks::StressState,
     /// A collection whose finalizers' errors go nowhere is running (one
     /// luna starts on its own, not the program).
     pub(super) fin_quiet: bool,

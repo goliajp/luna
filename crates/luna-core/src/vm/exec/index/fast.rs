@@ -9,8 +9,8 @@ use crate::runtime::value::tag;
 
 /// gc-verify builds keep every read and write on the probed path.
 const PROBED_ONLY: bool = crate::runtime::gc_hooks::VERIFY;
+use super::set::{table_raw_set_at, table_set_existing_at};
 use fast_arith::{raw_gc, raw_int, raw_tag};
-use index_set::{table_raw_set_at, table_set_existing_at};
 
 /// Raw `tb[*pk]` with the key read in place (strings by pointer, integers
 /// in the array part, other keys by the general lookup out of line),
@@ -119,7 +119,11 @@ unsafe fn table_get_cold(tb: &Table, key: Value, dst: *mut Value, plain: bool) -
 /// field (5.1 big.lua's `a:findfield(...)` against a table with 250+ string
 /// keys, where "findfield" lands past const #255).
 #[cfg_attr(luna_hot, inline(always))]
-pub(super) fn self_key(regs: *mut Value, kptr: *const Value, inst: Inst) -> *const Value {
+pub(in crate::vm::exec) fn self_key(
+    regs: *mut Value,
+    kptr: *const Value,
+    inst: Inst,
+) -> *const Value {
     if inst.k() {
         kptr.wrapping_add(inst.c() as usize)
     } else {
@@ -135,7 +139,11 @@ impl Vm {
     /// # Safety
     /// `pt` and `pk` point at initialised values and `dst` at a register.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(super) unsafe fn index_raw_at(pt: *const Value, pk: *const Value, dst: *mut Value) -> bool {
+    pub(in crate::vm::exec) unsafe fn index_raw_at(
+        pt: *const Value,
+        pk: *const Value,
+        dst: *mut Value,
+    ) -> bool {
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
             if !PROBED_ONLY && raw_tag(pt) == tag::TABLE {
@@ -151,7 +159,7 @@ impl Vm {
     /// # Safety
     /// As for `index_raw_at`, and `pk` points at a string.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(super) unsafe fn index_raw_kstr_at(
+    pub(in crate::vm::exec) unsafe fn index_raw_kstr_at(
         pt: *const Value,
         pk: *const Value,
         dst: *mut Value,
@@ -173,7 +181,11 @@ impl Vm {
     /// `regs` and `kptr` are the running frame's, and `R[A+1]` holds the
     /// object.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(super) unsafe fn self_probe(regs: *mut Value, kptr: *const Value, inst: Inst) -> bool {
+    pub(in crate::vm::exec) unsafe fn self_probe(
+        regs: *mut Value,
+        kptr: *const Value,
+        inst: Inst,
+    ) -> bool {
         let (po, pk) = (
             regs.wrapping_add(inst.a() as usize + 1),
             self_key(regs, kptr, inst),
@@ -194,7 +206,7 @@ impl Vm {
     /// # Safety
     /// `pk` points at a string and `dst` at a register.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(super) unsafe fn index_raw_kstr_key_at(
+    pub(in crate::vm::exec) unsafe fn index_raw_kstr_key_at(
         t: Value,
         pk: *const Value,
         dst: *mut Value,
@@ -218,7 +230,7 @@ impl Vm {
     /// # Safety
     /// `pt`, `pk` and `pv` point at initialised values.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(super) unsafe fn newindex_raw_at(
+    pub(in crate::vm::exec) unsafe fn newindex_raw_at(
         &mut self,
         pt: *const Value,
         pk: *const Value,
@@ -248,7 +260,7 @@ impl Vm {
     /// # Safety
     /// As for `newindex_raw_at`, and `pk` points at a string.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(super) unsafe fn newindex_raw_kstr_at(
+    pub(in crate::vm::exec) unsafe fn newindex_raw_kstr_at(
         &mut self,
         pt: *const Value,
         pk: *const Value,
@@ -293,7 +305,7 @@ impl Vm {
     /// # Safety
     /// `pk` and `pv` point at initialised values.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(super) unsafe fn newindex_raw_key_at(
+    pub(in crate::vm::exec) unsafe fn newindex_raw_key_at(
         &mut self,
         t: Value,
         pk: *const Value,

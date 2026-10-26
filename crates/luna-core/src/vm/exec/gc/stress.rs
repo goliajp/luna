@@ -31,7 +31,7 @@ impl Vm {
     /// `offset + every`, `offset + 2 * every`, … (counted from 0 there)
     /// instead of at each one: the `every` offsets `0..every` together
     /// collect at every checkpoint once.
-    pub fn gc_stress_interval(&mut self, every: u64, offset: u64) {
+    pub(crate) fn gc_stress_interval(&mut self, every: u64, offset: u64) {
         assert!(offset < every, "an offset within the interval");
         self.stress.every = every;
         self.stress.seen = 0;
@@ -40,17 +40,17 @@ impl Vm {
 
     /// Start keeping the numbers of the checkpoints that collect, counted
     /// as [`Vm::gc_stress_interval`] counts them.
-    pub fn gc_stress_log(&mut self) {
+    pub(crate) fn gc_stress_log(&mut self) {
         self.stress.log = Some(Vec::new());
     }
 
     /// The numbers [`Vm::gc_stress_log`] kept.
-    pub fn gc_stress_collected(&self) -> &[u64] {
+    pub(crate) fn gc_stress_collected(&self) -> &[u64] {
         self.stress.log.as_deref().unwrap_or_default()
     }
 
     /// The checkpoint at `live_top` with the collector running.
-    pub(super) fn stress_checkpoint(&mut self, live_top: u32) {
+    pub(in crate::vm::exec) fn stress_checkpoint(&mut self, live_top: u32) {
         self.heap.safe_point();
         let n = self.stress.seen;
         self.stress.seen += 1;

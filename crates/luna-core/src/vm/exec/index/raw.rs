@@ -23,7 +23,7 @@ impl Vm {
     /// out of memory: the emergency collection, then one more attempt.
     #[cold]
     #[inline(never)]
-    pub(super) fn raw_set_after_oom(
+    pub(in crate::vm::exec) fn raw_set_after_oom(
         &mut self,
         t: Gc<Table>,
         key: Value,

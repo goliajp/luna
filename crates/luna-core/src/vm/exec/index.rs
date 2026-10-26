@@ -3,6 +3,14 @@
 
 use super::*;
 
+pub(super) mod fast;
+mod miss;
+mod pushed;
+mod raw;
+mod set;
+#[cfg(feature = "gc-verify")]
+mod verify;
+
 impl Vm {
     /// [`Self::op_index`]; `probed` = `t` is a table whose raw `t[key]` the
     /// caller already found nil.

@@ -115,7 +115,7 @@ impl Heap {
 
     /// PUC's `luaC_barrierback` for a store of `vals` into `t`, read-only
     /// or not: a black table that takes a white object goes back to gray.
-    pub fn barrier_store<T: GcObject>(&mut self, t: Gc<T>, vals: &[Value]) {
+    pub(crate) fn barrier_store<T: GcObject>(&mut self, t: Gc<T>, vals: &[Value]) {
         if vals.iter().any(|&v| is_white_object(v)) {
             self.barrier_back(t);
         }

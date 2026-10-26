@@ -2,6 +2,7 @@
 //! together collect at every checkpoint a full-strength run collects at,
 //! each at one offset only.
 
+use luna_core::__private::VmGcStress;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
