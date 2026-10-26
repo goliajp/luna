@@ -2,7 +2,9 @@
 
 use crate::{current_jit_vm, str_arg, table_arg};
 use luna_core::__private::VmJitState;
-use luna_core::__private::{GcInternals, HeapInternals, TableInternals, ValueInternals, VmJitAlloc};
+use luna_core::__private::{
+    GcInternals, HeapInternals, TableInternals, ValueInternals, VmJitAlloc,
+};
 
 /// `t[key] = val` where `t` is a Table Gc (i64 pun), `key`
 /// is an Int and `val` is an Int. Wraps `Table::set_int(&mut Heap,

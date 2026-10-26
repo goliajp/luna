@@ -4,6 +4,7 @@
 use super::*;
 use crate::numeric::c_pointer;
 use crate::runtime::LuaStr;
+use crate::runtime::puc::api::PucText;
 use crate::runtime::puc::fmt::FmtArg;
 
 impl Vm {

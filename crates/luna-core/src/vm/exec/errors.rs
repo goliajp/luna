@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::runtime::ErrorStatus;
+use crate::runtime::puc::api::PucText;
 use crate::runtime::puc::fmt::FmtArg;
 mod position;
 mod type_err;

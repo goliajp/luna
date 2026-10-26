@@ -5,7 +5,8 @@
 
 use super::*;
 use crate::runtime::LuaStr;
-use crate::runtime::puc::PucKind;
+use crate::runtime::puc::PucObj;
+use crate::runtime::puc::api::{PucCount, PucText};
 use crate::runtime::puc::fmt::FmtArg;
 
 impl Vm {
@@ -56,8 +57,8 @@ impl Vm {
     }
 
     /// A record of an object of `size` bytes PUC makes and luna does not.
-    pub(crate) fn ghost(&mut self, kind: PucKind, size: usize) -> Result<(), LuaError> {
-        self.retry_oom(|vm| vm.heap.acct_ghost(kind, size))
+    pub(crate) fn ghost(&mut self, o: PucObj) -> Result<(), LuaError> {
+        self.retry_oom(|vm| vm.heap.ghost_obj(o))
     }
 
     /// `lua_concat` of the last `total` values of `st`, which the collector

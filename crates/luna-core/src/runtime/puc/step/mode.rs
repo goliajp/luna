@@ -34,7 +34,7 @@ pub(crate) fn change_mode<H: StepHost + ?Sized>(h: &mut H, prev: &str, new: &str
 impl Heap {
     /// Whether the standalone interpreter restarts the collector in
     /// generational mode before it runs anything (5.4 on `lua.c`).
-    pub(crate) fn lua_c_starts_generational(&self) -> bool {
+    pub(in crate::runtime) fn lua_c_starts_generational(&self) -> bool {
         self.puc.dialect >= Dialect::L54
     }
 }

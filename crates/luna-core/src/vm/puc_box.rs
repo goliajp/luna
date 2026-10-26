@@ -3,6 +3,7 @@
 //! then garbage that the collector finalizes before freeing it.
 
 use crate::runtime::dialect::Dialect;
+use crate::runtime::puc::api::PucCount;
 use crate::runtime::userdata::UserdataPayload;
 use crate::runtime::{Gc, LuaStr, Table, Userdata, Value};
 use crate::version::LuaVersion;

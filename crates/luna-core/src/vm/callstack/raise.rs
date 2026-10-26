@@ -8,6 +8,7 @@ use crate::version::LuaVersion;
 use crate::vm::exec::Vm;
 
 use super::NativeAct;
+use crate::runtime::puc::api::PucLoads;
 
 /// A native that raised the error in flight, and where it ran.
 #[derive(Clone, Copy)]

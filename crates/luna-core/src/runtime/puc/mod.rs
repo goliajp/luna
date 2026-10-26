@@ -13,6 +13,7 @@ use crate::runtime::userdata::Userdata;
 use crate::runtime::value::Value;
 use records::{parse, strcache};
 
+pub(crate) mod api;
 pub(crate) mod boot;
 pub(crate) use boot::STRT_STAND;
 mod control;

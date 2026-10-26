@@ -178,7 +178,7 @@ impl Heap {
     /// The counted string `h` entered PUC's string table, which may have
     /// grown on the way (`grow_from`): 5.1 puts it in, then resizes, 5.2
     /// resizes first.
-    pub(crate) fn strt_enter(&mut self, p: Gc<LuaStr>) {
+    pub(in crate::runtime) fn strt_enter(&mut self, p: Gc<LuaStr>) {
         if !crate::runtime::gc_hooks::TRACE
             || !matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
         {

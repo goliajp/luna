@@ -12,6 +12,7 @@
 use super::*;
 use crate::runtime::LuaStr;
 use crate::runtime::mem::{LVec, Oom};
+use crate::runtime::puc::api::{PucCollector, PucCount};
 use crate::runtime::table::TableError;
 
 impl Vm {

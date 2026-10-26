@@ -1,6 +1,7 @@
 //! Concatenation and `tostring` conversion.
 
 use super::*;
+use crate::runtime::puc::api::PucText;
 
 impl Vm {
     /// Fast string concatenation of an adjacent pair, or `None` when a

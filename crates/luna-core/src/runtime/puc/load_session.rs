@@ -66,7 +66,7 @@ impl Drop for Building {
 impl Heap {
     /// A load begins.
     #[inline]
-    pub(crate) fn load_begins(&self) -> LoadSpan {
+    pub(in crate::runtime) fn load_begins(&self) -> LoadSpan {
         LoadSpan {
             base: self.unborn_len(),
             ended: false,
@@ -76,7 +76,7 @@ impl Heap {
     /// The load of `s` ends: what it set aside that PUC did not make (luna's
     /// own, or the garbage of a load that failed) goes on the list.
     #[inline]
-    pub(crate) fn load_ends(&mut self, mut s: LoadSpan) {
+    pub(in crate::runtime) fn load_ends(&mut self, mut s: LoadSpan) {
         s.ended = true;
         self.flush_unborn(s.base);
     }
@@ -85,7 +85,7 @@ impl Heap {
     /// nothing is counted, and with `aside` (a counted load) the objects
     /// are set aside until the replay reaches where PUC makes each.
     #[inline]
-    pub(crate) fn build_load(&mut self, aside: bool) -> Building {
+    pub(in crate::runtime) fn build_load(&mut self, aside: bool) -> Building {
         let off = self.counting_off();
         Building {
             off: Some(off),
@@ -95,7 +95,7 @@ impl Heap {
 
     /// The building `b` started is done: counting as it was.
     #[inline]
-    pub(crate) fn load_built(&mut self, mut b: Building) {
+    pub(in crate::runtime) fn load_built(&mut self, mut b: Building) {
         if let Some(a) = b.aside.take() {
             self.loads_aside_back(a);
         }
@@ -106,7 +106,7 @@ impl Heap {
 
     /// Where loads stand now, for [`Heap::unwind_load`].
     #[inline]
-    pub(crate) fn load_unwind_point(&self) -> LoadUnwind {
+    pub(in crate::runtime) fn load_unwind_point(&self) -> LoadUnwind {
         LoadUnwind {
             counting: self.counting_mark(),
             frames: self.parse_mark(),
@@ -118,7 +118,7 @@ impl Heap {
     /// A memory error unwound a load past its tokens: counting, the parser
     /// frames and the setting aside back to `u`, and what it set aside on
     /// the list.
-    pub(crate) fn unwind_load(&mut self, u: LoadUnwind) {
+    pub(in crate::runtime) fn unwind_load(&mut self, u: LoadUnwind) {
         self.restore_counting(u.counting);
         self.restore_parse_frames(u.frames);
         self.loads_aside_back(u.aside);

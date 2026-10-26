@@ -107,7 +107,7 @@ impl FuncArrays {
 impl Heap {
     /// What the parser's arrays' bytes depend on now.
     #[inline]
-    pub(crate) fn parser_sizes(&self) -> ParserSizes {
+    pub(in crate::runtime) fn parser_sizes(&self) -> ParserSizes {
         ParserSizes {
             d: self.puc.dialect,
             s: self.puc.sizes,
@@ -121,13 +121,13 @@ impl Heap {
     }
 
     /// The bytes of array `a` with room for `n` elements.
-    pub(crate) fn parser_bytes(&self, a: ParserArray, n: usize) -> usize {
+    pub(in crate::runtime) fn parser_bytes(&self, a: ParserArray, n: usize) -> usize {
         n * self.parser_elem(a)
     }
 
     /// One more element in `v`.
     #[inline(always)]
-    pub(crate) fn parser_push(&mut self, v: &mut GrowVec, a: ParserArray) {
+    pub(in crate::runtime) fn parser_push(&mut self, v: &mut GrowVec, a: ParserArray) {
         if v.n + 1 > v.cap {
             self.parser_grow(v, a);
         }
@@ -136,7 +136,7 @@ impl Heap {
 
     /// `v` grown to hold `n` (the descriptor arrays, which shrink and grow
     /// again).
-    pub(crate) fn parser_reach(&mut self, v: &mut GrowVec, a: ParserArray, n: usize) {
+    pub(in crate::runtime) fn parser_reach(&mut self, v: &mut GrowVec, a: ParserArray, n: usize) {
         while v.cap < n {
             self.parser_grow(v, a);
         }
@@ -152,7 +152,7 @@ impl Heap {
     }
 
     /// `v` freed (`luaD_protectedparser` frees the descriptor arrays).
-    pub(crate) fn parser_free(&mut self, v: GrowVec, a: ParserArray) {
+    pub(in crate::runtime) fn parser_free(&mut self, v: GrowVec, a: ParserArray) {
         let b = self.parser_bytes(a, v.cap);
         self.acct_block(b, 0);
     }
@@ -167,7 +167,7 @@ impl Heap {
     /// One instruction on `line` (`luaK_code`): the code array, then the
     /// line info (5.4+ `savelineinfo`, with its absolute entries).
     #[inline(always)]
-    pub(crate) fn parser_code(&mut self, f: &mut FuncArrays, line: u32) {
+    pub(in crate::runtime) fn parser_code(&mut self, f: &mut FuncArrays, line: u32) {
         self.parser_push(&mut f.code, ParserArray::Code);
         if matches!(self.puc.dialect, Dialect::L54 | Dialect::L55) {
             let dif = i64::from(line) - i64::from(f.prev_line);
@@ -186,7 +186,7 @@ impl Heap {
 
     /// The last instruction taken back, with its line info (5.4+
     /// `removelastlineinfo`).
-    pub(crate) fn parser_uncode(&mut self, f: &mut FuncArrays) {
+    pub(in crate::runtime) fn parser_uncode(&mut self, f: &mut FuncArrays) {
         f.code.n -= 1;
         f.line.n -= 1;
         if f.last_abs {
@@ -199,7 +199,7 @@ impl Heap {
     }
 
     /// The function ends (`close_func`): each array trimmed to its count.
-    pub(crate) fn parser_close(&mut self, f: &mut FuncArrays) {
+    pub(in crate::runtime) fn parser_close(&mut self, f: &mut FuncArrays) {
         self.parser_trim(&mut f.code, ParserArray::Code);
         self.parser_trim(&mut f.line, ParserArray::LineInfo);
         self.parser_trim(&mut f.abs, ParserArray::AbsLines);

@@ -1,6 +1,7 @@
 //! The metamethod events and their names.
 
 use super::*;
+use crate::runtime::puc::api::PucParse;
 
 /// Outcome of an index/newindex/comparison fast path: either a directly
 /// computed result, or a metamethod (with the receiver it resolved against) the

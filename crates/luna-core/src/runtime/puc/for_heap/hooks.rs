@@ -19,7 +19,7 @@ pub(in crate::runtime) use crate::runtime::puc::verify::is_kept;
 #[cfg(feature = "gc-trace")]
 impl Heap {
     /// `LUNA_GC_PROP`: how many objects PUC's list holds as the sweep finds it.
-    pub(crate) fn trace_listed(&mut self) {
+    pub(in crate::runtime) fn trace_listed(&mut self) {
         if !self.hooks.trace.prop {
             return;
         }
@@ -48,7 +48,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads a live object of this heap.
-    pub(crate) unsafe fn trace_swept(&mut self, h: *mut GcHeader, dead: bool) {
+    pub(in crate::runtime) unsafe fn trace_swept(&mut self, h: *mut GcHeader, dead: bool) {
         if !self.hooks.trace.sweep {
             return;
         }
@@ -73,7 +73,12 @@ impl Heap {
 
     /// `LUNA_GC_REFUSE` refuses a table resize from `old_a` array slots to
     /// `new_a` and `new_h` nodes: one of the parts PUC makes is refused.
-    pub(crate) fn refuse_table(&mut self, old_a: usize, new_a: usize, new_h: usize) -> bool {
+    pub(in crate::runtime) fn refuse_table(
+        &mut self,
+        old_a: usize,
+        new_a: usize,
+        new_h: usize,
+    ) -> bool {
         let (oa, na, nh) = (
             self.array_bytes(old_a),
             self.array_bytes(new_a),
@@ -83,13 +88,13 @@ impl Heap {
     }
 
     /// `LUNA_GC_REFUSE` refuses a new long string of `len` bytes.
-    pub(crate) fn refuse_string(&mut self, len: usize) -> bool {
+    pub(in crate::runtime) fn refuse_string(&mut self, len: usize) -> bool {
         let size = self.puc_size(crate::runtime::puc::PucObj::Str { len, long: true });
         len > crate::runtime::string::MAX_SHORT_LEN && self.hooks.trace.refuse_now(0, size)
     }
 
     /// `LUNA_GC_PROP`: the object `h` traversed with work `w`.
-    pub(crate) unsafe fn trace_prop(&mut self, h: *mut GcHeader, w: i64, run: Running) {
+    pub(in crate::runtime) unsafe fn trace_prop(&mut self, h: *mut GcHeader, w: i64, run: Running) {
         // SAFETY: the caller's contract: `h` heads an allocated object
         unsafe {
             if !self.hooks.trace.prop {
@@ -164,7 +169,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
-    pub(crate) unsafe fn verify_class_byte(&self, h: *mut GcHeader, strt: bool) {
+    pub(in crate::runtime) unsafe fn verify_class_byte(&self, h: *mut GcHeader, strt: bool) {
         // SAFETY: the caller's contract
         unsafe {
             assert_eq!(

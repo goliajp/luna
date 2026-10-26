@@ -1,6 +1,7 @@
 //! Coroutine bookkeeping: status queries, other threads' slots, closing.
 
 use super::*;
+use crate::runtime::puc::api::PucCount;
 
 impl Vm {
     pub(crate) fn new_coro(&mut self, body: Value) -> Gc<Coro> {

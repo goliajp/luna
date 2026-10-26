@@ -22,7 +22,7 @@ impl Heap {
     /// What a memory cap is held against: the bytes the allocation context
     /// has handed out, when it counts them (a host function or a policy),
     /// else PUC's count ([`Heap::bytes`]).
-    pub(crate) fn cap_bytes(&self) -> usize {
+    pub(in crate::runtime) fn cap_bytes(&self) -> usize {
         self.mem_ctx().in_use().unwrap_or(self.puc.count.bytes)
     }
 
@@ -35,18 +35,18 @@ impl Heap {
 
     /// [`Heap::gc_due`] once `more` bytes more are counted.
     #[inline]
-    pub(crate) fn gc_due_after(&self, more: usize) -> bool {
+    pub(in crate::runtime) fn gc_due_after(&self, more: usize) -> bool {
         self.puc_due_after(more) && !self.no_gc() && !self.no_auto()
     }
 
     /// `collectgarbage("stop"/"restart")`: suspend or resume auto-GC.
-    pub(crate) fn gc_is_stopped(&self) -> bool {
+    pub(in crate::runtime) fn gc_is_stopped(&self) -> bool {
         self.puc.stopped
     }
 
     /// `collectgarbage("stop")` / `"restart"`. A restart makes a step due
     /// at once (5.1 `GCthreshold = totalbytes`, later `luaE_setdebt(g, 0)`).
-    pub(crate) fn gc_set_stopped(&mut self, stopped: bool) {
+    pub(in crate::runtime) fn gc_set_stopped(&mut self, stopped: bool) {
         self.puc.stopped = stopped;
         if !stopped {
             self.puc_restart_due();
@@ -62,7 +62,7 @@ impl Heap {
 
     /// The stop flag put back as it was, with no debt set (PUC `GCTM`
     /// restoring `gcrunning`).
-    pub(crate) fn gc_restore_stopped(&mut self, stopped: bool) {
+    pub(in crate::runtime) fn gc_restore_stopped(&mut self, stopped: bool) {
         self.puc.stopped = stopped;
         self.refresh_gc_limit();
     }
@@ -76,7 +76,7 @@ impl Heap {
     /// The count at which the next step falls due, from the pace. 5.1
     /// stops the collector with an unreachable threshold; the later
     /// dialects still step then, to put the debt back.
-    pub(crate) fn refresh_gc_limit(&mut self) {
+    pub(in crate::runtime) fn refresh_gc_limit(&mut self) {
         self.puc_set_limit(self.puc.stopped && self.puc_rules().stop_unreachable);
     }
 
@@ -113,7 +113,7 @@ impl Heap {
     /// A 5.4 or 5.5 finalizer runs (`on`), and no step may run, or none
     /// does any more.
     #[inline]
-    pub(crate) fn gc_set_fin_stop(&mut self, on: bool) {
+    pub(in crate::runtime) fn gc_set_fin_stop(&mut self, on: bool) {
         self.puc.fin_stop = on;
     }
 
@@ -121,7 +121,7 @@ impl Heap {
     /// does, 5.1 under a threshold twice the count, 5.2 and 5.3 not
     /// running, 5.4 and 5.5 stopped for the finalizer (`GCSTPGC`). What
     /// [`Heap::finalizer_returned`] puts back.
-    pub(crate) fn finalizer_runs(&mut self) -> FinalizerStop {
+    pub(in crate::runtime) fn finalizer_runs(&mut self) -> FinalizerStop {
         let stop = FinalizerStop {
             stopped: self.puc.stopped,
             fin_stop: self.puc.fin_stop,
@@ -141,7 +141,7 @@ impl Heap {
 
     /// The finalizer returned, `ok` or raising: the collector runs as
     /// before it; a 5.1 error leaves the threshold it ran under.
-    pub(crate) fn finalizer_returned(&mut self, stop: FinalizerStop, ok: bool) {
+    pub(in crate::runtime) fn finalizer_returned(&mut self, stop: FinalizerStop, ok: bool) {
         match self.puc.dialect {
             Dialect::L51 => {
                 if ok {
@@ -158,7 +158,7 @@ impl Heap {
     /// Whether an allocation that failed may run an emergency collection:
     /// never in 5.1; in 5.2 only while the collector runs (`gcrunning`);
     /// from 5.3 on, always.
-    pub(crate) fn emergency_allowed(&self) -> bool {
+    pub(in crate::runtime) fn emergency_allowed(&self) -> bool {
         match self.puc.dialect {
             Dialect::L51 => false,
             Dialect::L52 => !self.puc.stopped,
@@ -168,7 +168,7 @@ impl Heap {
 
     /// 5.2's full collection calls the pending finalizers first; the
     /// others clear the running stack's dead slots.
-    pub(crate) fn full_calls_pending_first(&self) -> bool {
+    pub(in crate::runtime) fn full_calls_pending_first(&self) -> bool {
         self.puc.dialect == Dialect::L52
     }
 }

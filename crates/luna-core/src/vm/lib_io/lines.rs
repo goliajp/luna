@@ -1,6 +1,7 @@
 //! Line iterators: `io.lines` and `file:lines`.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 
 /// Most read formats a line iterator may carry: 5.2 `LUA_MINSTACK - 3`,
 /// 5.3+ `MAXARGLINE`. The argument number in the error is the limit's own

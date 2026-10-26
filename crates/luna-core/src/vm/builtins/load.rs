@@ -3,6 +3,7 @@
 use super::*;
 use crate::frontend::lexer::Fed;
 use crate::runtime::puc::Deferred;
+use crate::runtime::puc::api::{PucCount, PucParse};
 use crate::runtime::{Gc, LuaStr};
 
 mod mode;

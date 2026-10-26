@@ -95,7 +95,7 @@ pub(in crate::runtime::puc) unsafe fn load_tab_size(
 
 impl Heap {
     /// A new empty parser table (PUC `luaH_new`), counted.
-    pub(crate) fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom> {
+    pub(in crate::runtime) fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom> {
         let mut hdr = GcHeader::new(ObjTag::Ghost);
         (hdr.sub, hdr.cls) = (LOADTAB, 0);
         hdr.set_flags(0);
@@ -113,7 +113,7 @@ impl Heap {
 
     /// The parser table `t` resized to `a` array slots and `h` nodes (PUC
     /// `luaH_resize`).
-    pub(crate) fn load_tab_resize(&mut self, t: Gc<LoadTab>, a: usize, h: usize) {
+    pub(in crate::runtime) fn load_tab_resize(&mut self, t: Gc<LoadTab>, a: usize, h: usize) {
         // SAFETY: `t` is a handle, so the parser table is live, and nothing
         // else borrows it
         let lt = unsafe { t.as_mut() };
@@ -127,7 +127,11 @@ impl Heap {
     /// `obj` keyed in the parser table `t`: a black table that takes a
     /// white object goes back to gray (`luaC_barrierback` in
     /// `luaH_newkey`).
-    pub(crate) fn load_tab_ref(&mut self, t: Gc<LoadTab>, obj: Gc<GcHeader>) -> Result<(), Oom> {
+    pub(in crate::runtime) fn load_tab_ref(
+        &mut self,
+        t: Gc<LoadTab>,
+        obj: Gc<GcHeader>,
+    ) -> Result<(), Oom> {
         // SAFETY: `t` is a handle, so the parser table is live, and nothing
         // else borrows it
         unsafe { t.as_mut() }.refs.push(obj.as_ptr())?;
@@ -140,7 +144,7 @@ impl Heap {
 
     /// `obj`'s key in the parser table `t` set to nil: a dead key, which
     /// a traversal does not mark.
-    pub(crate) fn load_tab_unref(&mut self, t: Gc<LoadTab>, obj: *mut GcHeader) {
+    pub(in crate::runtime) fn load_tab_unref(&mut self, t: Gc<LoadTab>, obj: *mut GcHeader) {
         // SAFETY: `t` is a handle, so the parser table is live, and nothing
         // else borrows it
         let refs = unsafe { &mut t.as_mut().refs };
@@ -240,7 +244,7 @@ impl Heap {
 impl Heap {
     /// `luaC_objbarrier` from the main closure `cl` to its new upvalue
     /// `uv`: an upvalue is marked with what it holds at once, never gray.
-    pub(crate) fn barrier_new_upval(
+    pub(in crate::runtime) fn barrier_new_upval(
         &mut self,
         cl: Gc<crate::runtime::LuaClosure>,
         uv: Gc<crate::runtime::function::Upvalue>,

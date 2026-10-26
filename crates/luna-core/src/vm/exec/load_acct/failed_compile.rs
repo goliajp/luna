@@ -8,6 +8,7 @@
 use super::*;
 use crate::frontend::ast::Chunk;
 use crate::frontend::parser::Marks;
+use crate::runtime::puc::api::{PucLoads, PucParse};
 
 impl Vm {
     /// Count the load of `src` that failed with `e`, `chunk` its tree with

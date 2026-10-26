@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::runtime::mem::{BlockKind, LAny, LVec, Oom};
+use crate::runtime::puc::api::PucCount;
 use crate::runtime::userdata::UserdataPayload;
 use std::alloc::Layout;
 

@@ -36,7 +36,7 @@ pub(in crate::runtime) struct C0;
 /// A function standing for PUC's objects `objs`, the first `counted` of
 /// them counted already.
 pub(in crate::runtime) struct StandingFor<'a> {
-    pub objs: &'a [(PucKind, usize)],
+    pub objs: &'a [PucObj],
     pub counted: usize,
 }
 /// A native function with `nup` upvalues; `fixed` while the opening
@@ -190,10 +190,10 @@ impl Born<StandingFor<'_>> for NativeClosure {
         if !heap.counting() {
             return false;
         }
-        for &(kind, size) in &how.objs[how.counted..] {
-            heap.acct_obj(kind, size);
+        for &o in &how.objs[how.counted..] {
+            heap.new_obj(o);
         }
-        heap.stand_for(g.header(), how.objs.iter().map(|&(_, s)| s));
+        heap.stand_for(g.header(), how.objs);
         true
     }
 }

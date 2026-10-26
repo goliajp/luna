@@ -4,6 +4,8 @@
 
 use super::*;
 use crate::runtime::dialect::Dialect;
+use crate::runtime::mem::Oom;
+use records::GhostRef;
 
 /// One allocation of PUC's, by what it is.
 #[derive(Clone, Copy, Debug)]
@@ -28,6 +30,8 @@ pub(crate) enum PucObj {
     LuaClosure(usize),
     Upval,
     Proto,
+    /// a prototype and `n` bytes of the arrays it holds, freed with it
+    ProtoWithArrays(usize),
     Table,
     /// a table's hash part of `n` nodes
     Nodes(usize),
@@ -76,6 +80,7 @@ impl PucObj {
             PucObj::LuaClosure(n) => s.lua_closure(n),
             PucObj::Upval => s.upval,
             PucObj::Proto => s.proto,
+            PucObj::ProtoWithArrays(n) => s.proto + n,
             PucObj::Table => s.table,
             PucObj::Nodes(n) => s.node * n,
             PucObj::CallInfo => s.callinfo,
@@ -89,10 +94,68 @@ impl PucObj {
     }
 }
 
+impl PucObj {
+    /// The kind of object it is. A part of one (nodes, stack slots, a
+    /// `CallInfo`, a string's header) is none, and is not counted as one.
+    pub(in crate::runtime) fn kind(self) -> PucKind {
+        match self {
+            PucObj::Udata { .. }
+            | PucObj::Box
+            | PucObj::Stream
+            | PucObj::GMatchState
+            | PucObj::RandState => PucKind::Userdata,
+            PucObj::CClosure(_) => PucKind::CClosure,
+            PucObj::LuaClosure(_) => PucKind::LuaClosure,
+            PucObj::Upval => PucKind::Upval,
+            PucObj::Proto | PucObj::ProtoWithArrays(_) => PucKind::Proto,
+            PucObj::Table => PucKind::Table,
+            PucObj::Str { long: false, .. } => PucKind::ShortStr,
+            PucObj::Str { long: true, .. } | PucObj::LongStrHeader | PucObj::ExternalStr => {
+                PucKind::LongStr
+            }
+            PucObj::Thread => PucKind::Thread,
+            PucObj::Nodes(_) | PucObj::CallInfo | PucObj::Slots(_) | PucObj::StrHeader => {
+                panic!("{self:?} is a part of an object, not one")
+            }
+        }
+    }
+}
+
 impl Heap {
+    /// A new object `o`.
+    #[inline(always)]
+    pub(in crate::runtime) fn new_obj(&mut self, o: PucObj) {
+        self.acct_obj(o.kind(), self.puc_size(o));
+    }
+
+    /// `o`, made without counting, is PUC's now: counted here.
+    #[inline(always)]
+    pub(in crate::runtime) fn promote_obj(&mut self, h: Gc<GcHeader>, o: PucObj) {
+        self.acct_promote_obj(h, o.kind(), self.puc_size(o));
+    }
+
+    /// An object `o` PUC makes and luna does not: counted now, freed by the
+    /// next sweep.
+    pub(in crate::runtime) fn ghost_obj(&mut self, o: PucObj) -> Result<(), Oom> {
+        self.acct_ghost(o.kind(), self.puc_size(o))
+    }
+
+    /// An object `o` PUC makes and luna does not (yet), as
+    /// [`Heap::ghost_obj`]: where its record is.
+    pub(in crate::runtime) fn ghost_obj_ref(&mut self, o: PucObj) -> Result<GhostRef, Oom> {
+        self.acct_ghost_ref(o.kind(), self.puc_size(o))
+    }
+
+    /// `cl`, a main closure made without counting, is PUC's now: counted
+    /// here, without 5.1's environment among its upvalues.
+    pub(in crate::runtime) fn promote_main_closure(&mut self, cl: Gc<LuaClosure>) {
+        let size = self.closure_size(&cl.proto, cl.upvals().len());
+        self.acct_promote_obj(cl.hdr(), PucKind::LuaClosure, size);
+    }
+
     /// The bytes PUC allocates for `o` in this dialect.
     #[inline]
-    pub(crate) fn puc_size(&self, o: PucObj) -> usize {
+    pub(in crate::runtime) fn puc_size(&self, o: PucObj) -> usize {
         o.bytes(self.puc.dialect, &self.puc.sizes)
     }
 }

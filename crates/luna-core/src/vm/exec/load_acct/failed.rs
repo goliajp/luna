@@ -11,6 +11,7 @@
 
 use super::*;
 use crate::frontend::parser::{ParseScratch, completed, parse_in_place};
+use crate::runtime::puc::api::{PucLoads, PucParse};
 
 impl Vm {
     /// Count the load of `src`, named `source`, that failed with `e`; its

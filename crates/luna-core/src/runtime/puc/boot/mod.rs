@@ -76,7 +76,7 @@ impl Heap {
     /// lives as long as the object behind `h`, which holds luna's string
     /// in its place (the package table: luna's default path is a short
     /// string all package tables share).
-    pub(crate) fn acct_stand_on(&mut self, h: Gc<GcHeader>, size: usize, count: bool) {
+    pub(in crate::runtime) fn acct_stand_on(&mut self, h: Gc<GcHeader>, size: usize, count: bool) {
         if count {
             self.acct_obj(PucKind::LongStr, size);
         }
@@ -87,7 +87,7 @@ impl Heap {
     /// long as the object behind `h` (the package table, which holds
     /// luna's default path in place of PUC's): counted now, and the
     /// table's place given back with it.
-    pub(crate) fn acct_stand_strt(&mut self, h: Gc<GcHeader>, len: usize) {
+    pub(in crate::runtime) fn acct_stand_strt(&mut self, h: Gc<GcHeader>, len: usize) {
         self.acct_string(len);
         self.strt_settle();
         let size = self.puc.sizes.string(len, false);
@@ -114,7 +114,7 @@ impl Heap {
     /// `cs`, a long string luna's compiler made without counting, is the
     /// one PUC's scanner made as `ss` (counted) and keeps as the constant:
     /// the count moves to `cs`.
-    pub(crate) fn acct_move_long(&mut self, ss: Gc<LuaStr>, cs: Gc<LuaStr>) {
+    pub(in crate::runtime) fn acct_move_long(&mut self, ss: Gc<LuaStr>, cs: Gc<LuaStr>) {
         if !ss.hdr().is_uncounted() && cs.hdr().is_uncounted() {
             // SAFETY: both are handles, so their objects are live; nothing
             // borrows the headers while their per-type bytes are written
@@ -156,7 +156,7 @@ impl Heap {
     /// it here.
     #[cold]
     #[inline(never)]
-    pub(crate) fn acct_promote(&mut self, s: Gc<LuaStr>, len: usize) {
+    pub(in crate::runtime) fn acct_promote(&mut self, s: Gc<LuaStr>, len: usize) {
         let h = s.header();
         if !self.counting() {
             return;
@@ -173,7 +173,7 @@ impl Heap {
 
     /// The parser's string of the chunk name `s`: counted now if luna made
     /// it without counting (PUC found it made already otherwise).
-    pub(crate) fn acct_source(&mut self, s: Gc<LuaStr>) {
+    pub(in crate::runtime) fn acct_source(&mut self, s: Gc<LuaStr>) {
         if s.hdr.sub & UNCOUNTED != 0 {
             self.acct_promote(s, s.len());
         }

@@ -14,6 +14,7 @@ pub(crate) use undump::UndumpShown;
 use super::load_acct::{PVal, ReaderView};
 use super::*;
 use crate::runtime::mem::LVec;
+use crate::runtime::puc::api::{PucCollector, PucCount};
 use crate::runtime::puc::records::env51::ENV_PROTO;
 
 /// A reader call of a running `load`.

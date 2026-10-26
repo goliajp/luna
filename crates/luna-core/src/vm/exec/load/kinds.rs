@@ -2,6 +2,7 @@
 //! MacroLua chunk, and a text chunk.
 
 use super::*;
+use crate::runtime::puc::api::{PucCount, PucLoads, PucText};
 
 impl Vm {
     /// A binary chunk, undumped.

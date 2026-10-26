@@ -5,6 +5,7 @@
 //! crosses what the last visit allowed (`JitLimits`).
 
 use super::*;
+use crate::runtime::puc::api::PucCount;
 
 /// When compiled code next needs `Vm::jit_self_level`: a level whose
 /// base is at `base` or above.

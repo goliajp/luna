@@ -47,7 +47,7 @@ impl Heap {
 
     /// The text of a number as PUC writes it (`lua_number2str`,
     /// `tostringbuff`); 5.1 and 5.2 have no integers.
-    pub(crate) fn number_text(&self, n: Num) -> String {
+    pub(in crate::runtime) fn number_text(&self, n: Num) -> String {
         let n = match (self.puc.dialect, n) {
             (Dialect::L51 | Dialect::L52, Num::Int(i)) => Num::Float(i as f64),
             (_, n) => n,
@@ -57,7 +57,7 @@ impl Heap {
 
     /// The string of `fmt` with each directive replaced by the next of
     /// `args`, made as PUC's `lua_pushfstring` makes it.
-    pub(crate) fn pushfstring(
+    pub(in crate::runtime) fn pushfstring(
         &mut self,
         fmt: &[u8],
         args: &[FmtArg<'_>],

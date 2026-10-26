@@ -13,7 +13,11 @@ const KEEPER: u8 = 0x10;
 impl Heap {
     /// A long string of `size` bytes PUC makes now, living as long as the
     /// object behind `host`: counted now, and freed where PUC frees it.
-    pub(crate) fn acct_kept_string(&mut self, host: Gc<GcHeader>, size: usize) -> Result<(), Oom> {
+    pub(in crate::runtime) fn acct_kept_string(
+        &mut self,
+        host: Gc<GcHeader>,
+        size: usize,
+    ) -> Result<(), Oom> {
         let host = host.as_ptr();
         let mut sizes = LVec::new(self.mem());
         sizes.push(size as u32)?;

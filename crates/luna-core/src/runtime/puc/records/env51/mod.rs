@@ -185,7 +185,7 @@ impl Heap {
     /// Record `k` made now (the opening counted it): current white and
     /// live; its header, which names it on the stack. E1 made again
     /// starts the records of another opening.
-    pub(crate) fn env51_born(&mut self, k: usize) -> *mut GcHeader {
+    pub(in crate::runtime) fn env51_born(&mut self, k: usize) -> *mut GcHeader {
         if k == E1 && self.env51_gen_now().opened {
             let g = self.env51_gen();
             self.env51_records().gens.push(g);
@@ -202,7 +202,7 @@ impl Heap {
     }
 
     /// Which record `h` heads, if one does.
-    pub(crate) fn env51_record_index(&self, h: *mut GcHeader) -> Option<usize> {
+    pub(in crate::runtime) fn env51_record_index(&self, h: *mut GcHeader) -> Option<usize> {
         let e = self.puc.records.env51_box.as_deref()?;
         e.gens
             .iter()
@@ -210,12 +210,12 @@ impl Heap {
     }
 
     /// The package table, the loaders' environment.
-    pub(crate) fn env51_package(&mut self, t: Gc<Table>) {
+    pub(in crate::runtime) fn env51_package(&mut self, t: Gc<Table>) {
         self.env51_records().package = t.as_ptr() as *mut GcHeader;
     }
 
     /// The default input (0) or output (1) in the latest E1's array.
-    pub(crate) fn env51_io(&self, i: usize) -> Option<Gc<Userdata>> {
+    pub(in crate::runtime) fn env51_io(&self, i: usize) -> Option<Gc<Userdata>> {
         let e = self.puc.records.env51_box.as_deref()?;
         let h = e.gens.last()?.io[i];
         // SAFETY: E1 holds its files: marking it marks them
@@ -224,7 +224,7 @@ impl Heap {
 
     /// The latest E1's array entry `i` set to `u`, with the barrier of
     /// `lua_rawseti` into E1.
-    pub(crate) fn env51_set_io(&mut self, i: usize, u: Gc<Userdata>) {
+    pub(in crate::runtime) fn env51_set_io(&mut self, i: usize, u: Gc<Userdata>) {
         let g = self.env51_gen_now();
         g.io[i] = u.as_ptr() as *mut GcHeader;
         let e1 = g.ph.hdr(E1);
@@ -236,7 +236,7 @@ impl Heap {
     /// after the io library's first function, E2 and `io_noclose` before
     /// its last, E3 and `io_pclose` before them (the standard files they
     /// were made after are at the list's end).
-    pub(crate) fn env51_anchors(&mut self, first: *mut GcHeader, last: *mut GcHeader) {
+    pub(in crate::runtime) fn env51_anchors(&mut self, first: *mut GcHeader, last: *mut GcHeader) {
         let a = &mut self.env51_gen_now().anchors;
         (a[0].at, a[0].before) = (first, false);
         (a[1].at, a[1].before) = (last, true);
@@ -252,7 +252,7 @@ impl Heap {
 
     /// The object behind `h`, a native or a userdata, has environment
     /// `env`: one of the io library's is the latest opening's.
-    pub(crate) fn set_env51(&mut self, h: Gc<GcHeader>, env: u8) {
+    pub(in crate::runtime) fn set_env51(&mut self, h: Gc<GcHeader>, env: u8) {
         let h = h.as_ptr();
         // SAFETY: `h` heads a live object; only its class and flag bytes
         // are written: one with an environment to mark is no leaf

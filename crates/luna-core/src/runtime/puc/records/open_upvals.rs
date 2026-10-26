@@ -44,13 +44,13 @@ pub(crate) struct OpenDead {
 impl Heap {
     /// The VM's lists of open upvalues, lent to the collection under way.
     #[inline]
-    pub(crate) fn lend_open_upvals(&mut self, lend: OpenLend) {
+    pub(in crate::runtime) fn lend_open_upvals(&mut self, lend: OpenLend) {
         self.puc.records.open_dead.lend = Some(lend);
     }
 
     /// Whether this dialect's collector keeps open upvalues on threads.
     #[inline]
-    pub(crate) fn open_on_threads(&self) -> bool {
+    pub(in crate::runtime) fn open_on_threads(&self) -> bool {
         self.puc.rules.open_upvals_on_threads
     }
 
@@ -70,7 +70,7 @@ impl Heap {
     /// The lists handed over (see [`Heap::lend_open_upvals`]), back to the
     /// VM.
     #[inline]
-    pub(crate) fn take_open_lend(&mut self) -> Option<OpenLend> {
+    pub(in crate::runtime) fn take_open_lend(&mut self) -> Option<OpenLend> {
         self.puc.records.open_dead.lend.take()
     }
 
@@ -147,14 +147,14 @@ impl Heap {
 
     /// Whether some dead open upvalue waits for the sweep.
     #[inline]
-    pub(crate) fn has_dead_open(&self) -> bool {
+    pub(in crate::runtime) fn has_dead_open(&self) -> bool {
         !self.puc.records.open_dead.dead.is_empty()
     }
 
     /// Thread `owner` closes its upvalues from `slot` up: the dead ones
     /// among them are freed now.
     #[inline]
-    pub(crate) fn close_dead_open(&mut self, thread: Option<Gc<Coro>>, slot: u32) {
+    pub(in crate::runtime) fn close_dead_open(&mut self, thread: Option<Gc<Coro>>, slot: u32) {
         if !self.puc.records.open_dead.dead.is_empty() {
             let owner = owner_of(thread);
             self.free_dead_open(|o, s| o == owner && s >= slot);
@@ -163,7 +163,7 @@ impl Heap {
 
     /// The dead open upvalue of `owner`'s `slot`, which a new closure takes
     /// back before the sweep frees it (PUC `luaF_findupval`).
-    pub(crate) fn revive_open(
+    pub(in crate::runtime) fn revive_open(
         &mut self,
         thread: Option<Gc<Coro>>,
         slot: u32,

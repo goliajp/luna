@@ -1,6 +1,7 @@
 //! Loads whose text a reader hands over piece by piece.
 
 use super::*;
+use crate::runtime::puc::api::{PucCount, PucLoads, PucParse, PucText};
 
 impl Vm {
     /// Start loading a text chunk that a reader hands over piece by piece

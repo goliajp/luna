@@ -11,6 +11,7 @@
 //! its next tick, and a cap of zero is exceeded by any heap.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 
 impl Vm {
     /// An instruction budget or a memory cap is armed (exhausted or not):

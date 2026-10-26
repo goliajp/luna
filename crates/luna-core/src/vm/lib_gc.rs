@@ -13,6 +13,7 @@
 //! pacing unchanged and doubling a parameter doubles its effect.
 
 use crate::runtime::Value;
+use crate::runtime::puc::api::PucCollector;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;

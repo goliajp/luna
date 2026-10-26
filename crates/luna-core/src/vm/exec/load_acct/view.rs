@@ -11,6 +11,7 @@
 
 use super::*;
 use crate::frontend::parser::{ParseScratch, completed, parse_in_place, scanned_upto};
+use crate::runtime::puc::api::PucParse;
 
 /// What [`Vm::reader_view`] found.
 pub(in crate::vm::exec) struct ReaderView {

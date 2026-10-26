@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::runtime::LuaStr;
+use crate::runtime::puc::api::PucText;
 
 impl Vm {
     /// 5.1 and 5.2: the check before an API call allocates.

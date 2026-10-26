@@ -2,6 +2,7 @@
 
 use super::stack_size::{self, Grown};
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 
 impl Vm {
     /// Register a table for finalization if its (just-set) metatable carries a

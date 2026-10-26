@@ -1,6 +1,7 @@
 //! `luaG_typeerror`: the message naming an operand of the wrong type.
 
 use super::*;
+use crate::runtime::puc::api::PucText;
 
 impl Vm {
     pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {

@@ -3,6 +3,7 @@
 //! the function's name.
 
 use super::*;
+use crate::runtime::puc::api::PucText;
 
 impl Vm {
     /// `pushfuncname` of 5.2 to 5.5: the string, made with what PUC makes

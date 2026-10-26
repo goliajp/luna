@@ -12,7 +12,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
-    pub(crate) unsafe fn puc_objsize(&self, h: *mut GcHeader) -> usize {
+    pub(in crate::runtime) unsafe fn puc_objsize(&self, h: *mut GcHeader) -> usize {
         // SAFETY: the caller's contract
         unsafe {
             if (*h).tag == ObjTag::Coro {
@@ -39,7 +39,7 @@ impl Heap {
     ///
     /// # Safety
     /// `h` heads an allocated object of this heap.
-    pub(crate) unsafe fn object_work(
+    pub(in crate::runtime) unsafe fn object_work(
         &self,
         h: *mut GcHeader,
         run: Running,

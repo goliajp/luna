@@ -19,7 +19,8 @@ use crate::compiler::puc_log::PEv;
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::Proto;
 use crate::runtime::dialect::Dialect;
-use crate::runtime::puc::PucKind;
+use crate::runtime::puc::PucObj;
+use crate::runtime::puc::api::{PucCount, PucParse};
 use crate::runtime::puc::records::parse::{
     FuncArrays, GrowVec, PKey, PTab, ParserArray, ParserSizes,
 };
@@ -54,7 +55,6 @@ impl Vm {
         let proto = cl.proto;
         let (marks, scanned) = rec;
         let d = self.heap.dialect();
-        let upval = self.heap.puc_size(crate::runtime::puc::PucObj::Upval);
         let mut r = Replay::new(
             (d, self.heap.parser_sizes()),
             proto,
@@ -81,13 +81,13 @@ impl Vm {
                 Some(&uv) => {
                     let h = uv.hdr();
                     if h.is_uncounted() {
-                        self.heap.acct_promote_obj(h, PucKind::Upval, upval);
+                        self.heap.promote_obj(h, PucObj::Upval);
                     } else {
-                        self.heap.acct_obj(PucKind::Upval, upval);
+                        self.heap.new_obj(PucObj::Upval);
                     }
                     self.heap.barrier_new_upval(cl, uv);
                 }
-                None => self.heap.acct_obj(PucKind::Upval, upval),
+                None => self.heap.new_obj(PucObj::Upval),
             }
         }
         self.replay_end(&r);
@@ -191,8 +191,6 @@ impl Vm {
     /// The main closure, made without counting, is counted where PUC makes
     /// it.
     fn acct_main_closure(&mut self, cl: Gc<LuaClosure>) {
-        let size = self.heap.closure_size(&cl.proto, cl.upvals().len());
-        self.heap
-            .acct_promote_obj(cl.hdr(), PucKind::LuaClosure, size);
+        self.heap.promote_main_closure(cl);
     }
 }

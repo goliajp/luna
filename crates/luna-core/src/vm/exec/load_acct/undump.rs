@@ -4,6 +4,7 @@
 //! PUC's, or a record of one luna does not have.
 
 use super::*;
+use crate::runtime::puc::api::{PucCount, PucLoads, PucParse};
 use crate::runtime::puc::fmt::FmtArg;
 use crate::vm::dump::{Arr, UEv};
 
@@ -38,10 +39,7 @@ impl Vm {
                 // 5.2 makes a closure of one upvalue first, and another
                 // when the function has a different number
                 UEv::Closure(_) if reclose => {
-                    let size = self
-                        .heap
-                        .puc_size(crate::runtime::puc::PucObj::LuaClosure(1));
-                    self.heap.acct_ghost(PucKind::LuaClosure, size)?;
+                    self.heap.ghost_obj(PucObj::LuaClosure(1))?;
                 }
                 UEv::Closure(_) | UEv::Reclose(_) => {
                     self.acct_main_closure(cl);
@@ -52,8 +50,7 @@ impl Vm {
                 UEv::Proto => {
                     let p = protos.next().unwrap_or(cl.proto);
                     let hdr = p.hdr();
-                    let size = self.heap.puc_size(crate::runtime::puc::PucObj::Proto);
-                    self.heap.acct_promote_obj(hdr, PucKind::Proto, size);
+                    self.heap.promote_obj(hdr, PucObj::Proto);
                     // its arrays are kept as they are counted below
                     p.puc_arrays.set([0; 7]);
                     open.push(p);
@@ -90,10 +87,8 @@ impl Vm {
         if d == Dialect::L51 {
             self.acct_main_closure(cl);
         } else {
-            let upval = self.heap.puc_size(crate::runtime::puc::PucObj::Upval);
             for &uv in cl.upvals().iter().take(cl.proto.upvals.len()) {
-                let hdr = uv.hdr();
-                self.heap.acct_promote_obj(hdr, PucKind::Upval, upval);
+                self.heap.promote_obj(uv.hdr(), PucObj::Upval);
             }
         }
         self.heap.acct_block(buff, 0);
@@ -124,19 +119,15 @@ impl Vm {
         for (i, ev) in evs.iter().enumerate() {
             match *ev {
                 UEv::Closure(n) | UEv::Reclose(n) => {
-                    let size = self
-                        .heap
-                        .puc_size(crate::runtime::puc::PucObj::LuaClosure(n as usize));
-                    self.heap.acct_ghost(PucKind::LuaClosure, size)?;
+                    self.heap.ghost_obj(PucObj::LuaClosure(n as usize))?;
                     if let Some(h) = h.as_mut() {
                         h.insert(&mut self.heap, d, PKey::Ptr(1), None)?;
                     }
                 }
                 // a prototype and the arrays read for it, freed with it
                 UEv::Proto => {
-                    let size = self.heap.puc_size(crate::runtime::puc::PucObj::Proto)
-                        + self.arrays_of(&evs[i + 1..]);
-                    self.heap.acct_ghost(PucKind::Proto, size)?;
+                    let arrays = self.arrays_of(&evs[i + 1..]);
+                    self.heap.ghost_obj(PucObj::ProtoWithArrays(arrays))?;
                 }
                 UEv::End | UEv::Vec(..) => {}
                 UEv::Buff(n) if n as usize > buff => {
@@ -156,10 +147,7 @@ impl Vm {
         }
         // a long string is made before its bytes are read
         if let Some(len) = u.cut_long {
-            let size = self
-                .heap
-                .puc_size(crate::runtime::puc::PucObj::Str { len, long: true });
-            self.heap.acct_ghost(PucKind::LongStr, size)?;
+            self.heap.ghost_obj(PucObj::Str { len, long: true })?;
         }
         self.heap.acct_block(buff, 0);
         self.undump_error(chunkname, e)
@@ -245,11 +233,10 @@ impl Vm {
                 Ok(Value::Str(s))
             }
             None => {
-                let size = self.heap.puc_size(crate::runtime::puc::PucObj::Str {
+                self.heap.ghost_obj(PucObj::Str {
                     len: b.len(),
                     long: true,
-                });
-                self.heap.acct_ghost(PucKind::LongStr, size)?;
+                })?;
                 Ok(Value::Bool(true))
             }
         }
