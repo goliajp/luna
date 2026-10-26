@@ -11,8 +11,7 @@ use crate::vm::isa::{Inst, Op};
 /// closing value among them.
 pub(crate) fn needs_close(code: &[Inst], protos: &[Gc<Proto>]) -> bool {
     protos.iter().any(|p| p.upvals.iter().any(|u| u.in_stack))
-        || code.iter().any(|i| {
-            let op = i.op();
+        || code.iter().filter_map(|i| i.try_op()).any(|op| {
             op == Op::Tbc
                 || op.is_tfor_prep() && op.for_layout().is_some_and(|l| l.closing().is_some())
         })
@@ -25,9 +24,11 @@ pub(crate) fn mark_closing_returns(code: &mut [Inst], protos: &[Gc<Proto>]) {
     if !needs_close(code, protos) {
         return;
     }
+    // a loaded chunk's code is not verified yet: an opcode no `Op` names is
+    // left for the verifier to refuse
     for i in code.iter_mut() {
-        if matches!(i.op(), Op::Return0 | Op::Return1) {
-            *i = Inst::iabc(i.op(), i.a(), i.b(), i.c(), true);
+        if let Some(op @ (Op::Return0 | Op::Return1)) = i.try_op() {
+            *i = Inst::iabc(op, i.a(), i.b(), i.c(), true);
         }
     }
 }
