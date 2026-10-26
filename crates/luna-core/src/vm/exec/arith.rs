@@ -102,14 +102,17 @@ impl Vm {
         }
         match arith_num(self.version, op, ln, rn) {
             Ok(v) => Ok(Some(v)),
-            // a '%' shown is a `%%` of PUC's format ("attempt to perform
-            // 'n%%0'")
-            Err(msg) => {
-                let fmt = msg.replace('%', "%%");
-                let conv = msg.matches('%').count() as u32;
-                Err(self.runerror_fmt(fmt.as_bytes(), &[], conv, false))
-            }
+            Err(msg) => Err(self.arith_err(msg)),
         }
+    }
+
+    /// The error of an arithmetic op on numbers (`'n%%0'`): a '%' it shows
+    /// is a `%%` of PUC's format.
+    #[cold]
+    fn arith_err(&mut self, msg: &str) -> LuaError {
+        let fmt = msg.replace('%', "%%");
+        let conv = msg.matches('%').count() as u32;
+        self.runerror_fmt(fmt.as_bytes(), &[], conv, false)
     }
 
     /// Find the arithmetic/bitwise metamethod (left operand first), or raise the

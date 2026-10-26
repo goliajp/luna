@@ -55,30 +55,44 @@ impl Vm {
         if self.frames.len() as u32 >= self.g.ci_hint {
             return None;
         }
+        let frame = CallFrame::Lua(self.fresh_frame(cl, base, func_slot, nresults));
         frames_push_sync(
             &mut self.frames,
             &mut self.frames_top,
             &mut self.trap,
-            CallFrame::Lua(Frame {
-                closure: cl,
-                base,
-                pc: 0,
-                func_slot,
-                nresults,
-                hook_oldpc: u32::MAX,
-                from_c: false,
-                n_varargs: 0,
-                tm: self.pending_tm.take(),
-                is_hook: std::mem::take(&mut self.pending_is_hook),
-                tailcalls: std::mem::take(&mut self.pending_tailcalls),
-                ccmt: std::mem::take(&mut self.pending_ccmt),
-            }),
+            frame,
         );
         // SAFETY: a Lua frame was just pushed
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(f) => Some(f),
             // SAFETY: see above
             CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
+        }
+    }
+
+    /// A Lua frame for `cl` at `base`, about to run, with what the call
+    /// that makes it left pending (its tag method, hook, tail calls).
+    #[inline(always)]
+    fn fresh_frame(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        base: u32,
+        func_slot: u32,
+        nresults: i32,
+    ) -> Frame {
+        Frame {
+            closure: cl,
+            base,
+            pc: 0,
+            func_slot,
+            nresults,
+            hook_oldpc: u32::MAX,
+            from_c: false,
+            n_varargs: 0,
+            tm: self.pending_tm.take(),
+            is_hook: std::mem::take(&mut self.pending_is_hook),
+            tailcalls: std::mem::take(&mut self.pending_tailcalls),
+            ccmt: std::mem::take(&mut self.pending_ccmt),
         }
     }
 }
@@ -124,9 +138,8 @@ impl Vm {
         {
             return Returned::No;
         }
-        // popping the top frame leaves this one in place. Indexing `frames`
-        // mutably would reborrow the whole slice, the running frame too,
-        // which the fast loop still writes its pc through on `No`
+        // not indexed: that reborrows every frame, the running one too,
+        // whose pc the fast loop still writes on `No`
         // SAFETY: `n >= 2`, so slot `n - 2` holds a frame
         let caller_slot = unsafe { &mut *self.frames.as_mut_ptr().add(n - 2) };
         let caller: Option<*mut Frame> = match caller_slot {
