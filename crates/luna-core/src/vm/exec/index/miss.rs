@@ -19,7 +19,7 @@ impl Vm {
     /// `fr` points at the running frame, and `regs` / `kptr` at its
     /// register window and its proto's constants.
     #[inline(never)]
-    pub(in crate::vm::exec) unsafe fn index_op_miss(
+    pub(in super::super) unsafe fn index_op_miss(
         &mut self,
         inst: Inst,
         regs: *const Value,
@@ -70,7 +70,7 @@ impl Vm {
     /// # Safety
     /// `pt` and `pk` point at initialised values.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(in crate::vm::exec) unsafe fn index_miss_at(
+    pub(in super::super) unsafe fn index_miss_at(
         &mut self,
         pt: *const Value,
         pk: *const Value,
@@ -99,7 +99,7 @@ impl Vm {
     /// # Safety
     /// `fr` points at the running frame.
     #[inline(never)]
-    pub(in crate::vm::exec) unsafe fn newindex_op_miss(
+    pub(in super::super) unsafe fn newindex_op_miss(
         &mut self,
         inst: Inst,
         fr: *const Frame,
@@ -183,7 +183,7 @@ impl Vm {
     /// # Safety
     /// `pt` points at an initialised value.
     #[inline(never)]
-    pub(in crate::vm::exec) unsafe fn index_str_miss(
+    pub(in super::super) unsafe fn index_str_miss(
         &mut self,
         pt: *const Value,
         key: Gc<crate::runtime::string::LuaStr>,

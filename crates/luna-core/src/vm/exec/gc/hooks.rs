@@ -8,10 +8,10 @@ use super::*;
 
 /// gc-stress: which checkpoints collect; nothing in the product.
 #[cfg(feature = "gc-stress")]
-pub(in crate::vm::exec) use super::stress::Stress as StressState;
+pub(in super::super) use super::stress::Stress as StressState;
 #[cfg(not(feature = "gc-stress"))]
 #[derive(Default)]
-pub(in crate::vm::exec) struct StressState;
+pub(in super::super) struct StressState;
 
 impl Vm {
     /// A checkpoint: gc-trace writes it, gc-verify checks the live top
@@ -19,7 +19,7 @@ impl Vm {
     /// checkpoint is done).
     #[inline(always)]
     #[track_caller]
-    pub(in crate::vm::exec) fn hook_checkpoint(&mut self, live_top: u32) -> bool {
+    pub(in super::super) fn hook_checkpoint(&mut self, live_top: u32) -> bool {
         #[cfg(feature = "gc-trace")]
         self.trace_checkpoint();
         #[cfg(feature = "gc-verify")]
@@ -37,7 +37,7 @@ impl Vm {
     /// holds), written all the same.
     #[inline(always)]
     #[track_caller]
-    pub(in crate::vm::exec) fn hook_trace_checkpoint(&mut self) {
+    pub(in super::super) fn hook_trace_checkpoint(&mut self) {
         #[cfg(feature = "gc-trace")]
         self.trace_checkpoint();
     }
@@ -45,7 +45,7 @@ impl Vm {
     /// gc-verify: after a collection, every register the collector rooted
     /// holds a live value.
     #[inline(always)]
-    pub(in crate::vm::exec) fn hook_frames_live(&self, ctx: &str) {
+    pub(in super::super) fn hook_frames_live(&self, ctx: &str) {
         #[cfg(feature = "gc-verify")]
         self.verify_frame_regs_live(ctx);
         let _ = ctx;
@@ -53,7 +53,7 @@ impl Vm {
 
     /// gc-verify: the key an interpreter read takes is live.
     #[inline(always)]
-    pub(in crate::vm::exec) fn hook_index_key(&self, key: Value) {
+    pub(in super::super) fn hook_index_key(&self, key: Value) {
         #[cfg(feature = "gc-verify")]
         self.verify_index_key(key);
         let _ = key;
@@ -61,7 +61,7 @@ impl Vm {
 
     /// gc-verify: the key a write takes is live.
     #[inline(always)]
-    pub(in crate::vm::exec) fn hook_written_key(&self, key: Value) {
+    pub(in super::super) fn hook_written_key(&self, key: Value) {
         #[cfg(feature = "gc-verify")]
         self.verify_written_key(key);
         let _ = key;
@@ -70,7 +70,7 @@ impl Vm {
     /// gc-verify: a parser table the debug library is shown has the parts
     /// PUC's has (`luna`'s, `puc`: array slots and nodes).
     #[inline(always)]
-    pub(in crate::vm::exec) fn hook_reader_sizes(&self, luna: (u64, u64), puc: (u64, u64)) {
+    pub(in super::super) fn hook_reader_sizes(&self, luna: (u64, u64), puc: (u64, u64)) {
         #[cfg(feature = "gc-verify")]
         assert_eq!(
             luna, puc,
@@ -121,7 +121,7 @@ impl Vm {
 
     /// `f`, its checkpoints shown in the accounting trace as made in a C
     /// function (`in_c`) or in a call hook (`call_hook`) of PUC's.
-    pub(in crate::vm::exec) fn traced_as<R>(
+    pub(in super::super) fn traced_as<R>(
         &mut self,
         in_c: bool,
         call_hook: bool,

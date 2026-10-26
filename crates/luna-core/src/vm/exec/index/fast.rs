@@ -12,13 +12,10 @@ const PROBED_ONLY: bool = crate::runtime::gc_hooks::VERIFY;
 use super::set::{table_raw_set_at, table_set_existing_at};
 use fast_arith::{raw_gc, raw_int, raw_tag};
 
-/// Raw `tb[*pk]` with the key read in place (strings by pointer, integers
-/// in the array part, other keys by the general lookup out of line),
-/// copied to `dst` when it settles the read without `__index`: a non-nil
-/// value, or any value of a table without a metatable. `false`, with `dst`
-/// untouched, leaves the read to the `__index` chain. The value goes from
-/// its slot to `dst` directly, as PUC `setobj2s` does: passed back as a
-/// `Value` it took a detour through stack slots.
+/// Raw `tb[*pk]`, the key read in place (strings by pointer, integers in
+/// the array part, others out of line), copied straight to `dst` (PUC
+/// `setobj2s`) when it settles the read without `__index` (a non-nil value,
+/// or a table without a metatable); `false`, `dst` untouched, otherwise.
 ///
 /// # Safety
 /// `pk` points at an initialised value and `dst` at a register; `dst` is
@@ -112,18 +109,10 @@ unsafe fn table_get_cold(tb: &Table, key: Value, dst: *mut Value, plain: bool) -
     true
 }
 
-/// `SelfOp`'s key: `K[C]` when `k` is set, else `R[C]`. PUC OP_SELF's C is
-/// a constant index when the k-flag is set; otherwise it points to a
-/// register that holds the (constant-loaded) key. luna's compiler falls back
-/// to the register form when the constant index exceeds OP_SELF's 8-bit C
-/// field (5.1 big.lua's `a:findfield(...)` against a table with 250+ string
-/// keys, where "findfield" lands past const #255).
+/// `SelfOp`'s key: `K[C]` when `k` is set, else `R[C]`, the register the
+/// compiler loads a constant past C's 8 bits into (5.1 big.lua).
 #[cfg_attr(luna_hot, inline(always))]
-pub(in crate::vm::exec) fn self_key(
-    regs: *mut Value,
-    kptr: *const Value,
-    inst: Inst,
-) -> *const Value {
+pub(in super::super) fn self_key(regs: *mut Value, kptr: *const Value, inst: Inst) -> *const Value {
     if inst.k() {
         kptr.wrapping_add(inst.c() as usize)
     } else {
@@ -139,7 +128,7 @@ impl Vm {
     /// # Safety
     /// `pt` and `pk` point at initialised values and `dst` at a register.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(in crate::vm::exec) unsafe fn index_raw_at(
+    pub(in super::super) unsafe fn index_raw_at(
         pt: *const Value,
         pk: *const Value,
         dst: *mut Value,
@@ -159,7 +148,7 @@ impl Vm {
     /// # Safety
     /// As for `index_raw_at`, and `pk` points at a string.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(in crate::vm::exec) unsafe fn index_raw_kstr_at(
+    pub(in super::super) unsafe fn index_raw_kstr_at(
         pt: *const Value,
         pk: *const Value,
         dst: *mut Value,
@@ -181,7 +170,7 @@ impl Vm {
     /// `regs` and `kptr` are the running frame's, and `R[A+1]` holds the
     /// object.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(in crate::vm::exec) unsafe fn self_probe(
+    pub(in super::super) unsafe fn self_probe(
         regs: *mut Value,
         kptr: *const Value,
         inst: Inst,
@@ -206,7 +195,7 @@ impl Vm {
     /// # Safety
     /// `pk` points at a string and `dst` at a register.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(in crate::vm::exec) unsafe fn index_raw_kstr_key_at(
+    pub(in super::super) unsafe fn index_raw_kstr_key_at(
         t: Value,
         pk: *const Value,
         dst: *mut Value,
@@ -218,19 +207,16 @@ impl Vm {
         false
     }
 
-    /// `t[key] := v` without `__newindex` (PUC `luaV_fastset`), with the
-    /// table, the key and the value read in place: overwriting a key that is
-    /// present with a non-nil value never involves `__newindex`, and with no
-    /// metatable the write is a raw set. `false` leaves the write to
-    /// [`Self::newindex_miss`], having done nothing; so does a read-only
-    /// table, whose write raises there, and a black one, which needs the
-    /// write barrier: one flag test (`GcHeader::plain_store`) turns both
-    /// away, in place of the barrier test the store took afterwards.
+    /// `t[key] := v` without `__newindex` (PUC `luaV_fastset`), all read in
+    /// place: a present key with a non-nil value, or any key of a table
+    /// without a metatable; `false`, nothing done, leaves it to
+    /// [`Self::newindex_miss`], as does a read-only or black table (one
+    /// flag test, `GcHeader::plain_store`, turns both away).
     ///
     /// # Safety
     /// `pt`, `pk` and `pv` point at initialised values.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(in crate::vm::exec) unsafe fn newindex_raw_at(
+    pub(in super::super) unsafe fn newindex_raw_at(
         &mut self,
         pt: *const Value,
         pk: *const Value,
@@ -260,7 +246,7 @@ impl Vm {
     /// # Safety
     /// As for `newindex_raw_at`, and `pk` points at a string.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(in crate::vm::exec) unsafe fn newindex_raw_kstr_at(
+    pub(in super::super) unsafe fn newindex_raw_kstr_at(
         &mut self,
         pt: *const Value,
         pk: *const Value,
@@ -305,7 +291,7 @@ impl Vm {
     /// # Safety
     /// `pk` and `pv` point at initialised values.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(in crate::vm::exec) unsafe fn newindex_raw_key_at(
+    pub(in super::super) unsafe fn newindex_raw_key_at(
         &mut self,
         t: Value,
         pk: *const Value,
