@@ -1,5 +1,5 @@
-//! D1+D2 — Redis-Lua-shape micro-bench. Workloads modelled on the dogfood
-//! report §5#1: BullMQ token-bucket / Redlock-style sliding window /
+//! Redis-Lua-shape micro-bench. Workloads modelled on scripts embedders
+//! run: BullMQ token-bucket / Redlock-style sliding window /
 //! method dispatch via metatables / string ops. These are luna's
 //! "real-world embedder shape" baselines (vs the fib_28 / loop_int_1m
 //! academic shapes in lua_microbench).
