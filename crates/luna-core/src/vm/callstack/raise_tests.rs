@@ -12,10 +12,16 @@ use crate::vm::exec::Vm;
 const ERRORS: &str = r#"
 local ok1 = pcall(error, {})
 local ok2 = pcall(string.rep)
+local ok3 = xpcall(error, function(m) error(m) end)
+return ok1, ok2, ok3
+"#;
+
+/// A message handler that recurses until the stack overflows: in 5.2 and
+/// 5.3, whose Lua calls no call count stops, a million slots of calls,
+/// which Miri does not get through in hours.
+const OVERFLOWS: &str = r#"
 local function h(m) return h(m) .. '' end
-local ok3 = xpcall(error, h)
-local ok4 = xpcall(error, function(m) error(m) end)
-return ok1, ok2, ok3, ok4
+return xpcall(error, h)
 "#;
 
 fn remembered(vm: &Vm) -> usize {
@@ -34,8 +40,15 @@ fn a_collection_forgets_the_error_values_it_frees() {
         LuaVersion::Lua55,
     ] {
         let mut vm = Vm::new(v);
-        let f = vm.load(ERRORS.as_bytes(), b"=errors").expect("load");
-        vm.call_value(Value::Closure(f), &[]).expect("run");
+        let scripts: &[&str] = if cfg!(miri) && matches!(v, LuaVersion::Lua52 | LuaVersion::Lua53) {
+            &[ERRORS]
+        } else {
+            &[OVERFLOWS, ERRORS]
+        };
+        for src in scripts {
+            let f = vm.load(src.as_bytes(), b"=errors").expect("load");
+            vm.call_value(Value::Closure(f), &[]).expect("run");
+        }
         let before = remembered(&vm);
         vm.collect_garbage();
         assert_eq!(
