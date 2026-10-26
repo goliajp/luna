@@ -68,71 +68,59 @@ pub(super) fn trace_isa() -> Option<cranelift_codegen::isa::OwnedTargetIsa> {
 
 /// The address of a Rust helper trace code calls.
 pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
-    Some(match name {
-        "luna_jit_new_table_sized" => crate::jit_backend::luna_jit_new_table_sized as *const u8,
-        "luna_jit_table_reserve_list" => {
-            crate::jit_backend::luna_jit_table_reserve_list as *const u8
-        }
-        "luna_jit_table_set_int_checked" => {
-            crate::jit_backend::luna_jit_table_set_int_checked as *const u8
-        }
-        "luna_jit_table_set_field_checked" => {
-            crate::jit_backend::luna_jit_table_set_field_checked as *const u8
-        }
-        "luna_jit_table_set_checked" => crate::jit_backend::luna_jit_table_set_checked as *const u8,
-        "luna_jit_table_get_field" => crate::jit_backend::luna_jit_table_get_field as *const u8,
-        "luna_jit_op_get_tab_up" => crate::jit_backend::luna_jit_op_get_tab_up as *const u8,
-        "luna_jit_table_get_int" => crate::jit_backend::luna_jit_table_get_int as *const u8,
-        "luna_jit_table_get_int_checked" => {
-            crate::jit_backend::luna_jit_table_get_int_checked as *const u8
-        }
-        "luna_jit_table_get_field_checked" => {
-            crate::jit_backend::luna_jit_table_get_field_checked as *const u8
-        }
-        "luna_jit_op_get_tab_up_checked" => {
-            crate::jit_backend::luna_jit_op_get_tab_up_checked as *const u8
-        }
-        "luna_jit_table_len_checked" => crate::jit_backend::luna_jit_table_len_checked as *const u8,
-        "luna_jit_math_fn_is_library" => {
-            crate::jit_backend::luna_jit_math_fn_is_library as *const u8
-        }
-        "luna_jit_str_sub" => crate::jit_backend::luna_jit_str_sub as *const u8,
-        "luna_jit_fmod" => crate::jit_backend::luna_jit_fmod as *const u8,
-        "luna_jit_math1" => crate::jit_backend::luna_jit_math1 as *const u8,
-        "luna_jit_pow" => crate::jit_backend::luna_jit_pow as *const u8,
-        "luna_jit_numpow" => crate::jit_backend::luna_jit_numpow as *const u8,
-        "luna_jit_upval_get_checked" => crate::jit_backend::luna_jit_upval_get_checked as *const u8,
-        "luna_jit_upval_of_checked" => crate::jit_backend::luna_jit_upval_of_checked as *const u8,
-        "luna_jit_op_self_checked" => crate::jit_backend::luna_jit_op_self_checked as *const u8,
-        "luna_jit_gc_due" => crate::jit_backend::luna_jit_gc_due as *const u8,
-        "luna_jit_sunk_table" => crate::jit_backend::luna_jit_sunk_table as *const u8,
-        "luna_jit_sunk_grow" => crate::jit_backend::luna_jit_sunk_grow as *const u8,
-        "luna_jit_str_buf_concat" => crate::jit_backend::luna_jit_str_buf_concat as *const u8,
-        "luna_jit_suppress_trace_admit" => {
-            crate::jit_backend::luna_jit_suppress_trace_admit as *const u8
-        }
-        "luna_jit_upval_get" => crate::jit_backend::luna_jit_upval_get as *const u8,
-        "luna_jit_head_closure" => crate::jit_backend::luna_jit_head_closure as *const u8,
-        "luna_jit_trace_materialize_frames" => {
-            crate::jit_backend::luna_jit_trace_materialize_frames as *const u8
-        }
-        "luna_jit_materialize_sunk_table" => {
-            crate::jit_backend::luna_jit_materialize_sunk_table as *const u8
-        }
-        "luna_jit_op_closure" => crate::jit_backend::luna_jit_op_closure as *const u8,
-        "luna_jit_op_closure_in" => crate::jit_backend::luna_jit_op_closure_in as *const u8,
-        "luna_jit_set_top" => crate::jit_backend::luna_jit_set_top as *const u8,
-        "luna_jit_spill_to_stack" => crate::jit_backend::luna_jit_spill_to_stack as *const u8,
-        "luna_jit_op_close" => crate::jit_backend::luna_jit_op_close as *const u8,
-        "luna_jit_op_tforcall" => crate::jit_backend::luna_jit_op_tforcall as *const u8,
-        "luna_jit_stack_load" => crate::jit_backend::luna_jit_stack_load as *const u8,
-        "luna_jit_stack_tag" => crate::jit_backend::luna_jit_stack_tag as *const u8,
-        "luna_jit_op_concat" => crate::jit_backend::luna_jit_op_concat as *const u8,
-        "luna_jit_stack_update_raw" => crate::jit_backend::luna_jit_stack_update_raw as *const u8,
-        "luna_jit_str_buf_acquire" => crate::jit_backend::luna_jit_str_buf_acquire as *const u8,
-        "luna_jit_str_buf_release" => crate::jit_backend::luna_jit_str_buf_release as *const u8,
-        "luna_jit_str_buf_extend" => crate::jit_backend::luna_jit_str_buf_extend as *const u8,
-        "luna_jit_str_buf_intern" => crate::jit_backend::luna_jit_str_buf_intern as *const u8,
-        _ => return reloc::resolve_symbol(name),
-    })
+    // each helper by its name, as the trace's module imports it
+    macro_rules! by_name {
+        ($($f:ident),* $(,)?) => {
+            match name {
+                $(stringify!($f) => crate::jit_backend::$f as *const u8,)*
+                _ => return reloc::resolve_symbol(name),
+            }
+        };
+    }
+    Some(by_name!(
+        luna_jit_new_table_sized,
+        luna_jit_table_reserve_list,
+        luna_jit_table_set_int_checked,
+        luna_jit_table_set_field_checked,
+        luna_jit_table_set_checked,
+        luna_jit_table_get_field,
+        luna_jit_op_get_tab_up,
+        luna_jit_table_get_int,
+        luna_jit_table_get_int_checked,
+        luna_jit_table_get_field_checked,
+        luna_jit_op_get_tab_up_checked,
+        luna_jit_table_len_checked,
+        luna_jit_math_fn_is_library,
+        luna_jit_str_sub,
+        luna_jit_fmod,
+        luna_jit_math1,
+        luna_jit_pow,
+        luna_jit_numpow,
+        luna_jit_upval_get_checked,
+        luna_jit_upval_of_checked,
+        luna_jit_op_self_checked,
+        luna_jit_gc_due,
+        luna_jit_sunk_table,
+        luna_jit_sunk_grow,
+        luna_jit_str_buf_concat,
+        luna_jit_suppress_trace_admit,
+        luna_jit_upval_get,
+        luna_jit_head_closure,
+        luna_jit_trace_materialize_frames,
+        luna_jit_materialize_sunk_table,
+        luna_jit_op_closure,
+        luna_jit_op_closure_in,
+        luna_jit_set_top,
+        luna_jit_spill_to_stack,
+        luna_jit_op_close,
+        luna_jit_op_tforcall,
+        luna_jit_stack_load,
+        luna_jit_stack_tag,
+        luna_jit_op_concat,
+        luna_jit_stack_update_raw,
+        luna_jit_str_buf_acquire,
+        luna_jit_str_buf_release,
+        luna_jit_str_buf_extend,
+        luna_jit_str_buf_intern,
+    ))
 }
