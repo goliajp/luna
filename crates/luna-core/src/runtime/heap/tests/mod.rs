@@ -1,6 +1,8 @@
 use super::*;
 use crate::vm::isa::{Inst, Op};
 
+mod drive;
+
 #[test]
 fn collect_traces_function_objects() {
     let mut heap = Heap::new();

@@ -4,7 +4,7 @@
 use super::*;
 
 impl Heap {
-    #[allow(dead_code)]
+    #[cfg(any(feature = "gc-stress", feature = "gc-verify"))]
     /// Whether `h` is an object of this heap the collector keeps: on the
     /// object lists, and not one a pending sweep frees. Walks every object;
     /// for checks tests turn on.
@@ -31,7 +31,7 @@ impl Heap {
     /// one would let an interpreter store skip the write barrier or write
     /// into a read-only table. Checked in debug builds after each atomic
     /// step and at the end of each sweep and full collection.
-    #[allow(dead_code)]
+    #[cfg(any(debug_assertions, feature = "gc-verify"))]
     pub(in crate::runtime) fn verify_slow_bits(&self, ctx: &str) {
         let check = |h: *mut GcHeader| {
             // SAFETY: `h` is on one of the heap's own lists, all of whose
@@ -50,6 +50,7 @@ impl Heap {
 }
 
 /// Whether SLOW agrees with BLACK and the read-only mark.
+#[cfg(any(debug_assertions, feature = "gc-verify"))]
 fn slow_consistent(h: &GcHeader) -> bool {
     h.flags == h.with_slow(h.flags)
 }

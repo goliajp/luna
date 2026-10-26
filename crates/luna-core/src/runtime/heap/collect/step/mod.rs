@@ -60,19 +60,6 @@ impl Heap {
         }
     }
 
-    /// [`Heap::gc_begin_propagate`] with `roots` / `extra` as the roots.
-    #[cfg(test)]
-    pub(crate) fn gc_start_propagate(&mut self, roots: &[Value], extra: &[Gc<Upvalue>]) {
-        let mut m = self.gc_begin_propagate();
-        for &r in roots {
-            m.value(r);
-        }
-        for &uv in extra {
-            m.mark(uv);
-        }
-        self.stash_marker(m);
-    }
-
     /// PUC `luaC_fullgc` with marking under way (`keepinvariant`): no
     /// atomic step, `entersweep` and the sweep to its end (5.1 back to the
     /// string sweep), which with the white not flipped frees nothing and
@@ -105,27 +92,6 @@ impl Heap {
         self.phase = GcPhase::Pause;
     }
 
-    /// Drain up to `budget` gray objects (blacken + trace). Returns true if
-    /// the gray queue is now empty (caller should follow up with
-    /// `gc_finish_atomic`). PUC `propagatemark` budgeted loop.
-    #[cfg(test)]
-    pub(crate) fn gc_step_propagate(&mut self, budget: usize) -> bool {
-        debug_assert!(self.phase == GcPhase::Propagate);
-        let mut m = self.loan_marker();
-        let mut n = 0;
-        while n < budget {
-            let Some(h) = m.pop() else {
-                break;
-            };
-            // SAFETY: `h` was popped off the gray stack, which only `Marker::header` and `barrier_back` push to, with headers of allocated objects; frees happen only in the sweep, never during propagate or between its steps
-            unsafe { blacken(h, &mut m) };
-            n += 1;
-        }
-        let exhausted = m.stack.is_empty() && !m.overflow;
-        self.stash_marker(m);
-        exhausted
-    }
-
     /// Phase peek (for the VM-side step driver).
     pub(crate) fn gc_phase_is_pause(&self) -> bool {
         self.phase == GcPhase::Pause
@@ -133,7 +99,6 @@ impl Heap {
     pub(crate) fn gc_phase_is_propagate(&self) -> bool {
         self.phase == GcPhase::Propagate
     }
-    #[allow(dead_code)] // public phase-peek API trio; sweep variant unused internally
     pub(crate) fn gc_phase_is_sweep(&self) -> bool {
         self.phase == GcPhase::Sweep
     }
