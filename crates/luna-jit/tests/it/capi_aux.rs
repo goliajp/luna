@@ -37,6 +37,11 @@ fn lib_open() {
     check("lib_open");
 }
 
+#[test]
+fn count_compiled_loop() {
+    check("count_compiled_loop");
+}
+
 // a signal in a wait status and reading a directory exist only on POSIX
 #[cfg(unix)]
 #[test]
