@@ -124,6 +124,34 @@ impl Heap {
         }
     }
 
+    /// luna's name `bytes`, which PUC makes only where the program first
+    /// uses it (`made_later`), and makes again after its sweep freed it:
+    /// from 5.3 on, whose sweep goes over strings in the list's order, made
+    /// set aside, among the first objects set aside (which no load's
+    /// setting aside reaches), so that PUC making it puts it at the list's
+    /// head, as PUC's is. See [`Heap::name_aside_again`].
+    pub(crate) fn try_intern_name(
+        &mut self,
+        bytes: &[u8],
+        made_later: bool,
+    ) -> Result<Gc<crate::runtime::LuaStr>, crate::runtime::mem::Oom> {
+        if !made_later || self.puc.rules.sweeps_string_table {
+            return self.try_intern(bytes);
+        }
+        let a = self.set_loads_aside(true);
+        let s = self.try_intern(bytes);
+        self.loads_aside_back(a);
+        self.puc.names_aside = self.puc.unborn.len();
+        s
+    }
+
+    /// Whether `h`, a string PUC's sweep frees and luna keeps, is one of
+    /// luna's names set aside at first: the sweep sets it aside again,
+    /// for PUC's making it again to put it at the list's head.
+    pub(in crate::runtime::puc) fn name_aside_again(&self, h: *mut GcHeader) -> bool {
+        self.puc.unborn[..self.puc.names_aside].contains(&h)
+    }
+
     /// The objects still set aside: allocated, off the lists.
     pub(in crate::runtime::puc) fn unborn_objs(&self) -> impl Iterator<Item = *mut GcHeader> + '_ {
         // SAFETY: what the list of them holds is allocated (only

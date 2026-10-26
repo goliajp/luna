@@ -29,7 +29,11 @@ impl Heap {
                 } else {
                     Fate::Keep
                 };
-                if let Fate::Free(_) = fate {
+                if let Fate::Aside = fate {
+                    *link = (*cur).next;
+                    self.detach_new(cur);
+                    self.live -= 1;
+                } else if let Fate::Free(_) = fate {
                     *link = (*cur).next;
                     self.free_obj(cur);
                     freed += 1;
@@ -118,6 +122,11 @@ impl Heap {
                     // PUC's string table holds it, not the list it sweeps to
                     // the first live object: its string sweep comes first
                     Fate::Hold => *link = (*cur).next,
+                    Fate::Aside => {
+                        *link = (*cur).next;
+                        self.detach_new(cur);
+                        self.live -= 1;
+                    }
                     Fate::Free(_) => {
                         *link = (*cur).next;
                         self.free_obj(cur);
@@ -190,7 +199,11 @@ impl Heap {
                 } else {
                     Fate::Keep
                 };
-                if let Fate::Free(k) = fate {
+                if let Fate::Aside = fate {
+                    *link = (*cur).next;
+                    self.detach_new(cur);
+                    self.live -= 1;
+                } else if let Fate::Free(k) = fate {
                     n += k;
                     *link = (*cur).next;
                     // gc-verify notes every free in `free_obj`; 5.1 and 5.2

@@ -86,6 +86,8 @@ impl Heap {
         let _ = self.counting_off();
         let mut held = self.take_held_strings();
         held.extend(self.open_off_list());
+        // luna's names set aside, the only objects set aside now
+        held.extend(self.unborn_objs());
         held
     }
 }

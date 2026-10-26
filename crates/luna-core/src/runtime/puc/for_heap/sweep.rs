@@ -14,6 +14,9 @@ pub(crate) enum Fate {
     Keep,
     /// held for the string sweep under way: the heap only unlinks it
     Hold,
+    /// set aside: a name of luna's PUC frees, made again where PUC makes
+    /// it (see `Heap::name_aside_again`); the heap takes it off the list
+    Aside,
 }
 
 impl Heap {
@@ -67,7 +70,11 @@ impl Heap {
                 return Fate::Hold;
             }
             if self.kept_dead(cur) {
-                return Fate::Keep;
+                return if self.name_aside_again(cur) {
+                    Fate::Aside
+                } else {
+                    Fate::Keep
+                };
             }
             let n = self.env51_sweep(cur, true);
             self.env51_forget(cur);

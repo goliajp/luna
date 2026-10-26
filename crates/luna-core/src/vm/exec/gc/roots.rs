@@ -280,7 +280,7 @@ impl Vm {
 
 /// Which of `MM_NAMES` are PUC's metamethod names (`luaT_init`, which fixes
 /// them) in version `v`, as bits by index.
-fn fixed_names(v: LuaVersion) -> u32 {
+pub(crate) fn fixed_names(v: LuaVersion) -> u32 {
     // __index __newindex __call __eq __lt __le __concat __len __add __sub
     // __mul __div __mod __pow __unm __gc
     let base = 0b100_1000_0001_1111_1111_1100_0111;

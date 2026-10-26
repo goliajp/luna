@@ -4,6 +4,7 @@ use super::*;
 #[cfg(feature = "gc-verify")]
 mod gc_verify;
 mod roots;
+pub(crate) use roots::fixed_names;
 #[cfg(feature = "gc-trace")]
 mod trace_k;
 
