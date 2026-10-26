@@ -57,19 +57,12 @@ impl Heap {
                 found = true;
                 first = first.min(a.recs[1]);
                 for (k, r) in a.recs.into_iter().enumerate() {
-                    let p = &mut g.ph[r];
-                    if p.dead {
+                    let swept = g.ph.with(r, |p| p.sweep(w));
+                    let Some(freed) = swept else {
                         continue;
-                    }
+                    };
                     n += 1;
-                    let f = p.hdr.flags();
-                    if is_white(f) && f & w == 0 {
-                        p.dead = true;
-                        p.hdr.set_flags(BLACK);
-                        each[m + k] = Some((r, p.counted));
-                    } else {
-                        p.hdr.set_flags(w);
-                    }
+                    each[m + k] = freed.map(|counted| (r, counted));
                 }
                 m += 2;
             }
@@ -126,8 +119,12 @@ impl Heap {
         let w = self.white();
         if let Some(e) = &mut self.puc.records.env51_box {
             for g in e.gens.iter_mut() {
-                for p in g.ph.iter_mut().filter(|p| !p.dead) {
-                    p.hdr.set_flags(w);
+                for k in 0..6 {
+                    g.ph.with(k, |p| {
+                        if !p.dead {
+                            p.hdr.set_flags(w);
+                        }
+                    });
                 }
             }
         }

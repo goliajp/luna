@@ -17,9 +17,9 @@ impl Marker {
         let g = e.gen_of(h);
         let h = match env {
             ENV_PACKAGE => e.package,
-            ENV_IO => &g.ph[E1].hdr as *const GcHeader as *mut GcHeader,
-            ENV_IO_STD => &g.ph[E2].hdr as *const GcHeader as *mut GcHeader,
-            _ => &g.ph[E3].hdr as *const GcHeader as *mut GcHeader,
+            ENV_IO => g.ph.hdr(E1),
+            ENV_IO_STD => g.ph.hdr(E2),
+            _ => g.ph.hdr(E3),
         };
         if !h.is_null() {
             // SAFETY: a record (boxed in the records the marker holds, which
@@ -48,7 +48,7 @@ impl Marker {
             let Some(g) = e
                 .gens
                 .iter()
-                .find(|g| g.ph.iter().any(|q| std::ptr::eq(q, p)))
+                .find(|g| (0..6).any(|k| std::ptr::eq(g.ph.at(k), p)))
             else {
                 return;
             };
@@ -56,7 +56,7 @@ impl Marker {
                 kids[n] = k;
                 n += 1;
             };
-            if std::ptr::eq(p, &g.ph[E1]) {
+            if std::ptr::eq(p, g.ph.at(E1)) {
                 for f in [g.io[1], g.io[0]] {
                     if !f.is_null() {
                         push(f);
@@ -69,11 +69,11 @@ impl Marker {
             }
             if p.env != 0 {
                 // a closure's environment, its own opening's E1
-                push(&g.ph[E1].hdr as *const GcHeader as *mut GcHeader);
+                push(g.ph.hdr(E1));
             }
             for &k in &p.kids {
                 if k != NONE {
-                    push(&g.ph[usize::from(k)].hdr as *const GcHeader as *mut GcHeader);
+                    push(g.ph.hdr(usize::from(k)));
                 }
             }
             for &k in &kids[..n] {
