@@ -31,20 +31,8 @@ pub(super) fn define_entry<M: Module>(
             math_fns.push((fold.math_key, fold.name_key));
         }
     }
-    // the arguments as the interpreter holds them, should a check fail
-    let arg_tags = (0..num_params)
-        .map(|i| {
-            if (table_mask >> i) & 1 == 1 {
-                luna_core::__private::raw::TABLE
-            } else if (float_mask >> i) & 1 == 1 {
-                luna_core::__private::raw::FLOAT
-            } else {
-                luna_core::__private::raw::INT
-            }
-        })
-        .collect();
     let checks = EntryChecks {
-        arg_tags,
+        arg_tags: arg_tags(float_mask, table_mask, num_params),
         self_upval: self_upval_idx.filter(|_| any_self_call),
         math_fns,
         ring,
@@ -55,4 +43,21 @@ pub(super) fn define_entry<M: Module>(
         fn_id
     };
     Some(entry_id)
+}
+
+/// The tags of the `n` arguments as the interpreter holds them, should a
+/// check fail: a table or a float where its mask's bit is set, else an
+/// integer.
+fn arg_tags(float_mask: u8, table_mask: u8, n: usize) -> Vec<u8> {
+    (0..n)
+        .map(|i| {
+            if (table_mask >> i) & 1 == 1 {
+                luna_core::__private::raw::TABLE
+            } else if (float_mask >> i) & 1 == 1 {
+                luna_core::__private::raw::FLOAT
+            } else {
+                luna_core::__private::raw::INT
+            }
+        })
+        .collect()
 }

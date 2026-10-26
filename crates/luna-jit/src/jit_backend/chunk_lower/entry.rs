@@ -126,13 +126,34 @@ pub(super) fn define_checked_entry<M: Module>(
     // a check failed: the interpreter runs the call from its start, the
     // level counted already
     bcx.switch_to_block(bail);
-    let n = checks.arg_tags.len();
+    emit_handoff(module, &mut bcx, &checks.arg_tags, &entry_args)?;
+    let zero = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().return_(&[zero]);
+
+    bcx.seal_all_blocks();
+    bcx.finalize(module.target_config());
+    module.define_function(entry_id, ctx).ok()?;
+    chunk_share::note(module, ctx, entry_id);
+    module.clear_context(ctx);
+    Some(entry_id)
+}
+
+/// The bail block's handoff: the arguments, each with its tag, stored for
+/// `luna_jit_handoff_frame`, which has the interpreter run the call from
+/// its start.
+fn emit_handoff<M: Module>(
+    module: &mut M,
+    bcx: &mut FunctionBuilder<'_>,
+    arg_tags: &[u8],
+    entry_args: &[Value],
+) -> Option<()> {
+    let n = arg_tags.len();
     let slot = bcx.create_sized_stack_slot(StackSlotData::new(
         StackSlotKind::ExplicitSlot,
         (16 * n.max(1)) as u32,
         3,
     ));
-    for (i, &tag) in checks.arg_tags.iter().enumerate() {
+    for (i, &tag) in arg_tags.iter().enumerate() {
         let t = bcx.ins().iconst(types::I64, i64::from(tag));
         bcx.ins().stack_store(types::I64, t, slot, (16 * i) as i32);
         bcx.ins()
@@ -151,15 +172,7 @@ pub(super) fn define_checked_entry<M: Module>(
     let regs = bcx.ins().stack_addr(types::I64, slot, 0);
     let count = bcx.ins().iconst(types::I64, n as i64);
     bcx.ins().call(hand_ref, &[pc0, level0, regs, count]);
-    let zero = bcx.ins().iconst(types::I64, 0);
-    bcx.ins().return_(&[zero]);
-
-    bcx.seal_all_blocks();
-    bcx.finalize(module.target_config());
-    module.define_function(entry_id, ctx).ok()?;
-    chunk_share::note(module, ctx, entry_id);
-    module.clear_context(ctx);
-    Some(entry_id)
+    Some(())
 }
 
 /// Defines the stub the last copy of a self-recursive body calls (and the
