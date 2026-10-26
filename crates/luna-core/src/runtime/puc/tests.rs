@@ -48,7 +48,7 @@ fn count_after(v: LuaVersion, script: &str, aside: bool, reopen: bool) -> usize 
     vm.set_global("loud", Value::Nil).unwrap();
     vm.collect_garbage();
     vm.collect_garbage();
-    vm.heap.puc.bytes
+    vm.heap.puc.count.bytes
 }
 
 const ALL: [LuaVersion; 5] = [

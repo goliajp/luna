@@ -16,14 +16,14 @@ pub(crate) struct RunMark {
 impl Heap {
     /// Approximate heap size in bytes.
     pub fn bytes(&self) -> usize {
-        self.puc.bytes
+        self.puc.count.bytes
     }
 
     /// What a memory cap is held against: the bytes the allocation context
     /// has handed out, when it counts them (a host function or a policy),
     /// else PUC's count ([`Heap::bytes`]).
     pub(crate) fn cap_bytes(&self) -> usize {
-        self.mem_ctx().in_use().unwrap_or(self.puc.bytes)
+        self.mem_ctx().in_use().unwrap_or(self.puc.count.bytes)
     }
 
     /// Whether allocation has crossed the auto-GC threshold (cheap safe-point

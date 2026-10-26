@@ -50,14 +50,14 @@ pub(super) fn step_52<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
 /// 5.2's `sweepthread` of each coroutine the sweep just kept (the main
 /// thread's comes at the end of the sweep).
 fn shrink_swept_52<H: StepHost + ?Sized>(h: &mut H) {
-    let swept = std::mem::take(&mut h.heap().puc.shrunk);
+    let swept = std::mem::take(&mut h.heap().puc.records.shrunk);
     for &t in &swept {
         // SAFETY: the sweep just kept `t`, a coroutine
         h.shrink_swept_thread_52(unsafe { crate::runtime::Gc::from_ptr_unchecked(t.cast()) });
     }
     let mut swept = swept;
     swept.clear();
-    h.heap().puc.shrunk = swept;
+    h.heap().puc.records.shrunk = swept;
 }
 
 /// 5.2's `luaC_fullgc` from a pause: the whole cycle as single steps,
@@ -85,7 +85,7 @@ pub(super) fn emergency_cycle_52<H: StepHost + ?Sized>(h: &mut H, young: Young) 
     mark_52(h, Some(young));
     estimate_52(h);
     h.heap().gc_finish_sweep();
-    h.heap().puc.shrunk.clear();
+    h.heap().puc.records.shrunk.clear();
 }
 
 /// 5.2's marking from a pause up to its atomic step, what it traverses
@@ -161,7 +161,7 @@ pub(super) fn singlestep_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
         }
         St::Propagate => atomic_52(h),
         St::SweepString => {
-            let size = h.heap().puc.strt_size as i64;
+            let size = h.heap().puc.records.strt_size as i64;
             let i = max.min(size - h.heap().puc.pace.strt_swept);
             let heap = h.heap();
             heap.puc.pace.strt_swept += i;
@@ -216,7 +216,7 @@ pub(crate) fn strt_resize_in_sweep(heap: &mut Heap) -> bool {
     if heap.puc.dialect == Dialect::L51 {
         return false;
     }
-    heap.puc.pace.strt_swept = heap.puc.strt_size as i64;
+    heap.puc.pace.strt_swept = heap.puc.records.strt_size as i64;
     heap.sweep_strings_upto(heap.puc.pace.strt_swept);
     strings_swept_52(heap);
     true

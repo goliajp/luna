@@ -20,7 +20,7 @@ impl Heap {
     #[inline(always)]
     pub(in crate::runtime) unsafe fn set_aside(&mut self, h: *mut GcHeader) -> bool {
         // SAFETY: the caller's contract
-        self.puc.unborn_on && unsafe { self.set_aside_now(h) }
+        self.puc.loads.unborn_on && unsafe { self.set_aside_now(h) }
     }
 
     /// [`Heap::set_aside`] while loads set objects aside.
@@ -29,10 +29,10 @@ impl Heap {
     /// As [`Heap::link`]'s.
     #[cold]
     unsafe fn set_aside_now(&mut self, h: *mut GcHeader) -> bool {
-        if self.puc.unborn.try_reserve(1).is_err() {
+        if self.puc.loads.unborn.try_reserve(1).is_err() {
             return false;
         }
-        self.puc.unborn.push(h);
+        self.puc.loads.unborn.push(h);
         self.hook_reborn(h);
         // SAFETY: the caller's contract
         unsafe { self.detach_new(h) };
@@ -66,28 +66,28 @@ impl Heap {
     /// until the token goes back to [`Heap::loads_aside_back`].
     #[inline]
     pub(in crate::runtime::puc) fn set_loads_aside(&mut self, on: bool) -> LoadsAside {
-        LoadsAside(std::mem::replace(&mut self.puc.unborn_on, on))
+        LoadsAside(std::mem::replace(&mut self.puc.loads.unborn_on, on))
     }
 
     /// Where loads were set aside at some point (a load unwound by running
     /// out of memory goes back there).
     #[inline]
     pub(in crate::runtime::puc) fn loads_aside_mark(&self) -> LoadsAside {
-        LoadsAside(self.puc.unborn_on)
+        LoadsAside(self.puc.loads.unborn_on)
     }
 
     /// Back to what [`Heap::set_loads_aside`] changed.
     #[inline]
     pub(in crate::runtime::puc) fn loads_aside_back(&mut self, a: LoadsAside) {
-        self.puc.unborn_on = a.0;
+        self.puc.loads.unborn_on = a.0;
     }
 
     /// The objects set aside at `from..to` of the list of them that are
     /// still aside go on the list, the others staying where they are.
     pub(in crate::runtime::puc) fn born_range(&mut self, (from, to): (usize, usize)) {
-        let to = to.min(self.puc.unborn.len());
+        let to = to.min(self.puc.loads.unborn.len());
         for i in from.min(to)..to {
-            let h = self.puc.unborn[i];
+            let h = self.puc.loads.unborn[i];
             // SAFETY: an object set aside is allocated; `born` leaves one
             // already on the list alone
             unsafe { self.born(h) };
@@ -98,18 +98,18 @@ impl Heap {
     /// that PUC did not make go on the list: luna's own, or garbage of a
     /// load that failed.
     pub(in crate::runtime::puc) fn flush_unborn(&mut self, base: usize) {
-        let mut rest = std::mem::take(&mut self.puc.unborn);
+        let mut rest = std::mem::take(&mut self.puc.loads.unborn);
         for &h in &rest[base.min(rest.len())..] {
             // SAFETY: an object set aside is allocated, and only here
             unsafe { self.born(h) };
         }
         rest.truncate(base);
-        self.puc.unborn = rest;
+        self.puc.loads.unborn = rest;
     }
 
     /// How many objects are set aside, for [`Heap::flush_unborn`].
     pub(in crate::runtime::puc) fn unborn_len(&self) -> usize {
-        self.puc.unborn.len()
+        self.puc.loads.unborn.len()
     }
 
     /// A sweep is over: what is set aside is white for the next cycle, as
@@ -141,7 +141,7 @@ impl Heap {
         let a = self.set_loads_aside(true);
         let s = self.try_intern(bytes);
         self.loads_aside_back(a);
-        self.puc.names_aside = self.puc.unborn.len();
+        self.puc.loads.names_aside = self.puc.loads.unborn.len();
         s
     }
 
@@ -149,7 +149,7 @@ impl Heap {
     /// luna's names set aside at first: the sweep sets it aside again,
     /// for PUC's making it again to put it at the list's head.
     pub(in crate::runtime::puc) fn name_aside_again(&self, h: *mut GcHeader) -> bool {
-        self.puc.unborn[..self.puc.names_aside].contains(&h)
+        self.puc.loads.unborn[..self.puc.loads.names_aside].contains(&h)
     }
 
     /// The objects still set aside: allocated, off the lists.
@@ -157,6 +157,7 @@ impl Heap {
         // SAFETY: what the list of them holds is allocated (only
         // `flush_unborn` drops one, after it put it on the list)
         self.puc
+            .loads
             .unborn
             .iter()
             .copied()

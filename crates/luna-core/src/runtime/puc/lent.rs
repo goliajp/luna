@@ -24,10 +24,10 @@ impl Heap {
     /// What a marker borrows, `stands` with the stand-ins.
     pub(in crate::runtime::puc) fn lend_model(&mut self, stands: bool) -> Lent {
         Lent {
-            env51: self.puc.env51_box.take(),
-            parse: std::mem::take(&mut self.puc.parse),
+            env51: self.puc.records.env51_box.take(),
+            parse: std::mem::take(&mut self.puc.loads.parse),
             stands: if stands {
-                std::mem::take(&mut self.puc.stand_ins)
+                std::mem::take(&mut self.puc.records.stand_ins)
             } else {
                 Vec::new()
             },
@@ -38,13 +38,13 @@ impl Heap {
     /// What a marker borrowed, back.
     pub(in crate::runtime::puc) fn settle_model(&mut self, l: &mut Lent) {
         if let Some(e) = l.env51.take() {
-            self.puc.env51_box = Some(e);
+            self.puc.records.env51_box = Some(e);
         }
-        if !l.parse.is_empty() || self.puc.parse.is_empty() {
-            self.puc.parse = std::mem::take(&mut l.parse);
+        if !l.parse.is_empty() || self.puc.loads.parse.is_empty() {
+            self.puc.loads.parse = std::mem::take(&mut l.parse);
         }
         if l.stands_taken {
-            self.puc.stand_ins = std::mem::take(&mut l.stands);
+            self.puc.records.stand_ins = std::mem::take(&mut l.stands);
             l.stands_taken = false;
         }
     }

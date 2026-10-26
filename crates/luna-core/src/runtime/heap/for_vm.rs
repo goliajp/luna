@@ -135,4 +135,14 @@ impl Heap {
         // written, and no reference to the header is held across this
         unsafe { (*o.header()).cls |= LUNA_ONLY };
     }
+
+    /// The number a new table, function, thread or userdata gets: its hash
+    /// as a table key. PUC hashes these by address, which varies from run
+    /// to run; numbers in creation order give one of the layouts PUC can
+    /// have, the same every run.
+    #[inline(always)]
+    pub(in crate::runtime) fn take_id(&mut self) -> u32 {
+        self.next_id = self.next_id.wrapping_add(16);
+        self.next_id
+    }
 }

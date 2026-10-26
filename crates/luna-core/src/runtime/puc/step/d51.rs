@@ -17,12 +17,12 @@ pub(super) fn step_51<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
             // the buckets the single steps would sweep before the limit,
             // at once: nothing else happens between them
             let heap = h.heap();
-            let left = heap.puc.strt_size as i64 - heap.puc.pace.strt_swept;
+            let left = heap.puc.records.strt_size as i64 - heap.puc.pace.strt_swept;
             let k = ((lim + SWEEPCOST_51 - 1) / SWEEPCOST_51).clamp(1, left.max(1));
             heap.puc.pace.strt_swept += k;
             let freed = heap.sweep_strings_upto(heap.puc.pace.strt_swept);
             heap.puc.pace.estimate -= freed;
-            if heap.puc.pace.strt_swept >= heap.puc.strt_size as i64 {
+            if heap.puc.pace.strt_swept >= heap.puc.records.strt_size as i64 {
                 h.heap().end_string_sweep();
                 h.heap().puc.pace.enter(St::SweepAll);
             }
@@ -56,7 +56,7 @@ pub(super) fn atomic_51<H: StepHost + ?Sized>(h: &mut H) {
     atomic(h);
     h.heap().puc.pace.enter(St::SweepString);
     // `totalbytes - udsize`: what is to be finalized is not counted
-    h.heap().puc.pace.estimate = h.heap().bytes() as i64 - h.heap().puc.udsize;
+    h.heap().puc.pace.estimate = h.heap().bytes() as i64 - h.heap().puc.records.udsize;
     h.heap().puc.pace.strt_swept = 0;
 }
 
@@ -75,7 +75,7 @@ pub(super) fn singlestep_51<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, LuaE
             heap.puc.pace.strt_swept += 1;
             let freed = heap.sweep_strings_upto(heap.puc.pace.strt_swept);
             heap.puc.pace.estimate -= freed;
-            if heap.puc.pace.strt_swept >= heap.puc.strt_size as i64 {
+            if heap.puc.pace.strt_swept >= heap.puc.records.strt_size as i64 {
                 h.heap().end_string_sweep();
                 h.heap().puc.pace.enter(St::SweepAll);
             }

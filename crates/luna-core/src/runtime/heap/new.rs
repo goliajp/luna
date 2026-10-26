@@ -105,6 +105,7 @@ impl Heap {
             table_pool: Vec::new(),
             slab: Default::default(),
             weak_userdata: ptr::null_mut(),
+            next_id: 0,
             userdata_freed: None,
             udata_after: None,
             blank_upval: None,

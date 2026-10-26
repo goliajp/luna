@@ -35,127 +35,138 @@ impl Heap {
     /// How many stack slots the loads' parser objects take (see
     /// [`Heap::mark_load_slots`]).
     pub(crate) fn load_slots(&self) -> u32 {
-        self.puc.parse.iter().map(|f| f.slots.len() as u32).sum()
+        self.puc
+            .loads
+            .parse
+            .iter()
+            .map(|f| f.slots.len() as u32)
+            .sum()
     }
 
     /// `frame` is the innermost load's view while a collection step runs
     /// in it, until the token goes back to [`Heap::close_parse_frame`].
     #[inline]
     pub(crate) fn open_parse_frame(&mut self, frame: ParseFrame) -> ParseOpen {
-        self.puc.parse.push(frame);
+        self.puc.loads.parse.push(frame);
         ParseOpen(())
     }
 
     #[inline]
     pub(crate) fn close_parse_frame(&mut self, _: ParseOpen) {
-        self.puc.parse.pop();
+        self.puc.loads.parse.pop();
     }
 
     /// Where the parser frames stand now.
     #[inline]
     pub(in crate::runtime::puc) fn parse_mark(&self) -> ParseMark {
-        ParseMark(self.puc.parse.len())
+        ParseMark(self.puc.loads.parse.len())
     }
 
     /// Back to the frames at `m` (a load unwound by running out of memory).
     #[inline]
     pub(in crate::runtime::puc) fn restore_parse_frames(&mut self, m: ParseMark) {
-        self.puc.parse.truncate(m.0);
+        self.puc.loads.parse.truncate(m.0);
     }
 
     /// The message of the load that just failed, made as PUC makes it.
     #[inline]
     pub(crate) fn set_load_msg(&mut self, m: Gc<LuaStr>) {
-        self.puc.load_msg = Some(m);
+        self.puc.loads.load_msg = Some(m);
     }
 
     /// The message [`Heap::set_load_msg`] left, if any, taken.
     #[inline]
     pub(crate) fn take_load_msg(&mut self) -> Option<Gc<LuaStr>> {
-        self.puc.load_msg.take()
+        self.puc.loads.load_msg.take()
     }
 
     /// The message [`Heap::set_load_msg`] left, if any.
     #[inline]
     pub(crate) fn load_msg(&self) -> Option<Gc<LuaStr>> {
-        self.puc.load_msg
+        self.puc.loads.load_msg
     }
 
     /// The load about to run was checked for a collection already (or no
     /// more, `false`).
     #[inline]
     pub(crate) fn set_load_checked(&mut self, on: bool) {
-        self.puc.load_checked = on;
+        self.puc.loads.load_checked = on;
     }
 
     /// Whether the load about to run was checked already; the mark taken.
     #[inline]
     pub(crate) fn take_load_checked(&mut self) -> bool {
-        std::mem::take(&mut self.puc.load_checked)
+        std::mem::take(&mut self.puc.loads.load_checked)
     }
 
     /// Whether the failed load's replay shrank the stack where
     /// `luaD_pcall` caught its error, now `on`.
     #[inline]
     pub(crate) fn load_caught(&mut self, on: bool) -> bool {
-        std::mem::replace(&mut self.puc.load_caught, on)
+        std::mem::replace(&mut self.puc.loads.load_caught, on)
     }
 
     /// A load that must not collect is running.
     #[inline]
     pub(crate) fn loads_held(&self) -> bool {
-        self.puc.load_holds
+        self.puc.loads.load_holds
     }
 
     /// A load that must not collect starts, until the token is handed to
     /// [`Heap::release_loads`].
     #[inline]
     pub(crate) fn hold_loads(&mut self) -> LoadsHeld {
-        LoadsHeld(std::mem::replace(&mut self.puc.load_holds, true))
+        LoadsHeld(std::mem::replace(&mut self.puc.loads.load_holds, true))
     }
 
     /// The load [`Heap::hold_loads`] started is over.
     #[inline]
     pub(crate) fn release_loads(&mut self, held: LoadsHeld) {
-        self.puc.load_holds = held.0;
+        self.puc.loads.load_holds = held.0;
     }
 
     /// 5.1's io library opening: its environments' records are on the
     /// stack (see `vm/opening/fenv51.rs`).
     #[inline]
     pub(crate) fn phantoms(&self) -> bool {
-        self.puc.phantoms
+        self.puc.opening.phantoms
     }
 
     #[inline]
     pub(crate) fn set_phantoms(&mut self, on: bool) {
-        self.puc.phantoms = on;
+        self.puc.opening.phantoms = on;
     }
 
     /// `s`, a string a library of PUC's keeps and luna's may not, kept
     /// alive (once, however often pinned).
     #[inline]
     pub(crate) fn pin(&mut self, s: Gc<LuaStr>) {
-        if !self.puc.pins.iter().any(|p| p.as_ptr() == s.as_ptr()) {
-            self.puc.pins.push(s);
+        if !self
+            .puc
+            .records
+            .pins
+            .iter()
+            .any(|p| p.as_ptr() == s.as_ptr())
+        {
+            self.puc.records.pins.push(s);
         }
     }
 
     /// Mark the strings [`Heap::pin`] keeps.
     #[inline]
     pub(crate) fn mark_pins(&self, m: &mut Marker) {
-        m.mark_strings(self.puc.pins.iter());
+        m.mark_strings(self.puc.records.pins.iter());
     }
 
     /// Mark the message [`Heap::set_load_msg`] left.
     #[inline]
     pub(crate) fn mark_load_msg(&self, m: &mut Marker) {
-        m.mark_strings(self.puc.load_msg.iter());
+        m.mark_strings(self.puc.loads.load_msg.iter());
     }
 
     /// The longest string PUC keeps in its string table (5.1: all).
     #[inline]
     pub(crate) fn short_max(&self) -> usize {
-        self.puc.short_max
+        self.puc.records.short_max
     }
 }

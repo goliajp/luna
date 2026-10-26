@@ -20,7 +20,7 @@ impl Heap {
         if unsafe { (*cur).cls } >> ENV_SHIFT == 0 {
             return 0;
         }
-        match &self.puc.env51_box {
+        match &self.puc.records.env51_box {
             Some(e) if e.ats.contains(&cur) => self.env51_sweep_at(cur, after),
             _ => 0,
         }
@@ -30,7 +30,12 @@ impl Heap {
     fn env51_sweep_at(&mut self, cur: *mut GcHeader, after: bool) -> i64 {
         let w = self.white();
         let (mut n, mut freed, mut found, mut first) = (0, 0, false, usize::MAX);
-        let gens = self.puc.env51_box.as_ref().map_or(0, |e| e.gens.len());
+        let gens = self
+            .puc
+            .records
+            .env51_box
+            .as_ref()
+            .map_or(0, |e| e.gens.len());
         for i in 0..gens {
             // the records of this opening the sweep frees, each on its own
             // as PUC frees them (an anchor names `newfenv`'s closure before
@@ -38,7 +43,7 @@ impl Heap {
             // a group's records, each anchor's: two groups at most share one
             let mut each = [None; 4];
             let mut m = 0;
-            let Some(e) = &mut self.puc.env51_box else {
+            let Some(e) = &mut self.puc.records.env51_box else {
                 return 0;
             };
             let g = &mut e.gens[i];
@@ -100,7 +105,7 @@ impl Heap {
     /// The object `h` is freed: no record is found by it any more.
     #[inline]
     pub(in crate::runtime::puc) fn env51_forget(&mut self, h: *mut GcHeader) {
-        if let Some(e) = &mut self.puc.env51_box {
+        if let Some(e) = &mut self.puc.records.env51_box {
             if !e.owners.is_empty() {
                 e.owners.retain(|o| o.0 != h);
             }
@@ -119,7 +124,7 @@ impl Heap {
     /// A cycle starts: the records are white, as PUC's objects are.
     pub(in crate::runtime::puc) fn env51_whiten(&mut self) {
         let w = self.white();
-        if let Some(e) = &mut self.puc.env51_box {
+        if let Some(e) = &mut self.puc.records.env51_box {
             for g in e.gens.iter_mut() {
                 for p in g.ph.iter_mut().filter(|p| !p.dead) {
                     p.hdr.set_flags(w);

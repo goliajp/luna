@@ -37,27 +37,27 @@ impl Heap {
             return;
         }
         let from = from.max(1);
-        let mut v = std::mem::take(&mut self.puc.strt.order);
+        let mut v = std::mem::take(&mut self.puc.records.strt.order);
         v.clear();
         self.each_string(|p| v.push((0, 0, p)));
         v.retain(|e| !skip.is_some_and(|s| s.ptr_eq(e.2)) && self.puc_holds(e.2));
-        let counts = &mut self.puc.strt.counts;
+        let counts = &mut self.puc.records.strt.counts;
         counts.clear();
         counts.resize(from + 1, 0);
         for e in v.iter_mut() {
             let (b, k) = (self.puc_bucket(e.2, from) as u32, e.2.chain());
             *e = (b, k, e.2);
-            self.puc.strt.counts[b as usize + 1] += 1;
+            self.puc.records.strt.counts[b as usize + 1] += 1;
         }
-        let counts = &mut self.puc.strt.counts;
+        let counts = &mut self.puc.records.strt.counts;
         for i in 1..counts.len() {
             counts[i] += counts[i - 1];
         }
-        let mut sorted = std::mem::take(&mut self.puc.strt.ordered);
+        let mut sorted = std::mem::take(&mut self.puc.records.strt.ordered);
         sorted.clear();
         sorted.extend_from_slice(&v);
         for &e in &v {
-            let at = &mut self.puc.strt.counts[e.0 as usize];
+            let at = &mut self.puc.records.strt.counts[e.0 as usize];
             sorted[*at as usize] = e;
             *at += 1;
         }
@@ -72,17 +72,17 @@ impl Heap {
             sorted[start..end].sort_unstable_by_key(|e| std::cmp::Reverse(e.1));
             start = end;
         }
-        let seq = &mut self.puc.strt.seq;
+        let seq = &mut self.puc.records.strt.seq;
         seq.clear();
         seq.resize(size, 0);
         for &(_, _, p) in &sorted {
             let b = self.puc_bucket(p, size);
-            let seq = &mut self.puc.strt.seq;
+            let seq = &mut self.puc.records.strt.seq;
             seq[b] += 1;
             p.set_chain(seq[b]);
         }
-        self.puc.strt.order = v;
-        self.puc.strt.ordered = sorted;
+        self.puc.records.strt.order = v;
+        self.puc.records.strt.ordered = sorted;
     }
 
     /// [`Heap::strt_reorder`] for a table doubled or halved (PUC's resizes
@@ -93,11 +93,11 @@ impl Heap {
     /// when the numbers would not fit.
     fn strt_rehash_halves(&mut self, from: usize, size: usize, skip: Option<Gc<LuaStr>>) -> bool {
         let grow = size == 2 * from;
-        if !(grow || 2 * size == from) || self.puc.strt.seq.len() != from || from == 0 {
+        if !(grow || 2 * size == from) || self.puc.records.strt.seq.len() != from || from == 0 {
             return false;
         }
-        let old = std::mem::take(&mut self.puc.strt.seq);
-        let mut seq = std::mem::take(&mut self.puc.strt.spare);
+        let old = std::mem::take(&mut self.puc.records.strt.seq);
+        let mut seq = std::mem::take(&mut self.puc.records.strt.spare);
         seq.clear();
         // each bound one above the highest number a string may get (a
         // string never numbered, 0, ends up above the others)
@@ -106,8 +106,8 @@ impl Heap {
                 match old[b & (from - 1)].checked_add(1) {
                     Some(n) => seq.push(n),
                     None => {
-                        self.puc.strt.seq = old;
-                        self.puc.strt.spare = seq;
+                        self.puc.records.strt.seq = old;
+                        self.puc.records.strt.spare = seq;
                         return false;
                     }
                 }
@@ -120,14 +120,14 @@ impl Heap {
                 {
                     Some(n) => seq.push(n),
                     None => {
-                        self.puc.strt.seq = old;
-                        self.puc.strt.spare = seq;
+                        self.puc.records.strt.seq = old;
+                        self.puc.records.strt.spare = seq;
                         return false;
                     }
                 }
             }
         }
-        let mut v = std::mem::take(&mut self.puc.strt.order);
+        let mut v = std::mem::take(&mut self.puc.records.strt.order);
         v.clear();
         self.each_string(|p| v.push((0, 0, p)));
         for &(_, _, p) in &v {
@@ -142,16 +142,16 @@ impl Heap {
             }
             s.set_chain(k);
         }
-        self.puc.strt.order = v;
-        self.puc.strt.seq = seq;
-        self.puc.strt.spare = old;
+        self.puc.records.strt.order = v;
+        self.puc.records.strt.seq = seq;
+        self.puc.records.strt.spare = old;
         true
     }
 
     /// The bucket `b` numbered again from 1, in its order.
     #[cold]
     fn strt_renumber(&mut self, b: usize) {
-        let size = self.puc.strt_size;
+        let size = self.puc.records.strt_size;
         let mut v = Vec::new();
         self.each_string(|p| v.push(p));
         v.retain(|&p| self.puc_holds(p) && self.puc_bucket(p, size) == b);
@@ -159,20 +159,20 @@ impl Heap {
         for (i, &p) in v.iter().enumerate() {
             p.set_chain(i as u16 + 1);
         }
-        self.puc.strt.seq[b] = v.len() as u16;
+        self.puc.records.strt.seq[b] = v.len() as u16;
     }
 
     /// String `p` at the head of its chain in a table of `size` buckets.
     fn strt_head(&mut self, p: Gc<LuaStr>, size: usize) {
         let b = self.puc_bucket(p, size);
-        if self.puc.strt.seq.len() != size {
-            self.puc.strt.seq.resize(size, 0);
+        if self.puc.records.strt.seq.len() != size {
+            self.puc.records.strt.seq.resize(size, 0);
         }
-        if self.puc.strt.seq[b] == u16::MAX {
+        if self.puc.records.strt.seq[b] == u16::MAX {
             self.strt_renumber(b);
         }
-        self.puc.strt.seq[b] += 1;
-        p.set_chain(self.puc.strt.seq[b]);
+        self.puc.records.strt.seq[b] += 1;
+        p.set_chain(self.puc.records.strt.seq[b]);
     }
 
     /// The counted string `h` entered PUC's string table, which may have
@@ -184,14 +184,14 @@ impl Heap {
         {
             return;
         }
-        let size = self.puc.strt_size;
+        let size = self.puc.records.strt_size;
         if !self.puc_holds(p) {
-            if let Some(from) = self.puc.strt.grow_from.take() {
+            if let Some(from) = self.puc.records.strt.grow_from.take() {
                 self.strt_reorder(from, size, None);
             }
             return;
         }
-        match self.puc.strt.grow_from.take() {
+        match self.puc.records.strt.grow_from.take() {
             Some(from) if self.puc.dialect == Dialect::L51 => {
                 self.strt_head(p, from);
                 self.strt_reorder(from, size, None);
@@ -210,22 +210,22 @@ impl Heap {
         if crate::runtime::gc_hooks::TRACE
             && matches!(self.puc.dialect, Dialect::L51 | Dialect::L52)
         {
-            self.puc.strt.grow_from = None;
-            self.strt_reorder(from, self.puc.strt_size, None);
+            self.puc.records.strt.grow_from = None;
+            self.strt_reorder(from, self.puc.records.strt_size, None);
         }
     }
 
     /// The table grew from `from` buckets for a string about to enter.
     pub(in crate::runtime::puc) fn strt_grew(&mut self, from: usize) {
         if crate::runtime::gc_hooks::TRACE {
-            self.puc.strt.grow_from = Some(from);
+            self.puc.records.strt.grow_from = Some(from);
         }
     }
 
     /// A string luna has no object for entered: a growth on its way is
     /// done.
     pub(in crate::runtime::puc) fn strt_settle(&mut self) {
-        if let Some(from) = self.puc.strt.grow_from.take() {
+        if let Some(from) = self.puc.records.strt.grow_from.take() {
             self.strt_resized(from);
         }
     }

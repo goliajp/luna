@@ -65,11 +65,12 @@ impl Heap {
         // and "not enough memory", which PUC makes at the start and luna
         // does not (a heap no Vm made has no PUC state: its string table
         // is never sized)
-        let mut n = self.ghost_short_strings() + usize::from(self.puc.strt_size != 0);
+        let mut n = self.ghost_short_strings() + usize::from(self.puc.records.strt_size != 0);
         // and 5.1's strings luna's stand for
         let strt = crate::runtime::puc::STRT_STAND;
         n += self
             .puc
+            .records
             .stand_ins
             .iter()
             .chain(lent)
@@ -78,7 +79,7 @@ impl Heap {
         // SAFETY: a header on a list or set aside heads an allocated object
         let counted = |h: *mut GcHeader| unsafe {
             (*h).tag == ObjTag::Str
-                && (*(h as *const LuaStr)).len() <= self.puc.short_max
+                && (*(h as *const LuaStr)).len() <= self.puc.records.short_max
                 && (*h).sub & (UNCOUNTED | EXTERNAL | SWEPT) == 0
         };
         for mut cur in [self.list_head(), self.fixed_head()] {
@@ -92,7 +93,7 @@ impl Heap {
         // and counted, though off the lists
         n += self.unborn_objs().filter(|&h| counted(h)).count();
         assert_eq!(
-            n, self.puc.strt_nuse,
+            n, self.puc.records.strt_nuse,
             "{ctx}: counted short strings against PUC's string table"
         );
     }
