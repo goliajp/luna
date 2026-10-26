@@ -3,15 +3,40 @@
 
 use super::*;
 
+#[cfg(test)]
+mod depth_tests;
+mod leave;
+use leave::Resumer;
+
 impl Vm {
     /// `coroutine.resume` core: drive `co` with `args` until it yields, returns
     /// or errors. Ok(values) carries yielded or returned values; Err carries an
     /// error raised inside the coroutine (the coroutine becomes dead).
+    ///
+    /// The switch to the coroutine and back are functions of their own: in
+    /// an unoptimised build their locals are then off the stack while the
+    /// coroutine runs, which a chain of resumes repeats on every level.
     pub(crate) fn resume_coro(
         &mut self,
         co: Gc<Coro>,
         args: Vec<Value>,
     ) -> Result<Vec<Value>, LuaError> {
+        let saved = self.resume_enter(co)?;
+        // drive it
+        let drive = if co.started {
+            self.coro_continue(&args)
+        } else {
+            // SAFETY: `co` is `self.current`, a root; the temporary borrow covers one field store and nothing else refers into the coroutine
+            unsafe { co.as_mut() }.started = true;
+            self.coro_first(co.body, &args)
+        };
+        self.resume_leave(co, saved, drive)
+    }
+
+    /// Switch from the running thread to `co`, keeping what the switch
+    /// replaced.
+    #[cfg_attr(luna_hot, inline(always))]
+    fn resume_enter(&mut self, co: Gc<Coro>) -> Result<Resumer, LuaError> {
         self.host_before_resume(co);
         match co.status {
             CoroStatus::Suspended => {}
@@ -53,93 +78,24 @@ impl Vm {
         // resumer reference and any future field writes during this call.
         self.heap.barrier_back(co);
         self.current = Some(co);
-        let resumer_natives_base = self.natives_base;
-        self.natives_base = self.running_natives.len();
-        // the coroutine's own frames start a fresh reach for xpcall handlers
-        let resumer_msgh_floor = std::mem::replace(&mut self.msgh_floor, 0);
-        let resumer_msgh_running = self.msgh_running.take();
-        // a coroutine that dies keeps its traceback for `debug.traceback(co)`
-        let resumer_keeps_traceback = std::mem::replace(&mut self.keep_error_traceback, true);
-        // non-yieldable calls belong to the thread that made them (PUC's
-        // per-thread `nny`): a coroutine resumed from inside one, such as a
-        // host's `lua_pcall`, can still yield
-        let resumer_nny = std::mem::replace(&mut self.nny, 0);
-
-        // drive it
-        let drive = if co.started {
-            self.coro_continue(&args)
-        } else {
-            // SAFETY: `co` is `self.current`, a root; the temporary borrow covers one field store and nothing else refers into the coroutine
-            unsafe { co.as_mut() }.started = true;
-            self.coro_first(co.body, &args)
-        };
-
-        // classify: a self-close termination or a pending yield each win over
-        // the (sentinel) error they raised to unwind the Rust stack.
-        let (outcome, status) = if let Some(death) = self.terminating.take() {
-            // the coroutine closed itself: it dies now, cleanly or with the
-            // error a `__close` handler raised.
-            let r = match death {
-                Some(e) => {
-                    self.set_coro_error(co, e, crate::runtime::ErrorStatus::Run);
-                    (Err(LuaError(e)), CoroStatus::Dead)
-                }
-                None => (Ok(Vec::new()), CoroStatus::Dead),
-            };
-            self.host_thread_reset(co);
-            r
-        } else {
-            match self.yielding.take() {
-                Some((vals, fslot, nres)) => {
-                    // SAFETY: `co` is still `self.current`, a root; the borrow covers two field stores
-                    let c = unsafe { co.as_mut() };
-                    c.resume_at = Some((fslot, nres));
-                    c.yield_ci_top = std::mem::take(&mut self.yield_ci_top);
-                    (Ok(vals), CoroStatus::Suspended)
-                }
-                None => {
-                    // died: a return is clean, an error is remembered so a later
-                    // `coroutine.close` can report it (PUC lua_closethread).
-                    // The frames taken where the error was raised stay with
-                    // the dead coroutine, as PUC's untouched dead stack does
-                    // (db.lua :848 family)
-                    if drive.is_err() {
-                        let dead = self.dead_snapshot.take();
-                        // SAFETY: `co` is still `self.current`, a root, and its frames have unwound, so `m` is the only reference into it for this store
-                        unsafe { co.as_mut() }.dead = dead;
-                        self.heap.barrier_back(co);
-                    }
-                    if let Err(e) = drive {
-                        let kind = self.error_status(e.0, special_before);
-                        self.set_coro_error(co, e.0, kind);
-                    }
-                    (self.host_returned(co, drive), CoroStatus::Dead)
-                }
-            }
-        };
-
-        // save the coroutine's context back and restore the resumer
-        self.natives_base = resumer_natives_base;
-        self.msgh_floor = resumer_msgh_floor;
-        self.msgh_running = resumer_msgh_running;
-        self.keep_error_traceback = resumer_keeps_traceback;
-        self.nny = resumer_nny;
-        self.store_coro_ctx(co);
-        self.set_coro_status(co, status);
-        match resumer {
-            Some(r) => {
-                self.load_coro_ctx(r);
-                self.set_coro_status(r, CoroStatus::Running);
-                self.current = Some(r);
-            }
-            None => {
-                let m = self.main_ctx.take().expect("main context saved");
-                self.put_ctx(m);
-                self.current = None;
-            }
-        }
-        self.g.nccalls = nccalls;
-        outcome
+        let natives_base = std::mem::replace(&mut self.natives_base, self.running_natives.len());
+        Ok(Resumer {
+            nccalls,
+            special_before,
+            resumer,
+            natives_base,
+            // the coroutine's own frames start a fresh reach for xpcall
+            // handlers
+            msgh_floor: std::mem::replace(&mut self.msgh_floor, 0),
+            msgh_running: self.msgh_running.take(),
+            // a coroutine that dies keeps its traceback for
+            // `debug.traceback(co)`
+            keeps_traceback: std::mem::replace(&mut self.keep_error_traceback, true),
+            // non-yieldable calls belong to the thread that made them
+            // (PUC's per-thread `nny`): a coroutine resumed from inside one,
+            // such as a host's `lua_pcall`, can still yield
+            nny: std::mem::replace(&mut self.nny, 0),
+        })
     }
 
     /// First resume: install the body function at slot 0 and run.

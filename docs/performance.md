@@ -112,7 +112,12 @@ where `luna-core` is built with optimisation (any `opt-level` but 0, whether
 or not debug assertions are on). At `opt-level = 0`, the default of a debug
 build, they are calls: each would otherwise keep stack slots of its own in
 the loop's frame, so that deep nesting of Lua and native calls ran out of a
-small thread stack before the C level limit. Such a build runs the loop
+small thread stack before the C level limit. For the same reason the steps
+of a call, a tail call and a coroutine resume that come before and after
+the call itself are functions of their own there, which leaves only what
+stays live during the call on the stack of each level: a chain of
+`coroutine.resume` or of `coroutine.wrap` functions reaches the C level
+limit (about 200 levels) on a 2 MB thread. Such a build runs the loop
 much slower; an embedder that wants a fast debug build can raise
 `luna-core`'s level alone:
 

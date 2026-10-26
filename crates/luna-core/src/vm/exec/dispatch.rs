@@ -216,7 +216,10 @@ impl Vm {
     }
 
     /// The fast loop instantiated for the loop's `(watch, trace_on, dbl,
-    /// pre53)`: 5.1/5.2 (`dbl`) are pre-5.3 too.
+    /// pre53)`: 5.1/5.2 (`dbl`) are pre-5.3 too. One call site per
+    /// instance when optimised; one call through a pointer otherwise, which
+    /// keeps the loop head's frame (on every level of a Lua call made from
+    /// a native) from holding the arguments of eight calls.
     #[inline(always)]
     fn run_fast_for(
         &mut self,
@@ -225,22 +228,32 @@ impl Vm {
         next: u32,
         modes: (bool, bool, bool, bool),
     ) -> Result<fast::FastExit, LuaError> {
-        match modes {
-            (true, _, true, _) => self.run_fast::<true, true, true, true>(fx, inst, next),
-            (false, true, true, _) => self.run_fast::<false, true, true, true>(fx, inst, next),
-            (false, false, true, _) => self.run_fast::<false, false, true, true>(fx, inst, next),
-            (true, _, false, true) => self.run_fast::<true, true, false, true>(fx, inst, next),
-            (false, true, false, true) => self.run_fast::<false, true, false, true>(fx, inst, next),
-            (false, false, false, true) => {
-                self.run_fast::<false, false, false, true>(fx, inst, next)
-            }
-            (true, _, false, false) => self.run_fast::<true, true, false, false>(fx, inst, next),
-            (false, true, false, false) => {
-                self.run_fast::<false, true, false, false>(fx, inst, next)
-            }
-            (false, false, false, false) => {
-                self.run_fast::<false, false, false, false>(fx, inst, next)
-            }
+        #[cfg(luna_hot)]
+        macro_rules! inst {
+            ($($m:literal),*) => {
+                self.run_fast::<$($m),*>(fx, inst, next)
+            };
         }
+        #[cfg(not(luna_hot))]
+        macro_rules! inst {
+            ($($m:literal),*) => {
+                Vm::run_fast::<$($m),*> as fn(&mut Vm, fast::Fast, Inst, u32) -> _
+            };
+        }
+        #[allow(clippy::let_and_return)]
+        let out = match modes {
+            (true, _, true, _) => inst!(true, true, true, true),
+            (false, true, true, _) => inst!(false, true, true, true),
+            (false, false, true, _) => inst!(false, false, true, true),
+            (true, _, false, true) => inst!(true, true, false, true),
+            (false, true, false, true) => inst!(false, true, false, true),
+            (false, false, false, true) => inst!(false, false, false, true),
+            (true, _, false, false) => inst!(true, true, false, false),
+            (false, true, false, false) => inst!(false, true, false, false),
+            (false, false, false, false) => inst!(false, false, false, false),
+        };
+        #[cfg(not(luna_hot))]
+        let out = out(self, fx, inst, next);
+        out
     }
 }

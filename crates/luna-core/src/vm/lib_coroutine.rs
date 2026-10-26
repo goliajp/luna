@@ -147,26 +147,51 @@ fn refusal_value(vm: &mut Vm, msg: &str) -> Result<Value, LuaError> {
 }
 
 fn co_resume(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    // what comes before and after the resume are functions of their own: in
+    // an unoptimised build their locals are then off the stack while the
+    // coroutine runs, which a chain of resumes repeats on every level
+    let (co, args) = match resume_args(vm, fs, nargs)? {
+        Ok(go) => go,
+        Err(refused) => return Ok(refused),
+    };
+    let r = vm.resume_coro(co, args);
+    resume_results(vm, fs, r)
+}
+
+/// The coroutine `coroutine.resume` resumes and the arguments it passes,
+/// or the count of the values it returns at once when it refuses.
+#[cfg_attr(luna_hot, inline(always))]
+fn resume_args(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+) -> Result<Result<(Gc<Coro>, Vec<Value>), u32>, LuaError> {
     let co = check_co(vm, Args::new(fs, nargs))?;
     let in_wrap = upval_table(vm, fs, 0);
     if let Some(msg) = resume_refusal(vm, co, false, in_wrap) {
         let m = refusal_value(vm, &msg)?;
-        return vm.nat_ret(fs, &[Value::Bool(false), m]);
+        return vm.nat_ret(fs, &[Value::Bool(false), m]).map(Err);
     }
     // 5.1 raises when `lua_checkstack` on either thread refuses
     // (`LUAI_MAXCSTACK` slots above the thread's base, which holds the
     // coroutine's body on one side and the coroutine on the other)
-    let v51 = vm.version() == LuaVersion::Lua51;
-    let max51 = crate::vm::argcheck::MAXCSTACK_51 as u32;
-    if v51 && nargs > max51 {
+    if vm.version() == LuaVersion::Lua51 && nargs > crate::vm::argcheck::MAXCSTACK_51 as u32 {
         return Err(raise_str(vm, "too many arguments to resume"));
     }
     let args: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     // the arguments move to the coroutine
     vm.native_settop(1);
-    match vm.resume_coro(co, args) {
+    Ok(Ok((co, args)))
+}
+
+/// What `coroutine.resume` returns for the coroutine's `r`.
+#[cfg_attr(luna_hot, inline(always))]
+fn resume_results(vm: &mut Vm, fs: u32, r: Result<Vec<Value>, LuaError>) -> Result<u32, LuaError> {
+    match r {
         Ok(mut vals) => {
-            if v51 && vals.len() as u32 >= max51 {
+            if vm.version() == LuaVersion::Lua51
+                && vals.len() as u32 >= crate::vm::argcheck::MAXCSTACK_51 as u32
+            {
                 return Err(raise_str(vm, "too many results to resume"));
             }
             // PUC `auxresume` gates the transfer on `lua_checkstack(L,
