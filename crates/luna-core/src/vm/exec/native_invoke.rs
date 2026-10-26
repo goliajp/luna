@@ -133,6 +133,25 @@ impl Vm {
         nargs: u32,
         nresults: i32,
     ) -> Result<(), LuaError> {
+        // what comes before and after the call are functions of their own:
+        // in an unoptimised build their locals are then off the stack while
+        // the native runs, which a chain of resumes repeats on every level
+        self.enter_native_plain(nc, func_slot, nargs, nresults)?;
+        // no guard here: a panic unwinds to `exec_with`, which raises it as
+        // this native's error (see `Vm::unguarded_native_panic`)
+        let result = (nc.f)(self, func_slot, nargs);
+        self.leave_native_plain(func_slot, nargs, nresults, result)
+    }
+
+    /// `call_native_plain` up to the call.
+    #[cfg_attr(luna_hot, inline(always))]
+    fn enter_native_plain(
+        &mut self,
+        nc: Gc<crate::runtime::NativeClosure>,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+    ) -> Result<(), LuaError> {
         // a C function gets `LUA_MINSTACK` slots (PUC `luaD_precall`)
         self.check_lua_stack(func_slot + 1 + nargs, 20, true)?;
         self.pending_tailcalls = 0;
@@ -148,10 +167,18 @@ impl Vm {
             self.frames.len(),
             ccmt,
         ))?;
-        self.precall_checkpoint(func_slot + 1 + nargs)?;
-        // no guard here: a panic unwinds to `exec_with`, which raises it as
-        // this native's error (see `Vm::unguarded_native_panic`)
-        let result = (nc.f)(self, func_slot, nargs);
+        self.precall_checkpoint(func_slot + 1 + nargs)
+    }
+
+    /// `call_native_plain` once the native returned `result`.
+    #[cfg_attr(luna_hot, inline(always))]
+    fn leave_native_plain(
+        &mut self,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+        result: Result<u32, LuaError>,
+    ) -> Result<(), LuaError> {
         let nret = self.native_returned(result)?;
         // the native may have armed a hook, whose return event it gets
         self.finish_native_call(func_slot, nargs, nret, nresults)
@@ -160,7 +187,7 @@ impl Vm {
     /// The native on top of `running_natives` returned `nret` results at
     /// `func_slot`: fire the return hook, pop it, adjust the results and
     /// give the collector its chance.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn finish_native_call(
         &mut self,
         func_slot: u32,
