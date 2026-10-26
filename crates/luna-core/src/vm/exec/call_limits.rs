@@ -2,6 +2,7 @@
 
 use super::stack_size::{self, Grown};
 use super::*;
+use crate::runtime::puc::api::PucCount;
 
 impl Vm {
     /// Room for `need` slots above `top` on the thread's stack (PUC

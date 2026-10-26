@@ -6,6 +6,7 @@
 //! does in PUC (`luaD_callnoyield`): a yield inside one is refused.
 
 use super::*;
+use crate::runtime::puc::api::PucCount;
 use crate::runtime::{LuaClosure, NativeClosure, UpvalState};
 
 /// `lua_arith`'s operations, in 5.3+ `LUA_OP*` order.

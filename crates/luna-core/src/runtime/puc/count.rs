@@ -40,7 +40,7 @@ impl Heap {
 
     /// A new object of `size` bytes.
     #[inline]
-    pub(crate) fn acct_obj(&mut self, kind: PucKind, size: usize) {
+    pub(in crate::runtime) fn acct_obj(&mut self, kind: PucKind, size: usize) {
         if !self.counting() {
             return;
         }
@@ -68,7 +68,12 @@ impl Heap {
     }
 
     /// An object made without counting is PUC's now: counted here.
-    pub(crate) fn acct_promote_obj(&mut self, h: Gc<GcHeader>, kind: PucKind, size: usize) {
+    pub(in crate::runtime) fn acct_promote_obj(
+        &mut self,
+        h: Gc<GcHeader>,
+        kind: PucKind,
+        size: usize,
+    ) {
         if self.counting() && h.is_uncounted() {
             // SAFETY: `h` is a handle, so its object is live; nothing
             // borrows the header while its per-type byte is written
@@ -82,7 +87,7 @@ impl Heap {
 
     /// A block (an array, a buffer) going from `old` to `new` bytes; either may be 0.
     #[inline]
-    pub(crate) fn acct_block(&mut self, old: usize, new: usize) {
+    pub(in crate::runtime) fn acct_block(&mut self, old: usize, new: usize) {
         if !self.counting() {
             return;
         }

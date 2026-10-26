@@ -2,6 +2,7 @@
 //! the parser's tables, and how full its buffer gets.
 
 use super::*;
+use crate::runtime::puc::api::{PucCount, PucParse};
 
 impl Replay<'_> {
     /// The table the scanner keys a string of `kind` in, if any.

@@ -2,6 +2,7 @@
 //! for the C API.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 use crate::vm::lib_gc::{self, PARAM_ORDER, Param};
 
 /// Why a C API load failed: a memory error (`LUA_ERRMEM`) or another one

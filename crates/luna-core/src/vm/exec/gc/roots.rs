@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::runtime::dialect::Dialect;
+use crate::runtime::puc::api::{PucCollector, PucLoads};
 
 impl Vm {
     /// Mark the GC roots in `m`: first-class `Value` roots plus bare-object

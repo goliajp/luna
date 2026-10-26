@@ -3,6 +3,7 @@
 use super::*;
 use crate::runtime::function::Upvalue;
 use crate::runtime::mem::LVec;
+use crate::runtime::puc::api::PucCollector;
 
 impl Vm {
     /// The open upvalue of `slot`: listed, or (5.1 / 5.2) one a marking

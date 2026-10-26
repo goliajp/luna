@@ -1,6 +1,7 @@
 //! Opening the standard libraries on a new state.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 
 mod registry;
 pub(crate) use registry::{CLIBS_KEY, HOOK_KEY, light_key};

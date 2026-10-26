@@ -145,7 +145,7 @@ impl Heap {
         &mut self,
         f: NativeFn,
         upvals: &[Value],
-        objs: &[(PucKind, usize)],
+        objs: &[PucObj],
         counted: usize,
     ) -> Result<Gc<NativeClosure>, Oom> {
         let g = self.uncounted(|h| h.try_new_builtin(f, upvals, Builtin::None, false));

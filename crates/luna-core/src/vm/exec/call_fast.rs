@@ -1,6 +1,7 @@
 //! The Lua-to-Lua call the fast loop makes without `begin_call`.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 
 impl Vm {
     /// Push the frame of a Lua function called from the fast loop (PUC

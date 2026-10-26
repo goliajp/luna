@@ -89,7 +89,7 @@ pub(crate) fn trace_full_end<H: StepHost + ?Sized>(h: &mut H) {
 impl Heap {
     /// gc-trace: the count moved by `delta` where the instrumented PUC's
     /// allocation function refused a growth.
-    pub(crate) fn adjust_count(&mut self, delta: i64) {
+    pub(in crate::runtime) fn adjust_count(&mut self, delta: i64) {
         self.puc.count.bytes = (self.puc.count.bytes as i64 + delta) as usize;
     }
 }

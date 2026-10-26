@@ -1,6 +1,7 @@
 //! The string buffer a trace builds an accumulated concatenation in.
 
 use super::*;
+use crate::runtime::puc::api::PucCount;
 
 /// What the string of a trace's accumulator buffer stands for (see
 /// `TraceGhosts::accum`).
@@ -68,13 +69,10 @@ impl Vm {
                 return -1;
             }
         } else {
-            let size = self.heap.puc_size(crate::runtime::puc::PucObj::Str {
+            let g = self.heap.ghost_obj_ref(crate::runtime::puc::PucObj::Str {
                 len: buf.len(),
                 long: true,
             });
-            let g = self
-                .heap
-                .acct_ghost_ref(crate::runtime::puc::PucKind::LongStr, size);
             self.jit_ghosts().accum = g.ok().map(AccumLast::Long);
         }
         if self.heap.gc_due() {

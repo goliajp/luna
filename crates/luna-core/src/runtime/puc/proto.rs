@@ -66,7 +66,11 @@ impl Heap {
 
     /// PUC's size of a Lua closure of `proto` with luna's `n` upvalues
     /// (5.1's has no upvalue for the environment luna gives it).
-    pub(crate) fn closure_size(&self, proto: &crate::runtime::function::Proto, n: usize) -> usize {
+    pub(in crate::runtime) fn closure_size(
+        &self,
+        proto: &crate::runtime::function::Proto,
+        n: usize,
+    ) -> usize {
         self.puc
             .sizes
             .lua_closure(n - usize::from(self.env51(proto)))
@@ -75,7 +79,7 @@ impl Heap {
     /// Whether a closure of `proto` has 5.1's environment among its
     /// upvalues (marked [`ENV51`] in the closure's header, so that freeing
     /// it needs no prototype, which may be freed first).
-    pub(crate) fn env51(&self, proto: &crate::runtime::function::Proto) -> bool {
+    pub(in crate::runtime) fn env51(&self, proto: &crate::runtime::function::Proto) -> bool {
         self.puc.dialect == Dialect::L51 && proto.env_upval_idx != u8::MAX
     }
 }

@@ -158,7 +158,7 @@ impl Heap {
     /// The string sweep is over (or a full collection ends it): the strings
     /// held off the object list are freed, or put back when a program made
     /// them again meanwhile.
-    pub(crate) fn end_string_sweep(&mut self) {
+    pub(in crate::runtime) fn end_string_sweep(&mut self) {
         let new_white = self.white();
         for h in std::mem::take(&mut self.puc.records.strt.held) {
             // SAFETY: a held string is allocated and on no list

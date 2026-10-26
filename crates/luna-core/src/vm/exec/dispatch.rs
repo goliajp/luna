@@ -2,6 +2,7 @@
 //! dispatch, then the fast loop and the opcodes it hands back.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 mod finish_cont;
 
 impl Vm {

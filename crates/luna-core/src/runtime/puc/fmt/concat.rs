@@ -6,7 +6,11 @@ impl Heap {
     /// PUC `luaV_concat(L, total)` over the top `total` values of `st`,
     /// every one a string or a number: what it makes, in its order, and
     /// the one value it leaves in their place.
-    pub(crate) fn puc_concat(&mut self, st: &mut Vec<Value>, total: usize) -> Result<(), Oom> {
+    pub(in crate::runtime) fn puc_concat(
+        &mut self,
+        st: &mut Vec<Value>,
+        total: usize,
+    ) -> Result<(), Oom> {
         let d = self.puc.dialect;
         let mut total = total;
         while total > 1 {

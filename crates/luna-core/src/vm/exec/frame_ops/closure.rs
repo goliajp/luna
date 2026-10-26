@@ -1,6 +1,7 @@
 //! Making closures: `OP_CLOSURE` and the closures other code builds from a proto.
 
 use super::*;
+use crate::runtime::puc::api::PucCount;
 
 impl Vm {
     /// OP_CLOSURE: a new closure over the proto's upvalue descriptors.

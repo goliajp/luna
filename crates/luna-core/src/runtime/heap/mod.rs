@@ -243,7 +243,7 @@ use crate::runtime::puc;
 use crate::runtime::puc::for_heap as model;
 use crate::runtime::puc::for_heap::{
     C0, ExternalStr, Fate, FoundStr, Ghost, Made, NativeFunction, NewStr, OfProto, PucFunction,
-    PucKind, PucObj, RemadeStr, StandingFor,
+    PucObj, RemadeStr, StandingFor,
 };
 mod alloc;
 mod barrier;

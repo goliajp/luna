@@ -1,6 +1,7 @@
 //! Collector pacing, the root set and full collections.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 #[cfg(feature = "gc-verify")]
 mod gc_verify;
 pub(super) mod hooks;

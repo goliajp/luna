@@ -6,6 +6,7 @@
 //! with its own allocation and check, as PUC's interpreter runs it.
 
 use super::*;
+use crate::runtime::puc::api::{PucCollector, PucCount};
 
 /// What became of a call [`Vm::try_jit_call_op`] was asked to run.
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -3,6 +3,7 @@
 //! at, as they live in the VM.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 use crate::runtime::puc::records::open_upvals::OpenLend;
 
 impl Vm {

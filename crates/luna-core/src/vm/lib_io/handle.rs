@@ -1,6 +1,7 @@
 //! `FILE*` handles: creation, argument checks, closing and the metamethods.
 
 use super::*;
+use crate::runtime::puc::api::{PucCollector, PucCount};
 
 /// A file handle made as PUC's `newprefile` makes it: the userdata
 /// (`lua_newuserdata`, which checks for a collection: `checked` makes the

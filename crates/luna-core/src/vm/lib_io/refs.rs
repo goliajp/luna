@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::runtime::Table;
+use crate::runtime::puc::api::PucCollector;
 
 /// The registry's field `name`, read raw without making the name.
 fn registry_field(vm: &Vm, name: &[u8]) -> Value {

@@ -110,14 +110,13 @@ impl Heap {
         self.puc.records.shrunk.push(h);
     }
 
-    /// The uncounted object `h` stands for objects of PUC's of the sizes in
-    /// `sizes`, freed with it.
-    pub(in crate::runtime::puc) fn stand_for(
-        &mut self,
-        h: *mut GcHeader,
-        sizes: impl Iterator<Item = usize>,
-    ) {
-        self.puc.records.stand_ins.extend(sizes.map(|s| (h, s)));
+    /// The uncounted object `h` stands for PUC's objects `objs`, freed with
+    /// it.
+    pub(in crate::runtime::puc) fn stand_for(&mut self, h: *mut GcHeader, objs: &[PucObj]) {
+        for &o in objs {
+            let size = self.puc_size(o);
+            self.puc.records.stand_ins.push((h, size));
+        }
     }
 
     /// The objects of PUC's that `h`, an uncounted object of luna's, stood
@@ -139,13 +138,13 @@ impl Heap {
     }
 
     /// The light function the opening made as function `id`.
-    pub(crate) fn light(&self, id: usize) -> Option<Gc<crate::runtime::NativeClosure>> {
+    pub(in crate::runtime) fn light(&self, id: usize) -> Option<Gc<crate::runtime::NativeClosure>> {
         self.puc.opening.lights.get(id).copied().flatten()
     }
 
     /// Function `id` of the opening's `count` is the light function `g`:
     /// one value however often pushed.
-    pub(crate) fn set_light(
+    pub(in crate::runtime) fn set_light(
         &mut self,
         id: usize,
         count: usize,
@@ -166,6 +165,7 @@ mod free;
 pub(in crate::runtime) mod hooks;
 mod marker;
 mod pace;
+pub(in crate::runtime) use pace::FinalizerStop;
 mod rules;
 mod sweep;
 pub(in crate::runtime) use born::{

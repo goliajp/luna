@@ -18,7 +18,7 @@ impl Gbuff {
 impl Heap {
     /// 5.1 and 5.2's buffer for concatenations made room for `n` bytes
     /// (`luaZ_openspace`, at least `LUA_MINBUFFER`).
-    pub(crate) fn open_gbuff(&mut self, n: usize) -> Result<(), Oom> {
+    pub(in crate::runtime) fn open_gbuff(&mut self, n: usize) -> Result<(), Oom> {
         let old = self.puc.records.gbuff.size();
         if n > old {
             let mem = self.mem();

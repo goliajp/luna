@@ -2,7 +2,8 @@
 //! backend, and tearing the state down.
 
 use super::*;
-use crate::runtime::mem::LVec;
+use crate::runtime::mem::{LVec, MemOwner};
+use crate::runtime::puc::api::PucCount;
 use crate::vm::exec::state::CallGuards;
 
 mod jit_install;
@@ -274,17 +275,14 @@ impl Vm {
     /// allocator watched by a [`crate::runtime::mem::MemoryPolicy`]
     /// ([`crate::runtime::mem::MemOwner::policy`]), or a host allocation
     /// function ([`crate::runtime::mem::MemOwner::raw`]).
-    pub fn new_minimal_with_mem(version: LuaVersion, mem: crate::runtime::mem::MemOwner) -> Vm {
+    pub fn new_minimal_with_mem(version: LuaVersion, mem: MemOwner) -> Vm {
         Vm::new_minimal_on(version, Heap::new_on(mem))
     }
 
     /// [`Vm::new_minimal_with_mem`], or `None` when the allocation context
     /// cannot give the Vm the memory it starts with (PUC `lua_newstate`
     /// returns NULL then); what was allocated is freed.
-    pub fn try_new_minimal_with_mem(
-        version: LuaVersion,
-        mem: crate::runtime::mem::MemOwner,
-    ) -> Option<Vm> {
+    pub fn try_new_minimal_with_mem(version: LuaVersion, mem: MemOwner) -> Option<Vm> {
         let heap = Heap::try_with_mem(mem, crate::runtime::heap::fresh_seed())?;
         Vm::try_new_minimal_on(version, heap)
     }
@@ -296,7 +294,7 @@ impl Vm {
     /// `None` when `mem` cannot give the Vm the memory it starts with.
     pub fn try_new_minimal_with_mem_and_seed(
         version: LuaVersion,
-        mem: crate::runtime::mem::MemOwner,
+        mem: MemOwner,
         seed: u32,
     ) -> Option<Vm> {
         Vm::try_new_minimal_on(version, Heap::try_with_mem(mem, seed)?)
@@ -304,7 +302,7 @@ impl Vm {
 
     /// [`Vm::new`] whose memory comes from `mem` (see
     /// [`Vm::new_minimal_with_mem`]).
-    pub fn new_with_mem(version: LuaVersion, mem: crate::runtime::mem::MemOwner) -> Vm {
+    pub fn new_with_mem(version: LuaVersion, mem: MemOwner) -> Vm {
         let mut vm = Vm::new_minimal_with_mem(version, mem);
         crate::vm::lib_mem::opened(vm.open_all_libs());
         vm

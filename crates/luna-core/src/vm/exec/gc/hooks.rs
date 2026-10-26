@@ -5,6 +5,8 @@
 //! `jit_rt::recording_check`).
 
 use super::*;
+#[cfg(feature = "gc-stress")]
+use crate::runtime::puc::api::PucCollector;
 
 /// gc-stress: which checkpoints collect; nothing in the product.
 #[cfg(feature = "gc-stress")]

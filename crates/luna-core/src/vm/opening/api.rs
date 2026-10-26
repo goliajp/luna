@@ -2,6 +2,7 @@
 //! allocates, and where it checks for a collection.
 
 use super::run::{Ix, Opener};
+use crate::runtime::puc::api::PucCollector;
 use crate::runtime::{Builtin, Gc, NativeClosure, Table, Value};
 use crate::version::LuaVersion;
 use crate::vm::error::LuaError;
@@ -48,9 +49,9 @@ impl Opener {
             Value::Table(tt) if tt.metatable().is_none() => vm.raw_set(tt, key, v)?,
             Value::LightUserdata(p) => {
                 if let (Value::Str(s), Value::LightUserdata(c)) = (key, v) {
-                    // SAFETY: a light userdata the opening stores into
-                    // another is one of its records, as both are here
-                    unsafe { vm.heap.env51_set_key(p as *mut _, s, c as *mut _) };
+                    // a light userdata the opening stores into another is
+                    // one of its records, as both are here
+                    vm.heap.env51_set_key(p as *mut _, s, c as *mut _);
                 }
             }
             _ => vm.host_set_index(t, key, v)?,

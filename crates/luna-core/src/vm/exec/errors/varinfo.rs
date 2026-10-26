@@ -1,6 +1,7 @@
 //! Naming the operand of a runtime error (PUC `varinfo`).
 
 use super::*;
+use crate::runtime::puc::api::PucText;
 
 impl Vm {
     /// Name the offending operand of the current instruction (PUC varinfo) for

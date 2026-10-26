@@ -2,6 +2,7 @@
 //! results and the per-frame closure and marker slots.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 
 impl Vm {
     /// Re-sync `frames_top` after a bulk `frames: Vec`

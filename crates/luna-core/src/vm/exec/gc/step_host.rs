@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::runtime::heap::{Marker, Propagated, Running};
+use crate::runtime::puc::api::{PucCollector, PucLoads};
 use crate::runtime::puc::step::{CiCount, StepHost};
 
 impl StepHost for Vm {

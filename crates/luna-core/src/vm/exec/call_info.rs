@@ -4,6 +4,7 @@
 //! `totalbytes`.
 
 use super::*;
+use crate::runtime::puc::api::PucCount;
 
 impl Vm {
     /// The `CallInfo`s the running thread uses besides its base one: its

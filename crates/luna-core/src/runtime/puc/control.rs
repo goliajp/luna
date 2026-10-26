@@ -7,18 +7,18 @@ use super::*;
 impl Heap {
     /// `collectgarbage`'s pacing parameters.
     #[inline]
-    pub(crate) fn gc_params(&self) -> &GcParams {
+    pub(in crate::runtime) fn gc_params(&self) -> &GcParams {
         &self.puc.params
     }
 
     #[inline]
-    pub(crate) fn gc_params_mut(&mut self) -> &mut GcParams {
+    pub(in crate::runtime) fn gc_params_mut(&mut self) -> &mut GcParams {
         &mut self.puc.params
     }
 
     /// There may be objects to be finalized (PUC `gcfinnum = 1`).
     #[inline]
-    pub(crate) fn finalizers_due(&mut self) {
+    pub(in crate::runtime) fn finalizers_due(&mut self) {
         self.puc.pace.fin_num = 1;
     }
 

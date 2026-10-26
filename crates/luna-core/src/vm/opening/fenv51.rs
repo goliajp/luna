@@ -9,7 +9,8 @@
 
 use super::run::Opener;
 use crate::runtime::Value;
-use crate::runtime::puc::PucKind;
+use crate::runtime::puc::PucObj;
+use crate::runtime::puc::api::{PucCollector, PucCount, PucLoads};
 use crate::runtime::puc::records::env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
@@ -19,10 +20,7 @@ impl Opener {
     /// numbers them), made and pushed (`lua_createtable(L, 0, 1)`).
     pub(crate) fn newfenv(&mut self, vm: &mut Vm, k: usize) -> Result<(), LuaError> {
         self.before(vm)?;
-        vm.heap.acct_obj(
-            PucKind::Table,
-            vm.heap.puc_size(crate::runtime::puc::PucObj::Table),
-        );
+        vm.heap.new_obj(PucObj::Table);
         vm.heap
             .acct_block(0, vm.heap.puc_size(crate::runtime::puc::PucObj::Nodes(1)));
         let h = vm.heap.env51_born(k);
@@ -34,10 +32,7 @@ impl Opener {
     /// The closure `k` (0 to 2: `io_fclose`, `io_noclose`, `io_pclose`)
     /// one of those tables holds, made.
     pub(crate) fn phantom_closure(&mut self, vm: &mut Vm, k: usize) -> Value {
-        vm.heap.acct_obj(
-            PucKind::CClosure,
-            vm.heap.puc_size(crate::runtime::puc::PucObj::CClosure(0)),
-        );
+        vm.heap.new_obj(PucObj::CClosure(0));
         Value::LightUserdata(vm.heap.env51_born(3 + k) as *const ())
     }
 

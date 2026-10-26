@@ -1,6 +1,7 @@
 //! 5.1-only base functions: `newproxy`, `gcinfo`, `setfenv`, `getfenv`.
 
 use super::*;
+use crate::runtime::puc::api::PucCount;
 
 /// PUC 5.1 `newproxy([false | true | proxy])`: an empty userdata, with no
 /// metatable, a fresh one, or the metatable of another proxy. Only a

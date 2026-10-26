@@ -10,6 +10,7 @@
 use super::step::Rd;
 use super::{Script, native};
 use crate::runtime::Value;
+use crate::runtime::puc::api::PucCollector;
 use crate::version::LuaVersion;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;

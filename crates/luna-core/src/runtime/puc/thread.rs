@@ -25,7 +25,7 @@ impl Thread {
 impl Heap {
     /// `new` `CallInfo`s of `t` allocated and `freed` ones freed, one block
     /// each.
-    pub(crate) fn acct_ci(&mut self, t: Thread, new: u32, freed: u32) {
+    pub(in crate::runtime) fn acct_ci(&mut self, t: Thread, new: u32, freed: u32) {
         if t.counted() {
             self.ci_blocks(new, freed);
         }
@@ -53,7 +53,7 @@ impl Heap {
 
     /// The stack of `t` resized from `old` to `new` slots
     /// (`luaD_reallocstack`).
-    pub(crate) fn acct_stack(&mut self, t: Thread, old: u32, new: u32) {
+    pub(in crate::runtime) fn acct_stack(&mut self, t: Thread, old: u32, new: u32) {
         if t.counted() {
             self.stack_blocks(old, new);
         }
@@ -66,7 +66,7 @@ impl Heap {
     }
 
     /// The stack of `t`, `s` slots, reallocated to the size it has.
-    pub(crate) fn acct_stack_same(&mut self, t: Thread, s: u32) {
+    pub(in crate::runtime) fn acct_stack_same(&mut self, t: Thread, s: u32) {
         if t.counted() {
             let b = self.stack_bytes(s);
             self.acct_part(b, b);
@@ -75,7 +75,7 @@ impl Heap {
 
     /// 5.1's `CallInfo` array of `t` resized from `old` to `new` entries
     /// (`luaD_reallocCI`).
-    pub(crate) fn acct_ci51(&mut self, t: Thread, old: u32, new: u32) {
+    pub(in crate::runtime) fn acct_ci51(&mut self, t: Thread, old: u32, new: u32) {
         if t.counted() {
             self.ci51_blocks(old, new);
         }

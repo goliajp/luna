@@ -3,6 +3,7 @@
 
 use super::{posrelat, start_pos};
 use crate::pattern::{self, CapValue, Flavor, MatchState, PatError};
+use crate::runtime::puc::api::PucCount;
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
@@ -225,18 +226,9 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // `GMatchState` userdata: the userdata, its check for a collection,
     // then the closure (`lua_pushcclosure`) and its check
     let it = if vm.version() >= LuaVersion::Lua53 {
-        use crate::runtime::puc::PucKind;
-        let objs = [
-            (
-                PucKind::Userdata,
-                vm.heap.puc_size(crate::runtime::puc::PucObj::GMatchState),
-            ),
-            (
-                PucKind::CClosure,
-                vm.heap.puc_size(crate::runtime::puc::PucObj::CClosure(3)),
-            ),
-        ];
-        vm.heap.acct_obj(objs[0].0, objs[0].1);
+        use crate::runtime::puc::PucObj;
+        let objs = [PucObj::GMatchState, PucObj::CClosure(3)];
+        vm.heap.new_obj(objs[0]);
         vm.api_check_after_rooted()?;
         let it = vm.lib_native_stand_in(gmatch_iter, &ups, &objs, 1)?;
         vm.api_check_after(it)?;

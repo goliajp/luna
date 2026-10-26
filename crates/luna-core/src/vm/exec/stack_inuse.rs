@@ -3,6 +3,7 @@
 
 use super::stack_size;
 use super::*;
+use crate::runtime::puc::api::PucCount;
 use crate::vm::callstack::NativeAct;
 
 /// PUC's `ci->top` of a thread's bottom `CallInfo`, in luna's numbering:

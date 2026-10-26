@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::runtime::puc::PucObj;
+use crate::runtime::puc::api::{PucCount, PucLoads, PucParse};
 use crate::runtime::puc::records::parse::set_parsing;
 
 impl Vm {
@@ -28,8 +29,7 @@ impl Vm {
         // the prototype luna made without counting
         if let Some(&p) = r.opening.get(r.opened) {
             let h = p.hdr();
-            self.heap
-                .acct_promote_obj(h, PucKind::Proto, self.heap.puc_size(PucObj::Proto));
+            self.heap.promote_obj(h, PucObj::Proto);
             if r.rec.is_none() {
                 set_parsing(p, true);
                 if !main && d != Dialect::L51 {

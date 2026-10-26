@@ -3,6 +3,7 @@
 //! upvalue left off its list would not close when its function returns.
 
 use crate::runtime::Value;
+use crate::runtime::puc::api::PucCollector;
 use crate::version::LuaVersion;
 use crate::vm::Vm;
 

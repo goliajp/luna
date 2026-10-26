@@ -130,7 +130,7 @@ impl Heap {
     /// set aside, among the first objects set aside (which no load's
     /// setting aside reaches), so that PUC making it puts it at the list's
     /// head, as PUC's is. See [`Heap::name_aside_again`].
-    pub(crate) fn try_intern_name(
+    pub(in crate::runtime) fn try_intern_name(
         &mut self,
         bytes: &[u8],
         made_later: bool,

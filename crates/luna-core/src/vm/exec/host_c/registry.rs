@@ -1,6 +1,7 @@
 //! The registry the C API sees, as `lua_newstate` makes it.
 
 use super::*;
+use crate::runtime::puc::api::PucCount;
 
 impl Vm {
     /// PUC's registry (`LUA_REGISTRYINDEX`), made now if it was not

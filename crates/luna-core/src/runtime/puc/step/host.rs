@@ -66,7 +66,7 @@ pub(crate) enum CiCount {
 
 impl Heap {
     /// Which `CallInfo`s PUC's traversal of a thread counts.
-    pub(crate) fn puc_ci_count(&self) -> CiCount {
+    pub(in crate::runtime) fn puc_ci_count(&self) -> CiCount {
         match self.puc.dialect {
             Dialect::L51 => CiCount::Array51,
             Dialect::L52 => CiCount::InUse,

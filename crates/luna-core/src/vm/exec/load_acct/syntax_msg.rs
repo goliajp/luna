@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::frontend::error::NearKind;
+use crate::runtime::puc::api::{PucLoads, PucText};
 use crate::runtime::puc::fmt::FmtArg;
 use crate::version::LuaVersion;
 

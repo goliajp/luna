@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::runtime::heap::GcHeader;
+use crate::runtime::puc::api::{PucLoads, PucParse};
 use crate::runtime::puc::records::parse::{OpenView, ParseFrame, set_parsing};
 
 /// The header of the object of `g`.
@@ -124,15 +125,13 @@ impl Vm {
     /// PUC's `luaC_objbarrier` from the prototype of open function `i` to
     /// `child`, which the parser has just put in it.
     pub(super) fn proto_barrier(&mut self, r: &Replay, i: usize, child: Gc<GcHeader>) {
-        let child = child.as_ptr();
         if r.rec.is_some() {
             return;
         }
         let Some(&p) = r.fs.get(i).and_then(|f| r.opening.get(f.shape)) else {
             return;
         };
-        // SAFETY: both are live objects of this heap
-        unsafe { self.heap.parse_barrier(hdr(p), child) };
+        self.heap.parse_barrier(p.hdr(), child);
     }
 
     /// The barrier from open function `i`'s prototype to its `n`th upvalue

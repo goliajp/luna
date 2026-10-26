@@ -23,7 +23,11 @@ impl Heap {
     /// allocated. For a table of PUC's luna has none for (a parser's,
     /// the registry PUC's state starts with): counted unless luna is
     /// building its own objects.
-    pub(crate) fn acct_table_resize(&mut self, old: (usize, usize), new: (usize, usize)) {
+    pub(in crate::runtime) fn acct_table_resize(
+        &mut self,
+        old: (usize, usize),
+        new: (usize, usize),
+    ) {
         if self.counting() {
             self.table_parts(old, new, Heap::acct_block);
         }
@@ -32,7 +36,11 @@ impl Heap {
     /// [`Heap::acct_table_resize`] of a counted table of luna's: counted
     /// as the table is, whatever luna builds meanwhile (see
     /// [`Heap::acct_part`]).
-    pub(crate) fn acct_counted_table_resize(&mut self, old: (usize, usize), new: (usize, usize)) {
+    pub(in crate::runtime) fn acct_counted_table_resize(
+        &mut self,
+        old: (usize, usize),
+        new: (usize, usize),
+    ) {
         self.table_parts(old, new, Heap::acct_part);
     }
 
@@ -93,7 +101,9 @@ impl Heap {
     /// `t`, made while nothing was counted, is a table PUC's state starts
     /// with, which [`Heap::acct_boot`] counted in its place: counted from
     /// here on, as it grows and when it is freed.
-    pub(crate) fn boot_table(t: Gc<crate::runtime::Table>) -> Gc<crate::runtime::Table> {
+    pub(in crate::runtime) fn boot_table(
+        t: Gc<crate::runtime::Table>,
+    ) -> Gc<crate::runtime::Table> {
         // SAFETY: `t` is a live table; only its class byte is written
         unsafe { (*t.header()).cls &= !super::UNLISTED };
         t
@@ -101,7 +111,7 @@ impl Heap {
 
     /// Whether `t` is one of luna's own tables, which nothing counts.
     #[inline]
-    pub(crate) fn is_own_table(&self, t: &crate::runtime::Table) -> bool {
+    pub(in crate::runtime) fn is_own_table(&self, t: &crate::runtime::Table) -> bool {
         t.hdr.cls & super::UNLISTED != 0
     }
 
@@ -186,7 +196,7 @@ impl Heap {
     /// halved when a quarter of it is used (5.1: and it is past twice its
     /// minimum; 5.2: when less than half is), and 5.1's concatenation
     /// buffer halved past twice its minimum, 5.2's freed.
-    pub(crate) fn acct_check_sizes(&mut self) {
+    pub(in crate::runtime) fn acct_check_sizes(&mut self) {
         let d = self.puc.dialect;
         let (size, nuse) = (self.puc.records.strt_size, self.puc.records.strt_nuse);
         let shrink = match d {

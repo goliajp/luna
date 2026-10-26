@@ -1,6 +1,7 @@
 //! `io.popen` and the shell it runs commands in.
 
 use super::*;
+use crate::runtime::puc::api::PucCollector;
 
 /// `io.popen(prog [, mode])`: a `/bin/sh -c prog` child with its stdout
 /// (`"r"`) or stdin (`"w"`) as the stream.
