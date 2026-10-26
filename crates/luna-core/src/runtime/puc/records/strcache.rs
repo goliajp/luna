@@ -104,12 +104,12 @@ impl Heap {
     pub(crate) fn intern_at(&mut self, at: CStr, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
         let cached = matches!(self.puc.dialect, Dialect::L53 | Dialect::L54 | Dialect::L55)
             && bytes.len() > string::MAX_SHORT_LEN;
-        if let Some(s) = self.puc.strcache.find(at, bytes).filter(|_| cached) {
+        if let Some(s) = self.puc.records.strcache.find(at, bytes).filter(|_| cached) {
             return Ok(s);
         }
         let s = self.try_intern(bytes)?;
         if cached {
-            self.puc.strcache.put(at, s);
+            self.puc.records.strcache.put(at, s);
         }
         Ok(s)
     }

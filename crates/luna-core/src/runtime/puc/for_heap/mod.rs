@@ -11,14 +11,14 @@ impl Heap {
     /// PUC's `totalbytes`.
     #[inline(always)]
     pub(in crate::runtime) fn puc_bytes(&self) -> usize {
-        self.puc.bytes
+        self.puc.count.bytes
     }
 
     /// Whether the count reaches the next step's due point once `more`
     /// bytes more are counted.
     #[inline(always)]
     pub(in crate::runtime::puc) fn puc_due_after(&self, more: usize) -> bool {
-        self.puc.bytes + more >= self.puc.gc_limit
+        self.puc.count.bytes + more >= self.puc.count.gc_limit
     }
 
     /// The collector restarts (`collectgarbage("restart")`): a step falls
@@ -27,8 +27,8 @@ impl Heap {
     pub(in crate::runtime::puc) fn puc_restart_due(&mut self) {
         let d = self.puc.dialect;
         match d {
-            Dialect::L51 => self.puc.pace.set_threshold(self.puc.bytes as i64),
-            _ => self.puc.pace.set_debt(d, self.puc.bytes, 0),
+            Dialect::L51 => self.puc.pace.set_threshold(self.puc.count.bytes as i64),
+            _ => self.puc.pace.set_debt(d, self.puc.count.bytes, 0),
         }
     }
 
@@ -36,7 +36,7 @@ impl Heap {
     /// collector is `stopped_51` (an unreachable threshold).
     #[inline]
     pub(in crate::runtime::puc) fn puc_set_limit(&mut self, stopped_51: bool) {
-        self.puc.gc_limit = if stopped_51 {
+        self.puc.count.gc_limit = if stopped_51 {
             usize::MAX
         } else {
             self.puc.pace.limit(self.puc.dialect)
@@ -48,7 +48,7 @@ impl Heap {
     /// 5.1 `setthreshold`), the collector in its pause.
     pub(in crate::runtime::puc) fn puc_pause(&mut self, pause: i64) {
         let d = self.puc.dialect;
-        let bytes = self.puc.bytes;
+        let bytes = self.puc.count.bytes;
         match d {
             Dialect::L51 => {
                 self.puc.pace.estimate = bytes as i64;
@@ -78,6 +78,7 @@ impl Heap {
         let s = self.puc.sizes;
         let mut n: i64 = self
             .puc
+            .records
             .pins
             .iter()
             .map(|p| s.string(p.len(), false) as i64)
@@ -86,37 +87,27 @@ impl Heap {
         n
     }
 
-    /// The number a new table, function, thread or userdata gets: its hash
-    /// as a table key. PUC hashes these by address, which varies from run
-    /// to run; numbers in creation order give one of the layouts PUC can
-    /// have, the same every run.
-    #[inline(always)]
-    pub(in crate::runtime) fn take_id(&mut self) -> u32 {
-        self.puc.next_id = self.puc.next_id.wrapping_add(16);
-        self.puc.next_id
-    }
-
     /// 5.1: what the atomic step found to finalize (`udsize`), which the
     /// step's estimate leaves out.
     #[inline]
     pub(in crate::runtime::puc) fn puc_found_to_finalize(&mut self, bytes: i64) {
-        self.puc.udsize = bytes;
+        self.puc.records.udsize = bytes;
     }
 
     /// 5.3: thread `h` comes up in this cycle's propagation; true the
     /// first time, when PUC's traversal shrinks its stack.
     pub(in crate::runtime) fn puc_shrinks_now(&mut self, h: *mut GcHeader) -> bool {
-        if self.puc.shrunk.contains(&h) {
+        if self.puc.records.shrunk.contains(&h) {
             return false;
         }
-        self.puc.shrunk.push(h);
+        self.puc.records.shrunk.push(h);
         true
     }
 
     /// 5.2: the sweep kept thread `h`, which `sweepthread` shrinks.
     #[inline]
     pub(in crate::runtime::puc) fn puc_swept_thread(&mut self, h: *mut GcHeader) {
-        self.puc.shrunk.push(h);
+        self.puc.records.shrunk.push(h);
     }
 
     /// The uncounted object `h` stands for objects of PUC's of the sizes in
@@ -126,16 +117,16 @@ impl Heap {
         h: *mut GcHeader,
         sizes: impl Iterator<Item = usize>,
     ) {
-        self.puc.stand_ins.extend(sizes.map(|s| (h, s)));
+        self.puc.records.stand_ins.extend(sizes.map(|s| (h, s)));
     }
 
     /// The objects of PUC's that `h`, an uncounted object of luna's, stood
     /// for are freed with it.
     pub(in crate::runtime::puc) fn free_stand_in(&mut self, h: *mut GcHeader) {
-        while let Some(i) = self.puc.stand_ins.iter().position(|(p, _)| *p == h) {
-            let (_, size) = self.puc.stand_ins.swap_remove(i);
+        while let Some(i) = self.puc.records.stand_ins.iter().position(|(p, _)| *p == h) {
+            let (_, size) = self.puc.records.stand_ins.swap_remove(i);
             if size & STRT_STAND != 0 {
-                self.puc.strt_nuse -= 1;
+                self.puc.records.strt_nuse -= 1;
             }
             self.acct_part(size & !STRT_STAND, 0);
         }
@@ -144,12 +135,12 @@ impl Heap {
     /// The bytes of PUC's string table (its array of buckets).
     #[inline]
     pub(in crate::runtime::puc) fn strt_bytes(&self) -> usize {
-        self.puc.strt_size * self.puc.sizes.ptr
+        self.puc.records.strt_size * self.puc.sizes.ptr
     }
 
     /// The light function the opening made as function `id`.
     pub(crate) fn light(&self, id: usize) -> Option<Gc<crate::runtime::NativeClosure>> {
-        self.puc.lights.get(id).copied().flatten()
+        self.puc.opening.lights.get(id).copied().flatten()
     }
 
     /// Function `id` of the opening's `count` is the light function `g`:
@@ -160,7 +151,7 @@ impl Heap {
         count: usize,
         g: Gc<crate::runtime::NativeClosure>,
     ) {
-        let l = &mut self.puc.lights;
+        let l = &mut self.puc.opening.lights;
         if l.len() <= id {
             l.resize(count.max(id + 1), None);
         }

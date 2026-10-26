@@ -34,7 +34,7 @@ impl Heap {
         self.puc.sizes = PucSizes::of(d);
         self.puc.rules = super::for_heap::HeapRules::of(d, &self.puc.sizes);
         if d == Dialect::L51 {
-            self.puc.short_max = usize::MAX;
+            self.puc.records.short_max = usize::MAX;
         }
     }
 
@@ -44,7 +44,7 @@ impl Heap {
         if !self.counting() {
             return;
         }
-        self.puc.bytes += size;
+        self.puc.count.bytes += size;
         self.hook_alloc(kind, size);
     }
 
@@ -87,7 +87,7 @@ impl Heap {
             return;
         }
         self.hook_block(old, new);
-        self.puc.bytes = self.puc.bytes + new - old;
+        self.puc.count.bytes = self.puc.count.bytes + new - old;
     }
 
     /// A block of an object PUC counts going from `old` to `new` bytes (a
@@ -107,7 +107,7 @@ impl Heap {
     #[inline]
     pub(in crate::runtime::puc) fn count_part(&mut self, old: usize, new: usize) {
         self.hook_block(old, new);
-        self.puc.bytes = self.puc.bytes + new - old;
+        self.puc.count.bytes = self.puc.count.bytes + new - old;
     }
 }
 

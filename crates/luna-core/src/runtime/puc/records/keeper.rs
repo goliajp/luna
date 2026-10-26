@@ -18,6 +18,7 @@ impl Heap {
         let mut sizes = LVec::new(self.mem());
         sizes.push(size as u32)?;
         self.puc
+            .records
             .keepers
             .try_reserve(1)
             .map_err(|_| Oom(self.mem()))?;
@@ -27,7 +28,10 @@ impl Heap {
         hdr.cls |= parse::KEPT;
         let g = self.try_adopt(Ghost { hdr, sizes })?;
         self.acct_obj(PucKind::LongStr, size);
-        self.puc.keepers.push((g.as_ptr() as *mut GcHeader, host));
+        self.puc
+            .records
+            .keepers
+            .push((g.as_ptr() as *mut GcHeader, host));
         // the host's traversal counts the string as PUC's marking does
         // SAFETY: `host` heads a live object; only its class byte is written
         unsafe { (*host).cls |= STANDS };
@@ -37,7 +41,7 @@ impl Heap {
     /// The bytes of the strings kept for `host`, which PUC's marking of
     /// it reaches.
     pub(in crate::runtime::puc) fn kept_bytes(&self, host: *mut GcHeader) -> usize {
-        kept_bytes(&self.puc.keepers, host)
+        kept_bytes(&self.puc.records.keepers, host)
     }
 
     /// The sweep reaches the dead keeper `h`: true (and current white)
@@ -53,12 +57,12 @@ impl Heap {
             if (*h).tag != ObjTag::Ghost || (*h).sub != KEEPER {
                 return false;
             }
-            let Some(i) = self.puc.keepers.iter().position(|k| k.0 == h) else {
+            let Some(i) = self.puc.records.keepers.iter().position(|k| k.0 == h) else {
                 return false;
             };
-            let f = (*self.puc.keepers[i].1).flags();
+            let f = (*self.puc.records.keepers[i].1).flags();
             if is_white(f) && f & self.white() == 0 {
-                self.puc.keepers.swap_remove(i);
+                self.puc.records.keepers.swap_remove(i);
                 return false;
             }
             (*h).paint(self.white());

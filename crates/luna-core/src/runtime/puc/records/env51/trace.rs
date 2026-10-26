@@ -6,7 +6,7 @@ use super::*;
 impl Heap {
     /// How many of 5.1's environment records a sweep has not freed.
     pub(in crate::runtime::puc) fn env51_live(&self) -> i64 {
-        self.puc.env51_box.as_ref().map_or(0, |e| e.live())
+        self.puc.records.env51_box.as_ref().map_or(0, |e| e.live())
     }
 }
 

@@ -186,6 +186,9 @@ pub struct Heap {
     /// A userdata the VM refers to without keeping it alive; null once
     /// freed
     weak_userdata: *mut GcHeader,
+    /// the number the last table, function, thread or userdata made got
+    /// (`Heap::take_id`)
+    next_id: u32,
     /// What the VM does with each userdata the collector frees, before it
     /// goes
     userdata_freed: Option<fn(Gc<Userdata>)>,

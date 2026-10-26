@@ -32,7 +32,7 @@ impl Heap {
     pub(crate) fn reader_call_begins(&mut self) -> DeferMark {
         self.hook_hold_lines();
         DeferMark {
-            bytes: self.puc.bytes,
+            bytes: self.puc.count.bytes,
             objs: self.unborn_len(),
             aside: self.set_loads_aside(true),
         }
@@ -42,9 +42,9 @@ impl Heap {
     /// the count, the objects it made kept aside.
     pub(crate) fn reader_call_ends(&mut self, mark: DeferMark) -> Deferred {
         self.loads_aside_back(mark.aside);
-        let bytes = self.puc.bytes as isize - mark.bytes as isize;
-        self.puc.bytes = mark.bytes;
-        self.puc.set_aside += bytes;
+        let bytes = self.puc.count.bytes as isize - mark.bytes as isize;
+        self.puc.count.bytes = mark.bytes;
+        self.puc.loads.set_aside += bytes;
         Deferred {
             bytes,
             objs: (mark.objs, self.unborn_len()),
@@ -55,8 +55,8 @@ impl Heap {
     /// The replay reaches where PUC's parser called the reader: what the
     /// call counted is counted now, its objects listed.
     pub(crate) fn replay_reader_call(&mut self, d: Deferred) {
-        self.puc.bytes = (self.puc.bytes as isize + d.bytes) as usize;
-        self.puc.set_aside -= d.bytes;
+        self.puc.count.bytes = (self.puc.count.bytes as isize + d.bytes) as usize;
+        self.puc.loads.set_aside -= d.bytes;
         self.born_range(d.objs);
         self.hook_put_lines(d.lines);
     }
@@ -64,16 +64,16 @@ impl Heap {
     /// A load with a reader begins: where the counts set aside and the
     /// objects stand now, for [`Heap::reader_load_ends`].
     pub(crate) fn reader_load_begins(&self) -> (isize, usize) {
-        (self.puc.set_aside, self.unborn_len())
+        (self.puc.loads.set_aside, self.unborn_len())
     }
 
     /// A load that began at `mark` ends: what its reader's calls counted
     /// and no replay counted again is counted now, and the objects they
     /// made go on the list.
     pub(crate) fn reader_load_ends(&mut self, (bytes, objs): (isize, usize)) {
-        let left = self.puc.set_aside - bytes;
-        self.puc.bytes = (self.puc.bytes as isize + left) as usize;
-        self.puc.set_aside = bytes;
+        let left = self.puc.loads.set_aside - bytes;
+        self.puc.count.bytes = (self.puc.count.bytes as isize + left) as usize;
+        self.puc.loads.set_aside = bytes;
         self.flush_unborn(objs);
     }
 }

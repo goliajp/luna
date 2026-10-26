@@ -27,7 +27,7 @@ impl Heap {
     #[inline]
     pub(in crate::runtime::puc) fn fin51_threshold(&mut self) -> i64 {
         let saved = self.puc.pace.threshold();
-        self.puc.pace.set_threshold(2 * self.puc.bytes as i64);
+        self.puc.pace.set_threshold(2 * self.puc.count.bytes as i64);
         saved
     }
 

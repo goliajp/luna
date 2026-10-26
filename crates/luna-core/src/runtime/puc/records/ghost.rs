@@ -190,7 +190,7 @@ impl Heap {
             return;
         }
         if s & SHORT != 0 {
-            self.puc.strt_nuse -= 1;
+            self.puc.records.strt_nuse -= 1;
         }
         self.acct_part((s & !FLAGS) as usize, 0);
     }

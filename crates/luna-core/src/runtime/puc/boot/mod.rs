@@ -17,11 +17,11 @@ impl Heap {
         let d = self.puc.dialect;
         let b = boot_sizes(d);
         let s = self.puc.sizes;
-        self.puc.silent = 0;
+        self.puc.count.silent = 0;
         self.acct_obj(PucKind::Thread, b.lg);
         // `lua_newstate`: no debt (5.1 sets its threshold when the state is
         // built)
-        self.puc.pace.set_debt(d, self.puc.bytes, 0);
+        self.puc.pace.set_debt(d, self.puc.count.bytes, 0);
         if b.ci_entries > 0 {
             self.acct_block(0, b.ci_entries * s.callinfo);
         }
@@ -38,7 +38,7 @@ impl Heap {
             self.acct_obj(PucKind::Table, s.table);
         }
         self.acct_block(0, b.strtab * s.ptr);
-        self.puc.strt_size = b.strtab;
+        self.puc.records.strt_size = b.strtab;
         let memerr = b"not enough memory".len();
         if d >= Dialect::L53 {
             self.acct_string(memerr);
@@ -62,7 +62,7 @@ impl Heap {
             self.strt_settle();
         }
         if d == Dialect::L51 {
-            self.puc.pace.set_threshold(4 * self.puc.bytes as i64);
+            self.puc.pace.set_threshold(4 * self.puc.count.bytes as i64);
         }
         Ok(())
     }
@@ -102,7 +102,10 @@ impl Heap {
         sizes: impl IntoIterator<Item = usize>,
     ) {
         let h = h.as_ptr();
-        self.puc.stand_ins.extend(sizes.into_iter().map(|s| (h, s)));
+        self.puc
+            .records
+            .stand_ins
+            .extend(sizes.into_iter().map(|s| (h, s)));
         // SAFETY: `h` comes from a handle, so its object is live; only its
         // class byte is written
         unsafe { (*h).cls |= super::STANDS };
@@ -132,7 +135,7 @@ impl Heap {
         // 5.1's string table holds every string, 5.2's the short ones
         let held = match self.puc.dialect {
             Dialect::L51 => true,
-            Dialect::L52 => len <= self.puc.short_max,
+            Dialect::L52 => len <= self.puc.records.short_max,
             _ => false,
         };
         // SAFETY: `h` comes from a handle, so its string is live; nothing

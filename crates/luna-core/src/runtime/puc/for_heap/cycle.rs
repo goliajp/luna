@@ -59,7 +59,7 @@ impl Heap {
     /// dead (PUC `luaS_clearcache`), and the open upvalues left white come
     /// off their lists.
     pub(in crate::runtime) fn puc_marking_ends(&mut self) {
-        self.puc.strcache.clear_dead();
+        self.puc.records.strcache.clear_dead();
         self.doom_open_upvals();
     }
 
