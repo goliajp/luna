@@ -137,3 +137,6 @@ impl Vm {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
