@@ -1,29 +1,41 @@
-//! A Lua stack filled to the limit by one call's results rather than by a
-//! million nested calls: the call that does not fit raises "stack
-//! overflow", and a message handler that does not fit the room the
-//! overflow leaves it is "error in error handling". Quick enough to run
-//! under Miri too.
+//! A Lua stack filled to the limit by what a C function holds on it
+//! rather than by a million nested calls: the call that does not fit
+//! raises "stack overflow", and a message handler that does not fit the
+//! room the overflow leaves it is "error in error handling". Quick enough
+//! to run under Miri too.
 
 use crate::runtime::Value;
 use crate::version::LuaVersion;
-use crate::vm::Vm;
+use crate::vm::exec::stack_size::MAX_STACK;
+use crate::vm::{LuaError, Vm};
 
-/// `string.byte` leaves all but the last thousand slots of the stack's
-/// limit as `fill`'s arguments; `fill` then recurses past it, and the
-/// error goes to the handler `h` (which `calls` counts): the message, and
-/// how many times the handler's body ran.
+/// `fill(f)`, as a C function that asks `lua_checkstack` for all but the
+/// last thousand slots of the stack's limit, fills them (`lua_settop`) and
+/// calls `f` above them.
+fn fill(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let f = vm.nat_arg(fs, nargs, 0);
+    let top = fs + 1 + nargs;
+    let n = MAX_STACK - 1000 - top;
+    assert!(vm.checkstack(top, i64::from(n)), "the room is granted");
+    vm.native_push_vals(&vec![Value::Nil; n as usize])?;
+    vm.call_value(f, &[])?;
+    Ok(vm.nat_return(fs, &[]))
+}
+
+/// `fill(r)`, `r` recursing past the limit, the error going to the handler
+/// `h` (which `calls` counts): the message, and how many times the
+/// handler's body ran.
 fn overflow(v: LuaVersion, h: &str) -> (String, i64) {
     let src = format!(
         "local function r() return 1 + r() end
-         local function fill(...) return r() end
-         local s = string.rep('x', {n})
          local calls = 0
-         local ok, m = xpcall(function() return fill(s:byte(1, -1)) end,
+         local ok, m = xpcall(function() return fill(r) end,
            function(m) calls = calls + 1 {h} end)
-         return ok, m, calls",
-        n = super::stack_size::MAX_STACK - 1000
+         return ok, m, calls"
     );
     let mut vm = Vm::new(v);
+    let f = vm.native(fill);
+    vm.set_global("fill", f).expect("a global");
     let runs = vm.msgh_runs;
     let r = vm.eval(&src).expect("the script runs");
     // the handler is started once: an overflow in it is "error in error
