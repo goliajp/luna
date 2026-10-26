@@ -174,3 +174,10 @@ debug = 1
 # target/debug/deps, and a directory that large slows the first exec of each
 # test binary
 split-debuginfo = "packed"
+
+# Unoptimised, the interpreter loop gives every local of every inlined
+# helper a slot of its own: about 45 KiB of stack for one call of it, 130
+# KiB with AddressSanitizer, so that deep Lua-to-native nesting runs out of
+# a small thread stack well before the C level limit.
+[profile.dev.package.luna-core]
+opt-level = 1
