@@ -1,3 +1,4 @@
+use super::super::tier_source::tier_up;
 use super::*;
 use luna_core::__private::classify_exit_tags;
 
@@ -233,15 +234,12 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         .collect();
 
     checkpoint("post:emit-pass-done");
-    // pre-compute exit_hit_counts before the struct
-    // init so per_exit_tags's len is still accessible.
+    // before the struct, while per_exit_tags's len can be read
     let exit_hit_counts: TArc<[TCellU32]> = {
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
         (0..total).map(|_| TCellU32::new(0)).collect()
     };
-    // parallel per-exit raw fn-ptr slots, all null
-    // until a child side trace compiles for the slot. Same length
-    // as exit_hit_counts.
+    // per exit, the side trace's entry once one compiles (null before)
     let exit_side_trace_ptrs: TArc<[TCellPtr]> = {
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
         (0..total).map(|_| TCellPtr::null()).collect()
@@ -337,21 +335,6 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         tier_up: tier_count
             .map(|(count, at)| tier_up(count, at, record.head_proto.call_hot_count.get())),
     }
-}
-
-/// The record of a baseline trace that moves to Cranelift after `at`
-/// iterations and entries, counted in `count` (fewer once its function,
-/// called `calls_at` times so far, is called again).
-fn tier_up(count: Box<TCellU32>, at: u32, calls_at: u32) -> Box<TierUp> {
-    Box::new(TierUp {
-        count,
-        at,
-        calls_at,
-        optimized: TCellPtr::null(),
-        tried: TCellBool::new(false),
-        parent_cells: [TCellPtr::null(), TCellPtr::null()],
-        source: TRefLock::new(None),
-    })
 }
 
 /// The registers the trace's ops write, the values inlined functions

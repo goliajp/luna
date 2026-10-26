@@ -272,18 +272,10 @@ impl Meta {
             })
             .collect();
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
-        let tier_up = match self.tier_at {
-            Some(at) if !tiered => Some(Box::new(TierUp {
-                count: Box::new(TCellU32::new(0)),
-                at,
-                calls_at,
-                optimized: TCellPtr::null(),
-                tried: TCellBool::new(false),
-                parent_cells: [TCellPtr::null(), TCellPtr::null()],
-                source: TRefLock::new(None),
-            })),
-            _ => None,
-        };
+        let tier_up = self
+            .tier_at
+            .filter(|_| !tiered)
+            .map(|at| super::tier_source::tier_up(Box::new(TCellU32::new(0)), at, calls_at));
         CompiledTrace {
             head_pc: self.head_pc,
             entry: placeholder_trace_fn,

@@ -37,7 +37,7 @@ impl LuaUserdata for Vec3 {
         // Static constructor reachable as Vec3.new(x, y, z).
         m.add_function(
             "new",
-            |vm, (x, y, z): (f64, f64, f64)| -> Result<luna_core::runtime::Value, _> {
+            |vm, (x, y, z): (f64, f64, f64)| -> Result<Value, _> {
                 Ok(vm.create_userdata(Vec3 { x, y, z }))
             },
         );
@@ -45,10 +45,7 @@ impl LuaUserdata for Vec3 {
         // __add: v + w  — both operands are Vec3 userdata.
         m.add_meta_method(
             MetaMethod::Add,
-            |vm,
-             this,
-             (rhs,): (luna_core::runtime::Value,)|
-             -> Result<luna_core::runtime::Value, _> {
+            |vm, this, (rhs,): (Value,)| -> Result<Value, _> {
                 let rhs = extract_vec3(rhs).ok_or_else(|| {
                     vm.runtime_error("__add expected Vec3 on the right-hand side")
                 })?;
@@ -63,10 +60,7 @@ impl LuaUserdata for Vec3 {
         // __sub: v - w
         m.add_meta_method(
             MetaMethod::Sub,
-            |vm,
-             this,
-             (rhs,): (luna_core::runtime::Value,)|
-             -> Result<luna_core::runtime::Value, _> {
+            |vm, this, (rhs,): (Value,)| -> Result<Value, _> {
                 let rhs = extract_vec3(rhs).ok_or_else(|| {
                     vm.runtime_error("__sub expected Vec3 on the right-hand side")
                 })?;
