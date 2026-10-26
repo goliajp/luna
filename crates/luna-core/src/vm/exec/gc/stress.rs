@@ -50,7 +50,7 @@ impl Vm {
     }
 
     /// The checkpoint at `live_top` with the collector running.
-    pub(in crate::vm::exec) fn stress_checkpoint(&mut self, live_top: u32) {
+    pub(in super::super) fn stress_checkpoint(&mut self, live_top: u32) {
         self.heap.safe_point();
         let n = self.stress.seen;
         self.stress.seen += 1;
