@@ -239,7 +239,10 @@ mod tests {
     /// past it, where it loads the string.
     #[test]
     fn string_keys_sit_on_their_main_position_chains() {
-        for n in [5_000, 70_000] {
+        // under Miri the big table has the fewest keys that take it past
+        // 2^16 nodes: the 65537th grows it to 2^17, as 70000 keys do
+        let big = if cfg!(miri) { (1 << 16) + 1 } else { 70_000 };
+        for n in [5_000, big] {
             crate::runtime::table::tests::with_table(|heap, t| {
                 for i in 0..n {
                     let k = Value::Str(heap.intern(format!("k{i:05}").as_bytes()));
