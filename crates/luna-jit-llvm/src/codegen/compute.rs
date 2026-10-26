@@ -58,37 +58,13 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
 
     let i64_type = ctx_static.i64_type();
     let regs_ty = i64_type.array_type(plan.num_regs);
-    // Parametric chunks. The fn signature widens
-    // from `fn() -> i64` to `fn(i64, …, i64) -> i64` with one i64 per
-    // declared positional param, then the entry BB stores each
-    // function arg into the matching `regs[i]` slot so the lowerer
-    // sees param 0..N-1 as live register sources.
-    let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
-        (0..plan.num_params).map(|_| i64_type.into()).collect();
-    let fn_type = i64_type.fn_type(&param_types, false);
-    // the entry the dispatcher calls checks once what the body relies on
-    // and fills the self-call context; the body, which self-recursive
-    // calls enter directly, takes the context's address first
-    let entry = module.add_function("luna_jit_llvm_entry", fn_type, None);
-    // the context's address, the native stack limit, the level's base and
-    // depth
-    let mut body_params = vec![i64_type.into(); 4];
-    body_params.extend_from_slice(&param_types);
-    let function = module.add_function(
-        "luna_jit_llvm_body",
-        i64_type.fn_type(&body_params, false),
-        Some(inkwell::module::Linkage::Private),
-    );
-    function.set_call_conventions(FASTCC);
+    let (entry, function) = declare_entry_and_body(ctx_static, &module, plan);
 
-    // Declare every `luna_jit_*` helper as an
-    // external IR function. Used by Op::GetUpval / Op::Call emit
-    // below; the dead-locals path skips this step.
+    // every `luna_jit_*` helper, an external function
     let helpers = declare_jit_helpers(ctx_static, &module);
     emit_entry(ctx_static, &builder, plan, entry, function, &helpers)?;
 
-    // Pre-create one LLVM BB per source BB. The PC-keyed map gives
-    // O(1) lookup for branch targets.
+    // one LLVM block per source block, by pc for the branch targets
     let n = plan.code.len();
     let mut bb_of_pc: Vec<Option<BasicBlock<'static>>> = vec![None; n];
     for (pc, start) in plan.bb_starts.iter().enumerate() {
@@ -99,9 +75,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     let entry_bb = bb_of_pc[0]?;
     builder.position_at_end(entry_bb);
 
-    // Allocate the chunk's register file in the entry BB. All other
-    // BBs read/write via the same alloca pointer; LLVM's mem2reg /
-    // SROA promote the scalar slots out of memory.
+    // the register file, in the entry block (mem2reg / SROA promote it)
     let regs = builder.build_alloca(regs_ty, "regs").ok()?;
 
     let mut emitter = ComputeEmitter {
@@ -290,4 +264,36 @@ fn emit_compare_branch(
         .build_conditional_branch(cmp, then_bb, else_bb)
         .ok()?;
     Some(())
+}
+
+/// The entry the dispatcher calls, `fn(i64, ...) -> i64` with one i64 per
+/// declared parameter (its entry block stores each into its register), and
+/// the body, which self-recursive calls enter directly.
+fn declare_entry_and_body(
+    ctx_static: &'static Context,
+    module: &inkwell::module::Module<'static>,
+    plan: &ChunkPlan,
+) -> (
+    inkwell::values::FunctionValue<'static>,
+    inkwell::values::FunctionValue<'static>,
+) {
+    let i64_type = ctx_static.i64_type();
+    let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> =
+        (0..plan.num_params).map(|_| i64_type.into()).collect();
+    let fn_type = i64_type.fn_type(&param_types, false);
+    // the entry the dispatcher calls checks once what the body relies on
+    // and fills the self-call context; the body, which self-recursive
+    // calls enter directly, takes the context's address first
+    let entry = module.add_function("luna_jit_llvm_entry", fn_type, None);
+    // the context's address, the native stack limit, the level's base and
+    // depth
+    let mut body_params = vec![i64_type.into(); 4];
+    body_params.extend_from_slice(&param_types);
+    let function = module.add_function(
+        "luna_jit_llvm_body",
+        i64_type.fn_type(&body_params, false),
+        Some(inkwell::module::Linkage::Private),
+    );
+    function.set_call_conventions(FASTCC);
+    (entry, function)
 }
