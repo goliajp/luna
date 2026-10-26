@@ -57,6 +57,10 @@ fn lowest_written(lo: usize, hi: usize) -> usize {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads the real native stack, which Miri does not model"
+)]
 fn the_reserves_cover_the_deepest_nesting_between_two_checks() {
     let deepest = std::thread::Builder::new()
         .stack_size(16 << 20)
