@@ -37,6 +37,9 @@ pub(crate) fn full_collect<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Yo
         } else {
             full_mark_and_sweep(h, None)
         }
+    } else if let (ShrinkAt::Sweep, Some(young)) = (rules.shrink_at, emergency) {
+        emergency_cycle_52(h, young);
+        0
     } else {
         full_mark_and_sweep(h, emergency)
     };

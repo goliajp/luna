@@ -118,3 +118,23 @@ fn an_emergency_while_marking_starts_the_collection_over() {
         .collect();
     assert!(kept.is_empty(), "kept in {kept:?}");
 }
+
+#[test]
+fn a_5_2_emergency_leaves_the_estimate_its_cycle_traversed() {
+    // `luaC_fullgc` runs the cycle as steps, an emergency's as well: its
+    // atomic step leaves `GCestimate`, as the program's does
+    let after = |emergency: bool| {
+        let mut vm = Vm::new_minimal_with_hash_seed(LuaVersion::Lua52, 1);
+        vm.open_all_libs().expect("the libraries open");
+        vm.eval(
+            "keep = {} for i = 1, 300 do keep[i] = {i} end
+             for i = 1, 300 do local _ = {i, i} end",
+        )
+        .expect("the script runs");
+        // an emergency with no young object, which the program's
+        // collection would not keep
+        full_collect(&mut vm, emergency.then_some((Some(0), true)));
+        vm.heap.puc.pace.estimate
+    };
+    assert_eq!(after(true), after(false));
+}

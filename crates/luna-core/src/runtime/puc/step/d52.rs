@@ -1,5 +1,6 @@
 //! The steps of 5.2.
 
+use super::full::Young;
 use super::*;
 
 pub(super) fn step_52<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
@@ -68,12 +69,7 @@ pub(crate) fn full_cycle_52<H: StepHost + ?Sized>(h: &mut H, swept: bool) -> usi
         shrink_swept_52(h);
         h.sweep_main_52();
     }
-    h.heap().puc.pace.enter(St::Pause);
-    singlestep_52(h);
-    let run = h.running();
-    let mut work = i64::MAX;
-    while !h.propagate(&mut work, i64::MIN, run) {}
-    h.heap().puc.pace.trav += i64::MAX - work;
+    mark_52(h, None);
     atomic_52(h);
     while h.heap().puc.pace.state() != St::Pause {
         singlestep_52(h);
@@ -81,14 +77,48 @@ pub(crate) fn full_cycle_52<H: StepHost + ?Sized>(h: &mut H, swept: bool) -> usi
     before - h.heap().live_objects()
 }
 
+/// 5.2's `luaC_fullgc` from an allocation that failed: the cycle's
+/// marking as its steps run it, for the estimate, with the young objects
+/// (see `Heap::young_len`); then the sweep, which shrinks no stack and
+/// resizes nothing (`KGC_EMERGENCY`).
+pub(super) fn emergency_cycle_52<H: StepHost + ?Sized>(h: &mut H, young: Young) {
+    mark_52(h, Some(young));
+    estimate_52(h);
+    h.heap().gc_finish_sweep();
+    h.heap().puc.shrunk.clear();
+}
+
+/// 5.2's marking from a pause up to its atomic step, what it traverses
+/// counted.
+fn mark_52<H: StepHost + ?Sized>(h: &mut H, young: Option<Young>) {
+    h.heap().puc.pace.enter(St::Pause);
+    singlestep_52(h);
+    if let Some(young) = young {
+        let mut m = h.heap().loan_marker();
+        h.heap().mark_young(&mut m, young);
+        h.heap().stash_marker(m);
+    }
+    let run = h.running();
+    let mut work = i64::MAX;
+    while !h.propagate(&mut work, i64::MIN, run) {}
+    h.heap().puc.pace.trav += i64::MAX - work;
+}
+
+/// 5.2's atomic step, the estimate what the cycle traversed (`GCestimate`,
+/// `atomic` included): the work, and the objects the way into the sweep
+/// went over.
+fn estimate_52<H: StepHost + ?Sized>(h: &mut H) -> (i64, i64) {
+    let (work, swept) = atomic(h);
+    h.heap().puc.pace.estimate = h.heap().puc.pace.trav + work;
+    (work, swept)
+}
+
 /// 5.2's step that finds no gray object: the atomic step, the
 /// estimate the memory traversed, and the sweep entered.
 pub(super) fn atomic_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
     let s = h.heap().puc.sizes;
-    let (work, swept) = atomic(h);
+    let (work, swept) = estimate_52(h);
     shrink_swept_52(h);
-    // `GCestimate`: what the cycle traversed, `atomic` included
-    h.heap().puc.pace.estimate = h.heap().puc.pace.trav + work;
     h.heap().puc.pace.enter(St::SweepString);
     h.heap().puc.pace.strt_swept = 0;
     // `entersweep` counts `sweeptolive` on `finobj` too: one step, its
