@@ -15,10 +15,11 @@ mod iter;
 mod load;
 mod protected;
 mod tonumber;
+mod tostring;
 
 use basic::{
     nat_getmetatable, nat_print, nat_rawequal, nat_rawget, nat_rawlen, nat_rawset, nat_select,
-    nat_setmetatable, nat_tostring, nat_type, nat_warn,
+    nat_setmetatable, nat_type, nat_warn,
 };
 use compat51::{nat_gcinfo, nat_getfenv, nat_newproxy, nat_setfenv};
 use errors::nat_assert;
@@ -36,3 +37,4 @@ pub(crate) use protected::{
     nat_xpcall, xpcall_handler,
 };
 pub(crate) use tonumber::nat_tonumber;
+use tostring::nat_tostring;

@@ -145,67 +145,10 @@ impl Vm {
             && !matches!(gc, Value::Closure(_) | Value::Native(_))
             && self.get_mm(gc, Mm::Call).is_nil()
         {
-            // `luaG_callerror`: the name part is a string of its own
-            // (`formatvarinfo`), then `typeerror`'s message
-            use crate::runtime::puc::fmt::FmtArg;
-            let tn = self.obj_typename(gc);
-            let base = self.lib_roots.mark();
-            let v = self
-                .pushfstring(
-                    b" (%s '%s')",
-                    &[FmtArg::S(b"metamethod"), FmtArg::S(b"__gc")],
-                )
-                .and_then(|extra| {
-                    // on the stack while the message is made
-                    self.lib_roots.push(Value::Str(extra));
-                    let args = [
-                        FmtArg::S(b"call"),
-                        FmtArg::S(tn.as_bytes()),
-                        FmtArg::S(extra.as_bytes()),
-                    ];
-                    self.pushfstring(b"attempt to %s a %s value%s", &args)
-                });
-            self.lib_roots.release(base);
-            let v = v.map_or_else(|e| e.0, Value::Str);
-            // `luaD_pcall` shrinks the stack it caught the error on
-            self.shrink_caught_error();
-            self.warn_error("__gc", v);
+            self.warn_uncallable_gc(gc);
             return Ok(());
         }
-        // the frame born from this call is named `__gc` (PUC `CIST_FIN`);
-        // saved around the call in case the handler is a native, which never
-        // takes it
-        let saved_tm = self
-            .pending_tm
-            .replace(crate::runtime::function::FrameTm::Gc);
-        // PUC `GCTM` pushes the finalizer at `L->top`, above everything in
-        // use; a native's top can lie below results a call it made has just
-        // returned (print's nested tostring)
-        let (len, top) = (self.stack.len(), self.top);
-        let at = self.native_top().map(|t| t.max(top));
-        let r = if propagate && self.version == LuaVersion::Lua51 {
-            // `luaD_call`: an error leaves through the finalizer, under the
-            // message handler that is running; it cannot yield
-            self.nny += 1;
-            let r = self.call_value_impl(gc, &[obj], false, at);
-            self.nny -= 1;
-            r
-        } else {
-            match at {
-                Some(at) => self.call_protected_at(gc, &[obj], at),
-                None => self.call_protected(gc, &[obj]),
-            }
-        };
-        // the call gives back the slots it took, not the window of a native
-        // below it, and leaves the stack and its top as they were (`GCTM`)
-        if self.stack.len() < len {
-            self.stack.regrow(len, Value::Nil);
-        } else {
-            self.stack.truncate(len);
-        }
-        self.top = top;
-        self.pending_tm = saved_tm;
-        let Err(e) = r else {
+        let Err(e) = self.call_finalizer(gc, obj, propagate) else {
             return Ok(());
         };
         // `luaD_pcall` shrinks the stack it caught the error on
@@ -223,6 +166,76 @@ impl Vm {
             return Err(e);
         }
         Err(self.gcmm_error(e.0))
+    }
+
+    /// 5.4+: `__gc` is no function and has no `__call`, so calling it
+    /// would fail in `GCTM`: the warning that failure gives, with no
+    /// position (the running level is not Lua code).
+    fn warn_uncallable_gc(&mut self, gc: Value) {
+        // `luaG_callerror`: the name part is a string of its own
+        // (`formatvarinfo`), then `typeerror`'s message
+        use crate::runtime::puc::fmt::FmtArg;
+        let tn = self.obj_typename(gc);
+        let base = self.lib_roots.mark();
+        let v = self
+            .pushfstring(
+                b" (%s '%s')",
+                &[FmtArg::S(b"metamethod"), FmtArg::S(b"__gc")],
+            )
+            .and_then(|extra| {
+                // on the stack while the message is made
+                self.lib_roots.push(Value::Str(extra));
+                let args = [
+                    FmtArg::S(b"call"),
+                    FmtArg::S(tn.as_bytes()),
+                    FmtArg::S(extra.as_bytes()),
+                ];
+                self.pushfstring(b"attempt to %s a %s value%s", &args)
+            });
+        self.lib_roots.release(base);
+        let v = v.map_or_else(|e| e.0, Value::Str);
+        // `luaD_pcall` shrinks the stack it caught the error on
+        self.shrink_caught_error();
+        self.warn_error("__gc", v);
+    }
+
+    /// `GCTM`'s call of `gc` on `obj`: protected but in 5.1 with
+    /// `propagate` (`luaD_call`), the stack and its top left as they were.
+    fn call_finalizer(&mut self, gc: Value, obj: Value, propagate: bool) -> Result<(), LuaError> {
+        // the frame born from this call is named `__gc` (PUC `CIST_FIN`);
+        // saved around the call in case the handler is a native, which never
+        // takes it
+        let saved_tm = self
+            .pending_tm
+            .replace(crate::runtime::function::FrameTm::Gc);
+        // PUC `GCTM` pushes the finalizer at `L->top`, above everything in
+        // use; a native's top can lie below results a call it made has just
+        // returned (print's nested tostring)
+        let (len, top) = (self.stack.len(), self.top);
+        let at = self.native_top().map(|t| t.max(top));
+        let r = if propagate && self.version == LuaVersion::Lua51 {
+            // `luaD_call`: an error leaves through the finalizer, under the
+            // message handler that is running; it cannot yield
+            self.nny += 1;
+            let r = self.call_value_impl(gc, &[obj], false, at).map(|_| ());
+            self.nny -= 1;
+            r
+        } else {
+            match at {
+                Some(at) => self.call_protected_at(gc, &[obj], at).map(|_| ()),
+                None => self.call_protected(gc, &[obj]).map(|_| ()),
+            }
+        };
+        // the call gives back the slots it took, not the window of a native
+        // below it, and leaves the stack and its top as they were (`GCTM`)
+        if self.stack.len() < len {
+            self.stack.regrow(len, Value::Nil);
+        } else {
+            self.stack.truncate(len);
+        }
+        self.top = top;
+        self.pending_tm = saved_tm;
+        r
     }
 
     /// 5.2/5.3 `LUA_ERRGCMM`: "error in __gc metamethod (msg)", thrown past
