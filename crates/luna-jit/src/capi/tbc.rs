@@ -13,7 +13,7 @@ fn close_one(api: &mut Api, i: usize, err: Option<Value>) -> Result<(), LuaError
     }
     let mm = api.vm.metafield(v, "__close");
     let e = err.unwrap_or(Value::Nil);
-    api.vm.host_call(mm, &[v, e], None).map(drop)
+    api.vm.host_call(mm, &[v, e], None, None).map(drop)
 }
 
 /// Close every to-be-closed slot at or above C stack index `to`, top

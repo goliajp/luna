@@ -51,7 +51,9 @@ pub trait VmCApiState {
     /// Whether a yield is on its way out (the `Err` a call returned is the
     /// yield, not an error).
     fn host_yielding(&self) -> bool;
-    /// Call `f(args)` from a C function (PUC `lua_callk`). With `cont` and
+    /// Call `f(args)` from a C function (PUC `lua_callk`), `below` the
+    /// values C has on its stack under `f` from its frame's base (`None`:
+    /// a call not made from C's stack, a hook's or a `__close`'s). With `cont` and
     /// a thread that can yield, a yield inside `f` suspends the coroutine
     /// with the continuation on the frame stack: the `Err` that comes back
     /// is then the yield (`Vm::host_yielding`), and the C function must
@@ -61,6 +63,7 @@ pub trait VmCApiState {
         f: Value,
         args: &[Value],
         cont: Option<HostContSpec>,
+        below: Option<u32>,
     ) -> Result<Vec<Value>, LuaError>;
     /// Suspend the running coroutine from the C function at `func_slot`
     /// (PUC `lua_yieldk`), yielding `vals`. With `cont`, the resume runs
@@ -119,6 +122,10 @@ pub trait VmCApiState {
     /// A protected call of the C API caught an error, its object set: from
     /// 5.2 `luaD_pcall` shrinks the stack then.
     fn host_pcall_caught(&mut self);
+    /// PUC `lua_checkstack(L, n)` with `pushed` values on the running C
+    /// function's frame (on the host's level, on its stack): whether PUC
+    /// grants the room, its stack grown as PUC grows it.
+    fn host_c_checkstack(&mut self, pushed: u32, n: i64) -> bool;
     /// Close the running coroutine from inside it (PUC 5.5
     /// `lua_closethread(L, L)`): run its pending `__close` handlers; the
     /// returned value is what the C function leaves with, and the resume
@@ -201,8 +208,9 @@ impl VmCApiState for crate::vm::Vm {
         f: Value,
         args: &[Value],
         cont: Option<HostContSpec>,
+        below: Option<u32>,
     ) -> Result<Vec<Value>, LuaError> {
-        crate::vm::Vm::host_call(self, f, args, cont)
+        crate::vm::Vm::host_call(self, f, args, cont, below)
     }
     #[inline]
     fn host_yield(
@@ -261,6 +269,9 @@ impl VmCApiState for crate::vm::Vm {
     #[inline]
     fn host_terminating(&self) -> bool {
         crate::vm::Vm::host_terminating(self)
+    }
+    fn host_c_checkstack(&mut self, pushed: u32, n: i64) -> bool {
+        crate::vm::Vm::host_c_checkstack(self, pushed, n)
     }
     fn host_pcall_caught(&mut self) {
         if self.version() >= crate::version::LuaVersion::Lua52 {

@@ -218,15 +218,22 @@ pub unsafe extern "C" fn lua_replace(L: *mut LuaState, idx: c_int) {
 pub unsafe extern "C" fn lua_checkstack(L: *mut LuaState, n: c_int) -> c_int {
     // SAFETY: the caller's contract (# Safety)
     let mut api = unsafe { Api::new(L) };
-    let max = max_stack(api.version());
-    let n = usize::try_from(n).unwrap_or(0);
-    let used = if api.version() == LuaVersion::Lua51 {
-        api.gettop() as usize
+    // PUC grows its one stack here, under the values C has pushed (5.2 on
+    // report a failure to grow as 0); a thread not running has no stack
+    // of luna's to grow, only PUC's limits refuse
+    let pushed = api.top() - api.base();
+    let ok = if api.thread().ptr_eq(api.vm.host_thread()) {
+        api.vm.host_c_checkstack(pushed as u32, i64::from(n))
     } else {
-        api.top()
+        let max = max_stack(api.version());
+        let used = if api.version() == LuaVersion::Lua51 {
+            pushed
+        } else {
+            api.top()
+        };
+        usize::try_from(n).is_ok_and(|n| n <= max && used + n <= max)
     };
-    // PUC grows the stack here (5.2 on report a failure to grow as 0)
-    c_int::from(n <= max && used + n <= max && api.reserve(n))
+    c_int::from(ok && api.reserve(usize::try_from(n).unwrap_or(0)))
 }
 
 /// PUC `lua_xmove`: pop `n` values from `from` and push them on `to`, two

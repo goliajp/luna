@@ -14,6 +14,7 @@ use super::*;
 use crate::vm::callstack::NativeAct;
 
 mod alloc;
+mod below;
 mod block;
 mod cont;
 pub(crate) mod debug;
@@ -197,30 +198,6 @@ impl Vm {
     /// yield, not an error).
     pub(crate) fn host_yielding(&self) -> bool {
         self.yielding.is_some()
-    }
-
-    /// Call `f(args)` from a C function (PUC `lua_callk`). With `cont` and
-    /// a thread that can yield, a yield inside `f` suspends the coroutine
-    /// with the continuation on the frame stack: the `Err` that comes back
-    /// is then the yield (`Vm::host_yielding`), and the C function must
-    /// leave. Without `cont` the call cannot yield.
-    pub(crate) fn host_call(
-        &mut self,
-        f: Value,
-        args: &[Value],
-        cont: Option<HostContSpec>,
-    ) -> Result<Vec<Value>, LuaError> {
-        let Some(spec) = cont.filter(|_| self.yield_barrier().is_none()) else {
-            return self.call_value(f, args);
-        };
-        let results_at = self.stack.len() as u32;
-        self.push_host_cont(spec, results_at)?;
-        let r = self.call_value_k(f, args);
-        if r.is_err() && self.yielding.is_some() {
-            return r;
-        }
-        frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
-        r
     }
 
     /// Suspend the running coroutine from the C function at `func_slot`
