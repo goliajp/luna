@@ -38,6 +38,11 @@ fn lib_open() {
 }
 
 #[test]
+fn names_made_again() {
+    check("names_made_again");
+}
+
+#[test]
 fn count_compiled_loop() {
     check("count_compiled_loop");
 }

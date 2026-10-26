@@ -66,7 +66,7 @@ impl Vm {
         let root = if self.version() == LuaVersion::Lua52 {
             Some(self.globals())
         } else {
-            self.loaded_table()
+            self.loaded_modules()
         };
         let Some(root) = root else {
             return Ok(None);
@@ -89,19 +89,6 @@ impl Vm {
             });
         }
         Ok(Some(name))
-    }
-
-    /// `package.loaded`, PUC's `_LOADED`.
-    pub(super) fn loaded_table(&mut self) -> Option<Gc<Table>> {
-        let pkg = Value::Str(self.heap.find_interned(b"package")?);
-        let Value::Table(p) = self.globals().get(pkg) else {
-            return None;
-        };
-        let loaded = Value::Str(self.heap.find_interned(b"loaded")?);
-        match p.get(loaded) {
-            Value::Table(t) => Some(t),
-            _ => None,
-        }
     }
 
     /// `findfield`: a string-keyed path to `f` at most `level` tables deep,

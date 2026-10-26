@@ -76,20 +76,11 @@ impl Vm {
         raised: &mut Option<crate::vm::error::LuaError>,
     ) -> Option<String> {
         // 5.2 searches the global table, later dialects the loaded modules
+        // the registry holds (with or without the package library)
         let loaded = if self.version == LuaVersion::Lua52 {
             self.globals()
         } else {
-            // names no string exists for are no table's keys
-            let pkg_k = Value::Str(self.heap.find_interned(b"package")?);
-            let pkg = match self.globals().get(pkg_k) {
-                Value::Table(t) => t,
-                _ => return None,
-            };
-            let loaded_k = Value::Str(self.heap.find_interned(b"loaded")?);
-            match pkg.get(loaded_k) {
-                Value::Table(t) => t,
-                _ => return None,
-            }
+            self.loaded_modules()?
         };
         // 5.3 on drops a "_G." the name starts with
         let strip = self.version >= LuaVersion::Lua53;
@@ -128,6 +119,18 @@ impl Vm {
             }
         }
         None
+    }
+
+    /// The registry's table of loaded modules (`LUA_LOADED_TABLE`, which
+    /// `package.loaded` is when the package library is open), where 5.3 on
+    /// look a function's name up (`pushglobalfuncname`).
+    pub(crate) fn loaded_modules(&self) -> Option<Gc<crate::runtime::Table>> {
+        // a name no string exists for is no table's key
+        let k = Value::Str(self.heap.find_interned(b"_LOADED")?);
+        match self.registry?.get(k) {
+            Value::Table(t) => Some(t),
+            _ => None,
+        }
     }
 
     /// The strings PUC's `findfield` and `pushglobalfuncname` make naming
