@@ -167,33 +167,38 @@ impl Vm {
             }
         }
         self.g.nccalls = nccalls;
-        {
-            // SAFETY: `co` is still held by the caller, and its context was swapped back out above (`take_ctx`), so `m` is the only reference into it while it is cleared
-            let m = unsafe { co.as_mut() };
-            m.status = CoroStatus::Dead;
-            m.stack.take();
-            m.frames.take();
-            m.open_upvals.take();
-            m.tbc.take();
-            m.top = 0;
-            m.meta_conts = 0;
-            m.host_conts = 0;
-            m.stale_frames = 0;
-            // `luaE_resetthread` leaves the stack `LUA_MINSTACK` above the
-            // function slot and (5.4) the error, if any; 5.5's `resetCI` sets
-            // the top before the error is put; the `CallInfo`s stay
-            let err = result.is_err() || death_err.is_some();
-            let size = 21 + u32::from(err && self.version < LuaVersion::Lua55);
-            let co = crate::runtime::puc::Thread::Coro(co);
-            self.heap.acct_stack(co, closed.stack_size, size);
-            m.stack_size = size;
-            m.ci_alloc = closed.ci_alloc;
-            m.resume_at = None;
-            m.error_value = None;
-            m.dead = None;
-        }
+        let err = result.is_err() || death_err.is_some();
+        self.reset_closed_coro(co, &closed, err);
         self.host_thread_reset(co);
         result.map(|()| death_err)
+    }
+
+    /// `luaE_resetthread` of `co`, closed (`closed`: its context swapped
+    /// back out; `err`: closing it raised, or it died of an error): dead,
+    /// its stacks emptied, the stack's size as PUC leaves it.
+    fn reset_closed_coro(&mut self, co: Gc<Coro>, closed: &super::coro_ctx::SavedCtx, err: bool) {
+        // SAFETY: `co` is still held by the caller, and its context was swapped back out above (`take_ctx`), so `m` is the only reference into it while it is cleared
+        let m = unsafe { co.as_mut() };
+        m.status = CoroStatus::Dead;
+        m.stack.take();
+        m.frames.take();
+        m.open_upvals.take();
+        m.tbc.take();
+        m.top = 0;
+        m.meta_conts = 0;
+        m.host_conts = 0;
+        m.stale_frames = 0;
+        // `luaE_resetthread` leaves the stack `LUA_MINSTACK` above the
+        // function slot and (5.4) the error, if any; 5.5's `resetCI` sets
+        // the top before the error is put; the `CallInfo`s stay
+        let size = 21 + u32::from(err && self.version < LuaVersion::Lua55);
+        let co = crate::runtime::puc::Thread::Coro(co);
+        self.heap.acct_stack(co, closed.stack_size, size);
+        m.stack_size = size;
+        m.ci_alloc = closed.ci_alloc;
+        m.resume_at = None;
+        m.error_value = None;
+        m.dead = None;
     }
 
     /// `coroutine.running`: the running thread plus whether it is the main one.

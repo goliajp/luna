@@ -109,18 +109,7 @@ pub(super) fn escape_analyze(
             // snapshot live sunk bindings BEFORE the op
             // processes (each cmp emit uses live_at_op[cmp_idx] to
             // materialise the right virt slots).
-            let mut live_snap: Vec<LiveBinding> = Vec::new();
-            for row in bindings.iter() {
-                for (reg, &slot) in row.iter().enumerate() {
-                    if let Some(sid) = slot {
-                        live_snap.push(LiveBinding {
-                            site: sid as u32,
-                            reg: reg as u32,
-                        });
-                    }
-                }
-            }
-            live_at_op[i] = live_snap;
+            live_at_op[i] = live_bindings(&bindings, bindings.len());
         }
 
         let rop = &record.ops[i];
@@ -177,18 +166,7 @@ pub(super) fn escape_analyze(
         .ops
         .get(upper)
         .map_or(max_depth, |r| r.inline_depth as usize + 1);
-    let mut live_end: Vec<LiveBinding> = Vec::new();
-    for row in bindings.iter().take(next_depth) {
-        for (reg, &slot) in row.iter().enumerate() {
-            if let Some(sid) = slot {
-                live_end.push(LiveBinding {
-                    site: sid as u32,
-                    reg: reg as u32,
-                });
-            }
-        }
-    }
-    live_at_op.push(live_end);
+    live_at_op.push(live_bindings(&bindings, next_depth));
 
     escape_at_end(
         record,
@@ -209,4 +187,20 @@ pub(super) fn escape_analyze(
         accum_sites,
         accum_live_at_op,
     }
+}
+
+/// The registers bound to a site in the frames below `depth`.
+fn live_bindings(bindings: &[Vec<Option<usize>>], depth: usize) -> Vec<LiveBinding> {
+    let mut live = Vec::new();
+    for row in bindings.iter().take(depth) {
+        for (reg, &slot) in row.iter().enumerate() {
+            if let Some(sid) = slot {
+                live.push(LiveBinding {
+                    site: sid as u32,
+                    reg: reg as u32,
+                });
+            }
+        }
+    }
+    live
 }

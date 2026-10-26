@@ -1,5 +1,8 @@
 use super::*;
 
+mod sites;
+use sites::{hash_slot, new_table_site};
+
 pub(super) fn mark_escape(sites: &mut [AllocSite], sid: usize) {
     if sites[sid].state == EscapeState::Sinkable {
         sites[sid].state = EscapeState::Escaped;
@@ -105,45 +108,7 @@ pub(super) fn sweep_table_write(
     op_actions: &mut [Option<OpAction>],
 ) {
     match op {
-        Op::NewTable => {
-            // admit all NewTable shapes as
-            // potential sites. For hash-only (b == 0) the
-            // array_cap is 0 and the site only sunk-emits via
-            // SetField/GetField. For mixed (b > 0, c > 0) the
-            // array part sunk-emits; hash slots accumulate via
-            // SetField scan.
-            let sizes = luna_core::__private::new_table_sizes(ins.b(), ins.c(), ins.k());
-            unbind(bindings, depth, a);
-            let sid = sites.len();
-            sites.push(AllocSite {
-                op_idx: i,
-                pc: rop.pc,
-                a,
-                inline_depth: depth,
-                array_cap: sizes.map_or(0, |(asize, _)| asize as u32),
-                hash_cap: sizes.map_or(0, |(_, h)| {
-                    if h == 0 {
-                        0
-                    } else {
-                        h.next_power_of_two() as u32
-                    }
-                }),
-                table_ops: crate::jit_backend::pack_table_ops(ins),
-                hash_keys: Vec::new(),
-                // sizes past a table's limit: the helper raises the error
-                state: if sizes.is_some() {
-                    EscapeState::Sinkable
-                } else {
-                    EscapeState::Escaped
-                },
-            });
-            bindings[depth as usize][a as usize] = Some(sid);
-            // tag this op so emit can take the sunk
-            // path (no NewTable helper call).
-            op_actions[i] = Some(OpAction::NewTableSite {
-                site_idx: sid as u32,
-            });
-        }
+        Op::NewTable => new_table_site(i, rop, depth, ins, a, bindings, sites, op_actions),
         Op::SetList => {
             // B=0 form: use the recorder's var_count
             // snapshot (= top - A - 1 at the SetList op) as the
@@ -223,29 +188,7 @@ pub(super) fn sweep_table_write(
                 mark_escape(sites, src_sid);
             }
             if let Some(sid) = lookup(bindings, depth, a) {
-                // Find or insert the hash slot for this key.
-                let slot_opt = sites[sid]
-                    .hash_keys
-                    .iter()
-                    .position(|&k| k == key_const_idx);
-                let slot = match slot_opt {
-                    Some(s) => s,
-                    None => {
-                        let s = sites[sid].hash_keys.len();
-                        sites[sid].hash_keys.push(key_const_idx);
-                        s
-                    }
-                };
-                let site = &mut sites[sid];
-                let grow_to = if slot_opt.is_none() && slot as u32 >= site.hash_cap {
-                    site.hash_cap = (slot as u32 + 1).next_power_of_two();
-                    site.hash_cap
-                } else {
-                    0
-                };
-                if grow_to != 0 && site.array_cap != 0 {
-                    mark_escape(sites, sid);
-                }
+                let (slot, grow_to) = hash_slot(sites, sid, key_const_idx);
                 op_actions[i] = Some(OpAction::SetFieldSunkWrite {
                     site_idx: sid as u32,
                     hash_slot: slot as u32,
