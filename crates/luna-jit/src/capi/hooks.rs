@@ -389,7 +389,7 @@ pub unsafe extern "C" fn luna_capi_hookf(L: *mut LuaState, ar: *mut c_void) {
     };
     let hooked = calling_from_hook(&mut api);
     api.vm.host_mark_hook_call(hooked);
-    let r = api.vm.host_call(f, &[name, line], None);
+    let r = api.vm.host_call(f, &[name, line], None, None);
     api.vm.host_mark_hook_call(false);
     if let Err(e) = r {
         api.raise(e);

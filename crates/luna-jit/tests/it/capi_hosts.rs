@@ -249,3 +249,8 @@ fn stack_depth() {
 fn pcall_error_shrinks() {
     check("pcall_error_shrinks");
 }
+
+#[test]
+fn stack_below_call() {
+    check("stack_below_call");
+}

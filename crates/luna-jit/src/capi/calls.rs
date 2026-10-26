@@ -72,9 +72,9 @@ fn run_call(
     spec: Option<HostContSpec>,
 ) -> Result<Vec<Value>, LuaError> {
     api.truncate(at);
-    let hooked = super::hooks::calling_from_hook(api);
+    let (hooked, below) = (super::hooks::calling_from_hook(api), at - api.base());
     api.vm.host_mark_hook_call(hooked);
-    let r = api.vm.host_call(f, args, spec);
+    let r = api.vm.host_call(f, args, spec, Some(below as u32));
     api.vm.host_mark_hook_call(false);
     r
 }
