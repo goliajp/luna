@@ -68,6 +68,21 @@ impl Vm {
             .map(Value::Native)
     }
 
+    /// [`Vm::check_lua_stack`] of a native that is not plain, which PUC
+    /// calls as a C function: `LUA_MINSTACK` slots above `top`. The host's
+    /// protected calls luna makes are no functions of PUC's.
+    #[inline(never)]
+    pub(super) fn special_native_room(
+        &mut self,
+        kind: NativeKind,
+        top: u32,
+    ) -> Result<(), LuaError> {
+        if matches!(kind, NativeKind::HostPcall | NativeKind::HostXpcall) {
+            return Ok(());
+        }
+        self.check_lua_stack(top, 20, true)
+    }
+
     /// `stack[func_slot]` is `nc`, a native whose kind is not
     /// [`NativeKind::Plain`]. `None` when it is to be called like any other
     /// native after all (`pairs` without a `__pairs` to honour).
