@@ -55,6 +55,19 @@ impl Vm {
             .map(Value::Native)
     }
 
+    /// [`Vm::builtin`] standing for a C function of PUC's with `puc_nup`
+    /// upvalues (a C API function's, whose first upvalues are its own).
+    pub(crate) fn builtin_puc(
+        &mut self,
+        f: crate::runtime::value::NativeFn,
+        upvals: &[Value],
+        builtin: crate::runtime::Builtin,
+        puc_nup: usize,
+    ) -> Result<Value, LuaError> {
+        self.retry_oom(|vm| vm.heap.try_new_native_puc(f, upvals, builtin, puc_nup))
+            .map(Value::Native)
+    }
+
     /// `stack[func_slot]` is `nc`, a native whose kind is not
     /// [`NativeKind::Plain`]. `None` when it is to be called like any other
     /// native after all (`pairs` without a `__pairs` to honour).

@@ -69,12 +69,13 @@ pub(in crate::capi) fn new_c_closure(
         luna_core::__private::Builtin::CFunction,
     );
     // from 5.2 on a C function without upvalues is a light C function,
-    // equal to every other push of the same pointer
+    // equal to every other push of the same pointer; PUC's function has
+    // the `n` upvalues alone
     let c = if n == 0 && api.version() >= LuaVersion::Lua52 {
         api.vm
-            .host_light_fn(f as usize, |vm| vm.builtin(tramp, &upvals, c))?
+            .host_light_fn(f as usize, |vm| vm.builtin_puc(tramp, &upvals, c, 0))?
     } else {
-        api.vm.builtin(tramp, &upvals, c)?
+        api.vm.builtin_puc(tramp, &upvals, c, n)?
     };
     api.truncate(from);
     Ok(c)
