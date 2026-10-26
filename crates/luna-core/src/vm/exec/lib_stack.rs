@@ -67,11 +67,19 @@ impl LibStack {
         self.0.remove(i)
     }
 
-    /// The values themselves, for an operation that works on a stack of
-    /// its own (`lua_concat`'s pieces).
+    /// `join` the top `total` values into one, on the values themselves
+    /// (`lua_concat` works on a stack of its own): when it succeeds, the
+    /// one it leaves takes their place and nothing below them moved.
     #[inline]
-    pub(crate) fn values_mut(&mut self) -> &mut Vec<Value> {
-        &mut self.0
+    pub(crate) fn join_top<E>(
+        &mut self,
+        total: usize,
+        join: impl FnOnce(&mut Vec<Value>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let below = self.0.len() - total;
+        let r = join(&mut self.0);
+        debug_assert!(r.is_err() || self.0.len() == below + total.min(1));
+        r
     }
 }
 

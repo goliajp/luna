@@ -83,7 +83,7 @@ impl Heap {
     /// strings the string sweep held off the list come back to be freed,
     /// with the open upvalues off it.
     pub(in crate::runtime) fn puc_heap_drops(&mut self) -> Vec<*mut GcHeader> {
-        let _ = self.counting_off();
+        self.counting_off().abandon();
         let mut held = self.take_held_strings();
         held.extend(self.open_off_list());
         // luna's names set aside, the only objects set aside now

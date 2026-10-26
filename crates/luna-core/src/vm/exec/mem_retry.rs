@@ -83,7 +83,7 @@ impl Vm {
     /// `lua_concat` of the last `total` values of `lib_roots`.
     pub(crate) fn concat_roots(&mut self, total: usize) -> Result<(), LuaError> {
         let mut st = std::mem::take(&mut self.lib_roots);
-        let r = self.concat_pieces(st.values_mut(), total);
+        let r = st.join_top(total, |v| self.concat_pieces(v, total));
         self.lib_roots = st;
         r
     }

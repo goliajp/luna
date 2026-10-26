@@ -41,7 +41,7 @@ pub(crate) struct LoadUnwind {
     unborn: usize,
 }
 
-fn unpaired(what: &str) {
+pub(super) fn unpaired(what: &str) {
     if crate::runtime::gc_hooks::DEBUG_CHECKS && !std::thread::panicking() {
         panic!("{what} dropped without its end");
     }
