@@ -165,6 +165,24 @@ impl Vm {
         self.heap.barrier_back(t);
     }
 
+    /// The write barrier `lua_setmetatable` takes for `obj`'s new metatable
+    /// `mt`: a table's goes back to gray in 5.1 and 5.2
+    /// (`luaC_objbarriert`, `luaC_objbarrierback`) and marks `mt` later
+    /// (`luaC_objbarrier`), as a userdata's does in every dialect.
+    pub(crate) fn metatable_barrier(&mut self, obj: Value, mt: Option<Gc<Table>>) {
+        let Some(mt) = mt else {
+            return;
+        };
+        match obj {
+            Value::Table(t) if self.version <= LuaVersion::Lua52 => {
+                self.heap.barrier_store(t, &[Value::Table(mt)])
+            }
+            Value::Table(t) => self.heap.barrier_forward(t, Value::Table(mt)),
+            Value::Userdata(u) => self.heap.barrier_forward(u, Value::Table(mt)),
+            _ => {}
+        }
+    }
+
     /// Register a MacroLua macro under `name`. Inert
     /// under non-MacroLua dialects (the macro is stored but the load
     /// path only consults the registry when

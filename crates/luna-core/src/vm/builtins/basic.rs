@@ -223,9 +223,7 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     vm.refuse_readonly(t)?;
     // SAFETY: `t` is the table argument, kept alive by its stack slot; the borrow covers one call, and `mt` is a separate handle
     unsafe { t.as_mut() }.set_metatable(mt);
-    // setmetatable links a long-lived table to a long-lived mt; barrier_back
-    // so the new mt gets traced even if t was already black.
-    vm.barrier_back_table(t);
+    vm.metatable_barrier(Value::Table(t), mt);
     // register for finalization if the new metatable carries `__gc` (PUC marks
     // the object finalizable at setmetatable time)
     vm.check_finalizer(t)?;

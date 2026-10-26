@@ -117,8 +117,7 @@ impl Vm {
                 // SAFETY: `t` is held by the caller's stack slot; the borrow
                 // covers one store and `mt` is a separate handle
                 unsafe { t.as_mut() }.set_metatable(mt);
-                self.heap
-                    .barrier_store(t, &[mt.map_or(Value::Nil, Value::Table)]);
+                self.metatable_barrier(Value::Table(t), mt);
                 if mt.is_some() {
                     self.check_finalizer(t)?;
                 }
@@ -126,7 +125,7 @@ impl Vm {
             Value::Userdata(u) => {
                 // SAFETY: as for a table
                 unsafe { u.as_mut() }.set_metatable(mt);
-                self.heap.barrier_back(u);
+                self.metatable_barrier(Value::Userdata(u), mt);
                 if mt.is_some() {
                     if self.version == LuaVersion::Lua51 {
                         self.heap.register_finalizable_userdata(u);
