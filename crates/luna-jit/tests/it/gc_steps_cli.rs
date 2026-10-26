@@ -5,7 +5,8 @@
 //! and its addresses; its recordings are from a PUC whose seed is fixed at
 //! 1, the seed luna takes from `LUNA_HASH_SEED`. Both run as `lua`, from
 //! the scripts' directory: the program's name and the script's path are
-//! strings the collector counts.
+//! strings the collector counts. The scripts in `tests/lua_c/<dialect>/`
+//! count what lua.c itself makes, the same way.
 
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -30,7 +31,12 @@ fn run(dir: &Path, dialect: &str, script: &str, jit: bool) -> String {
 
 /// The scripts of `dialect`, each run in the modes `jit` lists.
 fn check(dialect: &str, jit: &[bool]) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/gc_steps");
+    check_in("tests/gc_steps", dialect, jit);
+}
+
+/// [`check`] of the scripts under `base`.
+fn check_in(base: &str, dialect: &str, jit: &[bool]) {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(base);
     let mut scripts: Vec<_> = std::fs::read_dir(dir.join(dialect))
         .expect("the dialect's scripts")
         .flatten()
@@ -57,4 +63,13 @@ fn steps_5_1() {
 #[test]
 fn steps_5_2() {
     check("5.2", &[false, true]);
+}
+
+/// What lua.c's message handler makes counts as PUC's does: an error
+/// object that is no string is described with `lua_pushfstring`.
+#[test]
+fn lua_c_message_handler() {
+    for d in ["5.3", "5.4", "5.5"] {
+        check_in("tests/lua_c", d, &[false]);
+    }
 }
