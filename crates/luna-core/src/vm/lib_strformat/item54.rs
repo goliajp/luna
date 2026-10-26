@@ -126,6 +126,7 @@ pub(super) fn item54(
 /// `%s` of a value not taken as it is: `luaL_tolstring` (whose
 /// `__tostring` runs above the buffer's slot, its result left pushed over
 /// the errors that follow), then the bytes formatted by `form`.
+#[cfg_attr(luna_hot, inline(always))]
 fn string_item(
     vm: &mut Vm,
     a: Args,
