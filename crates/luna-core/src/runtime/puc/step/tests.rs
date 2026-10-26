@@ -106,13 +106,15 @@ fn an_emergency_while_marking_starts_the_collection_over() {
             singlestep_55(vm, false).expect("the cycle starts");
         }),
     ];
-    for (version, start) in starts {
-        let mut vm = marking_then_dropped(version, start);
-        assert!(vm.emergency_collect());
-        let left = vm.eval("return weak[1] == nil").expect("the script runs");
-        assert!(
-            matches!(left[0], crate::runtime::Value::Bool(true)),
-            "{version:?}"
-        );
-    }
+    let kept: Vec<LuaVersion> = starts
+        .into_iter()
+        .filter(|&(version, start)| {
+            let mut vm = marking_then_dropped(version, start);
+            assert!(vm.emergency_collect());
+            let left = vm.eval("return weak[1] == nil").expect("the script runs");
+            !matches!(left[0], crate::runtime::Value::Bool(true))
+        })
+        .map(|(version, _)| version)
+        .collect();
+    assert!(kept.is_empty(), "kept in {kept:?}");
 }
