@@ -51,7 +51,7 @@ impl Vm {
     /// `self.stack` neither moves nor is written through a reference, and
     /// `push_frame` sized the stack to `base + max_stack`, so every
     /// register the frame's instructions name is inside it.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn regs_at(&mut self, base: u32) -> *mut Value {
         self.stack.as_mut_ptr().wrapping_add(base as usize)
     }

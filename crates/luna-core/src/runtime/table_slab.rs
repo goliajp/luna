@@ -27,7 +27,7 @@ impl Table {
     /// entry retags. `array_ptr` itself stays maintained for the
     /// JIT, whose emitted code loads the field directly (no Rust
     /// borrows involved).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn array_base(&self) -> *mut u8 {
         if u64::from(self.asize) <= INLINE_ASIZE {
             self.inline_storage.get() as *mut u8
@@ -38,7 +38,7 @@ impl Table {
 
     /// Read view onto the array-part tag bytes. Trails
     /// the avals portion in the active backing (inline or slab).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn atags(&self) -> &[u8] {
         let n = self.asize as usize;
         if n == 0 {
@@ -55,7 +55,7 @@ impl Table {
         }
     }
 
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn atags_mut(&mut self) -> &mut [u8] {
         let n = self.asize as usize;
         if n == 0 {
@@ -71,7 +71,7 @@ impl Table {
     /// Read view onto the array-part payload slots. Sits
     /// at the start of the active backing (u64-aligned, identical size
     /// and layout to `RawVal`).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn avals(&self) -> &[RawVal] {
         let n = self.asize as usize;
         if n == 0 {
@@ -83,7 +83,7 @@ impl Table {
         unsafe { std::slice::from_raw_parts(self.array_base() as *const RawVal, n) }
     }
 
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn avals_mut(&mut self) -> &mut [RawVal] {
         let n = self.asize as usize;
         if n == 0 {

@@ -16,7 +16,7 @@ use crate::runtime::mem::LVec;
 // unless `trap` is set. So pushing a continuation sets it (the protected
 // call may finish without a frame of its own), and so does a pop that
 // leaves one on top.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn frames_push_sync(
     frames: &mut LVec<CallFrame>,
     frames_top: &mut u32,
@@ -30,7 +30,7 @@ pub(super) fn frames_push_sync(
 
 /// [`frames_push_sync`], failing (with nothing pushed) when the frame
 /// stack cannot grow.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn try_frames_push_sync(
     frames: &mut LVec<CallFrame>,
     frames_top: &mut u32,
@@ -63,7 +63,7 @@ pub(super) fn try_frames_push_sync(
 impl Vm {
     /// Push `cf` on the running thread's frame stack, collecting in an
     /// emergency when the stack cannot grow (PUC `luaE_extendCI`).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn push_cf(&mut self, cf: CallFrame) -> Result<(), LuaError> {
         // the room test first, so the common path keeps nothing across a call
         if self.frames.len() == self.frames.capacity() {
@@ -85,7 +85,7 @@ impl Vm {
 
     /// Room for one more frame, so a push that follows cannot fail;
     /// collecting in an emergency when the stack cannot grow.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn cf_room(&mut self) -> Result<(), LuaError> {
         if self.frames.len() == self.frames.capacity() {
             return self.cf_room_slow();
@@ -100,7 +100,7 @@ impl Vm {
     }
 }
 
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn frames_pop_sync(
     frames: &mut LVec<CallFrame>,
     frames_top: &mut u32,
@@ -128,7 +128,7 @@ pub(super) fn frames_pop_sync(
 
 /// [`frames_pop_sync`] when the caller knows the frame below the top one
 /// and whether it is a continuation: `frames.len() >= 2`.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn frames_pop_known(
     frames: &mut LVec<CallFrame>,
     frames_top: &mut u32,
@@ -226,7 +226,7 @@ impl Vm {
     /// metamethod, `__pairs` or `__close`): the C level it took comes
     /// back, unless it took none (`level`, see `begin_pcall`) or it is
     /// from before the thread's last resume (see `stale_frames`).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn cont_popped(&mut self, meta: bool, level: bool) {
         self.g.meta_conts -= u32::from(meta);
         if meta {

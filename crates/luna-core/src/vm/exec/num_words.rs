@@ -11,7 +11,7 @@ use super::*;
 /// payload with one load of both words (see [`raw_words`]); anything else
 /// that writes those registers leaves the seven bytes as they were, and
 /// takes the loop once through `Vm::for_loop`, which writes them so again.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) const fn tag_word(t: u8) -> u64 {
     u64::from_ne_bytes([t, 0, 0, 0, 0, 0, 0, 0])
 }
@@ -22,7 +22,7 @@ pub(super) const fn tag_word(t: u8) -> u64 {
 /// # Safety
 /// `p` points at a `Value`, and `bits` are an integer's or a float's as `t`
 /// names.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn put_words(p: *mut Value, t: u8, bits: u64) {
     // SAFETY: the caller's contract; a `Value` is its tag byte, seven bytes
     // of padding and the payload word, and these two words are a valid one
@@ -35,7 +35,7 @@ pub(super) unsafe fn put_words(p: *mut Value, t: u8, bits: u64) {
 /// # Safety
 /// `p` points at three initialised `Value`s.
 #[cfg(all(target_arch = "aarch64", not(miri)))]
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_words3(p: *const Value) -> ([u64; 3], [u64; 3]) {
     let (w0, v0, w1, v1, w2, v2): (u64, u64, u64, u64, u64, u64);
     // SAFETY: the caller's contract; `asm!` reads the padding bytes as the
@@ -64,7 +64,7 @@ pub(super) unsafe fn raw_words3(p: *const Value) -> ([u64; 3], [u64; 3]) {
 /// # Safety
 /// `p` points at three initialised `Value`s.
 #[cfg(all(target_arch = "aarch64", not(miri)))]
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_tag_words3(p: *const Value) -> [u64; 3] {
     let (w0, w1, w2): (u64, u64, u64);
     // SAFETY: as for `raw_words3`
@@ -88,7 +88,7 @@ pub(super) unsafe fn raw_tag_words3(p: *const Value) -> [u64; 3] {
 /// # Safety
 /// `p` points at an initialised `Value`.
 #[cfg(all(target_arch = "x86_64", not(miri)))]
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_word(p: *const Value) -> u64 {
     let w: u64;
     // SAFETY: as for `raw_words3`
@@ -108,7 +108,7 @@ pub(super) unsafe fn raw_word(p: *const Value) -> u64 {
 /// # Safety
 /// `p` points at an initialised `Value`.
 #[cfg(all(target_arch = "x86", not(miri)))]
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_word(p: *const Value) -> u64 {
     let (lo, hi): (u32, u32);
     // SAFETY: as for `raw_words3`
@@ -130,7 +130,7 @@ pub(super) unsafe fn raw_word(p: *const Value) -> u64 {
 /// # Safety
 /// `p` points at an initialised `Value`.
 #[cfg(all(target_arch = "aarch64", not(miri)))]
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn raw_word(p: *const Value) -> u64 {
     let w: u64;
     // SAFETY: as for `raw_words3`
@@ -151,7 +151,7 @@ pub(super) unsafe fn raw_word(p: *const Value) -> u64 {
 /// per iteration of an empty 5.5 integer loop). The empty `asm!` may read
 /// and write memory as far as the compiler knows, so the loads stay after it.
 #[cfg(all(target_arch = "aarch64", not(miri)))]
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn first(mut pc: u32) -> u32 {
     // SAFETY: the template is empty: it touches no register but `pc`, which
     // it leaves as it is, and no memory

@@ -43,7 +43,7 @@ impl Value {
     /// # Safety
     /// `src` points at an initialised `Value` and `dst` is writable; they
     /// may be the same.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) unsafe fn copy_raw(dst: *mut Value, src: *const Value) {
         let (s, d) = (src as *const u8, dst as *mut u8);
         // SAFETY: the caller's contract; the tag is the first byte and the
@@ -64,7 +64,7 @@ impl Value {
     ///
     /// # Safety
     /// As for `copy_raw`.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) unsafe fn copy_whole(dst: *mut Value, src: *const Value) {
         // SAFETY: the caller's contract
         unsafe { dst.write(src.read()) }
@@ -75,7 +75,7 @@ impl Value {
     ///
     /// # Safety
     /// As for `pack`, and `dst` is writable.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) unsafe fn pack_into(dst: *mut Value, tag: u8, v: RawVal) {
         debug_assert!(tag <= raw::LIGHTUSERDATA, "bad raw value tag");
         // SAFETY: the tag is a valid `Value` tag (the array tag, or one

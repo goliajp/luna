@@ -8,7 +8,7 @@ use crate::runtime::value::Value;
 
 /// The double nearest the exact result `r`, kept as an integer when it is
 /// that double's value.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 fn rounded(r: i64) -> Value {
     if r.unsigned_abs() <= 1 << 53 {
         return Value::Int(r);
@@ -22,7 +22,7 @@ fn rounded(r: i64) -> Value {
     }
 }
 
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(crate) fn add(a: i64, b: i64) -> Value {
     match a.checked_add(b) {
         Some(r) => rounded(r),
@@ -30,7 +30,7 @@ pub(crate) fn add(a: i64, b: i64) -> Value {
     }
 }
 
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(crate) fn sub(a: i64, b: i64) -> Value {
     match a.checked_sub(b) {
         Some(r) => rounded(r),
@@ -38,7 +38,7 @@ pub(crate) fn sub(a: i64, b: i64) -> Value {
     }
 }
 
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(crate) fn mul(a: i64, b: i64) -> Value {
     match a.checked_mul(b) {
         // zero times a negative number is -0
@@ -48,7 +48,7 @@ pub(crate) fn mul(a: i64, b: i64) -> Value {
     }
 }
 
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(crate) fn neg(i: i64) -> Value {
     match i {
         0 => Value::Float(-0.0),
@@ -59,7 +59,7 @@ pub(crate) fn neg(i: i64) -> Value {
 
 /// `a - floor(a/b)*b` (PUC `luai_nummod`). Below 2^53 the integer floor
 /// modulo is exact and equal to it; a zero divisor gives nan.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(crate) fn rem(a: i64, b: i64) -> Value {
     const EXACT: u64 = 1 << 53;
     if b != 0 && a.unsigned_abs() <= EXACT && b.unsigned_abs() <= EXACT {

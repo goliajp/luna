@@ -11,7 +11,7 @@ use fast_arith::{raw_gc, raw_int, raw_tag};
 ///
 /// # Safety
 /// `pk` and `pv` point at initialised values.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn table_set_existing_at(
     tb: &mut Table,
     pk: *const Value,
@@ -56,7 +56,7 @@ pub(super) unsafe fn table_set_existing_at(
 ///
 /// # Safety
 /// `pk` and `pv` point at initialised values.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) unsafe fn table_raw_set_at(
     tb: &mut Table,
     heap: &mut Heap,

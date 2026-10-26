@@ -180,7 +180,7 @@ impl Vm {
         Ok(())
     }
 
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn for_step(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
         let a = inst.a();
         // PUC 5.1–5.3 `OP_FORLOOP` compares the post-step `i` to `limit`
@@ -235,7 +235,7 @@ impl Vm {
         Ok(())
     }
 
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) fn float_for_step(&mut self, inst: Inst, base: u32, cur: f64, lim: f64, st: f64) {
         let a = inst.a();
         let next = cur + st;
@@ -276,7 +276,7 @@ impl Vm {
 /// `limit` by `step` (not 0), as PUC 5.4 `forprep` counts them (unsigned:
 /// a loop over more than 2^63 values has a "negative" count); `None` when
 /// the loop does not run.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn int_for_count(init: i64, limit: i64, step: i64) -> Option<u64> {
     if step > 0 {
         if init > limit {

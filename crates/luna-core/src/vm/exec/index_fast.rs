@@ -23,7 +23,7 @@ use index_set::{table_raw_set_at, table_set_existing_at};
 /// # Safety
 /// `pk` points at an initialised value and `dst` at a register; `dst` is
 /// written only after `pk` is read.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 unsafe fn table_get_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool {
     let plain = tb.metatable().is_none();
     // SAFETY: the caller's contract; payloads are read after their tags
@@ -70,7 +70,7 @@ unsafe fn table_get_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool 
 ///
 /// # Safety
 /// As for `table_get_into`, and `pk` points at a string.
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 unsafe fn table_get_kstr_into(tb: &Table, pk: *const Value, dst: *mut Value) -> bool {
     // SAFETY: the caller's contract
     unsafe {
@@ -118,7 +118,7 @@ unsafe fn table_get_cold(tb: &Table, key: Value, dst: *mut Value, plain: bool) -
 /// to the register form when the constant index exceeds OP_SELF's 8-bit C
 /// field (5.1 big.lua's `a:findfield(...)` against a table with 250+ string
 /// keys, where "findfield" lands past const #255).
-#[inline(always)]
+#[cfg_attr(luna_hot, inline(always))]
 pub(super) fn self_key(regs: *mut Value, kptr: *const Value, inst: Inst) -> *const Value {
     if inst.k() {
         kptr.wrapping_add(inst.c() as usize)
@@ -134,7 +134,7 @@ impl Vm {
     ///
     /// # Safety
     /// `pt` and `pk` point at initialised values and `dst` at a register.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) unsafe fn index_raw_at(pt: *const Value, pk: *const Value, dst: *mut Value) -> bool {
         // SAFETY: the caller's contract; a table tag means a live table
         unsafe {
@@ -150,7 +150,7 @@ impl Vm {
     ///
     /// # Safety
     /// As for `index_raw_at`, and `pk` points at a string.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) unsafe fn index_raw_kstr_at(
         pt: *const Value,
         pk: *const Value,
@@ -172,7 +172,7 @@ impl Vm {
     /// # Safety
     /// `regs` and `kptr` are the running frame's, and `R[A+1]` holds the
     /// object.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) unsafe fn self_probe(regs: *mut Value, kptr: *const Value, inst: Inst) -> bool {
         let (po, pk) = (
             regs.wrapping_add(inst.a() as usize + 1),
@@ -193,7 +193,7 @@ impl Vm {
     ///
     /// # Safety
     /// `pk` points at a string and `dst` at a register.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) unsafe fn index_raw_kstr_key_at(
         t: Value,
         pk: *const Value,
@@ -217,7 +217,7 @@ impl Vm {
     ///
     /// # Safety
     /// `pt`, `pk` and `pv` point at initialised values.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) unsafe fn newindex_raw_at(
         &mut self,
         pt: *const Value,
@@ -247,7 +247,7 @@ impl Vm {
     ///
     /// # Safety
     /// As for `newindex_raw_at`, and `pk` points at a string.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) unsafe fn newindex_raw_kstr_at(
         &mut self,
         pt: *const Value,
@@ -292,7 +292,7 @@ impl Vm {
     ///
     /// # Safety
     /// `pk` and `pv` point at initialised values.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(super) unsafe fn newindex_raw_key_at(
         &mut self,
         t: Value,
