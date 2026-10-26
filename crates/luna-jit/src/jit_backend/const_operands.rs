@@ -62,6 +62,13 @@ pub(super) fn split_const_operands(
         }
     }
     map.push(out.len());
+    retarget(&mut out, &map, relative)?;
+    Some((out, old_of))
+}
+
+/// The jumps at the new pcs of `relative` (each with its old pc) aimed
+/// again, through `map` (old pc to new pc), at what they aimed at.
+fn retarget(out: &mut [Inst], map: &[usize], relative: Vec<(usize, usize)>) -> Option<()> {
     for (new_pc, old_pc) in relative {
         let inst = out[new_pc];
         let at = |old_target: i64| -> Option<i64> {
@@ -91,7 +98,7 @@ pub(super) fn split_const_operands(
             }
         };
     }
-    Some((out, old_of))
+    Some(())
 }
 
 fn needs_split(inst: Inst) -> bool {
