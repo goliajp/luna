@@ -166,68 +166,79 @@ impl<'s> Parser<'s> {
         let mut entered = 0;
         loop {
             let last = *self.stk.exprs.last().expect("one target");
-            // a completion (lenient) takes any target: what PUC made of it
-            // before the error is still counted
-            if !matches!(
-                self.chunk.exprs[last.0 as usize],
-                Expr::Name(_) | Expr::Index { .. }
-            ) && !self.stk.lenient
-            {
-                return Err(self.error("syntax error"));
-            }
-            // PUC `restassign` checks each target as it reaches the ',' or
-            // '=' after it
-            if let Expr::Name(n) = self.chunk.exprs[last.0 as usize]
-                && !self.stk.lenient
-                && self
-                    .gotos
-                    .as_ref()
-                    .is_some_and(|g| g.is_const_local(self.lex.names().text(n.sym)))
-            {
-                let text = self.text(n.sym).to_owned();
-                return Err(
-                    self.plain_error(format!("attempt to assign to const variable '{text}'"))
-                );
-            }
+            self.check_target(last)?;
             if !self.accept(Token::Comma)? {
                 break;
             }
-            // PUC recurses once per extra target and bounds that against
-            // the C-call budget (errors.lua :650 expects the error for 500
-            // targets), after reading the target: 5.1 as a count of
-            // "variables in assignment", 5.2/5.3 as C levels, 5.4+ by
-            // entering a level that stays entered until the statement ends.
+            // bounded after reading the target
             let nvars = (self.stk.exprs.len() - mark) as u32;
             let t = self.suffixed_expr()?;
             self.stk.exprs.push_or_abort(t);
-            // a completion (lenient) takes any number: PUC's parse up to
-            // the error is what is counted
-            match self.version {
-                LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 if self.stk.lenient => {}
-                LuaVersion::Lua51 => {
-                    let limit = MAX_DEPTH.saturating_sub(self.depth);
-                    if nvars > limit {
-                        return Err(self.plain_error(format!(
-                            "{} has more than {limit} variables in assignment",
-                            self.where_()
-                        )));
-                    }
-                }
-                LuaVersion::Lua52 | LuaVersion::Lua53 => {
-                    if nvars + self.depth > MAX_DEPTH {
-                        return Err(self.levels_error());
-                    }
-                }
-                _ => {
-                    self.enter()?;
-                    entered += 1;
-                }
-            }
+            self.count_target(nvars, &mut entered)?;
         }
         let targets = finish(self.chunk, &mut self.stk.exprs, mark);
         self.expect(Token::Assign, "=")?;
         let exprs = self.exprlist()?;
         self.depth -= entered;
         Ok(self.push_stat(Stat::Assign { targets, exprs }))
+    }
+
+    /// An assignment's target `last`, checked as PUC's `restassign` checks
+    /// it when it reaches the ',' or '=' after it.
+    fn check_target(&mut self, last: ExprId) -> Result<(), SyntaxError> {
+        // a completion (lenient) takes any target: what PUC made of it
+        // before the error is still counted
+        if !matches!(
+            self.chunk.exprs[last.0 as usize],
+            Expr::Name(_) | Expr::Index { .. }
+        ) && !self.stk.lenient
+        {
+            return Err(self.error("syntax error"));
+        }
+        // PUC `restassign` checks each target as it reaches the ',' or
+        // '=' after it
+        if let Expr::Name(n) = self.chunk.exprs[last.0 as usize]
+            && !self.stk.lenient
+            && self
+                .gotos
+                .as_ref()
+                .is_some_and(|g| g.is_const_local(self.lex.names().text(n.sym)))
+        {
+            let text = self.text(n.sym).to_owned();
+            return Err(self.plain_error(format!("attempt to assign to const variable '{text}'")));
+        }
+        Ok(())
+    }
+
+    /// Another target after `nvars`, bounded as PUC bounds its recursion
+    /// against the C-call budget (errors.lua :650 expects the error for 500
+    /// targets): 5.1 as a count of "variables in assignment", 5.2/5.3 as C
+    /// levels, 5.4+ by entering a level that stays entered until the
+    /// statement ends (`entered`).
+    fn count_target(&mut self, nvars: u32, entered: &mut u32) -> Result<(), SyntaxError> {
+        // a completion (lenient) takes any number: PUC's parse up to
+        // the error is what is counted
+        match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 if self.stk.lenient => {}
+            LuaVersion::Lua51 => {
+                let limit = MAX_DEPTH.saturating_sub(self.depth);
+                if nvars > limit {
+                    return Err(self.plain_error(format!(
+                        "{} has more than {limit} variables in assignment",
+                        self.where_()
+                    )));
+                }
+            }
+            LuaVersion::Lua52 | LuaVersion::Lua53 => {
+                if nvars + self.depth > MAX_DEPTH {
+                    return Err(self.levels_error());
+                }
+            }
+            _ => {
+                self.enter()?;
+                *entered += 1;
+            }
+        }
+        Ok(())
     }
 }
