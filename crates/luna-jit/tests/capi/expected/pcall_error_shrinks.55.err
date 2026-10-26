@@ -1,0 +1,1 @@
+Lua warning: error in __gc ([string "local function deep(n) if n > 0 then return d..."]:3: boom)

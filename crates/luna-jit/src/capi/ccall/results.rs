@@ -46,8 +46,26 @@ pub(in crate::capi) fn pcall_outcome(
     let err = vals.get(1).copied().unwrap_or(Value::Nil);
     cstack(co).truncate(at);
     cstack(co).push_or_abort(err);
+    vm.host_pcall_caught();
     let kind = vm.error_status(err, errerr_before);
     Some(status_code(vm.version(), kind))
+}
+
+/// The status of a protected call whose error the call itself could not
+/// catch (the C stack was already full, or the call could not be set up
+/// for lack of memory): the error is still the call's, left at `at`.
+pub(in crate::capi) fn pcall_failed(
+    vm: &mut Vm,
+    co: Gc<Coro>,
+    at: usize,
+    e: LuaError,
+    errerr_before: SpecialErrors,
+) -> c_int {
+    let mem = vm.error_status(e.0, errerr_before) == ErrorStatus::Mem;
+    cstack(co).truncate(at);
+    cstack(co).push_or_abort(e.0);
+    vm.host_pcall_caught();
+    if mem { LUA_ERRMEM } else { LUA_ERRRUN }
 }
 
 /// The status code of the dialect for an error of status `kind`.
