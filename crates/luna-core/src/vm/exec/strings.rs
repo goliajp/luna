@@ -86,7 +86,7 @@ impl Vm {
             } else if v >= LuaVersion::Lua52 && matches!(x, Value::Str(s) if s.is_empty()) {
                 self.stack[(top - 2) as usize] = Value::Str(y);
             } else {
-                n = self.concat_join(top, total, y.len())?;
+                n = self.concat_join(v, top, total, y.len())?;
             }
             self.top -= n - 1;
         }
@@ -98,11 +98,16 @@ impl Vm {
 
     /// The longest run of strings (or numbers, made strings in place)
     /// below the top `top`, at most `total` of them, the topmost `y_len`
-    /// bytes long, joined into one string in the run's lowest slot: how
-    /// many it joined.
+    /// bytes long, joined into one string in the run's lowest slot under
+    /// dialect `v`: how many it joined.
     #[inline(always)]
-    fn concat_join(&mut self, top: u32, total: u32, y_len: usize) -> Result<u32, LuaError> {
-        let v = self.version;
+    fn concat_join(
+        &mut self,
+        v: LuaVersion,
+        top: u32,
+        total: u32,
+        y_len: usize,
+    ) -> Result<u32, LuaError> {
         let mut tl = y_len;
         let mut n = 1;
         while n < total && self.tostring_in_place(top - n - 1)? {
