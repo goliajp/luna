@@ -248,5 +248,5 @@ fn unpack_str(
         return Err(arg_error(vm, 2, "data string too short"));
     }
     let st = p + size as usize;
-    Ok(vm.alloc_str(&data[st..st + len as usize])?)
+    vm.alloc_str(&data[st..st + len as usize])
 }
