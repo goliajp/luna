@@ -20,14 +20,16 @@ fn owner_of(thread: Option<Gc<Coro>>) -> *mut GcHeader {
 /// A thread's open upvalues, by stack slot.
 pub(crate) type OpenList = LVec<(u32, Gc<Upvalue>)>;
 
-/// The open lists the VM holds, lent for the end of a marking: the
-/// running thread's (`running_co` null for the main thread) and, while a
-/// coroutine runs, the main thread's.
-#[derive(Clone, Copy)]
+/// The open lists the VM holds, handed over for the end of a marking and
+/// handed back when the collection ends: the running thread's
+/// (`running_co` null for the main thread) and, while a coroutine runs,
+/// the main thread's. They move rather than being pointed at, as they
+/// live in the VM, which the collector reaches only through the borrows
+/// it is given.
 pub(crate) struct OpenLend {
-    pub(crate) running: *mut OpenList,
+    pub(crate) running: OpenList,
     pub(crate) running_co: *mut GcHeader,
-    pub(crate) main: *mut OpenList,
+    pub(crate) main: Option<OpenList>,
 }
 
 /// The dead open upvalues the sweep has not reached yet.
@@ -56,19 +58,31 @@ impl Heap {
     /// their lists, and kept (black) until PUC frees them; the others take
     /// the white of the sweep to come.
     pub(in crate::runtime::puc) fn doom_open_upvals(&mut self) {
-        let Some(lend) = self.puc.records.open_dead.lend.take() else {
+        let Some(mut lend) = self.puc.records.open_dead.lend.take() else {
             return;
         };
-        if !self.open_on_threads() {
-            return;
+        if self.open_on_threads() {
+            self.doom_lists(&mut lend);
         }
+        self.puc.records.open_dead.lend = Some(lend);
+    }
+
+    /// The lists handed over (see [`Heap::lend_open_upvals`]), back to the
+    /// VM.
+    #[inline]
+    pub(crate) fn take_open_lend(&mut self) -> Option<OpenLend> {
+        self.puc.records.open_dead.lend.take()
+    }
+
+    fn doom_lists(&mut self, lend: &mut OpenLend) {
         // the white of the sweep about to start, which the live ones take
         // (PUC's sweep of the thread's list); none is on the list, so the
         // sweep does not reach it
         let live_white = self.white() ^ WHITE_BITS;
-        let mut lists: Vec<(*mut GcHeader, *mut OpenList)> = vec![(lend.running_co, lend.running)];
-        if !lend.main.is_null() {
-            lists.push((ptr::null_mut(), lend.main));
+        let mut lists: Vec<(*mut GcHeader, *mut OpenList)> =
+            vec![(lend.running_co, ptr::addr_of_mut!(lend.running))];
+        if let Some(main) = &mut lend.main {
+            lists.push((ptr::null_mut(), main));
         }
         for &co in self.threads() {
             let h = co.as_ptr() as *mut GcHeader;
@@ -78,8 +92,9 @@ impl Heap {
             }
         }
         for (owner, list) in lists {
-            // SAFETY: the lent lists are the VM's, alive for this call, and
-            // a coroutine's is its own; nothing else holds them meanwhile
+            // SAFETY: the lists handed over live in `lend`, borrowed for this
+            // call, and a coroutine's is its own; nothing else holds them
+            // meanwhile
             let list = unsafe { &mut *list };
             let start = self.puc.records.open_dead.dead.len();
             list.retain(|&(slot, uv)| {

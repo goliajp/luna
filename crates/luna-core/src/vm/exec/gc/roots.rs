@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::runtime::dialect::Dialect;
-use crate::runtime::puc::records::open_upvals::OpenLend;
 
 impl Vm {
     /// Mark the GC roots in `m`: first-class `Value` roots plus bare-object
@@ -219,27 +218,6 @@ impl Vm {
                 m.mark(uv);
             }
         }
-    }
-
-    /// The open lists the VM holds, lent to the collector for the end of
-    /// this marking (see `heap::open_upvals`).
-    pub(crate) fn lend_open_lists(&mut self) {
-        if !self.heap.open_on_threads() {
-            return;
-        }
-        let running_co = self
-            .current
-            .map_or(std::ptr::null_mut(), |c| c.as_ptr().cast());
-        let main = match (&mut self.main_ctx, self.current) {
-            (Some(mc), Some(_)) => std::ptr::addr_of_mut!(mc.open_upvals),
-            _ => std::ptr::null_mut(),
-        };
-        let running = std::ptr::addr_of_mut!(self.open_upvals);
-        self.heap.lend_open_upvals(OpenLend {
-            running,
-            running_co,
-            main,
-        });
     }
 
     /// The main thread's saved context while a coroutine runs.
