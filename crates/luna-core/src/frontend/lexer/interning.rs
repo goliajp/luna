@@ -43,6 +43,16 @@ impl<S: Source> Lexer<'_, S> {
         self.src.out_of_memory()
     }
 
+    /// The reader failed as the last token was scanned: PUC's scanner
+    /// stopped in it with the reader's error.
+    #[inline(always)]
+    pub(crate) fn reader_failed(&self) -> Result<(), SyntaxError> {
+        match S::STREAMS && self.src.reader_failed() {
+            true => Err(SyntaxError::reader_failed()),
+            false => Ok(()),
+        }
+    }
+
     /// The identifiers an interning lexer has read so far.
     pub(crate) fn names(&self) -> &Names {
         self.names.as_ref().expect("an interning lexer")

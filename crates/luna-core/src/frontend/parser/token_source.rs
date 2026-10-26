@@ -185,7 +185,11 @@ fn lexed_into<S: Source>(
     l: &mut Lexer<'_, S>,
     tok: &mut LexTok,
 ) -> Result<(Option<u8>, Sym), SyntaxError> {
-    Ok(match l.next_into(tok)? {
+    // a reader that failed stops the scan first, whatever it found
+    let odd = l.next_into(tok);
+    l.reader_failed()?;
+    let odd = odd?;
+    Ok(match odd {
         None => (None, l.last_sym),
         Some(c) => {
             tok.tok = Token::At;
@@ -196,7 +200,10 @@ fn lexed_into<S: Source>(
 
 /// The next item of a live lexer, as the parser holds it.
 fn lexed<S: Source>(l: &mut Lexer<'_, S>) -> Result<Cur, SyntaxError> {
-    Ok(match l.next_lexed()? {
+    let lexed = l.next_lexed();
+    l.reader_failed()?;
+    let lexed = lexed?;
+    Ok(match lexed {
         Lexed::Tok(info) => Cur {
             info,
             char: None,
