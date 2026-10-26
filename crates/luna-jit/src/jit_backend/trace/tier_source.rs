@@ -59,3 +59,18 @@ impl TierSource {
         (self.lir.clone(), self.relocs.clone())
     }
 }
+
+/// The record of a baseline trace that moves to Cranelift after `at`
+/// iterations and entries, counted in `count` (fewer once its function,
+/// called `calls_at` times so far, is called again).
+pub(super) fn tier_up(count: Box<TCellU32>, at: u32, calls_at: u32) -> Box<TierUp> {
+    Box::new(TierUp {
+        count,
+        at,
+        calls_at,
+        optimized: TCellPtr::null(),
+        tried: TCellBool::new(false),
+        parent_cells: [TCellPtr::null(), TCellPtr::null()],
+        source: TRefLock::new(None),
+    })
+}

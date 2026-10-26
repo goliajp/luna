@@ -48,6 +48,21 @@ struct ChunkIn<'a> {
     float_only: bool,
 }
 
+/// The kinds of the `n` parameters as the dispatcher passes them: a bit
+/// per float and per table (a table's raw `Gc<Table>` in its i64 slot);
+/// any other, an unread one included, is an integer.
+fn arg_masks(reg_kinds: &[RegKind], n: usize) -> (u8, u8) {
+    let (mut float, mut table) = (0u8, 0u8);
+    for (i, k) in reg_kinds.iter().take(n).enumerate() {
+        match k {
+            RegKind::Float => float |= 1 << i,
+            RegKind::Table => table |= 1 << i,
+            _ => {}
+        }
+    }
+    (float, table)
+}
+
 /// backend-agnostic body of the int-chunk
 /// lowerer. Generic over any `cranelift_module::Module` so the same
 /// codegen pipeline drives the runtime JIT (`JITModule`,
@@ -115,23 +130,7 @@ pub fn lower_int_chunk_into<M: Module>(
         return None;
     }
     let (reg_kinds, ret_kind) = kinds::sweep_kinds(c, &scan, &cfg)?;
-    // After convergence: derive per-arg kinds + the ret_is_float flag
-    // for the cache slot. An arg that's still Unset (param read by
-    // nothing) is treated as Int so the dispatcher's masking is
-    // well-defined.
-    //
-    // Table-typed params go through the dispatcher's
-    // `Value::Table` marshalling path (`arg_table_mask`); they
-    // pass the raw `Gc<Table>` ptr as the i64 ABI slot.
-    let mut arg_float_mask: u8 = 0;
-    let mut arg_table_mask: u8 = 0;
-    for i in 0..num_params {
-        match reg_kinds[i] {
-            RegKind::Float => arg_float_mask |= 1 << i,
-            RegKind::Table => arg_table_mask |= 1 << i,
-            _ => {}
-        }
-    }
+    let (arg_float_mask, arg_table_mask) = arg_masks(&reg_kinds, num_params);
     let ret_is_float = matches!(ret_kind, RegKind::Float);
     let ret_is_table = matches!(ret_kind, RegKind::Table);
 
@@ -160,11 +159,7 @@ pub fn lower_int_chunk_into<M: Module>(
         },
     )?;
 
-    // diag of the lowered chunk's shape lives in the runtime
-    // wrapper [`try_compile_int_chunk`]. The generic
-    // body only emits the function; finalize is the caller's job.
-    let _ = ret_kind; // tracked for diag in the JIT wrapper; backend-agnostic here.
-
+    // finalising is the caller's job
     Some((
         entry_id,
         ChunkMeta {
