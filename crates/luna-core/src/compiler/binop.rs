@@ -147,47 +147,7 @@ impl Compiler<'_> {
         let mut in_inst: Option<(Operand, bool)> = None;
         let mut right_reg = None;
         if l.is_none() {
-            if matches!(re, Exp::Int(_) | Exp::Float(_) | Exp::Const(_)) {
-                // Two numerals the fold left alone (`7.5 // 0`), as PUC's
-                // `codearith` takes them: 5.4+ moves the left one of `+`, `*`
-                // (and an integer of a bitwise operator) to the right; the
-                // right one becomes the operand, its constant first, and the
-                // left one a register; with no such form the right one takes
-                // its register first.
-                // ... and an immediate `I << x` is `SHLI`
-                // an order comparison (`codeorder`) takes the left numeral
-                // when the right operand is no immediate: `1 < 'x'` is `GTI`
-                let v54 = self.version >= LuaVersion::Lua54;
-                let swap = v54
-                    && (matches!(op, BinOp::Add | BinOp::Mul)
-                        || matches!(op, BinOp::BAnd | BinOp::BOr | BinOp::BXor)
-                            && matches!(le, Exp::Int(_))
-                        || op == BinOp::Shl);
-                let saved_line = self.force_line.replace(line);
-                if swap && let Some(form) = self.const_operand(op, &le, true) {
-                    in_inst = Some((form, true));
-                    right_reg = Some(self.exp_to_anyreg(re)?);
-                } else if let Some(form) = self.const_operand(op, &re, false) {
-                    in_inst = Some((form, false));
-                    l = Some(self.exp_to_anyreg(le)?);
-                } else if v54
-                    && order
-                    && let Some(form) = self.const_operand(op, &le, true)
-                {
-                    in_inst = Some((form, true));
-                    right_reg = Some(self.exp_to_anyreg(re)?);
-                } else {
-                    let r = self.exp_to_anyreg(re)?;
-                    if r >= saved {
-                        self.set_freereg(r + 1);
-                    }
-                    right_reg = Some(r);
-                    l = Some(self.exp_to_anyreg(le)?);
-                }
-                self.force_line = saved_line;
-            } else if let Some(form) = self.const_operand(op, &le, true) {
-                in_inst = Some((form, true));
-            }
+            (in_inst, l, right_reg) = self.place_left_numeral(op, le, re, line, saved, order)?;
         }
         if l.is_some()
             && right_reg.is_none()
@@ -244,6 +204,66 @@ impl Compiler<'_> {
         };
         self.force_line = saved_force_arith;
         r_op
+    }
+    /// The left operand a numeral left out of a register: what goes into
+    /// the instruction instead of a register (and on which side), the left
+    /// operand's register and the right one's, as PUC's `codearith` and
+    /// `codeorder` place them.
+    #[allow(clippy::type_complexity)]
+    fn place_left_numeral(
+        &mut self,
+        op: BinOp,
+        le: Exp,
+        re: Exp,
+        line: u32,
+        saved: u32,
+        order: bool,
+    ) -> Result<(Option<(Operand, bool)>, Option<u32>, Option<u32>), SyntaxError> {
+        let mut in_inst: Option<(Operand, bool)> = None;
+        let mut l = None;
+        let mut right_reg = None;
+        if matches!(re, Exp::Int(_) | Exp::Float(_) | Exp::Const(_)) {
+            // Two numerals the fold left alone (`7.5 // 0`), as PUC's
+            // `codearith` takes them: 5.4+ moves the left one of `+`, `*`
+            // (and an integer of a bitwise operator) to the right; the
+            // right one becomes the operand, its constant first, and the
+            // left one a register; with no such form the right one takes
+            // its register first.
+            // ... and an immediate `I << x` is `SHLI`
+            // an order comparison (`codeorder`) takes the left numeral
+            // when the right operand is no immediate: `1 < 'x'` is `GTI`
+            let v54 = self.version >= LuaVersion::Lua54;
+            let swap = v54
+                && (matches!(op, BinOp::Add | BinOp::Mul)
+                    || matches!(op, BinOp::BAnd | BinOp::BOr | BinOp::BXor)
+                        && matches!(le, Exp::Int(_))
+                    || op == BinOp::Shl);
+            let saved_line = self.force_line.replace(line);
+            if swap && let Some(form) = self.const_operand(op, &le, true) {
+                in_inst = Some((form, true));
+                right_reg = Some(self.exp_to_anyreg(re)?);
+            } else if let Some(form) = self.const_operand(op, &re, false) {
+                in_inst = Some((form, false));
+                l = Some(self.exp_to_anyreg(le)?);
+            } else if v54
+                && order
+                && let Some(form) = self.const_operand(op, &le, true)
+            {
+                in_inst = Some((form, true));
+                right_reg = Some(self.exp_to_anyreg(re)?);
+            } else {
+                let r = self.exp_to_anyreg(re)?;
+                if r >= saved {
+                    self.set_freereg(r + 1);
+                }
+                right_reg = Some(r);
+                l = Some(self.exp_to_anyreg(le)?);
+            }
+            self.force_line = saved_line;
+        } else if let Some(form) = self.const_operand(op, &le, true) {
+            in_inst = Some((form, true));
+        }
+        Ok((in_inst, l, right_reg))
     }
 }
 

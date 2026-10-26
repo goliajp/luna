@@ -18,10 +18,8 @@ impl<'s> Parser<'s> {
         if per_block {
             self.enter()?;
         }
-        // PUC `leaveblock` restores `nactvar` to the count at block entry, so
-        // a block's locals fall out of scope when it ends. Snapshot the count
-        // here so the limit check tracks ACTIVE locals (locals.lua opens many
-        // short blocks; without this the cap fires spuriously).
+        // PUC `leaveblock` restores `nactvar`: the limit counts the locals
+        // active, not every one the function declared (locals.lua)
         let local_snapshot = self.func_local_count.last().expect("func ctx").0;
         let locals_51_snap = self.snap_locals_51();
         self.goto_step(|g| {

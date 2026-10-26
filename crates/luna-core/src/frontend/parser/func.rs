@@ -9,38 +9,7 @@ impl<'s> Parser<'s> {
         self.func_local_count.push_or_abort((0, line, 0));
         self.enter_fn_51(line);
         let mark = self.stk.names.len();
-        let mut vararg = Vararg::None;
-        if self.tok.tok != Token::RParen {
-            loop {
-                match &self.tok.tok {
-                    Token::Ellipsis => {
-                        self.advance()?;
-                        vararg = if self.version.has_named_vararg()
-                            && matches!(self.tok.tok, Token::Name(_))
-                        {
-                            Vararg::Named(self.expect_name()?)
-                        } else {
-                            Vararg::Anonymous
-                        };
-                        if let Vararg::Named(ref n) = vararg {
-                            self.new_local()?;
-                            self.add_local_51(n.sym);
-                        }
-                        break;
-                    }
-                    Token::Name(_) => {
-                        let p = self.expect_name()?;
-                        self.new_local()?;
-                        self.add_local_51(p.sym);
-                        self.stk.names.push_or_abort(p);
-                    }
-                    _ => return Err(self.error("<name> or '...' expected")),
-                }
-                if !self.accept(Token::Comma)? {
-                    break;
-                }
-            }
-        }
+        let vararg = self.param_list()?;
         self.activate_locals()?;
         self.goto_step(|g| {
             g.enter_function();
@@ -78,6 +47,44 @@ impl<'s> Parser<'s> {
             line,
             end_line,
         })
+    }
+
+    /// PUC `parlist`: the named parameters (onto the name stack) and the
+    /// vararg, if any.
+    fn param_list(&mut self) -> Result<Vararg, SyntaxError> {
+        let mut vararg = Vararg::None;
+        if self.tok.tok != Token::RParen {
+            loop {
+                match &self.tok.tok {
+                    Token::Ellipsis => {
+                        self.advance()?;
+                        vararg = if self.version.has_named_vararg()
+                            && matches!(self.tok.tok, Token::Name(_))
+                        {
+                            Vararg::Named(self.expect_name()?)
+                        } else {
+                            Vararg::Anonymous
+                        };
+                        if let Vararg::Named(ref n) = vararg {
+                            self.new_local()?;
+                            self.add_local_51(n.sym);
+                        }
+                        break;
+                    }
+                    Token::Name(_) => {
+                        let p = self.expect_name()?;
+                        self.new_local()?;
+                        self.add_local_51(p.sym);
+                        self.stk.names.push_or_abort(p);
+                    }
+                    _ => return Err(self.error("<name> or '...' expected")),
+                }
+                if !self.accept(Token::Comma)? {
+                    break;
+                }
+            }
+        }
+        Ok(vararg)
     }
 
     /// PUC `new_localvar`, right after a local's name is read: up to 5.4
