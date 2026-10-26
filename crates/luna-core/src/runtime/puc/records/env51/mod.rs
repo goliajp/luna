@@ -16,9 +16,11 @@
 use super::*;
 
 mod mark;
+mod phantoms;
 mod sweep;
 #[cfg(feature = "gc-trace")]
 mod trace;
+use phantoms::Phantoms;
 #[cfg(feature = "gc-trace")]
 pub(in crate::runtime::puc) use trace::phantom_is_table;
 
@@ -64,7 +66,7 @@ pub(crate) struct Phantom {
 /// `luaL_openlibs` makes its tables and closures anew, the old ones
 /// living on as long as what holds them.
 pub(crate) struct Gen {
-    ph: [Phantom; 6],
+    ph: Phantoms,
     /// E1's array: the default input and output
     io: [*mut GcHeader; 2],
     /// where the records are on PUC's list of objects, by the objects of
@@ -137,14 +139,14 @@ impl Heap {
         };
         let none = usize::MAX;
         Box::new(Gen {
-            ph: [
+            ph: Phantoms::new([
                 rec(s.table + 2 * s.tvalue + s.node, FCLOSE, 0),
                 rec(s.table + s.node, NOCLOSE, 0),
                 rec(s.table + s.node, PCLOSE, 0),
                 rec(s.c_closure(0), none, 0),
                 rec(s.c_closure(0), none, ENV_IO),
                 rec(s.c_closure(0), none, ENV_IO),
-            ],
+            ]),
             io: [ptr::null_mut(); 2],
             anchors: [
                 anchor([FCLOSE, E1]),
@@ -192,10 +194,11 @@ impl Heap {
         let counted = self.counting();
         let g = self.env51_gen_now();
         g.opened |= k == E1;
-        let p = &mut g.ph[k];
-        p.hdr.set_flags(w);
-        (p.dead, p.counted) = (false, counted);
-        &mut p.hdr as *mut GcHeader
+        g.ph.with(k, |p| {
+            p.hdr.set_flags(w);
+            (p.dead, p.counted) = (false, counted);
+        });
+        g.ph.hdr(k)
     }
 
     /// Which record `h` heads, if one does.
@@ -203,7 +206,7 @@ impl Heap {
         let e = self.puc.records.env51_box.as_deref()?;
         e.gens
             .iter()
-            .find_map(|g| g.ph.iter().position(|p| std::ptr::eq(&p.hdr, h)))
+            .find_map(|g| (0..6).position(|k| g.ph.hdr(k) == h))
     }
 
     /// The package table, the loaders' environment.
@@ -224,7 +227,7 @@ impl Heap {
     pub(crate) fn env51_set_io(&mut self, i: usize, u: Gc<Userdata>) {
         let g = self.env51_gen_now();
         g.io[i] = u.as_ptr() as *mut GcHeader;
-        let e1 = &mut g.ph[E1].hdr as *mut GcHeader;
+        let e1 = g.ph.hdr(E1);
         // SAFETY: a record lives as long as the heap
         unsafe { self.barrier_back_obj(e1) };
     }
