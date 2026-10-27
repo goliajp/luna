@@ -1,6 +1,7 @@
 /* the count once the libraries are open, all of them and the package
    library alone: what each opener makes, the registry's table of C
-   libraries made once */
+   libraries made once; and after a full collection of the state whose
+   libraries opened with the collector running */
 #include <stdio.h>
 #include "lua.h"
 #include "lauxlib.h"
@@ -14,6 +15,8 @@ int main(void) {
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
   show(L, "all");
+  lua_gc(L, LUA_GCCOLLECT, 0);
+  show(L, "collected");
   lua_close(L);
   L = luaL_newstate();
 #if LUA_VERSION_NUM == 501
