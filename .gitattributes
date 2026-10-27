@@ -1,0 +1,3 @@
+# every text file checks out with LF line ends, Windows included: the
+# tests compare recorded outputs byte for byte
+* text=auto eol=lf
