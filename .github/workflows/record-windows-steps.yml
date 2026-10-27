@@ -6,8 +6,9 @@
 # started through `cmd` as `lua`, from the scripts' directory, TZ=UTC. The
 # outputs, CRLF read as LF, are uploaded as the artifact `windows-steps`,
 # with what `crates/luna-core/tests/windows_counts/host.c`, built with
-# each PUC and run from the same directory, prints for the count tests of
-# luna-core (`windows_counts/<dialect>.windows.out`).
+# each PUC (without the coincidences of addresses) and run from the same
+# directory, prints for the count tests of luna-core
+# (`windows_counts/<dialect>.windows.out`).
 # Run by hand when a script or a recording changes.
 
 name: record-windows-steps
@@ -59,6 +60,68 @@ jobs:
                       done += 1
               assert done == 1, f"{v}: {done} seed functions patched"
 
+      # luna counts as if two C strings never met in a bucket of luaS_new's
+      # cache (5.3 on), and as if a new key never took the node of a
+      # removed key hashed by its address: both depend on where the
+      # compiler and the allocator put things. The count host's PUC (a copy
+      # of the sources) gets a bucket for each C string address, and counts
+      # such a node as taken
+      - name: Take the coincidences of addresses out of the count host's PUC
+        shell: python
+        run: |
+          import os, re, shutil
+          root = os.path.join(os.environ["RUNNER_TEMP"], "puc")
+          private = """#define NOCOIN_N 8192
+          static const char *nocoin_k[NOCOIN_N];
+          static TString *nocoin_v[NOCOIN_N][STRCACHE_M];
+          static TString **nocoin_bucket (lua_State *L, const char *str) {
+            unsigned int h = point2uint(str) % NOCOIN_N;
+            int j;
+            while (nocoin_k[h] != NULL && nocoin_k[h] != str) h = (h + 1) % NOCOIN_N;
+            if (nocoin_k[h] == NULL) {
+              nocoin_k[h] = str;
+              for (j = 0; j < STRCACHE_M; j++) nocoin_v[h][j] = G(L)->memerrmsg;
+            }
+            return nocoin_v[h];
+          }
+          """.replace("\n          ", "\n")
+          clear = ("  { int h; for (h = 0; h < NOCOIN_N; h++) if (nocoin_k[h] != NULL)"
+                   " for (j = 0; j < STRCACHE_M; j++) if (iswhite(nocoin_v[h][j]))"
+                   " nocoin_v[h][j] = g->memerrmsg; }\n")
+          reuse = re.compile(r"\n  if \((!ttisnil|!isempty)\(gval\(mp\)\) \|\| (mp == dummynode|isdummy\(mp\)|isdummy\(t\))\) \{")
+          for v in ("5.1.5", "5.2.4", "5.3.6", "5.4.9", "5.5.1"):
+              src = os.path.join(root, f"lua-{v}", "src")
+              dst = os.path.join(root, f"lua-{v}", "src-host")
+              shutil.copytree(src, dst)
+              p = os.path.join(dst, "lstring.c")
+              s = open(p, newline="").read()
+              if "STRCACHE_N" in s:
+                  head = re.search(r"void luaS_clearcache \(global_State \*g\) \{\n  int i, j;\n", s)
+                  assert head, f"{v}: luaS_clearcache"
+                  s = s[:head.start()] + private + s[head.start():head.end()] + clear + s[head.end():]
+                  old = "  TString **p = G(L)->strcache[i];"
+                  assert old in s, f"{v}: luaS_new's bucket"
+                  s = s.replace(old, "  TString **p = nocoin_bucket(L, str);", 1)
+                  open(p, "w", newline="").write(s)
+              p = os.path.join(dst, "ltable.c")
+              s = open(p, newline="").read()
+              by_addr = "(!ttisnumber(key) && !ttisboolean(key) && !ttisstring(key))"
+              if "keyisnil" in s:
+                  nilkey, dead = "!keyisnil(mp)", "keyisdead(mp)"
+                  old_addr = ("(!keyisdead(mp) && ((keyiscollectable(mp) && novariant(keytt(mp)) != LUA_TSTRING)"
+                              " || keytt(mp) == LUA_VLIGHTUSERDATA))")
+              else:
+                  nilkey, dead = "!ttisnil(gkey(mp))", "(ttype(gkey(mp)) == LUA_TDEADKEY)"
+                  old_addr = ("(ttype(gkey(mp)) != LUA_TDEADKEY && !ttisnumber(gkey(mp))"
+                              " && !ttisboolean(gkey(mp)) && !ttisstring(gkey(mp)))")
+              def taken(m):
+                  empty = "isempty(gval(mp))" if m.group(1) == "!isempty" else "ttisnil(gval(mp))"
+                  return (f"\n  if ({m.group(1)}(gval(mp)) || {m.group(2)} || ({empty} && {nilkey}"
+                          f" && ({dead} || {by_addr} || {old_addr}))) {{")
+              s, n = reuse.subn(taken, s, count=1)
+              assert n == 1, f"{v}: luaH_newkey's main position test"
+              open(p, "w", newline="").write(s)
+
       - name: Build with MSVC
         shell: cmd
         run: |
@@ -74,7 +137,10 @@ jobs:
             if "%%v"=="5.3.6" set DEFS=/DLUA_COMPAT_5_2
             if "%%v"=="5.4.9" set DEFS=/DLUA_COMPAT_5_3
             call cl /nologo /O2 /MD /W0 !DEFS! /Fe:..\lua.exe *.c || exit /b 1
-            del lua.c
+            popd
+            pushd "%RUNNER_TEMP%\puc\lua-%%v\src-host" || exit /b 1
+            del lua.c luac.c
+            if exist onelua.c del onelua.c
             call cl /nologo /O2 /MD /W0 !DEFS! /I. /Fe:..\host.exe "%GITHUB_WORKSPACE%\crates\luna-core\tests\windows_counts\host.c" *.c || exit /b 1
             popd
           )
