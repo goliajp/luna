@@ -71,17 +71,19 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             // 5.1's loader gets only the name; 5.2+ also the file name,
             // which `checkload` pushes again from the found name's bytes
             if vm.version() == LuaVersion::Lua51 {
+                found.returned(vm, &[f])?;
                 return vm.nat_ret(fs, &[f]);
             }
-            let Value::Str(found) = fname else {
+            let Value::Str(fstr) = fname else {
                 unreachable!("a string")
             };
             vm.lib_roots.extend([f, fname]);
-            let at =
-                crate::runtime::puc::records::strcache::CStr::In(found.as_ptr() as *const _, 0);
+            let at = crate::runtime::puc::records::strcache::CStr::In(fstr.as_ptr() as *const _, 0);
             let pushed = vm.api_push_string_at(at, &file);
             vm.lib_roots.pop_n(2);
-            vm.nat_ret(fs, &[f, pushed?])
+            let pushed = pushed?;
+            found.returned(vm, &[f, pushed])?;
+            vm.nat_ret(fs, &[f, pushed])
         }
         Ok(m) | Err(m) => {
             let msg = argcheck::to_str_bytes(vm, m).unwrap_or_default();

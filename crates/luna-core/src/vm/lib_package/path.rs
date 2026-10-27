@@ -81,6 +81,7 @@ pub(super) fn ll_searchpath(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lua
     match r {
         Ok(f) => {
             let s = found_string(vm, &f)?;
+            f.returned(vm, &[s])?;
             vm.nat_ret(fs, &[s])
         }
         Err(msg) => vm.nat_ret(fs, &[Value::Nil, Value::Str(msg)]),

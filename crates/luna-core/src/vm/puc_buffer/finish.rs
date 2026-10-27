@@ -1,4 +1,5 @@
-//! Ending a buffer: its string pushed (`luaL_pushresult`).
+//! Ending a buffer: its string pushed (`luaL_pushresult`), or the buffer
+//! left on the stack as its C function returns.
 
 use super::*;
 
@@ -62,6 +63,18 @@ impl PucBuffer {
                 Ok(r)
             }
         }
+    }
+
+    /// The buffer left on the stack when its C function returns: from
+    /// 5.4 on its box is a to-be-closed slot, which the return closes
+    /// (`luaD_poscall`), its `__close` called above the function's top.
+    pub(crate) fn close_on_return(mut self, vm: &mut Vm) -> Result<(), LuaError> {
+        if self.boxed && self.d >= Dialect::L54 {
+            vm.box_closed()?;
+            vm.heap.trace_raw(self.size, 0);
+            self.drop_box(vm);
+        }
+        Ok(())
     }
 
     fn drop_box(&mut self, vm: &mut Vm) {
