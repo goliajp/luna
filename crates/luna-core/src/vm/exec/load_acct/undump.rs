@@ -148,7 +148,7 @@ impl Vm {
         }
         self.end_failed_undump(u.cut_long.filter(|_| refused.is_none()), buff)?;
         match refused {
-            Some(_) => Err(SyntaxError::memory()),
+            Some((_, too_big)) => Err(self.refused_block_error(too_big)),
             None => self.undump_error(chunkname, e),
         }
     }
