@@ -56,6 +56,9 @@ jobs:
           sudo apt-get install -y -qq llvm
           echo "ASAN_SYMBOLIZER_PATH=$(which llvm-symbolizer)" >> "$GITHUB_ENV"
 
+      # every step builds with `--cfg luna_asan` (one build of std, and the
+      # tests that size a thread's stack for a level's frames allow for the
+      # instrumentation's larger ones)
       - name: cargo +nightly build -Zsanitizer=address -Zbuild-std (warm cache)
         # Pre-build all the workspace once with sanitizer flags so the
         # subsequent `test` invocations don't each rebuild std.
@@ -65,7 +68,7 @@ jobs:
             -Z build-std \
             --target x86_64-unknown-linux-gnu
         env:
-          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
 
       - name: ASAN — luna-core --lib
         run: |
@@ -75,7 +78,7 @@ jobs:
             --target x86_64-unknown-linux-gnu \
             -- --nocapture
         env:
-          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
 
       # Integration tests run one per step, starting with the UAF
       # regression tests. Each test runs in its own invocation so a
@@ -89,7 +92,7 @@ jobs:
             --target x86_64-unknown-linux-gnu \
             -- --nocapture --test-threads=1 sort_gc_during_compare::
         env:
-          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
 
       - name: ASAN — toomanyidx_memory_cap regression
         run: |
@@ -100,7 +103,7 @@ jobs:
             --target x86_64-unknown-linux-gnu \
             -- --nocapture --test-threads=1 toomanyidx_memory_cap::
         env:
-          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
 
       - name: ASAN — gc_finalizer_edges regression
         run: |
@@ -111,7 +114,7 @@ jobs:
             --target x86_64-unknown-linux-gnu \
             -- --nocapture --test-threads=1 gc_finalizer_edges::
         env:
-          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
 
       - name: ASAN — host_roots_slot_recycling regression
         run: |
@@ -122,7 +125,7 @@ jobs:
             --target x86_64-unknown-linux-gnu \
             -- --nocapture --test-threads=1 host_roots_slot_recycling::
         env:
-          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
 
       - name: ASAN — io_popen_double_close regression
         run: |
@@ -133,7 +136,7 @@ jobs:
             --target x86_64-unknown-linux-gnu \
             -- --nocapture --test-threads=1 io_popen_double_close::
         env:
-          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
 
       # UAF-C regression sentinel (stale gc_top on native collects +
       # weak-table tombstone clearkey). Without the fix this loop AVs
@@ -152,7 +155,7 @@ jobs:
             --target x86_64-unknown-linux-gnu \
             -- --ignored --nocapture --test-threads=1
         env:
-          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
           LUNA_GC_STRESS_N: "5"
 
       # Full official_run under ASAN across all 5 dialects. Local
@@ -169,4 +172,4 @@ jobs:
             --release \
             -- --nocapture --test-threads=1
         env:
-          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
