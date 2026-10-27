@@ -258,6 +258,25 @@ map the name to a luna symbol:
 | `luaL_Buffer` functions | `luna_buffinit_51`, ... | | |
 | `lua_ident` | `luna_ident_51` | `luna_ident_52` | `luna_ident_53` |
 
+A state's strings hash with a seed of its own, as in PUC (5.5's
+`lua_newstate` takes the seed from the host), so the order `next` and
+`pairs` visit a table's string keys in can change from run to run. Two
+luna functions, declared in the same headers, take the seed from the
+caller:
+
+```c
+/* luaL_newstate, strings hashed with seed */
+lua_State *L = luna_newstate_seeded(LUA_VERSION_NUM, seed);
+/* lua_newstate, strings hashed with seed */
+lua_State *L = luna_newstate_with_seeded(LUA_VERSION_NUM, f, ud, seed);
+```
+
+States made with the same seed lay out their tables, and so iterate them,
+the same way on every run, which makes a test's output repeatable. With
+the same seed luna orders a table's string keys as PUC built with that seed
+(`luai_makeseed`) does. 5.1 hashes strings without a seed, so there the
+seed changes nothing.
+
 5.1 and 5.2 functions that later versions turned into macros stay
 exported (`lua_insert`, `lua_objlen`, `lua_equal`, `lua_cpcall`,
 `luaL_register`, `luaL_typerror`, ...). The exported functions — every
@@ -266,7 +285,7 @@ function any of the five versions declares, plus `lua_ident`:
 - `lua.h` (122): `lua_absindex`, `lua_arith`, `lua_atpanic`, `lua_call`, `lua_callk`, `lua_checkstack`, `lua_close`, `lua_closeslot`, `lua_closethread`, `lua_compare`, `lua_concat`, `lua_copy`, `lua_cpcall`, `lua_createtable`, `lua_dump`, `lua_equal`, `lua_error`, `lua_gc`, `lua_getallocf`, `lua_getctx`, `lua_getfenv`, `lua_getfield`, `lua_getglobal`, `lua_gethook`, `lua_gethookcount`, `lua_gethookmask`, `lua_geti`, `lua_getinfo`, `lua_getiuservalue`, `lua_getlocal`, `lua_getmetatable`, `lua_getstack`, `lua_gettable`, `lua_gettop`, `lua_getupvalue`, `lua_getuservalue`, `lua_ident`, `lua_insert`, `lua_iscfunction`, `lua_isinteger`, `lua_isnumber`, `lua_isstring`, `lua_isuserdata`, `lua_isyieldable`, `lua_len`, `lua_lessthan`, `lua_load`, `lua_newstate`, `lua_newthread`, `lua_newuserdata`, `lua_newuserdatauv`, `lua_next`, `lua_numbertocstring`, `lua_objlen`, `lua_pcall`, `lua_pcallk`, `lua_pushboolean`, `lua_pushcclosure`, `lua_pushexternalstring`, `lua_pushfstring`, `lua_pushinteger`, `lua_pushlightuserdata`, `lua_pushlstring`, `lua_pushnil`, `lua_pushnumber`, `lua_pushstring`, `lua_pushthread`, `lua_pushunsigned`, `lua_pushvalue`, `lua_pushvfstring`, `lua_rawequal`, `lua_rawget`, `lua_rawgeti`, `lua_rawgetp`, `lua_rawlen`, `lua_rawset`, `lua_rawseti`, `lua_rawsetp`, `lua_remove`, `lua_replace`, `lua_resetthread`, `lua_resume`, `lua_rotate`, `lua_setallocf`, `lua_setcstacklimit`, `lua_setfenv`, `lua_setfield`, `lua_setglobal`, `lua_sethook`, `lua_seti`, `lua_setiuservalue`, `lua_setlevel`, `lua_setlocal`, `lua_setmetatable`, `lua_settable`, `lua_settop`, `lua_setupvalue`, `lua_setuservalue`, `lua_setwarnf`, `lua_status`, `lua_stringtonumber`, `lua_toboolean`, `lua_tocfunction`, `lua_toclose`, `lua_tointeger`, `lua_tointegerx`, `lua_tolstring`, `lua_tonumber`, `lua_tonumberx`, `lua_topointer`, `lua_tothread`, `lua_tounsignedx`, `lua_touserdata`, `lua_type`, `lua_typename`, `lua_upvalueid`, `lua_upvaluejoin`, `lua_version`, `lua_warning`, `lua_xmove`, `lua_yield`, `lua_yieldk`
 - `lauxlib.h` (57): `luaL_addgsub`, `luaL_addlstring`, `luaL_addstring`, `luaL_addvalue`, `luaL_alloc`, `luaL_argerror`, `luaL_buffinit`, `luaL_buffinitsize`, `luaL_callmeta`, `luaL_checkany`, `luaL_checkinteger`, `luaL_checklstring`, `luaL_checknumber`, `luaL_checkoption`, `luaL_checkstack`, `luaL_checktype`, `luaL_checkudata`, `luaL_checkunsigned`, `luaL_checkversion_`, `luaL_error`, `luaL_execresult`, `luaL_fileresult`, `luaL_findtable`, `luaL_getmetafield`, `luaL_getsubtable`, `luaL_gsub`, `luaL_len`, `luaL_loadbuffer`, `luaL_loadbufferx`, `luaL_loadfile`, `luaL_loadfilex`, `luaL_loadstring`, `luaL_makeseed`, `luaL_newmetatable`, `luaL_newstate`, `luaL_openlib`, `luaL_optinteger`, `luaL_optlstring`, `luaL_optnumber`, `luaL_optunsigned`, `luaL_prepbuffer`, `luaL_prepbuffsize`, `luaL_pushmodule`, `luaL_pushresult`, `luaL_pushresultsize`, `luaL_ref`, `luaL_register`, `luaL_requiref`, `luaL_setfuncs`, `luaL_setmetatable`, `luaL_testudata`, `luaL_tolstring`, `luaL_traceback`, `luaL_typeerror`, `luaL_typerror`, `luaL_unref`, `luaL_where`
 - `lualib.h` (13): `luaL_openlibs`, `luaL_openselectedlibs`, `luaopen_base`, `luaopen_bit32`, `luaopen_coroutine`, `luaopen_debug`, `luaopen_io`, `luaopen_math`, `luaopen_os`, `luaopen_package`, `luaopen_string`, `luaopen_table`, `luaopen_utf8`
-- luna's per-dialect symbols (24): `luna_addlstring_51`, `luna_addstring_51`, `luna_addvalue_51`, `luna_buffinit_51`, `luna_callk_52`, `luna_checkversion_52`, `luna_dump_51`, `luna_gc_51`, `luna_ident_51`, `luna_ident_52`, `luna_ident_53`, `luna_ident_54`, `luna_load_51`, `luna_newstate`, `luna_newstate_with`, `luna_pcallk_52`, `luna_prepbuffer_51`, `luna_pushresult_51`, `luna_rawgeti_51`, `luna_rawseti_51`, `luna_resume_51`, `luna_resume_52`, `luna_version_52`, `luna_yieldk_52`
+- luna's per-dialect symbols (26): `luna_addlstring_51`, `luna_addstring_51`, `luna_addvalue_51`, `luna_buffinit_51`, `luna_callk_52`, `luna_checkversion_52`, `luna_dump_51`, `luna_gc_51`, `luna_ident_51`, `luna_ident_52`, `luna_ident_53`, `luna_ident_54`, `luna_load_51`, `luna_newstate`, `luna_newstate_seeded`, `luna_newstate_with`, `luna_newstate_with_seeded`, `luna_pcallk_52`, `luna_prepbuffer_51`, `luna_pushresult_51`, `luna_rawgeti_51`, `luna_rawseti_51`, `luna_resume_51`, `luna_resume_52`, `luna_version_52`, `luna_yieldk_52`
 
 Every macro of the PUC headers is in luna's headers with the same
 definition. The C host programs in `crates/luna-jit/tests/capi/` call

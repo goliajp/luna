@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const DIALECTS: [(&str, &str); 5] = [
+pub const DIALECTS: [(&str, &str); 5] = [
     ("51", "lua5.1"),
     ("52", "lua5.2"),
     ("53", "lua5.3"),
@@ -87,7 +87,7 @@ fn compiler() -> cc::Tool {
 }
 
 /// Compile `tests/capi/<name>.c` against the headers in `include/<inc>`.
-fn build(name: &str, v: &str, inc: &str) -> Result<PathBuf, String> {
+pub fn build(name: &str, v: &str, inc: &str) -> Result<PathBuf, String> {
     let tool = compiler();
     let lib = lib_dir();
     let out_dir = lib.join("capi-hosts");
@@ -202,6 +202,19 @@ fn diff(what: &str, want: &str, got: &str) -> Option<String> {
     Some(out)
 }
 
+/// Run the program `exe` built by [`build`].
+pub fn run(exe: PathBuf) -> std::process::Output {
+    let mut cmd = Command::new(exe);
+    if cfg!(windows) {
+        // the shared library is found next to the program or on PATH
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let mut dirs = vec![lib_dir()];
+        dirs.extend(std::env::split_paths(&path));
+        cmd.env("PATH", std::env::join_paths(dirs).expect("PATH"));
+    }
+    cmd.output().expect("run the C host")
+}
+
 /// Build and run `tests/capi/<name>.c` for every dialect with a
 /// recording, and fail with every difference from PUC's output.
 pub fn check(name: &str) {
@@ -219,15 +232,7 @@ pub fn check(name: &str) {
                 continue;
             }
         };
-        let mut cmd = Command::new(placed(exe, name, v));
-        if cfg!(windows) {
-            // the shared library is found next to the program or on PATH
-            let path = std::env::var_os("PATH").unwrap_or_default();
-            let mut dirs = vec![lib_dir()];
-            dirs.extend(std::env::split_paths(&path));
-            cmd.env("PATH", std::env::join_paths(dirs).expect("PATH"));
-        }
-        let out = cmd.output().expect("run the C host");
+        let out = run(placed(exe, name, v));
         let got_out = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
         let got_err = String::from_utf8_lossy(&out.stderr).replace("\r\n", "\n");
         if let Some(d) = diff(&format!("{name} {v} stdout"), &want_out, &got_out) {

@@ -107,6 +107,11 @@ LUNA_DATA const char luna_ident_52[];
 LUA_API lua_State *(luna_newstate_with) (int version, lua_Alloc f, void *ud,
                                          unsigned seed);
 #define lua_newstate(f,ud)	luna_newstate_with(LUA_VERSION_NUM, (f), (ud), 0)
+/* luna: lua_newstate whose strings hash with 'seed' rather than a seed of
+   the state's own (pass LUA_VERSION_NUM as 'version'), as luna_newstate_seeded
+   in lauxlib.h is to luaL_newstate */
+LUA_API lua_State *(luna_newstate_with_seeded) (int version, lua_Alloc f,
+                                                void *ud, unsigned seed);
 LUA_API void       (lua_close) (lua_State *L);
 LUA_API lua_State *(lua_newthread) (lua_State *L);
 
