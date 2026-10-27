@@ -123,8 +123,8 @@ fuzz_target!(|data: &[u8]| {
         let mut vm = luna_core::vm::Vm::new_with_mem(program::dialect(), mem);
         if jit {
             luna_jit::install_default_jit(&mut vm);
-            vm.jit().trace_hot_threshold = 2;
-            vm.jit().call_hot_threshold = 2;
+            vm.jit_mut().trace_hot_threshold = 2;
+            vm.jit_mut().call_hot_threshold = 2;
         } else {
             vm.install_null_jit();
         }

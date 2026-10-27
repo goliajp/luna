@@ -88,8 +88,8 @@ fn run(src: &str, jit: Option<(Tiers, u32, u32)>) -> Outcome {
         Some((tiers, trace, call)) => {
             vm.set_jit_enabled(!matches!(tiers, Tiers::TraceOnly));
             vm.set_trace_jit_enabled(!matches!(tiers, Tiers::MethodOnly));
-            vm.jit().trace_hot_threshold = trace;
-            vm.jit().call_hot_threshold = call;
+            vm.jit_mut().trace_hot_threshold = trace;
+            vm.jit_mut().call_hot_threshold = call;
         }
         None => {
             vm.set_jit_enabled(false);
