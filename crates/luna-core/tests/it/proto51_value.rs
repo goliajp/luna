@@ -2,7 +2,8 @@
 //! reader, as `debug.getlocal` hands it over: a value of type "proto".
 //! PUC 5.1 crashes on most operations on it (it is no value the language
 //! knows); luna raises the error 5.1 raises for a value of a type the
-//! operation does not take, and `tostring` gives "proto: 0x...".
+//! operation does not take, and `tostring` gives "proto: " and its
+//! address, as `%p` prints it on the target.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
@@ -15,7 +16,7 @@ load(function()
   if k == 2 then p = select(2, debug.getlocal(2, 5)) end
   return ({"local a = 1 ", "return a"})[k]
 end)
-local out = {type(p), (tostring(p):gsub("0x%x+", "ADDR"))}
+local out = {type(p), (tostring(p):gsub(": .+$", ": ADDR"))}
 for _, f in ipairs {
   function() return p.x end, function() p.x = 1 end, function() return p + 1 end,
   function() return p < p end, function() return p .. "" end, function() return p() end,
