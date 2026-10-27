@@ -4,6 +4,7 @@
 use super::progdir;
 use super::*;
 use crate::runtime::Builtin;
+use crate::runtime::puc::records::strcache::{CStr, site};
 use crate::vm::opening::{Ctor, Natives, Opener, run_open};
 use Ctor::{C, F};
 
@@ -126,9 +127,9 @@ pub(crate) fn puc_setpath(
     }
     let found = names
         .iter()
-        .find_map(|n| std::env::var_os(String::from_utf8_lossy(n).as_ref()));
+        .find_map(|n| std::env::var_os(String::from_utf8_lossy(n).as_ref()).map(|p| (n, p)));
     let found = match found {
-        Some(p) if !no_env(vm, op)? => Some(path::os_bytes(&p)),
+        Some((n, p)) if !no_env(vm, op)? => Some((n.clone(), path::os_bytes(&p))),
         _ => None,
     };
     let def = if cfg!(windows) {
@@ -137,8 +138,8 @@ pub(crate) fn puc_setpath(
         def.to_vec()
     };
     match found {
-        None => push_default(vm, op, &def, v == LuaVersion::Lua55)?,
-        Some(p) => push_env_path(vm, op, &p, &def)?,
+        None => push_default(vm, op, field, &def, v == LuaVersion::Lua55)?,
+        Some((name, p)) => push_env_path(vm, op, &name, &p, &def)?,
     }
     // PUC's default names the executable's directory as `!`, which
     // `setprogdir`'s copy replaces (the original left garbage)
@@ -165,12 +166,20 @@ fn no_env(vm: &mut Vm, op: &mut Opener) -> Result<bool, LuaError> {
     Ok(b)
 }
 
-/// The default path `def` pushed as PUC pushes it: 5.5's with
-/// `lua_pushexternalstring` and no `falloc`, a long string over bytes PUC
-/// does not own (every default is longer than a short string).
-fn push_default(vm: &mut Vm, op: &mut Opener, def: &[u8], external: bool) -> Result<(), LuaError> {
+/// The default path `def` of `field` pushed as PUC pushes it: with
+/// `lua_pushstring`, through `luaS_new`'s cache at the default's address;
+/// 5.5's with `lua_pushexternalstring` and no `falloc`, a long string over
+/// bytes PUC does not own (every default is longer than a short string).
+fn push_default(
+    vm: &mut Vm,
+    op: &mut Opener,
+    field: &[u8],
+    def: &[u8],
+    external: bool,
+) -> Result<(), LuaError> {
     if !external {
-        return op.pushstring(vm, def);
+        let at = CStr::Fixed(site::LITERAL, site::name_hash(field));
+        return push_at(vm, op, at, def);
     }
     debug_assert!(def.len() > crate::runtime::string::MAX_SHORT_LEN);
     op.before(vm)?;
@@ -179,16 +188,35 @@ fn push_default(vm: &mut Vm, op: &mut Opener, def: &[u8], external: bool) -> Res
     op.after(vm)
 }
 
-/// A path from the environment pushed with the default in place of its
-/// ";;": 5.1 to 5.3 through `luaL_gsub` twice (";;" marked, the mark
-/// replaced), the first result dropped; later in one buffer.
-fn push_env_path(vm: &mut Vm, op: &mut Opener, p: &[u8], def: &[u8]) -> Result<(), LuaError> {
+/// `lua_pushstring` of the C string at `at` holding `bytes`.
+fn push_at(vm: &mut Vm, op: &mut Opener, at: CStr, bytes: &[u8]) -> Result<(), LuaError> {
+    op.before(vm)?;
+    let s = vm.str_value_at(at, bytes)?;
+    op.push(vm, s)?;
+    op.after(vm)
+}
+
+/// The path `p` of the environment's variable `name` pushed with the
+/// default in place of its ";;": 5.1 to 5.3 through `luaL_gsub` twice
+/// (";;" marked, the mark replaced), the first result dropped; later in
+/// one buffer, or, with no ";;", the variable's own string through
+/// `luaS_new`'s cache.
+fn push_env_path(
+    vm: &mut Vm,
+    op: &mut Opener,
+    name: &[u8],
+    p: &[u8],
+    def: &[u8],
+) -> Result<(), LuaError> {
     if vm.version() <= LuaVersion::Lua53 {
         let marked = path::replace(p, b";;", b";\x01;");
         op.pushstring(vm, &marked)?;
         op.pushstring(vm, &path::replace(&marked, b"\x01", def))?;
         op.remove(vm, -2);
         return Ok(());
+    }
+    if !p.windows(2).any(|w| w == b";;") {
+        return push_at(vm, op, CStr::Fixed(site::GETENV, site::name_hash(name)), p);
     }
     op.pushstring(vm, &path::splice_default(p, def))
 }

@@ -40,6 +40,8 @@ pub(crate) mod site {
     pub(crate) const SEARCHPATH: u8 = 2;
     /// the environment's variables, by [`name_hash`]
     pub(crate) const GETENV: u8 = 3;
+    /// a library's string constants, by [`name_hash`] of what they are
+    pub(crate) const LITERAL: u8 = 4;
 
     /// A number for `name` (FNV-1a).
     pub(crate) fn name_hash(name: &[u8]) -> u32 {
