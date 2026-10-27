@@ -261,10 +261,10 @@ fn prog(v: u8) -> &'static [St] {
 fn header(v: u8) -> &'static [u8] {
     use crate::vm::dump::puc;
     match v {
-        0x51 => &puc::puc_51::HEADER,
-        0x52 => &puc::puc_52::HEADER,
-        0x53 => &puc::puc_53::HEADER,
-        0x54 => &puc::puc_54::HEADER,
-        _ => &puc::puc_55::HEADER,
+        0x51 => puc::puc_51::HEADER,
+        0x52 => puc::puc_52::HEADER,
+        0x53 => puc::puc_53::HEADER,
+        0x54 => puc::puc_54::HEADER,
+        _ => puc::puc_55::HEADER,
     }
 }
