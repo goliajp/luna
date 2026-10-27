@@ -119,8 +119,10 @@ fn load_keeps_pucs_objects_below_its_reader() {
 }
 
 /// The same while `load` undumps a binary chunk handed over in pieces;
-/// a reader is called no more once the chunk is read.
+/// a reader is called no more once the chunk is read. The pieces are a
+/// 64-bit PUC's chunk.
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn load_keeps_pucs_objects_below_its_reader_undumping() {
     let expected = BINARY_EXPECTED.replace("\r\n", "\n");
     let mut runs = 0;
