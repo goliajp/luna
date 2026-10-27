@@ -2,6 +2,8 @@
 
 use super::*;
 
+/// On Windows PUC's default path finds the module as `.\errmod.lua`
+/// (recorded from PUC built with MSVC).
 #[test]
 fn library_error() {
     let case = Case {
@@ -14,19 +16,31 @@ fn library_error() {
         Expect {
             dialects: &["5.1"],
             stdout: "",
-            stderr: "lua: ./errmod.lua:1: in module\nstack traceback:\n\t[C]: in function 'error'\n\t./errmod.lua:1: in main chunk\n\t[C]: ?\n\t[C]: ?\n",
+            stderr: if cfg!(windows) {
+                "lua: .\\errmod.lua:1: in module\nstack traceback:\n\t[C]: in function 'error'\n\t.\\errmod.lua:1: in main chunk\n\t[C]: ?\n\t[C]: ?\n"
+            } else {
+                "lua: ./errmod.lua:1: in module\nstack traceback:\n\t[C]: in function 'error'\n\t./errmod.lua:1: in main chunk\n\t[C]: ?\n\t[C]: ?\n"
+            },
             status: 1,
         },
         Expect {
             dialects: &["5.2", "5.3", "5.4"],
             stdout: "",
-            stderr: "lua: ./errmod.lua:1: in module\nstack traceback:\n\t[C]: in function 'error'\n\t./errmod.lua:1: in main chunk\n\t[C]: in function 'require'\n\t[C]: in ?\n",
+            stderr: if cfg!(windows) {
+                "lua: .\\errmod.lua:1: in module\nstack traceback:\n\t[C]: in function 'error'\n\t.\\errmod.lua:1: in main chunk\n\t[C]: in function 'require'\n\t[C]: in ?\n"
+            } else {
+                "lua: ./errmod.lua:1: in module\nstack traceback:\n\t[C]: in function 'error'\n\t./errmod.lua:1: in main chunk\n\t[C]: in function 'require'\n\t[C]: in ?\n"
+            },
             status: 1,
         },
         Expect {
             dialects: &["5.5"],
             stdout: "",
-            stderr: "lua: ./errmod.lua:1: in module\nstack traceback:\n\t[C]: in global 'error'\n\t./errmod.lua:1: in main chunk\n\t[C]: in function 'require'\n\t[C]: in ?\n",
+            stderr: if cfg!(windows) {
+                "lua: .\\errmod.lua:1: in module\nstack traceback:\n\t[C]: in global 'error'\n\t.\\errmod.lua:1: in main chunk\n\t[C]: in function 'require'\n\t[C]: in ?\n"
+            } else {
+                "lua: ./errmod.lua:1: in module\nstack traceback:\n\t[C]: in global 'error'\n\t./errmod.lua:1: in main chunk\n\t[C]: in function 'require'\n\t[C]: in ?\n"
+            },
             status: 1,
         },
     ]);
