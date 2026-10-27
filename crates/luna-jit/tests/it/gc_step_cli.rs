@@ -34,7 +34,11 @@ fn a_5_1_step_restarts_the_collector() {
             "{}",
             String::from_utf8_lossy(&out.stderr)
         );
-        assert_eq!(String::from_utf8_lossy(&out.stdout), PUC, "{flag:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            crate::cli_common::as_on_this_platform(PUC),
+            "{flag:?}"
+        );
     }
     let _ = std::fs::remove_dir_all(&dir); // a leftover temp directory is harmless
 }
