@@ -113,7 +113,7 @@ pub(super) struct Replay<'s> {
     pub(super) tabs: u32,
     /// the first long string of each content keyed in a parser table: a
     /// table finds a long string by its bytes
-    pub(super) long_keys: std::collections::HashMap<Box<[u8]>, usize>,
+    pub(super) long_keys: std::collections::HashMap<Box<[u8]>, Gc<crate::runtime::LuaStr>>,
     /// the scanner's buffer
     pub(super) buff: usize,
     pub(super) actvar: GrowVec,

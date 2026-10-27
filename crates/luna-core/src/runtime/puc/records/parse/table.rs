@@ -44,13 +44,12 @@ impl PKey {
     /// them keyed standing for all, in `longs`).
     pub(crate) fn of_str(
         s: Gc<crate::runtime::LuaStr>,
-        longs: &mut std::collections::HashMap<Box<[u8]>, usize>,
+        longs: &mut std::collections::HashMap<Box<[u8]>, Gc<crate::runtime::LuaStr>>,
     ) -> PKey {
-        let p = s.as_ptr() as usize;
         if s.is_short() {
-            return PKey::Ptr(p);
+            return PKey::Ptr(s.as_ptr() as usize);
         }
-        PKey::Ptr(*longs.entry(s.as_bytes().into()).or_insert(p))
+        PKey::Ptr(longs.entry(s.as_bytes().into()).or_insert(s).as_ptr() as usize)
     }
 
     /// The integer of a key that may go to the array part.

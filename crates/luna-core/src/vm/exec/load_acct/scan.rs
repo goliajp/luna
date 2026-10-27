@@ -14,6 +14,30 @@ impl Replay<'_> {
         }
     }
 
+    /// `s` just scanned, or, a long string whose bytes the table already
+    /// holds, the one it holds: PUC's `luaX_newstring` goes on with that
+    /// one, and the one just made is garbage, kept by nothing.
+    fn anchored_long(
+        &mut self,
+        s: Gc<crate::runtime::LuaStr>,
+        text: ScanText,
+        kind: ScanKind,
+    ) -> Gc<crate::runtime::LuaStr> {
+        let Some(&held) = self.long_keys.get(s.as_bytes()) else {
+            return s;
+        };
+        let k = PKey::Ptr(held.as_ptr() as usize);
+        if held.ptr_eq(s) || !self.scan_table(kind).is_some_and(|t| t.contains(k)) {
+            return s;
+        }
+        self.longs.retain(|l| !l.ptr_eq(s));
+        match text {
+            ScanText::Sym(sym) => self.syms[sym.0 as usize].0 = Some(held),
+            ScanText::Reserved(k, _) => self.reserved[usize::from(k)].0 = Some(held),
+        }
+        held
+    }
+
     /// A number for that table, other than 0: the innermost function's
     /// up to 5.2, the chunk's after.
     fn table_id(&self) -> u32 {
@@ -87,6 +111,7 @@ impl Vm {
                 s
             }
         };
+        let s = r.anchored_long(s, text, kind);
         // a table's keys stay until the load is done
         let id = r.table_id();
         let in_table = match text {

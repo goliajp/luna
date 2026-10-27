@@ -38,6 +38,15 @@ impl Vm {
         let open = self.heap.open_parse_frame(frame);
         let stepped = self.native_checkpoint_due();
         self.heap.close_parse_frame(open);
+        // gc-verify: the long strings the scanner made and no constant took
+        // are held by its table, so the step left them
+        #[cfg(feature = "gc-verify")]
+        for l in &r.longs {
+            assert!(
+                self.heap.holds_live(l.header()),
+                "a scanned long string was freed"
+            );
+        }
         // 5.1 and 5.2 drop a function's table when it ends: a name the step
         // freed is made again where it is scanned next
         if due && matches!(r.d, Dialect::L51 | Dialect::L52) {
