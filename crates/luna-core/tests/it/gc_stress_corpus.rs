@@ -19,7 +19,6 @@ use super::refusing_alloc::run;
 const SLOW: &[(&str, &str)] = &[
     ("5.2", "870_c_stack_overflow_paths"),
     ("5.2", "1047_msgh_at_full_stack"),
-    // 5.2's deep recursions inside a message handler: past an hour
     ("5.2", "999_handler_after_varinfo_52"),
 ];
 

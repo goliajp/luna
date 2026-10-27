@@ -188,7 +188,8 @@ corpus_tests!(
     v54 = 3,
     v55 = 4;
     slow v52_1047 = 1 "1047_msgh_at_full_stack.lua",
-    v52_870 = 1 "870_c_stack_overflow_paths.lua"
+    v52_870 = 1 "870_c_stack_overflow_paths.lua",
+    v52_999_handler = 1 "999_handler_after_varinfo_52.lua"
 );
 // 5.3+, where `string.dump` strips
 corpus_tests!(

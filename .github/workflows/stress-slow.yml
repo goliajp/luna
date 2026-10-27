@@ -30,6 +30,25 @@ jobs:
           - { test: v52_1047, every: 3, offset: 0 }
           - { test: v52_1047, every: 3, offset: 1 }
           - { test: v52_1047, every: 3, offset: 2 }
+          # about 38 hours at full strength on the project's x86_64 runner:
+          # 5.2 checks for a collection at every call, and the fixture
+          # recurses a million calls deep inside a message handler
+          - { test: v52_999_handler, every: 16, offset: 0 }
+          - { test: v52_999_handler, every: 16, offset: 1 }
+          - { test: v52_999_handler, every: 16, offset: 2 }
+          - { test: v52_999_handler, every: 16, offset: 3 }
+          - { test: v52_999_handler, every: 16, offset: 4 }
+          - { test: v52_999_handler, every: 16, offset: 5 }
+          - { test: v52_999_handler, every: 16, offset: 6 }
+          - { test: v52_999_handler, every: 16, offset: 7 }
+          - { test: v52_999_handler, every: 16, offset: 8 }
+          - { test: v52_999_handler, every: 16, offset: 9 }
+          - { test: v52_999_handler, every: 16, offset: 10 }
+          - { test: v52_999_handler, every: 16, offset: 11 }
+          - { test: v52_999_handler, every: 16, offset: 12 }
+          - { test: v52_999_handler, every: 16, offset: 13 }
+          - { test: v52_999_handler, every: 16, offset: 14 }
+          - { test: v52_999_handler, every: 16, offset: 15 }
     # the longest a hosted job may run
     timeout-minutes: 360
     env:
