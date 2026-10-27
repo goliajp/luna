@@ -1,0 +1,25 @@
+== 5.1
+stack traceback:
+	[C]: ?
+	[C]: in function 'gsub'
+	global_under_g.lua:5: in main chunk
+== 5.2
+stack traceback:
+	[C]: in function '_G.v4'
+	[C]: in function 'gsub'
+	global_under_g.lua:5: in main chunk
+== 5.3
+stack traceback:
+	[C]: in function 'v4'
+	[C]: in function 'string.gsub'
+	global_under_g.lua:5: in main chunk
+== 5.4
+stack traceback:
+	[C]: in function 'v4'
+	[C]: in function 'string.gsub'
+	global_under_g.lua:5: in main chunk
+== 5.5
+stack traceback:
+	[C]: in function 'v4'
+	[C]: in field 'gsub'
+	global_under_g.lua:5: in main chunk

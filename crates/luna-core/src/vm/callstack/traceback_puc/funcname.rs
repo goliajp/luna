@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::runtime::puc::api::PucText;
+use crate::vm::callstack::func_name::FuncName;
 
 impl Vm {
     /// `pushfuncname` of 5.2 to 5.5: the string, made with what PUC makes
@@ -21,8 +22,6 @@ impl Vm {
     }
 
     pub(super) fn funcname_pushed(&mut self, ar: &Ar) -> Result<(), LuaError> {
-        let v = self.version();
-        let named = ar.name.as_ref().filter(|(what, _)| !what.is_empty());
         let global = |vm: &mut Vm| -> Result<Option<Gc<LuaStr>>, LuaError> {
             let g = vm.puc_global_name(ar.func)?;
             if let Some(g) = g {
@@ -30,55 +29,56 @@ impl Vm {
             }
             Ok(g)
         };
-        if matches!(v, LuaVersion::Lua53 | LuaVersion::Lua54)
-            && let Some(g) = global(self)?
-        {
-            return self.api_push(|h| h.pushfstring(b"function '%s'", &[FmtArg::S(g.as_bytes())]));
+        match self.func_name(ar, global)? {
+            FuncName::Global(g) => {
+                self.api_push(|h| h.pushfstring(b"function '%s'", &[FmtArg::S(g.as_bytes())]))
+            }
+            FuncName::Named(word) => {
+                let n = ar.name.as_ref().map_or("", |(_, n)| n.as_str());
+                if self.version() == LuaVersion::Lua52 {
+                    self.api_push(|h| h.pushfstring(b"function '%s'", &[FmtArg::S(n.as_bytes())]))
+                } else {
+                    let args = [FmtArg::S(word.as_bytes()), FmtArg::S(n.as_bytes())];
+                    self.api_push(|h| h.pushfstring(b"%s '%s'", &args))
+                }
+            }
+            FuncName::Main => self.api_push(|h| h.try_intern(b"main chunk")),
+            FuncName::Lua => {
+                let args = [FmtArg::S(&ar.short_src), FmtArg::D(ar.linedefined)];
+                self.api_push(|h| h.pushfstring(b"function <%s:%d>", &args))
+            }
+            FuncName::Unknown => self.api_push(|h| h.try_intern(b"?")),
         }
-        if let Some((what, n)) = named {
-            return if v == LuaVersion::Lua52 {
-                self.api_push(|h| h.pushfstring(b"function '%s'", &[FmtArg::S(n.as_bytes())]))
-            } else {
-                let args = [FmtArg::S(what.as_bytes()), FmtArg::S(n.as_bytes())];
-                self.api_push(|h| h.pushfstring(b"%s '%s'", &args))
-            };
-        }
-        if ar.what == "main" {
-            return self.api_push(|h| h.try_intern(b"main chunk"));
-        }
-        let g = match v {
-            LuaVersion::Lua52 if ar.what == "C" => global(self)?,
-            LuaVersion::Lua55 => global(self)?,
-            _ => None,
-        };
-        if let Some(g) = g {
-            return self.api_push(|h| h.pushfstring(b"function '%s'", &[FmtArg::S(g.as_bytes())]));
-        }
-        if ar.what != "C" {
-            let args = [FmtArg::S(&ar.short_src), FmtArg::D(ar.linedefined)];
-            return self.api_push(|h| h.pushfstring(b"function <%s:%d>", &args));
-        }
-        self.api_push(|h| h.try_intern(b"?"))
     }
 
     /// `pushglobalfuncname`: the name the loaded modules (5.2: the
-    /// globals) hold `f` under, made as PUC makes it.
+    /// globals) hold `f` under, made as PUC makes it: a field of a module
+    /// joins the module's name, `"."` and the field's (`findfield`), and
+    /// 5.3 on push the name again without a leading `"_G."`.
     pub(super) fn puc_global_name(&mut self, f: Value) -> Result<Option<Gc<LuaStr>>, LuaError> {
-        let root = if self.version() == LuaVersion::Lua52 {
-            Some(self.globals())
-        } else {
-            self.loaded_modules()
-        };
-        let Some(root) = root else {
+        let Some(path) = self.global_path(f) else {
             return Ok(None);
         };
-        let Some(name) = self.findfield(root, f, 2)? else {
-            return Ok(None);
+        let name = match path.inner {
+            None => path.outer,
+            Some(inner) => {
+                let base = self.lib_roots.mark();
+                self.lib_roots.push(Value::Str(path.outer));
+                let r = self.api_push(|h| h.try_intern(b".")).and_then(|()| {
+                    self.lib_roots.push(Value::Str(inner));
+                    self.api_concat(base.at())
+                });
+                let s = self.lib_roots.get(base.at()).copied();
+                self.lib_roots.release(base);
+                r?;
+                match s {
+                    Some(Value::Str(s)) => s,
+                    _ => unreachable!("a concatenation of strings"),
+                }
+            }
         };
-        if self.version() >= LuaVersion::Lua53
-            && let Some(rest) = name.as_bytes().strip_prefix(b"_G.")
-        {
-            let rest = rest.to_vec();
+        if self.version() >= LuaVersion::Lua53 && path.under_g() {
+            let rest = name.as_bytes()[3..].to_vec();
             self.lib_roots.push(Value::Str(name));
             let r = self.api_push(|h| h.try_intern(&rest));
             let s = self.lib_roots.pop();
@@ -90,44 +90,5 @@ impl Vm {
             });
         }
         Ok(Some(name))
-    }
-
-    /// `findfield`: a string-keyed path to `f` at most `level` tables deep,
-    /// in traversal order; a path through a table is joined with `"."`.
-    pub(super) fn findfield(
-        &mut self,
-        t: Gc<Table>,
-        f: Value,
-        level: u32,
-    ) -> Result<Option<Gc<LuaStr>>, LuaError> {
-        if level == 0 {
-            return Ok(None);
-        }
-        let mut k = Value::Nil;
-        while let Ok(Some((nk, nv))) = t.next(k) {
-            k = nk;
-            let Value::Str(ks) = nk else { continue };
-            if nv.raw_eq(f) {
-                return Ok(Some(ks));
-            }
-            if let Value::Table(inner) = nv
-                && let Some(name) = self.findfield(inner, f, level - 1)?
-            {
-                // the module's name, ".", the field's, joined
-                let base = self.lib_roots.mark();
-                self.lib_roots.push(nk);
-                let r = self.api_push(|h| h.try_intern(b".")).and_then(|()| {
-                    self.lib_roots.push(Value::Str(name));
-                    self.api_concat(base.at())
-                });
-                let s = self.lib_roots.get(base.at()).copied();
-                self.lib_roots.release(base);
-                r?;
-                if let Some(Value::Str(s)) = s {
-                    return Ok(Some(s));
-                }
-            }
-        }
-        Ok(None)
     }
 }

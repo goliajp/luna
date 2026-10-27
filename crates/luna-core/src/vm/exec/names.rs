@@ -76,50 +76,12 @@ impl Vm {
         target: Gc<crate::runtime::NativeClosure>,
         raised: &mut Option<crate::vm::error::LuaError>,
     ) -> Option<String> {
-        // 5.2 searches the global table, later dialects the loaded modules
-        // the registry holds (with or without the package library)
-        let loaded = if self.version == LuaVersion::Lua52 {
-            self.globals()
-        } else {
-            self.loaded_modules()?
-        };
-        // 5.3 on drops a "_G." the name starts with
-        let strip = self.version >= LuaVersion::Lua53;
-        let matches = |v: Value| -> bool { matches!(v, Value::Native(nc) if nc.ptr_eq(target)) };
-        let mut k = Value::Nil;
-        while let Ok(Some((nk, nv))) = loaded.next(k) {
-            k = nk;
-            let Value::Str(outer) = nk else { continue };
-            let outer = String::from_utf8_lossy(outer.as_bytes()).into_owned();
-            if matches(nv) {
-                return Some(if strip && outer == "_G" {
-                    String::new()
-                } else {
-                    outer
-                });
-            }
-            if let Value::Table(inner_t) = nv {
-                let mut k2 = Value::Nil;
-                while let Ok(Some((nk2, nv2))) = inner_t.next(k2) {
-                    k2 = nk2;
-                    if matches(nv2)
-                        && let Value::Str(inner_s) = nk2
-                    {
-                        if let Err(e) = self.globalfuncname_strings(nk, inner_s) {
-                            *raised = Some(e);
-                            return None;
-                        }
-                        let inner = String::from_utf8_lossy(inner_s.as_bytes()).into_owned();
-                        return Some(if strip && outer == "_G" {
-                            inner
-                        } else {
-                            format!("{outer}.{inner}")
-                        });
-                    }
-                }
-            }
+        let path = self.global_path(Value::Native(target))?;
+        if let Err(e) = self.globalfuncname_strings(path) {
+            *raised = Some(e);
+            return None;
         }
-        None
+        Some(String::from_utf8_lossy(&path.name(self.version)).into_owned())
     }
 
     /// The registry's table of loaded modules (`LUA_LOADED_TABLE`, which
@@ -135,25 +97,26 @@ impl Vm {
     }
 
     /// The strings PUC's `findfield` and `pushglobalfuncname` make naming
-    /// a function found as field `inner` of `outer`: `"."`, the
+    /// a function found at `path`: for a field of a module `"."` and the
     /// concatenation of the three, and from 5.3 the name without `"_G."`.
     fn globalfuncname_strings(
         &mut self,
-        outer: Value,
-        inner: Gc<crate::runtime::LuaStr>,
+        path: crate::vm::callstack::GlobalPath,
     ) -> Result<(), crate::vm::error::LuaError> {
-        // each made by an API call that checks for a collection
-        self.api_check_before()?;
-        let dot = self.heap.try_intern(b".")?;
-        self.api_check_after(Value::Str(dot))?;
-        let mut st = vec![outer, Value::Str(dot), Value::Str(inner)];
-        let r = self.rooted(&[Value::Str(dot)], |vm| vm.api_check_before());
-        r?;
-        self.heap.puc_concat(&mut st, 3)?;
-        self.api_check_after(st[0])?;
-        let g = matches!(outer, Value::Str(s) if s.as_bytes() == b"_G");
-        if g && self.version >= LuaVersion::Lua53 {
-            let s = self.heap.try_intern(inner.as_bytes())?;
+        if let Some(inner) = path.inner {
+            // each made by an API call that checks for a collection
+            self.api_check_before()?;
+            let dot = self.heap.try_intern(b".")?;
+            self.api_check_after(Value::Str(dot))?;
+            let mut st = vec![Value::Str(path.outer), Value::Str(dot), Value::Str(inner)];
+            let r = self.rooted(&[Value::Str(dot)], |vm| vm.api_check_before());
+            r?;
+            self.heap.puc_concat(&mut st, 3)?;
+            self.api_check_after(st[0])?;
+        }
+        if path.under_g() && self.version >= LuaVersion::Lua53 {
+            // 5.2's name is the joined one, before 5.3 drops the prefix
+            let s = self.heap.try_intern(&path.name(LuaVersion::Lua52)[3..])?;
             self.api_check_after(Value::Str(s))?;
         }
         Ok(())

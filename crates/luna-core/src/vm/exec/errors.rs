@@ -26,6 +26,11 @@ impl Vm {
     /// `\n\t<short_src>:<line>: in <name>`, a C level `\n\t[C]: in <name>`.
     /// Levels are left out as `luaL_traceback` leaves them out of a deep
     /// stack, and names follow the dialect, as the embedding guide lists.
+    ///
+    /// The text is made without making Lua objects, so it is not counted
+    /// by `collectgarbage("count")`; where the count must be PUC's, take
+    /// the traceback with the C API's `luaL_traceback` or Lua's
+    /// `debug.traceback`.
     pub fn take_error_traceback(&mut self) -> Option<String> {
         let levels = self.error_traceback.take()?;
         let mut tb = b"stack traceback:".to_vec();
@@ -50,6 +55,11 @@ impl Vm {
     /// level of the stack it died with, the function that raised first.
     /// `None` when no error killed it, or once it is closed. The text is
     /// made when asked for: a dead coroutine keeps only its frames.
+    ///
+    /// The text is made without making Lua objects, so it is not counted
+    /// by `collectgarbage("count")`; where the count must be PUC's, take
+    /// the traceback with the C API's `luaL_traceback` or Lua's
+    /// `debug.traceback`.
     pub fn coroutine_error_traceback(
         &mut self,
         co: crate::runtime::Gc<crate::runtime::Coro>,
@@ -76,6 +86,11 @@ impl Vm {
     /// (when given) and a newline, then `stack traceback:` and one line per
     /// stack level from `level` on, level 0 being the running function (the
     /// native calling this, when a native does).
+    ///
+    /// The text is made without making Lua objects, so it is not counted
+    /// by `collectgarbage("count")`; where the count must be PUC's, take
+    /// the traceback with the C API's `luaL_traceback` or Lua's
+    /// `debug.traceback`.
     pub fn traceback(&mut self, msg: Option<&[u8]>, level: i64) -> Vec<u8> {
         let mut out = match msg {
             Some(m) => {
