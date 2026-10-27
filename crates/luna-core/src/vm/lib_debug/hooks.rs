@@ -119,6 +119,7 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     if state.line {
         mask.push(b'l');
     }
-    let m = vm.api_push_string(&mask)?;
+    // the hook is on PUC's stack while the mask is made
+    let m = vm.rooted(&[hook], |vm| vm.api_push_string(&mask))?;
     vm.nat_ret(fs, &[hook, m, Value::Int(state.count_base)])
 }
