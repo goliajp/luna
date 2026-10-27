@@ -6,7 +6,7 @@
 //! With `LUNA_CONSOLE_RAW_DIR` set, each console's bytes are also written
 //! to a file there when it closes, to see which sequences ConPTY sends.
 
-use crate::cli_common::{luna, workdir};
+use crate::cli_common::workdir;
 use crate::cli_console_screen::Screen;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
@@ -64,8 +64,9 @@ fn environment(overrides: &[(&str, &OsString)]) -> Vec<u16> {
 
 impl Console {
     /// `luna` with `args` on a console of its own.
+    #[cfg(feature = "repl-line-editor")]
     pub(crate) fn spawn(args: &[&str]) -> Console {
-        Console::spawn_program(&luna(), args)
+        Console::spawn_program(&crate::cli_common::luna(), args)
     }
 
     /// `program` with `args` on a console of its own, in a fresh directory.
@@ -298,6 +299,7 @@ impl Drop for Console {
 }
 
 /// `s` without its CSI and OSC sequences.
+#[cfg(feature = "repl-line-editor")]
 pub(crate) fn strip_escapes(s: &str) -> String {
     let mut out = String::new();
     let mut chars = s.chars().peekable();
