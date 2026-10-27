@@ -14,16 +14,16 @@ use crate::runtime::mem::{LVec, Oom};
 #[repr(C)]
 pub(crate) struct Ghost {
     pub(crate) hdr: GcHeader,
-    pub(crate) sizes: LVec<u32>,
+    pub(crate) sizes: LVec<u64>,
 }
 
-pub(in crate::runtime::puc) const SHORT: u32 = 1 << 31;
+pub(in crate::runtime::puc) const SHORT: u64 = 1 << 63;
 /// a part freed with the object before it, not an object of its own
-const PART: u32 = 1 << 30;
+const PART: u64 = 1 << 62;
 /// an object luna made after all, which stands for it: neither freed nor
 /// swept here
-pub(in crate::runtime::puc) const TAKEN: u32 = 1 << 29;
-const FLAGS: u32 = SHORT | PART | TAKEN;
+pub(in crate::runtime::puc) const TAKEN: u64 = 1 << 61;
+const FLAGS: u64 = SHORT | PART | TAKEN;
 
 /// Where an object's record is (its record and the object's place in
 /// it), while luna holds no object for it (a trace's sunk table or the
@@ -50,13 +50,13 @@ impl Heap {
     /// A record of an object PUC made whose allocation was counted
     /// already.
     fn ghost_record(&mut self, kind: PucKind, size: usize) -> Result<(), Oom> {
-        let size = size as u32 | if kind == PucKind::ShortStr { SHORT } else { 0 };
+        let size = size as u64 | if kind == PucKind::ShortStr { SHORT } else { 0 };
         self.ghost_push(size).map(drop)
     }
 
     /// `entry` at the end of the newest record (a new one when the newest
     /// object is not a record); the record and the entry's place.
-    fn ghost_push(&mut self, entry: u32) -> Result<(*mut Ghost, usize), Oom> {
+    fn ghost_push(&mut self, entry: u64) -> Result<(*mut Ghost, usize), Oom> {
         let size = entry;
         let born = self.white();
         let head = self.list_head();
@@ -92,7 +92,7 @@ impl Heap {
     ) -> Result<GhostRef, Oom> {
         // made while counting is set aside: an entry of no bytes, nothing
         // counted for it or freed
-        let size = [self.puc.sizes.table as u32, 0][usize::from(!self.counting())];
+        let size = [self.puc.sizes.table as u64, 0][usize::from(!self.counting())];
         let (g, at) = self.ghost_push(size)?;
         // room for the two parts first: no half record is left behind
         // SAFETY: `ghost_push` just returned `g`, a live record of this heap
@@ -125,8 +125,8 @@ impl Heap {
         }
         self.acct_counted_table_resize((old_a, old_h), (new_a, new_h));
         let (ab, hb) = (
-            self.array_bytes(new_a) as u32,
-            self.hash_bytes(new_h) as u32,
+            self.array_bytes(new_a) as u64,
+            self.hash_bytes(new_h) as u64,
         );
         let sizes = self.record(t);
         sizes[t.at + 1] = PART | ab;
@@ -134,7 +134,7 @@ impl Heap {
     }
 
     /// The entries of the record `r` is in.
-    fn record(&mut self, r: GhostRef) -> &mut LVec<u32> {
+    fn record(&mut self, r: GhostRef) -> &mut LVec<u64> {
         // SAFETY: a record lives until the sweep after the trace that made
         // it has left, and its entries are reached only through here, one
         // borrow at a time
@@ -155,8 +155,8 @@ impl Heap {
     ) -> Result<GhostRef, Oom> {
         // made while counting is set aside: an entry of no bytes
         let size = size * usize::from(self.counting());
-        let size32 = size as u32 | if kind == PucKind::ShortStr { SHORT } else { 0 };
-        let (g, at) = self.ghost_push(size32)?;
+        let size64 = size as u64 | if kind == PucKind::ShortStr { SHORT } else { 0 };
+        let (g, at) = self.ghost_push(size64)?;
         self.acct_obj(kind, size);
         Ok(GhostRef { g, at })
     }
@@ -193,7 +193,7 @@ impl Heap {
 
     /// The free of a record's entry `s`: the bytes, a short string's place
     /// in the string table; nothing for an empty part or one luna took.
-    fn ghost_free(&mut self, s: u32) {
+    fn ghost_free(&mut self, s: u64) {
         if s & TAKEN != 0 || s & !FLAGS == 0 {
             return;
         }
