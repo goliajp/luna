@@ -6,7 +6,10 @@
 //! are from a PUC whose seed is fixed at 1, the seed luna takes from
 //! `LUNA_HASH_SEED`, run without address randomisation. Both run as `lua`, from
 //! the scripts' directory: the program's name and the script's path are
-//! strings the collector counts. The scripts in `tests/lua_c/<dialect>/`
+//! strings the collector counts. A script whose output depends on the C
+//! library has a recording of its own for macOS (`<name>.macos.out`, from
+//! PUC built with `make macosx` and the same fixed seed). The scripts in
+//! `tests/lua_c/<dialect>/`
 //! count what lua.c itself makes, the same way.
 
 use std::os::unix::process::CommandExt;
@@ -30,6 +33,13 @@ fn run(dir: &Path, dialect: &str, script: &str, jit: bool) -> String {
     String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n")
 }
 
+/// The name of the recordings made on this platform's PUC.
+const PLATFORM: &str = if cfg!(target_vendor = "apple") {
+    "macos"
+} else {
+    "linux"
+};
+
 /// The scripts of `dialect`, each run in the modes `jit` lists.
 fn check(dialect: &str, jit: &[bool]) {
     check_in("tests/gc_steps", dialect, jit);
@@ -47,8 +57,18 @@ fn check_in(base: &str, dialect: &str, jit: &[bool]) {
     scripts.sort();
     assert!(!scripts.is_empty(), "{dialect}: no script");
     for name in scripts {
-        let want = std::fs::read_to_string(dir.join(dialect).join(name.replace(".lua", ".out")))
-            .expect("the recorded output");
+        // a recording of PUC on this platform where its C library's BUFSIZ
+        // (the room 5.1's and 5.2's buffers have before they allocate)
+        // makes it differ from glibc's
+        let own = dir
+            .join(dialect)
+            .join(name.replace(".lua", &format!(".{PLATFORM}.out")));
+        let path = if own.exists() {
+            own
+        } else {
+            dir.join(dialect).join(name.replace(".lua", ".out"))
+        };
+        let want = std::fs::read_to_string(path).expect("the recorded output");
         for &j in jit {
             let got = run(&dir, dialect, &format!("{dialect}/{name}"), j);
             assert_eq!(got, want, "{dialect}/{name} jit={j}");
@@ -61,14 +81,7 @@ fn steps_5_1() {
     check("5.1", &[false, true]);
 }
 
-/// 5.2's `luaL_Buffer` holds `BUFSIZ` bytes before it allocates, and the
-/// round lines `table.concat` makes are longer than macOS's 1024: the
-/// recording is glibc's (8192).
 #[test]
-#[cfg_attr(
-    not(all(target_os = "linux", target_env = "gnu")),
-    ignore = "recorded with glibc's BUFSIZ"
-)]
 fn steps_5_2() {
     check("5.2", &[false, true]);
 }
