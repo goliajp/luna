@@ -38,11 +38,16 @@ fn text(v: &Value) -> String {
     }
 }
 
-/// `src` run on a thread with the stack a test thread gets by default: the
-/// error, the status of the coroutine refused, and the depth reached.
+/// The stack a test thread gets by default, and under AddressSanitizer as
+/// many times that as its instrumentation makes a level's frames larger
+/// (measured: up to five times, a resume's 4.9 KB taking 25 KB).
+const STACK: usize = if cfg!(luna_asan) { 6 << 21 } else { 2 << 20 };
+
+/// `src` run on a thread with [`STACK`]: the error, the status of the
+/// coroutine refused, and the depth reached.
 fn run(v: LuaVersion, src: &'static str) -> (String, String, i64) {
     std::thread::Builder::new()
-        .stack_size(2 << 20)
+        .stack_size(STACK)
         .spawn(move || {
             let mut vm = Vm::new(v);
             let out = vm.eval(src).expect("the chain runs");
