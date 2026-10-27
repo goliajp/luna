@@ -134,29 +134,26 @@ pub(crate) fn puc_setpath(
         Some(p) if !no_env(vm, op)? => Some(path::os_bytes(&p)),
         _ => None,
     };
-    let luna_def = if field == b"path" {
-        LUA_PATH_DEFAULT.to_vec()
-    } else {
-        cpath_default(v)
-    };
     let pkg = op.get(vm, if versioned { -2 } else { -1 });
-    let external = v == LuaVersion::Lua55;
-    match found {
-        // PUC's default names the executable's directory as `!`;
-        // `setprogdir`'s copy replaces it and the default is left garbage
-        None if cfg!(windows) => {
-            let def = progdir::windows_default(v, field);
-            let made = progdir::in_exe_dir(&def);
-            push_default(vm, op, field, &def, &def, pkg, external)?;
-            push_default(vm, op, field, &luna_def, &made, pkg, false)?;
-            op.remove(vm, -2);
+    if cfg!(windows) {
+        // PUC's default names the executable's directory as `!`, which
+        // `setprogdir`'s copy replaces (the original left garbage); luna's
+        // path is PUC's
+        let def = progdir::windows_default(v, field);
+        match found {
+            None => push_default(vm, op, field, &def, &def, pkg, v == LuaVersion::Lua55)?,
+            Some(p) => push_env_path(vm, op, &p, &def)?,
         }
-        None => push_default(vm, op, field, &luna_def, def, pkg, external)?,
-        Some(p) => {
-            push_env_path(vm, op, &p, &luna_def)?;
-            if cfg!(windows) {
-                progdir::setprogdir(vm, op)?;
-            }
+        progdir::setprogdir(vm, op)?;
+    } else {
+        let luna_def = if field == b"path" {
+            LUA_PATH_DEFAULT.to_vec()
+        } else {
+            cpath_default(v)
+        };
+        match found {
+            None => push_default(vm, op, field, &luna_def, def, pkg, v == LuaVersion::Lua55)?,
+            Some(p) => push_env_path(vm, op, &p, &luna_def)?,
         }
     }
     let ix = op.ix(vm, if versioned { -3 } else { -2 });

@@ -672,11 +672,13 @@ Things that differ from `lua.c`:
   copyright line.
 - The values a script or `-e` chunk returns are printed after it
   (`=> value`).
-- `package.path` defaults to `./?.lua;./?/init.lua`, as luna has no
-  install prefix. `package.cpath` has PUC's default (`/usr/local/lib/lua/5.x/`
-  and `./?.so`; on Windows the directories next to the executable); a C
-  library found there is reported as PUC built without dynamic libraries
-  reports it ("dynamic libraries not enabled"), and none is loaded.
+- On Windows `package.path` and `package.cpath` are PUC's defaults, which
+  name the directory of the executable. Elsewhere `package.path` defaults
+  to `./?.lua;./?/init.lua`, as luna has no install prefix, and
+  `package.cpath` is PUC's default (`/usr/local/lib/lua/5.x/` and
+  `./?.so`). A C library found on `package.cpath` is reported as PUC built
+  without dynamic libraries reports it ("dynamic libraries not enabled"),
+  and none is loaded.
 - With the `repl-line-editor` feature and stdin a terminal, the REPL
   reads lines through a line editor in place of readline: tab completion
   against the globals, syntax highlighting, and history in
