@@ -110,9 +110,9 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
             pc_to_block[pc_i] = Some(bcx.create_block());
         }
     }
-    // a self-recursive body enters through a block of its own, which counts
-    // its level; the block of pc 0 may be a loop's head
-    let entry = if any_self_call {
+    // a block of its own to enter by: a self-recursive body counts its level
+    // there, and Cranelift's entry block may not be a loop's head (pc 0's)
+    let entry = if any_self_call || !cfg.bb_predecessors[0].is_empty() {
         bcx.create_block()
     } else {
         pc_to_block[0].expect("entry block exists")
@@ -181,7 +181,7 @@ pub(super) fn emit_chunk<M: Module>(module: &mut M, e: EmitIn<'_>) -> Option<Fun
         current_is_nil,
         terminated: false,
     };
-    if any_self_call {
+    if Some(entry) != pc_to_block[0] {
         let pc0 = pc_to_block[0].expect("entry block exists");
         bcx.ins().jump(pc0, &[]);
         bcx.switch_to_block(pc0);
