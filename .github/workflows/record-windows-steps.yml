@@ -20,7 +20,7 @@ jobs:
   record:
     name: record with MSVC-built PUC
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
 
@@ -241,37 +241,53 @@ jobs:
           capi = os.path.join(crate, "tests", "capi")
           expected = os.path.join(capi, "expected")
           versions = {"51": "5.1.5", "52": "5.2.4", "53": "5.3.6", "54": "5.4.9", "55": "5.5.1"}
-          obj = tempfile.mkdtemp()
-          for f in sorted(os.listdir(capi)):
-              if not f.endswith(".c"):
-                  continue
-              name = f[:-2]
-              for v, ver in versions.items():
-                  linux = os.path.join(expected, f"{name}.{v}.out")
-                  if not os.path.exists(linux):
-                      continue
-                  src = os.path.join(root, f"lua-{ver}", "src-host")
-                  exe = os.path.join(bin_dir, f"capi-{name}-{v}.exe")
-                  r = subprocess.run([cl, "/nologo", "/w", "/O2", "/MD", "/DLUA_COMPAT_ALL",
-                                      "/DLUA_COMPAT_5_2", "/DLUA_COMPAT_5_3", f"/I{src}", f"/I{capi}",
-                                      os.path.join(capi, f), f"/Fe{exe}", f"/Fo{obj}\\",
-                                      os.path.join(root, f"lua-{ver}", "puc.lib")],
-                                     env=env, capture_output=True)
-                  if r.returncode != 0:
-                      print(f"capi/{name}.{v}: not built")
-                      continue
-                  r = subprocess.run([exe], cwd=crate, env=env, capture_output=True)
-                  code = r.returncode
-                  status = "abort" if code in (3, 0xC0000409, -1073740791) else str(code)
-                  dest = os.path.join(out_root, "capi")
-                  os.makedirs(dest, exist_ok=True)
-                  out = r.stdout.replace(b"\r\n", b"\n")
-                  err = r.stderr.replace(b"\r\n", b"\n")
-                  open(os.path.join(dest, f"{name}.{v}.windows.out"), "wb").write(out)
-                  open(os.path.join(dest, f"{name}.{v}.windows.err"), "wb").write(err)
-                  open(os.path.join(dest, f"{name}.{v}.windows.status"), "w").write(status + "\n")
-                  same = open(linux, "rb").read().replace(b"\r\n", b"\n") == out
-                  print(f"capi/{name}.{v} status {status}", "same as Linux" if same else "own")
+          import concurrent.futures, datetime, sys
+
+          def say(text):
+              print(datetime.datetime.now().strftime("%H:%M:%S"), text, flush=True)
+
+          def record(name, v, ver):
+              """build host `name` against PUC `ver` and run it (a minute at
+              most): what it printed, or why there is nothing"""
+              src = os.path.join(root, f"lua-{ver}", "src-host")
+              exe = os.path.join(bin_dir, f"capi-{name}-{v}.exe")
+              obj = tempfile.mkdtemp()
+              t0 = datetime.datetime.now()
+              r = subprocess.run([cl, "/nologo", "/w", "/O2", "/MD", "/DLUA_COMPAT_ALL",
+                                  "/DLUA_COMPAT_5_2", "/DLUA_COMPAT_5_3", f"/I{src}", f"/I{capi}",
+                                  os.path.join(capi, name + ".c"), f"/Fe{exe}", f"/Fo{obj}\\",
+                                  os.path.join(root, f"lua-{ver}", "puc.lib")],
+                                 env=env, capture_output=True)
+              built = (datetime.datetime.now() - t0).total_seconds()
+              if r.returncode != 0:
+                  return f"capi/{name}.{v}: not built ({built:.0f}s)"
+              t0 = datetime.datetime.now()
+              try:
+                  r = subprocess.run([exe], cwd=crate, env=env, capture_output=True, timeout=60)
+              except subprocess.TimeoutExpired:
+                  return f"capi/{name}.{v}: ran out of its minute (built in {built:.0f}s)"
+              ran = (datetime.datetime.now() - t0).total_seconds()
+              code = r.returncode
+              status = "abort" if code in (3, 0xC0000409, -1073740791) else str(code)
+              dest = os.path.join(out_root, "capi")
+              os.makedirs(dest, exist_ok=True)
+              out = r.stdout.replace(b"\r\n", b"\n")
+              err = r.stderr.replace(b"\r\n", b"\n")
+              open(os.path.join(dest, f"{name}.{v}.windows.out"), "wb").write(out)
+              open(os.path.join(dest, f"{name}.{v}.windows.err"), "wb").write(err)
+              open(os.path.join(dest, f"{name}.{v}.windows.status"), "w").write(status + "\n")
+              linux = os.path.join(expected, f"{name}.{v}.out")
+              same = open(linux, "rb").read().replace(b"\r\n", b"\n") == out
+              return (f"capi/{name}.{v} status {status} {'same as Linux' if same else 'own'}"
+                      f" (built {built:.0f}s, ran {ran:.1f}s)")
+
+          jobs = [(f[:-2], v, ver) for f in sorted(os.listdir(capi)) if f.endswith(".c")
+                  for v, ver in versions.items()
+                  if os.path.exists(os.path.join(expected, f"{f[:-2]}.{v}.out"))]
+          say(f"{len(jobs)} hosts to record")
+          with concurrent.futures.ThreadPoolExecutor(4) as pool:
+              for line in pool.map(lambda j: record(*j), jobs):
+                  say(line)
           cli = {"5.1": "5.1.5", "5.2": "5.2.4", "5.3": "5.3.6", "5.4": "5.4.9", "5.5": "5.5.1"}
           env["PATH"] = bin_dir + os.pathsep + path
           env["TZ"] = "UTC"
@@ -284,9 +300,10 @@ jobs:
               os.makedirs(dest, exist_ok=True)
               err = r.stderr.replace(b"\r\n", b"\n")
               open(os.path.join(dest, f"library_error.{d}.windows.err"), "wb").write(err)
-              print(f"cli/library_error {d} exit {r.returncode} stdout {r.stdout!r}:", err.decode(errors="replace"))
+              say(f"cli/library_error {d} exit {r.returncode} stdout {r.stdout!r}: " + err.decode(errors="replace"))
 
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: windows-steps
           path: ${{ runner.temp }}/windows-steps
