@@ -55,8 +55,10 @@ fn luna_listing(v: LuaVersion, seed: u32) -> String {
 
 #[test]
 fn library_tables_iterate_in_pucs_order() {
+    // a checkout may give the listing CRLF line ends
+    let expected = EXPECTED.replace("\r\n", "\n");
     let mut runs = 0;
-    for section in EXPECTED.split("S ").filter(|s| !s.is_empty()) {
+    for section in expected.split("S ").filter(|s| !s.is_empty()) {
         let (head, body) = section.split_once('\n').expect("a header line");
         let (seed, d) = head.split_once(' ').expect("seed and dialect");
         let seed: u32 = seed.parse().expect("a seed");
