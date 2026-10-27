@@ -31,6 +31,7 @@
 
 use arbitrary::Unstructured;
 use libfuzzer_sys::fuzz_target;
+use luna_core::__private::VmJitState;
 use luna_core::runtime::Value;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
