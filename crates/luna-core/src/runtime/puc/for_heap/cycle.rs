@@ -38,6 +38,7 @@ impl Heap {
         incremental: bool,
     ) {
         self.puc_found_to_finalize(fin);
+        self.forget_born_unborn();
         self.settle_sizer(m);
         self.hook_listed();
         if incremental {

@@ -88,9 +88,11 @@ impl Heap {
         let to = to.min(self.puc.loads.unborn.len());
         for i in from.min(to)..to {
             let h = self.puc.loads.unborn[i];
-            // SAFETY: an object set aside is allocated; `born` leaves one
-            // already on the list alone
-            unsafe { self.born(h) };
+            if !h.is_null() {
+                // SAFETY: an entry not forgotten is allocated; `born`
+                // leaves one already on the list alone
+                unsafe { self.born(h) };
+            }
         }
     }
 
@@ -100,8 +102,10 @@ impl Heap {
     pub(in crate::runtime::puc) fn flush_unborn(&mut self, base: usize) {
         let mut rest = std::mem::take(&mut self.puc.loads.unborn);
         for &h in &rest[base.min(rest.len())..] {
-            // SAFETY: an object set aside is allocated, and only here
-            unsafe { self.born(h) };
+            if !h.is_null() {
+                // SAFETY: an entry not forgotten is allocated
+                unsafe { self.born(h) };
+            }
         }
         rest.truncate(base);
         self.puc.loads.unborn = rest;
@@ -152,15 +156,36 @@ impl Heap {
         self.puc.loads.unborn[..self.puc.loads.names_aside].contains(&h)
     }
 
+    /// A sweep starts: the entries of objects set aside that went on the
+    /// list since are forgotten (made null), as the sweep may free them
+    /// while a load goes on (its checkpoints run collection steps). luna's
+    /// names, which it keeps and the sweep may set aside again, stay.
+    pub(in crate::runtime::puc) fn forget_born_unborn(&mut self) {
+        let from = self.puc.loads.names_aside;
+        for h in self.puc.loads.unborn.iter_mut().skip(from) {
+            if !still_aside(*h) {
+                *h = std::ptr::null_mut();
+            }
+        }
+    }
+
     /// The objects still set aside: allocated, off the lists.
     pub(in crate::runtime::puc) fn unborn_objs(&self) -> impl Iterator<Item = *mut GcHeader> + '_ {
-        // SAFETY: what the list of them holds is allocated (only
-        // `flush_unborn` drops one, after it put it on the list)
         self.puc
             .loads
             .unborn
             .iter()
             .copied()
-            .filter(|&h| unsafe { Heap::is_detached(h) })
+            .filter(|&h| still_aside(h))
     }
+}
+
+/// Whether the entry `h` of the objects set aside is one still off the
+/// lists.
+fn still_aside(h: *mut GcHeader) -> bool {
+    // SAFETY: an entry not forgotten is allocated: an object set aside is
+    // off the lists, which only a sweep frees from, and one that went on
+    // the list since is forgotten as the next sweep begins; only its link
+    // is read
+    !h.is_null() && unsafe { Heap::is_detached(h) }
 }
