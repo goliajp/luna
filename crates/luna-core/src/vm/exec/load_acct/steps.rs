@@ -109,6 +109,16 @@ impl Vm {
         }
     }
 
+    /// `f` run with the load's objects on the stack as PUC's parser holds
+    /// them at this point.
+    pub(super) fn with_parse_frame<T>(&mut self, r: &Replay, f: impl FnOnce(&mut Vm) -> T) -> T {
+        let frame = self.parse_frame(r, None);
+        let open = self.heap.open_parse_frame(frame);
+        let out = f(self);
+        self.heap.close_parse_frame(open);
+        out
+    }
+
     /// The replay is over, `done` or not: what it was building is built
     /// (or garbage), and what a step of this cycle marked of it holds what
     /// luna's own objects hold besides (a chunk loaded gets its upvalue
