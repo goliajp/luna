@@ -8,6 +8,7 @@ mod capi_debug;
 mod capi_for_limit;
 mod capi_hosts;
 mod capi_load;
+mod capi_seeded;
 mod capi_tables;
 mod capi_threads;
 mod capi_values;

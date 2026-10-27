@@ -5,7 +5,9 @@ use super::ccall::{CCall, CHook, PendingYield};
 use super::*;
 use luna_core::runtime::mem::{BlockKind, LAny, MemOwner};
 
+mod make;
 mod thread;
+pub use make::*;
 pub(super) use thread::*;
 
 /// PUC `lua_Alloc`: `(ud, ptr, osize, nsize)`.
@@ -36,8 +38,6 @@ pub(crate) struct Global {
     /// `lua_newstate`'s allocation function, which `lua_getallocf` returns
     pub(super) alloc: Option<LuaAlloc>,
     pub(super) alloc_ud: *mut c_void,
-    /// `lua_newstate`'s seed (5.5)
-    pub(super) seed: u32,
     /// the debug library's hook as `lua_gethook` handed it out
     pub(super) hookf: Option<super::ccall::LuaHook>,
 }
@@ -100,8 +100,8 @@ const _: () = assert!(std::mem::align_of::<Vm>() <= 8 && std::mem::align_of::<Gl
 /// from the host's allocation function and goes back to it, the state's
 /// record and the Vm's own block on `lua_close`. From the first state on,
 /// luna's standard output goes through the C library's `stdout`, as PUC's
-/// does.
-fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut LuaState {
+/// does. Strings hash with `seed`, or with a seed of the state's own.
+fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: Option<u32>) -> *mut LuaState {
     // PUC passes the kind of object as the old size of a new block: 5.1
     // passes 0, later versions LUA_TTHREAD for the main block
     let kind = if v == LuaVersion::Lua51 { 0 } else { 8 };
@@ -136,7 +136,11 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
     let mem = unsafe { MemOwner::raw(alloc, ud, v) };
     mem.ctx()
         .add_external(std::mem::size_of::<Global>() + std::mem::size_of::<Vm>());
-    let Some(mut vm) = Vm::try_new_minimal_with_mem(v, mem) else {
+    let vm = match seed {
+        Some(s) => Vm::try_new_minimal_with_mem_and_seed(v, mem, s),
+        None => Vm::try_new_minimal_with_mem(v, mem),
+    };
+    let Some(mut vm) = vm else {
         // SAFETY: both blocks are live, of these sizes, and unused
         unsafe {
             alloc(ud, vm_block, std::mem::size_of::<Vm>(), 0);
@@ -165,7 +169,6 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
             vm_box: vm_ptr,
             alloc: Some(alloc),
             alloc_ud: ud,
-            seed,
             hookf: None,
         })
     };
@@ -190,91 +193,6 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: u32) -> *mut
             std::ptr::null_mut()
         }
     }
-}
-
-/// The dialect whose `LUA_VERSION_NUM` is `n`.
-fn dialect(n: c_int) -> Option<LuaVersion> {
-    Some(match n {
-        501 => LuaVersion::Lua51,
-        502 => LuaVersion::Lua52,
-        503 => LuaVersion::Lua53,
-        504 => LuaVersion::Lua54,
-        505 => LuaVersion::Lua55,
-        _ => return None,
-    })
-}
-
-/// A 5.5 state with luaL_newstate's panic function (PUC `luaL_newstate`).
-/// A host compiled against luna's headers gets its own dialect: the
-/// headers make `luaL_newstate()` a call of `luna_newstate`.
-// SAFETY: no other item in the link is named `luaL_newstate`: the host does
-// not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
-#[unsafe(no_mangle)]
-pub extern "C" fn luaL_newstate() -> *mut LuaState {
-    luna_newstate(505)
-}
-
-/// `luaL_newstate` for the dialect whose `LUA_VERSION_NUM` is `version`
-/// (501 to 505); null for any other number. Its allocation function is
-/// `luaL_alloc`, as PUC's.
-// SAFETY: no other item in the link is named `luna_newstate`: PUC's liblua
-// has no such symbol and this crate defines it once
-#[unsafe(no_mangle)]
-pub extern "C" fn luna_newstate(version: c_int) -> *mut LuaState {
-    let Some(v) = dialect(version) else {
-        return std::ptr::null_mut();
-    };
-    let l = new_state(v, luna_c_l_alloc, std::ptr::null_mut(), 0);
-    if l.is_null() {
-        return l;
-    }
-    // SAFETY: `l` is the main thread's state just made; `g` is its global
-    // record, and nothing runs on the state yet
-    unsafe {
-        let g = (*l).g;
-        (*g).panic = Some(luna_c_default_panic);
-        // 5.4 starts with warnings off, 5.5 on
-        if v >= LuaVersion::Lua55 {
-            (*(*g).vm).host_warn_on();
-        }
-    }
-    l
-}
-
-/// PUC `lua_newstate` for the dialect `version`: a state without a panic
-/// function or a warning function, null when `f` fails to allocate the
-/// state's record. `f` allocates that record only; luna's collector does
-/// not allocate through it.
-// SAFETY: no other item in the link is named `luna_newstate_with`: PUC's
-// liblua has no such symbol and this crate defines it once
-#[unsafe(no_mangle)]
-pub extern "C" fn luna_newstate_with(
-    version: c_int,
-    f: Option<LuaAlloc>,
-    ud: *mut c_void,
-    seed: u32,
-) -> *mut LuaState {
-    let (Some(v), Some(f)) = (dialect(version), f) else {
-        return std::ptr::null_mut();
-    };
-    let l = new_state(v, f, ud, seed);
-    if !l.is_null() {
-        // SAFETY: `l` is the main thread's state just made, and nothing
-        // runs on the state yet
-        let vm = unsafe { &mut *(*(*l).g).vm };
-        vm.set_host_warn(Some(Box::new(|_, _, _| Ok(()))));
-    }
-    l
-}
-
-/// PUC 5.5 `lua_newstate`.
-// SAFETY: no other item in the link is named `lua_newstate`: the host does
-// not link PUC's liblua next to this crate, which defines each `lua_*`
-// symbol once
-#[unsafe(no_mangle)]
-pub extern "C" fn lua_newstate(f: Option<LuaAlloc>, ud: *mut c_void, seed: u32) -> *mut LuaState {
-    luna_newstate_with(505, f, ud, seed)
 }
 
 /// Close the state (PUC `lua_close`): the main thread's to-be-closed
@@ -313,17 +231,4 @@ pub unsafe extern "C" fn lua_close(L: *mut LuaState) {
             f(ud, g.cast(), std::mem::size_of::<Global>(), 0);
         }
     }
-}
-
-// SAFETY: the declaration matches the definition in `csrc/shim_core.c`;
-// it is `safe` to name because it is only stored as a panic function,
-// which luna calls only with a live state. C sees `lua_State` as opaque
-// and reads only its leading fields, which `csrc/shim.h` declares
-#[allow(improper_ctypes)]
-unsafe extern "C" {
-    /// luaL_newstate's panic function.
-    safe fn luna_c_default_panic(L: *mut LuaState) -> c_int;
-    /// luaL_newstate's allocation function (PUC `l_alloc`).
-    fn luna_c_l_alloc(ud: *mut c_void, ptr: *mut c_void, osize: usize, nsize: usize)
-    -> *mut c_void;
 }

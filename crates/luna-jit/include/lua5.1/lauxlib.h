@@ -75,6 +75,10 @@ LUALIB_API int (luaL_loadstring) (lua_State *L, const char *s);
 
 LUALIB_API lua_State *(luna_newstate) (int version);
 #define luaL_newstate()	luna_newstate(LUA_VERSION_NUM)
+/* luna: luaL_newstate whose strings hash with 'seed' rather than a seed
+   of the state's own (pass LUA_VERSION_NUM as 'version'):
+   5.1 hashes strings without a seed, so 'seed' changes nothing here */
+LUALIB_API lua_State *(luna_newstate_seeded) (int version, unsigned seed);
 
 LUALIB_API const char *(luaL_gsub) (lua_State *L, const char *s, const char *p,
                                                   const char *r);

@@ -750,6 +750,8 @@ optimization.
 
 ### Fixed
 
+- C API: 5.5's `lua_newstate` hashes strings with the seed it is given, as
+  PUC's does; it took a seed of its own.
 - A finalizer that runs while a library function is using the results of
   a call it made no longer overwrites them: in 5.1 to 5.3, `print` could
   fail with "'tostring' must return a string to 'print'" when a
@@ -1231,6 +1233,10 @@ optimization.
 
 ### Added
 
+- C API: `luna_newstate_seeded(version, seed)` and
+  `luna_newstate_with_seeded(version, f, ud, seed)`, `luaL_newstate` and
+  `lua_newstate` whose strings hash with the caller's seed, so that tables
+  iterate in the same order on every run.
 - `Vm::runtime_error`: a runtime error with the position of the running
   Lua code, as a library function raises it (`luaL_error`); it replaces
   the hidden `Vm::rt_err` for hosts. `Vm::index_with_mm` and
