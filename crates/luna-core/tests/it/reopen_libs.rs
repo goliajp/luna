@@ -8,6 +8,8 @@ use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
+use super::windows_counts::{bytes_collected, ran_from_puc_dir, recorded};
+
 const ALL: [LuaVersion; 5] = [
     LuaVersion::Lua51,
     LuaVersion::Lua52,
@@ -76,9 +78,12 @@ fn fields_a_program_added_stay_unless_the_library_is_made_anew() {
 }
 
 /// A Vm whose libraries opened as `lua.c` opens them: with the collector
-/// stopped (5.3's leaves it running).
+/// stopped (5.3's leaves it running). Its strings are hashed with the seed
+/// the recordings' PUC had fixed (1): where a table's keys sit decides the
+/// order a step traverses objects in, and so what a step that ends mid-way
+/// has counted.
 fn lua_c_opened(v: LuaVersion) -> Vm {
-    let mut vm = Vm::new_minimal(v);
+    let mut vm = Vm::new_minimal_with_hash_seed(v, 1);
     let stop = v != LuaVersion::Lua53;
     if stop {
         vm.host_gc(0, [0; 3]).expect("stop");
@@ -99,7 +104,10 @@ fn counts_around(v: LuaVersion, setup: &str, reopen: bool) -> (i64, i64) {
     const LUA_GCCOLLECT: i32 = 2;
     let mut vm = lua_c_opened(v);
     vm.host_gc(LUA_GCSTOP, [0; 3]).expect("stop");
-    let f = vm.load(setup.as_bytes(), setup.as_bytes()).expect("setup");
+    // `luaL_dostring`'s load, with its collection checks
+    let Ok((f, _)) = vm.host_load_chunk(setup.as_bytes(), setup.as_bytes()) else {
+        panic!("the setup compiles");
+    };
     vm.call_value(Value::Closure(f), &[]).expect("setup");
     let before = vm.heap.bytes() as i64;
     if reopen {
@@ -117,12 +125,32 @@ fn reopen_counts(v: LuaVersion, setup: &str) -> (i64, i64) {
     (added, left - counts_around(v, setup, false).1)
 }
 
+/// What PUC built with MSVC printed for a second `luaL_openlibs` and for
+/// none, from line `at` of each dialect's recording: the bytes it adds,
+/// and what a collection after it leaves of them.
+fn windows_want(at: usize) -> Vec<(i64, i64)> {
+    ALL.iter()
+        .map(|&v| {
+            let r = recorded(v);
+            let (added, left) = bytes_collected(&r[at]);
+            (added, left - bytes_collected(&r[at + 1]).1)
+        })
+        .collect()
+}
+
 // PUC's answers for a 64-bit build: the bytes the second `luaL_openlibs`
 // adds, and what a collection after it leaves of them
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn reopening_counts_what_puc_counts() {
+    if ran_from_puc_dir("reopen_libs::reopening_counts_what_puc_counts") {
+        return;
+    }
     let got: Vec<_> = ALL.iter().map(|&v| reopen_counts(v, "")).collect();
+    if cfg!(windows) {
+        assert_eq!(got, windows_want(2));
+        return;
+    }
     assert_eq!(got, [(7016, 515), (7287, 299), (0, 0), (0, 0), (0, 0)]);
 }
 
@@ -133,8 +161,15 @@ fn reopening_counts_what_puc_counts() {
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn reopening_unloaded_libraries_counts_what_puc_counts() {
+    if ran_from_puc_dir("reopen_libs::reopening_unloaded_libraries_counts_what_puc_counts") {
+        return;
+    }
     let setup = "for k in pairs(package.loaded) do package.loaded[k] = nil end";
     let got: Vec<_> = ALL.iter().map(|&v| reopen_counts(v, setup)).collect();
+    if cfg!(windows) {
+        assert_eq!(got, windows_want(4));
+        return;
+    }
     let want = [
         (7016, 515),
         (7287, 299),
@@ -173,6 +208,9 @@ fn reopen_trace() {
     let Ok(d) = std::env::var("LUNA_REOPEN") else {
         return;
     };
+    if ran_from_puc_dir("reopen_libs::reopen_trace") {
+        return;
+    }
     let v = ALL[["5.1", "5.2", "5.3", "5.4", "5.5"]
         .iter()
         .position(|&x| x == d)

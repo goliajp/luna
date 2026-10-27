@@ -116,3 +116,4 @@ mod vm;
 mod vm_alloc_context;
 mod vm_alloc_fail;
 mod vm_drop;
+mod windows_counts;
