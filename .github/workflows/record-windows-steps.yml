@@ -103,6 +103,10 @@ jobs:
                   old = "  TString **p = G(L)->strcache[i];"
                   assert old in s, f"{v}: luaS_new's bucket"
                   s = s.replace(old, "  TString **p = nocoin_bucket(L, str);", 1)
+                  # the buckets are the state's: a new state starts with none
+                  init = "void luaS_init (lua_State *L) {\n"
+                  assert init in s, f"{v}: luaS_init"
+                  s = s.replace(init, init + "  memset(nocoin_k, 0, sizeof nocoin_k);\n", 1)
                   open(p, "w", newline="").write(s)
               p = os.path.join(dst, "ltable.c")
               s = open(p, newline="").read()
