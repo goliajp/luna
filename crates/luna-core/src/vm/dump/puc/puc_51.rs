@@ -156,7 +156,7 @@ fn read_proto(
 
     let n = read_count(r, 4)?;
     let lines = (0..n).map(|_| read_int(r)).collect::<Result<Vec<_>, _>>()?;
-    let n = read_count(r, 16)?;
+    let n = read_count(r, SIZE_T as usize + 8)?; // a name's length, two `int`s
     let mut locvars = Vec::with_capacity(n);
     for _ in 0..n {
         let name = String::from_utf8_lossy(read_string(r)?.unwrap_or(b""));
