@@ -13,33 +13,36 @@ impl Vm {
         ev: PEv,
     ) -> Result<(), SyntaxError> {
         match ev {
-            PEv::Code(line) => {
-                self.replay_instruction(r, line);
+            PEv::Grow(line, n) => {
+                self.replay_code(r, line, n);
                 Ok(())
             }
             ev => self.replay_other(r, tok, ev),
         }
     }
 
-    /// An instruction luna emitted on `line`: the PUC instructions that
-    /// stand for it, with their lines, and the constants PUC adds for it
+    /// `n` instructions luna emitted on `line`: the PUC instructions that
+    /// stand for each, with their lines, and the constants PUC adds for it
     /// (an instruction PUC has none for stands for none).
-    fn replay_instruction(&mut self, r: &mut Replay, line: u32) {
+    fn replay_code(&mut self, r: &mut Replay, line: u32, n: u32) {
         let Replay { fs, opening, .. } = r;
         let Some(f) = fs.last_mut() else {
             return;
         };
         let h = &mut self.heap;
-        let pc = f.pc;
-        f.pc += 1;
-        let Some(p) = opening.get(f.shape).filter(|p| pc < p.code.len()) else {
-            h.parser_code(&mut f.a, line);
-            return;
-        };
+        let from = f.pc;
+        f.pc += n as usize;
+        let p = opening.get(f.shape);
         let Fs { a, lay, .. } = f;
-        let added = lay.code(p, pc, line, |l| h.parser_code(a, l));
-        for _ in 0..added {
-            h.parser_push(&mut a.k, ParserArray::Consts);
+        for pc in from..from + n as usize {
+            let Some(p) = p.filter(|p| pc < p.code.len()) else {
+                h.parser_code(a, line);
+                continue;
+            };
+            let added = lay.code(p, pc, line, |l| h.parser_code(a, l));
+            for _ in 0..added {
+                h.parser_push(&mut a.k, ParserArray::Consts);
+            }
         }
     }
 
@@ -59,12 +62,11 @@ impl Vm {
             }
             PEv::Lit(text) => self.replay_scan(r, text.as_bytes(), ScanKind::Str)?,
             PEv::Close => self.replay_close(r, tok)?,
-            PEv::Code(line) => self.replay_instruction(r, line),
+            PEv::Grow(line, n) => self.replay_code(r, line, n),
             PEv::CodeUp(line) => {
                 let child = r.fs.pop();
-                let coded = self.replay_event(r, tok, PEv::Code(line));
+                self.replay_code(r, line, 1);
                 r.fs.extend(child);
-                coded?;
             }
             PEv::Use => {}
             PEv::Uncode => {

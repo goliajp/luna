@@ -126,7 +126,7 @@ impl<'a> Compiler<'a> {
         self.at(close);
         // PUC attributes the implicit final return to the closing `end` line, so
         // that line shows up in `debug.getinfo(...,"L").activelines`.
-        let final_ret = self.puc_log.len();
+        let final_ret = self.log_seam();
         self.final_return(body.end_line)?;
         let proto = self.finish_level(line, body.end_line);
         let idx = self.lr().protos.len() as u32;
