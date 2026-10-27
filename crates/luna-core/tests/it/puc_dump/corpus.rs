@@ -46,6 +46,12 @@ const SLOW: &[(&str, &str, &str, u64)] = &[
         "870_c_stack_overflow_paths.lua",
         34,
     ),
+    (
+        "dump_round_trips_through_luna",
+        "5.2",
+        "999_handler_after_varinfo_52.lua",
+        250,
+    ),
 ];
 
 thread_local! {
