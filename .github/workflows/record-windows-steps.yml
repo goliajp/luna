@@ -285,7 +285,11 @@ jobs:
               return (f"capi/{name}.{v} status {status} {'same as Linux' if same else 'own'}"
                       f" (built {built:.0f}s, ran {ran:.1f}s)")
 
-          jobs = [(f[:-2], v, ver) for f in sorted(os.listdir(capi)) if f.endswith(".c")
+          # the hosts luna's tests run on Unix only: they test what POSIX
+          # gives (a command killed by a signal, io.popen of POSIX commands)
+          unix_only = {"aux_posix", "io_posix"}
+          jobs = [(f[:-2], v, ver) for f in sorted(os.listdir(capi))
+                  if f.endswith(".c") and f[:-2] not in unix_only
                   for v, ver in versions.items()
                   if os.path.exists(os.path.join(expected, f"{f[:-2]}.{v}.out"))]
           say(f"{len(jobs)} hosts to record")
