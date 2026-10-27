@@ -51,6 +51,11 @@ jobs:
         shell: pwsh
         run: |
           choco install procdump -y --no-progress | Out-Null
+          # choco's exit code and output are dropped above: check the result
+          if (-not (Get-Command procdump -ErrorAction SilentlyContinue)) {
+            Write-Error "procdump is not on PATH after 'choco install procdump' (exit code $LASTEXITCODE)"
+            exit 1
+          }
           New-Item -Path "$env:GITHUB_WORKSPACE\crashdumps" -ItemType Directory -Force | Out-Null
 
       - name: Build harness (grab test-binary path)
