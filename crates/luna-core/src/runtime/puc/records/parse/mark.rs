@@ -82,9 +82,10 @@ impl Marker {
                 continue;
             }
             // SAFETY: a frame's closure is allocated while its load runs
-            let cl = unsafe { &*(f.closure as *const crate::runtime::LuaClosure) };
-            // SAFETY: as above
             unsafe { self.header(f.closure) };
+            // borrowed only once its header is marked, which writes to it
+            // SAFETY: as above
+            let cl = unsafe { &*(f.closure as *const crate::runtime::LuaClosure) };
             for &uv in cl.upvals().iter() {
                 self.upval(uv);
             }
