@@ -100,7 +100,13 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             }
         }
         let addr = builder.build_ptr_to_int(buf, i64t, "handoff_addr").ok()?;
-        let base = self.function.get_nth_param(2)?.into_int_value();
+        // the level below is the interpreter's (-1) unless the chunk calls
+        // itself, when the context knows its base
+        let base = if self.self_calls {
+            self.function.get_nth_param(2)?.into_int_value()
+        } else {
+            i64t.const_all_ones()
+        };
         let record = self.helpers.get("luna_jit_handoff_frame").copied()?;
         builder
             .build_call(
@@ -114,9 +120,12 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
                 "handoff",
             )
             .ok()?;
-        let flag_at = self.ctx_addr(1, "flag_at")?;
-        let handed = i64t.const_int(luna_jit_helpers::SELF_HANDED as u64, false);
-        builder.build_store(flag_at, handed).ok()?;
+        // a level of a self-recursive chunk tells the one below
+        if self.self_calls {
+            let flag_at = self.ctx_addr(1, "flag_at")?;
+            let handed = i64t.const_int(luna_jit_helpers::SELF_HANDED as u64, false);
+            builder.build_store(flag_at, handed).ok()?;
+        }
         builder.build_return(Some(&i64t.const_zero())).ok()?;
         Some(())
     }

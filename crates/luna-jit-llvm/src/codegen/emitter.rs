@@ -25,11 +25,11 @@ pub(super) struct ComputeEmitter<'ctx, 'a> {
     pub(super) i64_type: inkwell::types::IntType<'ctx>,
     pub(super) regs_ty: inkwell::types::ArrayType<'ctx>,
     pub(super) regs: PointerValue<'ctx>,
-    /// `luna_jit_*` helper declarations.
-    /// Op::GetUpval (ValueRead role) reaches for
-    /// `helpers["luna_jit_upval_get"]`; future ops widen the call sites
-    /// without per-op registration boilerplate.
+    /// `luna_jit_*` helper declarations, by name.
     pub(super) helpers: &'a HashMap<&'static str, FunctionValue<'ctx>>,
+    /// whether the chunk calls itself: only then is there a self-call
+    /// context, the body's first parameter, to read and set
+    pub(super) self_calls: bool,
     /// `luna_jit_helpers::self_call_desc` of this chunk's self calls
     pub(super) self_call_desc: i64,
     /// `llvm.read_register.i64`, which reads the stack pointer for the
