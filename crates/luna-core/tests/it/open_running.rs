@@ -11,6 +11,14 @@ use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
+const ALL: [LuaVersion; 5] = [
+    LuaVersion::Lua51,
+    LuaVersion::Lua52,
+    LuaVersion::Lua53,
+    LuaVersion::Lua54,
+    LuaVersion::Lua55,
+];
+
 #[test]
 #[ignore]
 fn open_running_trace() {
@@ -46,7 +54,10 @@ const CHUNK: &str = "local t, out = {}, {} for i = 1, 2000 do t[i] = {i} \
 /// The count once the libraries are open, then what `CHUNK` (loaded as
 /// `luaL_loadstring` loads it, and called) reports.
 fn embedder_counts(v: LuaVersion) -> String {
-    let mut vm = Vm::new(v);
+    // `Vm::new` with the seed the recordings' PUC had fixed (1), as in
+    // `reopen_libs::lua_c_opened`
+    let mut vm = Vm::new_minimal_with_hash_seed(v, 1);
+    vm.open_all_libs().expect("the libraries open");
     let opened = i64::from(vm.host_gc(3, [0; 3]).expect("count")) * 1024
         + i64::from(vm.host_gc(4, [0; 3]).expect("count"));
     let Ok((f, _)) = vm.host_load_chunk(CHUNK.as_bytes(), CHUNK.as_bytes()) else {
@@ -64,6 +75,18 @@ fn embedder_counts(v: LuaVersion) -> String {
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn vm_new_counts_what_an_embedder_counts() {
+    use super::windows_counts::{ran_from_puc_dir, recorded};
+    if ran_from_puc_dir("open_running::vm_new_counts_what_an_embedder_counts") {
+        return;
+    }
+    if cfg!(windows) {
+        for v in ALL {
+            let r = recorded(v);
+            let want = format!("{} {}", r[0].trim_start_matches("opened "), r[1]);
+            assert_eq!(embedder_counts(v), want, "{v:?}");
+        }
+        return;
+    }
     // with `gc-stress` every checkpoint collects: no garbage is left
     // floating when the counts are read (and 5.1's `Vm::new` collects as
     // it opens the libraries)
