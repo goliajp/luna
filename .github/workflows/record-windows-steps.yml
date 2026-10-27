@@ -4,7 +4,10 @@
 # the tests' conditions: the string hash seed fixed at 1 (the same patch
 # as the Linux recordings' PUC), the interpreter at C:\luna-gc-steps\lua.exe
 # started through `cmd` as `lua`, from the scripts' directory, TZ=UTC. The
-# outputs, CRLF read as LF, are uploaded as the artifact `windows-steps`.
+# outputs, CRLF read as LF, are uploaded as the artifact `windows-steps`,
+# with what `crates/luna-core/tests/windows_counts/host.c`, built with
+# each PUC and run from the same directory, prints for the count tests of
+# luna-core (`windows_counts/<dialect>.windows.out`).
 # Run by hand when a script or a recording changes.
 
 name: record-windows-steps
@@ -71,6 +74,8 @@ jobs:
             if "%%v"=="5.3.6" set DEFS=/DLUA_COMPAT_5_2
             if "%%v"=="5.4.9" set DEFS=/DLUA_COMPAT_5_3
             call cl /nologo /O2 /MD /W0 !DEFS! /Fe:..\lua.exe *.c || exit /b 1
+            del lua.c
+            call cl /nologo /O2 /MD /W0 !DEFS! /Fe:..\host.exe "%GITHUB_WORKSPACE%\crates\luna-core\tests\windows_counts\host.c" *.c || exit /b 1
             popd
           )
 
@@ -104,6 +109,23 @@ jobs:
                       linux = os.path.join(scripts, d, name[:-4] + ".out")
                       same = os.path.exists(linux) and open(linux, "rb").read() == out
                       print(f"{base}/{d}/{name} exit {r.returncode}", "same as Linux" if same else "own")
+          chunk = ('local t, out = {}, {} for i = 1, 2000 do t[i] = {i} '
+                   'if i % 250 == 0 then out[#out + 1] = math.floor(collectgarbage("count") * 1024) end '
+                   'end return table.concat(out, " ")')
+          unload = "for k in pairs(package.loaded) do package.loaded[k] = nil end"
+          runs = [("running", chunk), ("reopen", ""), ("noreopen", ""), ("reopen", unload), ("noreopen", unload)]
+          for d, v in versions.items():
+              host = os.path.join(bin_dir, "host.exe")
+              shutil.copy(os.path.join(root, f"lua-{v}", "host.exe"), host)
+              out = b""
+              for mode, arg in runs:
+                  r = subprocess.run([host, mode, arg], env=env, capture_output=True)
+                  assert r.returncode == 0, (d, mode, r.stdout, r.stderr)
+                  out += r.stdout.replace(b"\r\n", b"\n")
+              dest = os.path.join(out_root, "windows_counts", f"{d}.windows.out")
+              os.makedirs(os.path.dirname(dest), exist_ok=True)
+              open(dest, "wb").write(out)
+              print(f"windows_counts/{d}:", out.decode())
 
       - uses: actions/upload-artifact@v7
         with:
