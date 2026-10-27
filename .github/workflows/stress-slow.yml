@@ -12,10 +12,6 @@ on:
     # nightly at 07:00 UTC, after diff-puc, whose PUC builds it reuses
     - cron: '0 7 * * *'
   workflow_dispatch:
-  # a batch branch's push runs it, which also registers the workflow
-  # before it is on develop
-  push:
-    branches: ['batch*']
 
 jobs:
   slow:
