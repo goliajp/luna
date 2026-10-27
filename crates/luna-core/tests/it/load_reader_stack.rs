@@ -168,3 +168,30 @@ fn a_reader_makes_objects_with_finalizers() {
         assert_eq!(got, "3001 3", "{v:?}");
     }
 }
+
+/// `gc-verify` takes what a load sets aside (what its reader makes) as
+/// live: with every check collecting, the reader's strings on the stack
+/// are no dead values.
+#[cfg(all(feature = "gc-stress", feature = "gc-verify"))]
+#[test]
+fn a_collection_in_a_reader_finds_what_it_made_live() {
+    const SCRIPT: &str = "local n = 0
+        local f = load(function()
+          n = n + 1
+          local s = string.rep('x', n) .. n .. 'y'
+          return ({'return ', '#\"' .. s .. '\"'})[n]
+        end)
+        return f()";
+    for v in [
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let mut vm = Vm::new(v);
+        let got = vm.eval(SCRIPT).expect("script");
+        let four = matches!(got.first(), Some(Value::Int(4)))
+            || matches!(got.first(), Some(Value::Float(f)) if *f == 4.0);
+        assert!(four, "{v:?}: {got:?}");
+    }
+}
