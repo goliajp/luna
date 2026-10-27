@@ -132,3 +132,37 @@ fn load_keeps_pucs_objects_below_its_reader_undumping() {
     }
     assert_eq!(runs, 5, "five dialects");
 }
+
+/// A reader that makes objects with finalizers (a table with `__gc`, the
+/// box of a `luaL_Buffer` past its room on the C stack) while `load` sets
+/// what the reader makes aside: each joins the finalizer list when PUC
+/// makes it, and the load and a collection go on.
+#[test]
+fn a_reader_makes_objects_with_finalizers() {
+    const SCRIPT: &str = r#"
+        local n, fin = 0, 0
+        local f = load(function()
+          n = n + 1
+          setmetatable({}, {__gc = function() fin = fin + 1 end})
+          local s = table.concat({string.rep("x", 3000), "y"})
+          return ({"return ", tostring(string.len(s))})[n]
+        end)
+        collectgarbage()
+        collectgarbage()
+        return f() .. " " .. fin
+    "#;
+    for v in [
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let mut vm = Vm::new(v);
+        let got = match vm.eval(SCRIPT).expect("script").first() {
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            other => panic!("{v:?}: got {other:?}"),
+        };
+        // as PUC 5.2.4 to 5.5.1 give it
+        assert_eq!(got, "3001 3", "{v:?}");
+    }
+}
