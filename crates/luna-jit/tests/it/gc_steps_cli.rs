@@ -56,7 +56,10 @@ fn run(dir: &Path, dialect: &str, script: &str, jit: bool) -> String {
     // the recordings' PUC ran without them: they replace the default paths
     for (k, _) in std::env::vars_os() {
         let name = k.to_string_lossy().to_uppercase();
-        if ["LUA_PATH", "LUA_CPATH", "LUA_INIT"].iter().any(|p| name.starts_with(p)) {
+        if ["LUA_PATH", "LUA_CPATH", "LUA_INIT"]
+            .iter()
+            .any(|p| name.starts_with(p))
+        {
             cmd.env_remove(&k);
         }
     }
