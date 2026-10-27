@@ -11,10 +11,6 @@ on:
   schedule:
     - cron: '30 5 * * *'
   workflow_dispatch:
-  # a batch branch's push runs it, which also registers the workflow
-  # before it is on develop
-  push:
-    branches: ['batch*']
 
 jobs:
   corpus:
