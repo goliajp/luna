@@ -20,7 +20,7 @@ impl Heap {
     ) -> Result<(), Oom> {
         let host = host.as_ptr();
         let mut sizes = LVec::new(self.mem());
-        sizes.push(size as u32)?;
+        sizes.push(size as u64)?;
         self.puc
             .records
             .keepers
@@ -82,6 +82,6 @@ pub(in crate::runtime::puc) fn kept_bytes(
 ) -> usize {
     let ks = ks.iter().filter(|k| k.1 == host);
     // SAFETY: a keeper is a live record until it is unlisted
-    ks.map(|k| unsafe { (*(k.0 as *const Ghost)).sizes.iter().sum::<u32>() } as usize)
+    ks.map(|k| unsafe { (*(k.0 as *const Ghost)).sizes.iter().sum::<u64>() } as usize)
         .sum()
 }
