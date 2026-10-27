@@ -195,7 +195,7 @@ impl Vm {
     /// C function, made above the box and the string just pushed with the
     /// method, the box and (5.4) the error (`callclosemethod`), which wants
     /// `LUA_MINSTACK` slots above those (`precallC`).
-    fn box_closed(&mut self) -> Result<(), LuaError> {
+    pub(crate) fn box_closed(&mut self) -> Result<(), LuaError> {
         self.box_close_room()?;
         self.note_c_call();
         Ok(())

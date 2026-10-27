@@ -8,12 +8,24 @@ use crate::runtime::puc::fmt::FmtArg;
 use crate::vm::puc_buffer::PucBuffer;
 
 /// What a search found: the file name's bytes, where 5.4 on has them in
-/// its buffer's frame (see `found_string`), and the string ≤5.3 made of
-/// them.
+/// its buffer's frame (see `found_string`), the string ≤5.3 made of
+/// them, and 5.4 on's buffer, still on the stack.
 pub(super) struct Found {
     pub(super) file: Vec<u8>,
     pub(super) at: Option<u32>,
     pub(super) made: Option<Gc<LuaStr>>,
+    buf: Option<PucBuffer>,
+}
+
+impl Found {
+    /// The C function that searched returns, `keep` its values: the
+    /// buffer's box is closed then.
+    pub(super) fn returned(self, vm: &mut Vm, keep: &[Value]) -> Result<(), LuaError> {
+        match self.buf {
+            Some(b) => vm.rooted(keep, |vm| b.close_on_return(vm)),
+            None => Ok(()),
+        }
+    }
 }
 
 /// The first readable file among `path`'s templates with `name` (its
@@ -66,6 +78,7 @@ fn search_54(
                 file: file.to_vec(),
                 at,
                 made: None,
+                buf: Some(b),
             }));
         }
         off += file.len() + 1;
@@ -134,6 +147,7 @@ fn search_51(
                 file,
                 at: None,
                 made: Some(made),
+                buf: None,
             }));
         }
         let entry = vm.api_pushfstring(1, b"\n\tno file '%s'", &[FmtArg::S(&file)])?;
