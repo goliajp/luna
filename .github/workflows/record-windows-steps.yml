@@ -192,6 +192,14 @@ jobs:
               os.makedirs(os.path.dirname(dest), exist_ok=True)
               open(dest, "wb").write(out)
               print(f"windows_counts/{d}:", out.decode())
+              # the allocations of a second luaL_openlibs with package.loaded
+              # emptied, and of none, for comparing with luna's trace
+              logs = os.path.join(out_root, "windows_counts_alloc", d)
+              os.makedirs(logs, exist_ok=True)
+              for mode in ("reopen", "noreopen"):
+                  log = dict(env, HOST_ALLOC_LOG=os.path.join(logs, f"{mode}.log"))
+                  r = subprocess.run([host, mode, unload], env=log, capture_output=True)
+                  assert r.returncode == 0, (d, mode, r.stdout, r.stderr)
 
       - uses: actions/upload-artifact@v7
         with:
