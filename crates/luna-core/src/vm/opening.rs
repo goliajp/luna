@@ -15,8 +15,8 @@ use crate::vm::exec::Vm;
 #[rustfmt::skip]
 mod data;
 mod api;
-mod lauxlib;
 mod fenv51;
+mod lauxlib;
 mod run;
 mod step;
 
