@@ -240,14 +240,20 @@ fn a_negative_count_is_refused_before_its_array_is_made() {
         local f, e = ld(bad, "=bad")
         return tostring(f) .. " " .. e .. " " .. (collectgarbage("count") - c0) * 1024
     "#;
+    // 64-bit and 32-bit (`gcc -m32`) builds of PUC
+    let (b51, b52) = if cfg!(target_pointer_width = "64") {
+        (344, 386)
+    } else {
+        (252, 278)
+    };
     for (version, want) in [
         (
             LuaVersion::Lua51,
-            "nil bad: bad integer in precompiled chunk 344",
+            format!("nil bad: bad integer in precompiled chunk {b51}"),
         ),
         (
             LuaVersion::Lua52,
-            "nil bad: corrupted precompiled chunk 386",
+            format!("nil bad: corrupted precompiled chunk {b52}"),
         ),
     ] {
         let mut vm = Vm::new(version);
