@@ -80,6 +80,7 @@ impl<'a> Compiler<'a> {
             // escaping, not `_ENV`) it stays *virtual* — indexed straight off the
             // stack varargs with no heap table. Otherwise materialize it now.
             let virtual_ok = name != "_ENV" && !self.vararg_forced(&body.block, name);
+            self.l().named_vararg = true;
             if virtual_ok {
                 self.declare_local(name, r, true)?;
                 self.l().locals.last_mut().expect("just declared").vararg = Varg::Virtual;

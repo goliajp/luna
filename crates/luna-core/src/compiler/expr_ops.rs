@@ -171,8 +171,12 @@ impl<'a> Compiler<'a> {
 
     /// What `name` resolves to in the current function as a named vararg
     /// (a virtual one: `name[k]` indexes the stack varargs via OP_VARGIDX).
+    #[inline]
     pub(super) fn vararg_local(&self, name: &str) -> Varg {
         let lvl = self.lr();
+        if !lvl.named_vararg {
+            return Varg::No;
+        }
         // a more-recent `global name` marker shadows the local
         if lvl.global_declared(name) {
             return Varg::No;

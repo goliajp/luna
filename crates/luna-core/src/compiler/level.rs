@@ -35,6 +35,9 @@ pub(super) struct Level<'a> {
     pub(super) has_vararg_table_pseudo: bool,
     /// PUC 5.1 `LUAI_COMPAT_VARARG`'s `arg` local (`Proto::has_compat_vararg_arg`)
     pub(super) has_compat_vararg_arg: bool,
+    /// 5.5: the function names its `...` (a local whose `vararg` is not
+    /// `Varg::No`)
+    pub(super) named_vararg: bool,
     pub(super) line_defined: u32,
     /// PUC `fs->lasttarget`: the highest pc any jump lands on (a patched
     /// jump, a loop's back edge, a label), raised only, by `mark_target`;
@@ -109,6 +112,7 @@ impl<'a> Level<'a> {
             num_params,
             is_vararg,
             has_vararg_table_pseudo: false,
+            named_vararg: false,
             has_compat_vararg_arg: false,
             line_defined,
             last_target: None,
