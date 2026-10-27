@@ -48,12 +48,15 @@ impl Vm {
         if d == Dialect::L55 {
             self.anchor_in_h(r, h.as_ref().map(|t| (t.id, t.tab_hdr())))?;
         }
-        let ld = r.opening.get(r.opened).map_or(0, |p| p.line_defined);
+        let p = r.opening.get(r.opened);
+        let ld = p.map_or(0, |p| p.line_defined);
+        let lay = p.map(|p| crate::vm::dump::Layout::of(p, r.version));
         let shape = r.opened;
         r.opened += 1;
         r.fs.push(Fs {
             a: FuncArrays::new(ld),
             shape,
+            lay: lay.unwrap_or_default(),
             h,
             kbase: r.kstr.len(),
             ..Fs::default()

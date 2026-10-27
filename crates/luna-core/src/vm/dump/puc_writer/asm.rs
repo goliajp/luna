@@ -213,7 +213,7 @@ impl<'p> Asm<'p> {
     /// Constant `k` when it is a string PUC 5.3+ interns (the fast field
     /// ops of 5.4/5.5 take only those).
     pub(super) fn short_str(&self, k: u32) -> bool {
-        matches!(self.consts.get(k as usize), Some(Value::Str(s)) if s.len() <= 40)
+        super::width::short_key(&self.consts, k)
     }
 
     /// Luna's line table is empty for a function loaded from a stripped

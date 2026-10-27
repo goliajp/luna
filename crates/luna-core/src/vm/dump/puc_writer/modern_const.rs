@@ -11,13 +11,10 @@
 
 use super::asm::{L, Res};
 use super::modern::M;
+use super::width::{ImmOp, imm_op, temp_key_parts};
 use crate::runtime::Value;
 use crate::vm::dump::puc::modern::Kind;
-use crate::vm::isa::{MAX_SC, MIN_SC, OFFSET_SC, Op};
-
-fn fits_sc(i: i32) -> bool {
-    (MIN_SC..=MAX_SC).contains(&i)
-}
+use crate::vm::isa::{OFFSET_SC, Op};
 
 fn enc(i: i32) -> u32 {
     (i + OFFSET_SC) as u32
@@ -33,17 +30,13 @@ impl M<'_, '_> {
         let (t, key) = if get { (l.b, l.c) } else { (l.a, l.b) };
         let a = if get { self.asm.r(l.a)? } else { 0 };
         let val = if get { (0, false) } else { self.store_val(l)? };
-        let t = if matches!(l.op, Op::GetTabUpR | Op::SetTabUpR | Op::SetTabUpK) {
+        let (up, const_key) = temp_key_parts(l.op, l.k);
+        let t = if up {
             let r = self.asm.temp()?;
             self.emit(self.abc(Kind::GetUpval, r, t, 0, false))?;
             r
         } else {
             self.asm.r(t)?
-        };
-        let const_key = match l.op {
-            Op::GetTabUpR => l.k,
-            Op::SetTabUpR => false,
-            _ => true,
         };
         let key = if const_key {
             let r = self.asm.temp()?;
@@ -97,14 +90,12 @@ impl M<'_, '_> {
         let (a, b) = (self.asm.r(l.a)?, self.asm.r(l.b)?);
         let op = l.op.arith_const_op().expect("immediate arithmetic");
         let c = l.c as i32 - OFFSET_SC;
-        let (word, imm) = match op {
-            Op::Add => (self.op(Kind::ArithI), c),
-            Op::Shr => (self.shift_opcode(false), c),
+        let (word, imm) = match imm_op(op, l.k, c) {
+            Some((ImmOp::AddI, imm)) => (self.op(Kind::ArithI), imm),
+            Some((ImmOp::ShrI, imm)) => (self.shift_opcode(false), imm),
             // `I << x`
-            Op::Shl if l.k => (self.shift_opcode(true), c),
-            Op::Sub if fits_sc(-c) => (self.op(Kind::ArithI), -c),
-            Op::Shl if fits_sc(-c) => (self.shift_opcode(false), -c),
-            _ => return self.arith_via_register(a, b, op, c as i64, l.k),
+            Some((ImmOp::ShlI, imm)) => (self.shift_opcode(true), imm),
+            None => return self.arith_via_register(a, b, op, c as i64, l.k),
         };
         let tm = event(op).expect("arithmetic op");
         self.emit(self.raw_abc(word, a, b, enc(imm), false))?;
