@@ -75,7 +75,7 @@ jobs:
             if "%%v"=="5.4.9" set DEFS=/DLUA_COMPAT_5_3
             call cl /nologo /O2 /MD /W0 !DEFS! /Fe:..\lua.exe *.c || exit /b 1
             del lua.c
-            call cl /nologo /O2 /MD /W0 !DEFS! /Fe:..\host.exe "%GITHUB_WORKSPACE%\crates\luna-core\tests\windows_counts\host.c" *.c || exit /b 1
+            call cl /nologo /O2 /MD /W0 !DEFS! /I. /Fe:..\host.exe "%GITHUB_WORKSPACE%\crates\luna-core\tests\windows_counts\host.c" *.c || exit /b 1
             popd
           )
 
