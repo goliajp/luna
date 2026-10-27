@@ -64,11 +64,12 @@ pub(super) fn ran_from_puc_dir(test: &str) -> bool {
 /// `package.loaded` emptied. Only the run without `gc-stress` was
 /// recorded.
 pub(super) fn recorded(v: LuaVersion) -> Vec<String> {
-    assert!(
-        !cfg!(feature = "gc-stress"),
-        "no recording of PUC on Windows collecting at every check \
-         (`gc-stress`): only the run without it was recorded"
-    );
+    if cfg!(feature = "gc-stress") {
+        panic!(
+            "no recording of PUC on Windows collecting at every check \
+             (`gc-stress`): only the run without it was recorded"
+        );
+    }
     let d = match v {
         LuaVersion::Lua51 => "5.1",
         LuaVersion::Lua52 => "5.2",
