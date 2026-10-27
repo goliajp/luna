@@ -112,6 +112,8 @@ pub(crate) trait PucCount {
     /// An object `o` PUC makes and luna does not (yet), as
     /// [`Heap::ghost_obj`]: where its record is.
     fn ghost_obj_ref(&mut self, o: PucObj) -> Result<GhostRef, Oom>;
+    /// The bytes PUC allocates for `o` in this dialect.
+    fn puc_bytes(&self, o: PucObj) -> usize;
     /// `cl`, a main closure made without counting, is PUC's now: counted
     /// here, without 5.1's environment among its upvalues.
     fn promote_main_closure(&mut self, cl: Gc<LuaClosure>);
@@ -269,6 +271,10 @@ impl PucCount for Heap {
     #[inline(always)]
     fn ghost_obj_ref(&mut self, o: PucObj) -> Result<GhostRef, Oom> {
         Heap::ghost_obj_ref(self, o)
+    }
+
+    fn puc_bytes(&self, o: PucObj) -> usize {
+        Heap::puc_size(self, o)
     }
 
     #[inline(always)]
