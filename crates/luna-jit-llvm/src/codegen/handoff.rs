@@ -100,33 +100,35 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             }
         }
         let addr = builder.build_ptr_to_int(buf, i64t, "handoff_addr").ok()?;
-        // the level below is the interpreter's (-1) unless the chunk calls
-        // itself, when the context knows its base
+        self.record_level(pc, addr)?;
+        builder.build_return(Some(&i64t.const_zero())).ok()?;
+        Some(())
+    }
+
+    /// `luna_jit_handoff_frame` of this level, its registers at `regs`: the
+    /// level below is the interpreter's (-1) unless the chunk calls itself,
+    /// when the self-call context knows its base, and a level of such a
+    /// chunk sets the context's flag for the one below.
+    fn record_level(
+        &self,
+        pc: inkwell::values::IntValue<'ctx>,
+        regs: inkwell::values::IntValue<'ctx>,
+    ) -> Option<()> {
+        let i64t = self.i64_type;
         let base = if self.self_calls {
             self.function.get_nth_param(2)?.into_int_value()
         } else {
             i64t.const_all_ones()
         };
         let record = self.helpers.get("luna_jit_handoff_frame").copied()?;
-        builder
-            .build_call(
-                record,
-                &[
-                    pc.into(),
-                    base.into(),
-                    addr.into(),
-                    i64t.const_int(u64::from(n), false).into(),
-                ],
-                "handoff",
-            )
-            .ok()?;
-        // a level of a self-recursive chunk tells the one below
+        let n = i64t.const_int(u64::from(self.num_regs), false);
+        let args = [pc.into(), base.into(), regs.into(), n.into()];
+        self.builder.build_call(record, &args, "handoff").ok()?;
         if self.self_calls {
             let flag_at = self.ctx_addr(1, "flag_at")?;
             let handed = i64t.const_int(luna_jit_helpers::SELF_HANDED as u64, false);
-            builder.build_store(flag_at, handed).ok()?;
+            self.builder.build_store(flag_at, handed).ok()?;
         }
-        builder.build_return(Some(&i64t.const_zero())).ok()?;
         Some(())
     }
 }
