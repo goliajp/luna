@@ -55,7 +55,7 @@ impl Heap {
             // too (one gray is on a gray stack, traversed whatever its color)
             let f = (*h).flags();
             self.hook_born(h, f);
-            self.link_now(h);
+            self.link_born(h);
             if self.phase() == GcPhase::Propagate && is_black(f) {
                 (*h).set_flags(f);
             }

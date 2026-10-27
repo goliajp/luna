@@ -20,7 +20,9 @@ impl Heap {
         // allocated objects, `h` among them
         unsafe {
             (*h).flags |= FIN;
-            if !self.puc_rules().finobj {
+            // one a load's reader made is set aside: it goes on `finobj`
+            // when it is born (`Heap::link_born`)
+            if !self.puc_rules().finobj || Heap::is_detached(h) {
                 return;
             }
             if self.phase == GcPhase::Sweep && self.sweep_prev == h {
@@ -40,6 +42,22 @@ impl Heap {
             (*h).next = self.finobj;
             self.finobj = h;
             self.finobj_len += 1;
+        }
+    }
+
+    /// `h`, set aside, on the list now: on `finobj` when it was given a
+    /// finalizer meanwhile.
+    ///
+    /// # Safety
+    /// `h` heads a live object of this heap on no list.
+    pub(in crate::runtime) unsafe fn link_born(&mut self, h: *mut GcHeader) {
+        // SAFETY: the caller's contract; `link_now` puts `h` on `all`
+        unsafe {
+            self.link_now(h);
+            if (*h).flags & FIN != 0 {
+                (*h).flags &= !FIN;
+                self.move_to_finobj(h);
+            }
         }
     }
 
