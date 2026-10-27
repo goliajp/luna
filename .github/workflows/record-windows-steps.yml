@@ -220,6 +220,14 @@ jobs:
                   env[k] = v
           for k in [k for k in env if k.upper().startswith(("LUA_PATH", "LUA_CPATH", "LUA_INIT"))]:
               del env[k]
+          # one PATH, whatever case `set` printed it in; the compiler found on
+          # it here, as this process's own PATH is not the one given to cl
+          path = next(v for k, v in env.items() if k.upper() == "PATH")
+          for k in [k for k in env if k.upper() == "PATH"]:
+              del env[k]
+          env["PATH"] = path
+          cl = shutil.which("cl", path=path)
+          assert cl, "cl on the Visual Studio PATH"
           bin_dir = r"C:\luna-gc-steps"
           out_root = os.path.join(os.environ["RUNNER_TEMP"], "windows-steps")
           crate = os.path.join(os.getcwd(), "crates", "luna-jit")
@@ -237,7 +245,7 @@ jobs:
                       continue
                   src = os.path.join(root, f"lua-{ver}", "src-host")
                   exe = os.path.join(bin_dir, f"capi-{name}-{v}.exe")
-                  r = subprocess.run(["cl", "/nologo", "/w", "/O2", "/MD", "/DLUA_COMPAT_ALL",
+                  r = subprocess.run([cl, "/nologo", "/w", "/O2", "/MD", "/DLUA_COMPAT_ALL",
                                       "/DLUA_COMPAT_5_2", "/DLUA_COMPAT_5_3", f"/I{src}", f"/I{capi}",
                                       os.path.join(capi, f), f"/Fe{exe}", f"/Fo{obj}\\",
                                       os.path.join(root, f"lua-{ver}", "puc.lib")],
@@ -258,7 +266,7 @@ jobs:
                   same = open(linux, "rb").read().replace(b"\r\n", b"\n") == out
                   print(f"capi/{name}.{v} status {status}", "same as Linux" if same else "own")
           cli = {"5.1": "5.1.5", "5.2": "5.2.4", "5.3": "5.3.6", "5.4": "5.4.9", "5.5": "5.5.1"}
-          env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+          env["PATH"] = bin_dir + os.pathsep + path
           env["TZ"] = "UTC"
           for d, ver in cli.items():
               shutil.copy(os.path.join(root, f"lua-{ver}", "lua.exe"), os.path.join(bin_dir, "lua.exe"))
