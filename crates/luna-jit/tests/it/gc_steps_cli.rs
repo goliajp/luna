@@ -61,7 +61,14 @@ fn steps_5_1() {
     check("5.1", &[false, true]);
 }
 
+/// 5.2's `luaL_Buffer` holds `BUFSIZ` bytes before it allocates, and the
+/// round lines `table.concat` makes are longer than macOS's 1024: the
+/// recording is glibc's (8192).
 #[test]
+#[cfg_attr(
+    not(all(target_os = "linux", target_env = "gnu")),
+    ignore = "recorded with glibc's BUFSIZ"
+)]
 fn steps_5_2() {
     check("5.2", &[false, true]);
 }
