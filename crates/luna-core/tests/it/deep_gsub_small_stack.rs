@@ -7,11 +7,28 @@
 //! On 1 MB luna reaches the C level limit first; on a stack a little
 //! larger than the room its native stack check keeps free (96 KB in an
 //! optimised build, 512 KB in an unoptimised one) that check stops the
-//! nesting before the stack runs out.
+//! nesting before the stack runs out. That stack, the smallest the docs
+//! give a thread that runs luna, runs code that needs no deep nesting.
 
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
+
+/// The smallest thread stack luna runs code on: a little more than the
+/// room the native stack check keeps free.
+const SMALLEST: usize = if cfg!(debug_assertions) {
+    544 << 10
+} else {
+    128 << 10
+};
+
+const DIALECTS: [LuaVersion; 5] = [
+    LuaVersion::Lua51,
+    LuaVersion::Lua52,
+    LuaVersion::Lua53,
+    LuaVersion::Lua54,
+    LuaVersion::Lua55,
+];
 
 const SCRIPT: &str = r#"
     local function g() return (string.gsub("x", "x", function() return g() end)) end
@@ -21,24 +38,13 @@ const SCRIPT: &str = r#"
 
 #[test]
 fn nested_gsub_on_a_1_mb_stack_raises_an_error() {
-    let small = if cfg!(debug_assertions) {
-        544 << 10
-    } else {
-        128 << 10
-    };
-    for stack in [1 << 20, small] {
+    for stack in [1 << 20, SMALLEST] {
         nested_gsub_raises(stack);
     }
 }
 
 fn nested_gsub_raises(stack: usize) {
-    for v in [
-        LuaVersion::Lua51,
-        LuaVersion::Lua52,
-        LuaVersion::Lua53,
-        LuaVersion::Lua54,
-        LuaVersion::Lua55,
-    ] {
+    for v in DIALECTS {
         let got = std::thread::Builder::new()
             .stack_size(stack)
             .spawn(move || {
@@ -63,5 +69,27 @@ fn nested_gsub_raises(stack: usize) {
             "{v:?} on {stack}: {}",
             got.1
         );
+    }
+}
+
+#[test]
+fn code_runs_on_the_smallest_stack_the_docs_give() {
+    for v in DIALECTS {
+        let got = std::thread::Builder::new()
+            .stack_size(SMALLEST)
+            .spawn(move || {
+                let mut vm = Vm::new(v);
+                let r = vm
+                    .eval("return (string.gsub('x', 'x', function() return 'fine' end))")
+                    .expect("the script runs");
+                match r.first() {
+                    Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+                    other => panic!("{v:?}: got {other:?}"),
+                }
+            })
+            .expect("a thread")
+            .join()
+            .expect("the thread ends without a panic");
+        assert_eq!(got, "fine", "{v:?}");
     }
 }
