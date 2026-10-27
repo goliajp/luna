@@ -42,7 +42,6 @@ mod engine_shared_traces;
 mod field_ic_switch;
 mod forced_jit_corpus;
 mod gc_step_cli;
-#[cfg(unix)]
 mod gc_steps_cli;
 mod instr_budget_jit;
 mod jit_alloc_fail;

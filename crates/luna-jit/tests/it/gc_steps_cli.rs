@@ -7,20 +7,49 @@
 //! `LUNA_HASH_SEED`, run without address randomisation. Both run as `lua`, from
 //! the scripts' directory: the program's name and the script's path are
 //! strings the collector counts. A script whose output depends on the C
-//! library has a recording of its own for macOS (`<name>.macos.out`, from
-//! PUC built with `make macosx` and the same fixed seed). The scripts in
-//! `tests/lua_c/<dialect>/`
-//! count what lua.c itself makes, the same way.
+//! library or the platform has a recording of its own for macOS and
+//! Windows (`<name>.<platform>.out`, from PUC built with `make macosx`, and
+//! with MSVC, `cl /O2 /MD`, run from `C:\luna-gc-steps`, with the same
+//! fixed seed). The scripts in `tests/lua_c/<dialect>/` count what lua.c
+//! itself makes, the same way.
 
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
+/// The luna command run as `lua`: on Unix by the name it is given; on
+/// Windows, where a program's name is what started it, as a copy named
+/// `lua.exe` that `cmd` finds on the path. The copy sits where the
+/// recordings' PUC sat (`C:\luna-gc-steps`): its directory is in the
+/// default package paths (`!`), strings the collector counts.
+fn lua_command() -> Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_luna"));
+        cmd.arg0("lua");
+        cmd
+    }
+    #[cfg(windows)]
+    {
+        static COPY: std::sync::Once = std::sync::Once::new();
+        let bin = std::path::PathBuf::from(r"C:\luna-gc-steps");
+        COPY.call_once(|| {
+            std::fs::create_dir_all(&bin).expect("a directory");
+            std::fs::copy(env!("CARGO_BIN_EXE_luna"), bin.join("lua.exe")).expect("lua.exe");
+        });
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(&path));
+        let mut cmd = Command::new("cmd");
+        cmd.env("PATH", std::env::join_paths(paths).expect("a path"));
+        cmd.args(["/C", "lua"]);
+        cmd
+    }
+}
+
 fn run(dir: &Path, dialect: &str, script: &str, jit: bool) -> String {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_luna"));
-    cmd.arg0("lua")
-        .current_dir(dir)
-        .arg(format!("--lua={dialect}"));
+    let mut cmd = lua_command();
+    cmd.current_dir(dir).arg(format!("--lua={dialect}"));
     if !jit {
         cmd.arg("--no-jit");
     }
@@ -36,6 +65,8 @@ fn run(dir: &Path, dialect: &str, script: &str, jit: bool) -> String {
 /// The name of the recordings made on this platform's PUC.
 const PLATFORM: &str = if cfg!(target_vendor = "apple") {
     "macos"
+} else if cfg!(windows) {
+    "windows"
 } else {
     "linux"
 };
@@ -57,9 +88,10 @@ fn check_in(base: &str, dialect: &str, jit: &[bool]) {
     scripts.sort();
     assert!(!scripts.is_empty(), "{dialect}: no script");
     for name in scripts {
-        // a recording of PUC on this platform where its C library's BUFSIZ
-        // (the room 5.1's and 5.2's buffers have before they allocate)
-        // makes it differ from glibc's
+        // a recording of PUC on this platform where it differs from the
+        // one on Linux: the C library's BUFSIZ (the room 5.1's and 5.2's
+        // buffers have before they allocate), and on Windows the default
+        // package paths, which name the executable's directory
         let own = dir
             .join(dialect)
             .join(name.replace(".lua", &format!(".{PLATFORM}.out")));
