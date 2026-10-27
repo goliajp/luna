@@ -128,6 +128,7 @@ jobs:
           setlocal enabledelayedexpansion
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VS=%%i
           call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          set > "%RUNNER_TEMP%\vcvars.env"
           for %%v in (5.1.5 5.2.4 5.3.6 5.4.9 5.5.1) do (
             pushd "%RUNNER_TEMP%\puc\lua-%%v\src" || exit /b 1
             del luac.c
@@ -142,6 +143,8 @@ jobs:
             del lua.c luac.c
             if exist onelua.c del onelua.c
             call cl /nologo /O2 /MD /W0 !DEFS! /I. /Fe:..\host.exe "%GITHUB_WORKSPACE%\crates\luna-core\tests\windows_counts\host.c" *.c || exit /b 1
+            del host.obj
+            call lib /nologo /OUT:..\puc.lib *.obj || exit /b 1
             popd
           )
 
@@ -200,6 +203,73 @@ jobs:
                   log = dict(env, HOST_ALLOC_LOG=os.path.join(logs, f"{mode}.log"))
                   r = subprocess.run([host, mode, unload], env=log, capture_output=True)
                   assert r.returncode == 0, (d, mode, r.stdout, r.stderr)
+
+      # the C API hosts of luna-jit's tests (`tests/capi`), built with the
+      # same PUC and the defines the tests give luna's, run from
+      # C:\luna-gc-steps as the tests run luna's, from the crate directory;
+      # and the CLI case `cli_errors::libraries_and_warnings::library_error`
+      - name: Record the C API hosts and the CLI cases
+        shell: python
+        run: |
+          import os, shutil, subprocess, tempfile
+          root = os.path.join(os.environ["RUNNER_TEMP"], "puc")
+          env = {}
+          for line in open(os.path.join(os.environ["RUNNER_TEMP"], "vcvars.env"), errors="replace"):
+              if "=" in line:
+                  k, v = line.rstrip("\n").split("=", 1)
+                  env[k] = v
+          for k in [k for k in env if k.upper().startswith(("LUA_PATH", "LUA_CPATH", "LUA_INIT"))]:
+              del env[k]
+          bin_dir = r"C:\luna-gc-steps"
+          out_root = os.path.join(os.environ["RUNNER_TEMP"], "windows-steps")
+          crate = os.path.join(os.getcwd(), "crates", "luna-jit")
+          capi = os.path.join(crate, "tests", "capi")
+          expected = os.path.join(capi, "expected")
+          versions = {"51": "5.1.5", "52": "5.2.4", "53": "5.3.6", "54": "5.4.9", "55": "5.5.1"}
+          obj = tempfile.mkdtemp()
+          for f in sorted(os.listdir(capi)):
+              if not f.endswith(".c"):
+                  continue
+              name = f[:-2]
+              for v, ver in versions.items():
+                  linux = os.path.join(expected, f"{name}.{v}.out")
+                  if not os.path.exists(linux):
+                      continue
+                  src = os.path.join(root, f"lua-{ver}", "src-host")
+                  exe = os.path.join(bin_dir, f"capi-{name}-{v}.exe")
+                  r = subprocess.run(["cl", "/nologo", "/w", "/O2", "/MD", "/DLUA_COMPAT_ALL",
+                                      "/DLUA_COMPAT_5_2", "/DLUA_COMPAT_5_3", f"/I{src}", f"/I{capi}",
+                                      os.path.join(capi, f), f"/Fe{exe}", f"/Fo{obj}\\",
+                                      os.path.join(root, f"lua-{ver}", "puc.lib")],
+                                     env=env, capture_output=True)
+                  if r.returncode != 0:
+                      print(f"capi/{name}.{v}: not built")
+                      continue
+                  r = subprocess.run([exe], cwd=crate, env=env, capture_output=True)
+                  code = r.returncode
+                  status = "abort" if code in (3, 0xC0000409, -1073740791) else str(code)
+                  dest = os.path.join(out_root, "capi")
+                  os.makedirs(dest, exist_ok=True)
+                  out = r.stdout.replace(b"\r\n", b"\n")
+                  err = r.stderr.replace(b"\r\n", b"\n")
+                  open(os.path.join(dest, f"{name}.{v}.windows.out"), "wb").write(out)
+                  open(os.path.join(dest, f"{name}.{v}.windows.err"), "wb").write(err)
+                  open(os.path.join(dest, f"{name}.{v}.windows.status"), "w").write(status + "\n")
+                  same = open(linux, "rb").read().replace(b"\r\n", b"\n") == out
+                  print(f"capi/{name}.{v} status {status}", "same as Linux" if same else "own")
+          cli = {"5.1": "5.1.5", "5.2": "5.2.4", "5.3": "5.3.6", "5.4": "5.4.9", "5.5": "5.5.1"}
+          env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+          env["TZ"] = "UTC"
+          for d, ver in cli.items():
+              shutil.copy(os.path.join(root, f"lua-{ver}", "lua.exe"), os.path.join(bin_dir, "lua.exe"))
+              work = tempfile.mkdtemp()
+              open(os.path.join(work, "errmod.lua"), "w").write('error("in module")\n')
+              r = subprocess.run(["cmd", "/C", "lua", "-l", "errmod"], cwd=work, env=env, capture_output=True)
+              dest = os.path.join(out_root, "cli")
+              os.makedirs(dest, exist_ok=True)
+              err = r.stderr.replace(b"\r\n", b"\n")
+              open(os.path.join(dest, f"library_error.{d}.windows.err"), "wb").write(err)
+              print(f"cli/library_error {d} exit {r.returncode} stdout {r.stdout!r}:", err.decode(errors="replace"))
 
       - uses: actions/upload-artifact@v7
         with:
