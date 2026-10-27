@@ -222,7 +222,7 @@ impl Opener {
 
     /// The script's string `i` (1-based; 0 is none).
     pub(super) fn str(&self, i: u64) -> Option<&'static [u8]> {
-        (i > 0).then(|| self.s.str(i as usize - 1))
+        (i > 0).then(|| crate::vm::lib_package::opening_str(self.s.str(i as usize - 1)))
     }
 
     /// luna's own object `key` the functions being made share, made by

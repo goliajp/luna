@@ -115,7 +115,7 @@ pub(super) fn find_file(
         let fmt = b"'package.%s' must be a string";
         return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
     };
-    super::search_acct::search(vm, c_str(name), c_str(&path), b".", b"/")
+    super::search_acct::search(vm, c_str(name), c_str(&path), b".", LUA_DIRSEP)
 }
 
 /// The arguments of `package.searchpath`, all four checked in one call's
@@ -125,14 +125,14 @@ fn searchpath_args(vm: &mut Vm, a: Args) -> Result<[Vec<u8>; 4], LuaError> {
     let name = argcheck::check_string(vm, a, 0)?.as_bytes().to_vec();
     let path = argcheck::check_string(vm, a, 1)?.as_bytes().to_vec();
     let sep = opt_bytes(vm, a, 2, b".")?;
-    Ok([name, path, sep, opt_bytes(vm, a, 3, b"/")?])
+    Ok([name, path, sep, opt_bytes(vm, a, 3, LUA_DIRSEP)?])
 }
 
 /// [`searchpath_args`] where gcc evaluates a call's arguments from the
 /// last one on (i386).
 #[cfg(target_arch = "x86")]
 fn searchpath_args(vm: &mut Vm, a: Args) -> Result<[Vec<u8>; 4], LuaError> {
-    let dirsep = opt_bytes(vm, a, 3, b"/")?;
+    let dirsep = opt_bytes(vm, a, 3, LUA_DIRSEP)?;
     let sep = opt_bytes(vm, a, 2, b".")?;
     let path = argcheck::check_string(vm, a, 1)?.as_bytes().to_vec();
     Ok([

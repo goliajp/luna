@@ -33,6 +33,25 @@ pub(crate) use puc_fns::{PUC_FNS, puc_setpath};
 /// none, so only the current-directory templates remain.
 const LUA_PATH_DEFAULT: &[u8] = b"./?.lua;./?/init.lua";
 
+/// PUC's `LUA_DIRSEP`: what `require` and `package.searchpath` turn a
+/// module name's dots into, and the first line of `package.config`.
+const LUA_DIRSEP: &[u8] = if cfg!(windows) { b"\\" } else { b"/" };
+
+/// A string of the opening script, recorded from PUC built for Linux, as
+/// PUC built for the target has it: Windows' `package.config` starts with
+/// its `LUA_DIRSEP`.
+#[inline]
+pub(crate) fn opening_str(s: &'static [u8]) -> &'static [u8] {
+    if !cfg!(windows) {
+        return s;
+    }
+    match s {
+        b"/\n;\n?\n!\n-" => b"\\\n;\n?\n!\n-",
+        b"/\n;\n?\n!\n-\n" => b"\\\n;\n?\n!\n-\n",
+        _ => s,
+    }
+}
+
 /// PUC's message and `loadlib` "where" when built without dynamic libraries.
 const DLMSG: &[u8] = b"dynamic libraries not enabled; check your Lua installation";
 
