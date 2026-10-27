@@ -1,19 +1,26 @@
 /* the names the auxiliary library makes where a function uses them, which
    the collector frees when nothing holds them: "__metatable" (getmetatable,
-   setmetatable), "__pairs" (pairs), "__tostring" and "__name" (tostring,
-   and an argument's type error). The io library, whose metatable holds
-   the last two, is not opened, nor any library but the basic one. Each chunk uses its name now and then while
-   it makes garbage and keeps objects, so that the name dies and is made
-   again where other objects lie around it; the sum of the counts after
-   every round, and every 500 rounds the count, show where the collector
-   freed what. */
+   setmetatable), "__pairs" (pairs), "__tostring" (tostring) and "__name"
+   (an argument's type error). The io library, whose metatable holds the
+   last two, is not opened, nor any library but the basic one. Each chunk
+   uses its name now and then while it makes garbage and keeps objects, so
+   that the name dies and is made again where other objects lie around it;
+   the sum of the counts after every round, and every 500 rounds the count,
+   show where the collector freed what. The table's `__tostring` gives a
+   text of its own: the default one holds the table's address, whose length
+   differs from one platform to another and would change every count.
+   5.2 has no recording: its collector sweeps the string table a bucket at
+   a time, so the work of a step depends on where the strings hash, and
+   5.2.4 seeds the hash with the time and the state's addresses
+   (`makeseed`): PUC's own counts differ from run to run. */
 #include <stdio.h>
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
 
 #define LOOP(use) \
-  "local t, keep, out, sum = setmetatable({1}, {}), {}, '', 0\n" \
+  "local t = setmetatable({1}, {__tostring = function() return 't' end})\n" \
+  "local keep, out, sum = {}, '', 0\n" \
   "for i = 1, 40000 do\n" \
   "  local _ = {i}\n" \
   "  if i % 3 == 0 then keep[#keep + 1] = {} end\n" \
