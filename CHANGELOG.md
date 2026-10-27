@@ -752,6 +752,10 @@ optimization.
 
 - C API: 5.5's `lua_newstate` hashes strings with the seed it is given, as
   PUC's does; it took a seed of its own.
+- C API: 5.2's `luaL_argerror` and `luaL_traceback` find a global
+  function's name in the globals' table order, as PUC's do (`t.f` or
+  `_G.f` where PUC reaches those first), rather than trying the globals'
+  own keys first.
 - A finalizer that runs while a library function is using the results of
   a call it made no longer overwrites them: in 5.1 to 5.3, `print` could
   fail with "'tostring' must return a string to 'print'" when a

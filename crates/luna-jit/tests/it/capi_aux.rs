@@ -75,3 +75,8 @@ fn io_posix() {
 fn openlibs_count() {
     check("openlibs_count");
 }
+
+#[test]
+fn global_names() {
+    check("global_names");
+}

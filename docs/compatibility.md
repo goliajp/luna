@@ -260,9 +260,10 @@ map the name to a luna symbol:
 
 A state's strings hash with a seed of its own, as in PUC (5.5's
 `lua_newstate` takes the seed from the host), so the order `next` and
-`pairs` visit a table's string keys in can change from run to run. Two
-luna functions, declared in the same headers, take the seed from the
-caller:
+`pairs` visit a table's string keys in, and what depends on it (the name
+5.2's `luaL_argerror` and `luaL_traceback` find for a global function),
+can change from run to run. Two luna functions, declared in the same
+headers, take the seed from the caller:
 
 ```c
 /* luaL_newstate, strings hashed with seed */
@@ -352,9 +353,6 @@ Differences from PUC:
   environment upvalue, threads and userdata made through the C API;
   `lua_setlevel` does nothing.
 - A C hook may yield only from a line or count event.
-- In 5.2, `luaL_argerror` and `luaL_traceback` name a global function by
-  the globals' own keys before looking one level deeper; PUC's search
-  follows its table order, which depends on a per-run hash seed.
 - `lua_ident` is data in the library: a Windows host linking the DLL needs
   the declaration from luna's `lua.h`, which imports it (define
   `LUNA_STATIC` when linking the static library). A 5.1 host that declares
