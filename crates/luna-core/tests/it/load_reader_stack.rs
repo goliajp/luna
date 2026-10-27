@@ -17,7 +17,11 @@ use luna_core::vm::Vm;
 const SCRIPT: &str = include_str!("load_reader_stack/reader.lua");
 const EXPECTED: &str = include_str!("load_reader_stack/expected.txt");
 const BINARY: &str = include_str!("load_reader_stack/binary.lua");
+/// PUC's listing with the target's `size_t`: the chunk is its `string.dump`
+#[cfg(target_pointer_width = "64")]
 const BINARY_EXPECTED: &str = include_str!("load_reader_stack/binary_expected.txt");
+#[cfg(target_pointer_width = "32")]
+const BINARY_EXPECTED: &str = include_str!("load_reader_stack/binary_expected_32.txt");
 
 fn dialect(name: &str) -> LuaVersion {
     match name {
@@ -119,10 +123,8 @@ fn load_keeps_pucs_objects_below_its_reader() {
 }
 
 /// The same while `load` undumps a binary chunk handed over in pieces;
-/// a reader is called no more once the chunk is read. The pieces are a
-/// 64-bit PUC's chunk.
+/// a reader is called no more once the chunk is read.
 #[test]
-#[cfg(target_pointer_width = "64")]
 fn load_keeps_pucs_objects_below_its_reader_undumping() {
     let expected = BINARY_EXPECTED.replace("\r\n", "\n");
     let mut runs = 0;
