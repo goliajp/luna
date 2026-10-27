@@ -159,3 +159,87 @@ fn a_translated_operand_that_does_not_fit_is_refused() {
     let msg = String::from_utf8_lossy(&e.msg).into_owned();
     assert!(msg.contains("bad code in precompiled chunk"), "{msg}");
 }
+
+/// A 5.4 chunk whose source is a long string of `n` bytes, cut after
+/// three. PUC makes the string before it reads the bytes: the count holds
+/// it until the next collection, and a size its allocator refuses is the
+/// memory error. Each line: the size, the load's results, the count's
+/// growth in KB after the load and after a collection, as PUC 5.4.9 gives
+/// them on 64-bit Linux.
+#[test]
+fn a_cut_long_string_is_made_before_its_bytes_are_read() {
+    const SCRIPT: &str = r#"
+        local function varint(x)
+          local t = {string.char(0x80 | (x % 128))}
+          x = x // 128
+          while x > 0 do table.insert(t, 1, string.char(x % 128)); x = x // 128 end
+          return table.concat(t)
+        end
+        local hdr = string.dump(function() return 1 end):sub(1, 31)
+        local out = {}
+        for _, n in ipairs(SIZES) do
+          local bad = hdr .. "\1" .. varint(n + 1) .. "abc"
+          collectgarbage(); local c0 = collectgarbage("count")
+          local f, e = load(bad, "=bad")
+          local c1 = collectgarbage("count")
+          collectgarbage(); local c2 = collectgarbage("count")
+          out[#out + 1] = table.concat({n, tostring(f), e, math.floor(c1 - c0), math.floor(c2 - c0)}, " ")
+        end
+        return table.concat(out, "\n")
+    "#;
+    let mut cases = vec![(
+        600u64 << 20,
+        "629145600 nil bad: bad binary format (truncated chunk) 614400 0",
+    )];
+    // past any address space; a 32-bit size_t cannot hold it at all
+    #[cfg(target_pointer_width = "64")]
+    cases.push((1u64 << 60, "1152921504606846976 nil not enough memory 0 0"));
+    let sizes: Vec<String> = cases.iter().map(|c| c.0.to_string()).collect();
+    let want: Vec<&str> = cases.iter().map(|c| c.1).collect();
+    let mut vm = Vm::new(LuaVersion::Lua54);
+    let src = SCRIPT.replace("SIZES", &format!("{{{}}}", sizes.join(", ")));
+    let got = match vm.eval(&src).expect("script").first() {
+        Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+        other => panic!("a listing, got {other:?}"),
+    };
+    assert_eq!(got, want.join("\n"));
+}
+
+/// A 5.1 or 5.2 chunk whose first function's code count is -1: PUC's
+/// `LoadInt` refuses it before anything is allocated for the code. The
+/// count's growth in bytes is what the load made before, and the message,
+/// as PUC 5.1.5 and 5.2.4 give it.
+#[test]
+fn a_negative_count_is_refused_before_its_array_is_made() {
+    const SCRIPT: &str = r#"
+        local ld = loadstring or load
+        local d = string.dump(function() end)
+        local bad
+        if _VERSION == "Lua 5.1" then
+          -- the header, no source, the lines, four bytes, the count
+          bad = d:sub(1, 12) .. ("\0"):rep(20) .. "\255\255\255\255"
+        else
+          bad = d:sub(1, 18) .. ("\0"):rep(11) .. "\255\255\255\255"
+        end
+        collectgarbage(); local c0 = collectgarbage("count")
+        local f, e = ld(bad, "=bad")
+        return tostring(f) .. " " .. e .. " " .. (collectgarbage("count") - c0) * 1024
+    "#;
+    for (version, want) in [
+        (
+            LuaVersion::Lua51,
+            "nil bad: bad integer in precompiled chunk 344",
+        ),
+        (
+            LuaVersion::Lua52,
+            "nil bad: corrupted precompiled chunk 386",
+        ),
+    ] {
+        let mut vm = Vm::new(version);
+        let got = match vm.eval(SCRIPT).expect("script").first() {
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            other => panic!("a result, got {other:?}"),
+        };
+        assert_eq!(got, want, "{version:?}");
+    }
+}
