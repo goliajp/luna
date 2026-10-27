@@ -264,3 +264,37 @@ fn a_negative_count_is_refused_before_its_array_is_made() {
         assert_eq!(got, want, "{version:?}");
     }
 }
+
+/// A chunk whose code count is too big for its array: on a 32-bit target
+/// the array's bytes do not fit a `size_t`, and PUC raises
+/// `luaM_toobig`'s runtime error, which the message handler running then
+/// gets; a negative 5.3 count asks the allocator for nearly all of
+/// memory, the memory error. As 32-bit and 64-bit builds of PUC give it,
+/// under `pcall` and under `xpcall` with a handler.
+#[test]
+fn a_code_array_too_big_for_size_t_is_refused_as_puc_refuses_it() {
+    const SCRIPT: &str = include_str!("binary_load_errors/code_count.lua");
+    let run = |v: LuaVersion, n: u64| {
+        let mut vm = Vm::new(v);
+        let src = SCRIPT.replace("local n = N", &format!("local n = {n}"));
+        match vm.eval(&src).expect("script").first() {
+            Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+            other => panic!("{v:?}: {other:?}"),
+        }
+    };
+    let oom = "true nil not enough memory|true nil not enough memory";
+    assert_eq!(run(LuaVersion::Lua53, u64::from(u32::MAX)), oom);
+    if cfg!(target_pointer_width = "32") {
+        let too_big = "true nil memory allocation error: block too big|\
+                       true nil H(memory allocation error: block too big)";
+        for v in [
+            LuaVersion::Lua51,
+            LuaVersion::Lua52,
+            LuaVersion::Lua53,
+            LuaVersion::Lua54,
+            LuaVersion::Lua55,
+        ] {
+            assert_eq!(run(v, 1 << 30), too_big, "{v:?}");
+        }
+    }
+}
