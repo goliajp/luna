@@ -16,6 +16,25 @@ concurrency:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
+  # Paths every platform can check out: Windows refuses its device names
+  # (CON, PRN, AUX, NUL, COM1-9, LPT1-9, in any case, with or without an
+  # extension) as any part of a path.
+  # ─────────────────────────────────────────────────────────────────
+  paths:
+    name: no Windows device name in a path
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: git ls-files has no device name as a path part
+        run: |
+          bad=$(git ls-files | grep -iE '(^|/)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.[^/]*)?(/|$)' || true)
+          if [ -n "$bad" ]; then
+            echo "paths Windows cannot check out:"
+            echo "$bad"
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────────────────────────
   # Native build + test matrix.
   # Stable toolchain across three OS × the standard cargo commands.
   # ─────────────────────────────────────────────────────────────────
