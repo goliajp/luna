@@ -69,6 +69,71 @@ const STR_LUAC: &[u8] = &[
     0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5f, 0x45, 0x4e, 0x56, 0x00,
 ];
 
+/// `chunk`, written by a 64-bit `luac`, with the target's `size_t`: the
+/// header's size and each string's length (`lundump.c`'s `LoadFunction`
+/// order).
+fn native(chunk: &[u8]) -> Vec<u8> {
+    fn int(b: &[u8], p: &mut usize) -> usize {
+        let v = u32::from_le_bytes(b[*p..*p + 4].try_into().unwrap()) as usize;
+        *p += 4;
+        v
+    }
+    fn copy(b: &[u8], p: &mut usize, n: usize, out: &mut Vec<u8>) {
+        out.extend_from_slice(&b[*p..*p + n]);
+        *p += n;
+    }
+    fn string(b: &[u8], p: &mut usize, out: &mut Vec<u8>) {
+        let n = u64::from_le_bytes(b[*p..*p + 8].try_into().unwrap()) as usize;
+        *p += 8;
+        out.extend_from_slice(&n.to_le_bytes());
+        copy(b, p, n, out);
+    }
+    fn function(b: &[u8], p: &mut usize, out: &mut Vec<u8>) {
+        copy(b, p, 11, out); // lines, parameters, vararg, stack size
+        let n = int(b, &mut { *p });
+        copy(b, p, 4 + 4 * n, out);
+        let n = int(b, &mut { *p });
+        copy(b, p, 4, out);
+        for _ in 0..n {
+            let t = b[*p];
+            copy(b, p, 1, out);
+            match t {
+                1 => copy(b, p, 1, out),
+                3 => copy(b, p, 8, out),
+                4 => string(b, p, out),
+                _ => {}
+            }
+        }
+        let n = int(b, &mut { *p });
+        copy(b, p, 4, out);
+        for _ in 0..n {
+            function(b, p, out);
+        }
+        let n = int(b, &mut { *p });
+        copy(b, p, 4 + 2 * n, out);
+        string(b, p, out); // source
+        let n = int(b, &mut { *p });
+        copy(b, p, 4 + 4 * n, out);
+        let n = int(b, &mut { *p });
+        copy(b, p, 4, out);
+        for _ in 0..n {
+            string(b, p, out);
+            copy(b, p, 8, out);
+        }
+        let n = int(b, &mut { *p });
+        copy(b, p, 4, out);
+        for _ in 0..n {
+            string(b, p, out);
+        }
+    }
+    let mut out = chunk[..18].to_vec();
+    out[8] = std::mem::size_of::<usize>() as u8;
+    let mut p = 18;
+    function(chunk, &mut p, &mut out);
+    assert_eq!(p, chunk.len(), "the whole chunk");
+    out
+}
+
 fn fresh_vm() -> Vm {
     let mut vm = Vm::new(LuaVersion::Lua54);
     vm.set_puc_bytecode_loading(true);
@@ -77,7 +142,7 @@ fn fresh_vm() -> Vm {
 
 fn run_chunk(vm: &mut Vm, bytes: &[u8]) -> Vec<Value> {
     let cl = vm
-        .load(bytes, b"=puc52-test")
+        .load(&native(bytes), b"=puc52-test")
         .expect("PUC 5.2 chunk load failed");
     vm.call_value(Value::Closure(cl), &[]).expect("call failed")
 }
@@ -122,7 +187,7 @@ fn load_string_const() {
 fn reject_without_puc_gate() {
     let mut vm = Vm::new(LuaVersion::Lua54); // puc loading default off
     let err = vm
-        .load(SIMPLE_LUAC, b"=puc52-test")
+        .load(&native(SIMPLE_LUAC), b"=puc52-test")
         .expect_err("should fail with PUC loading disabled");
     let msg = String::from_utf8_lossy(&err.msg);
     assert!(
@@ -133,7 +198,7 @@ fn reject_without_puc_gate() {
 
 #[test]
 fn reject_bad_signature() {
-    let mut bad = SIMPLE_LUAC.to_vec();
+    let mut bad = native(SIMPLE_LUAC);
     bad[0] = 0x1c; // mangle the escape byte; loader can't even recognise it
     let mut vm = fresh_vm();
     assert!(vm.load(&bad, b"=puc52-test").is_err());
@@ -143,7 +208,7 @@ fn reject_bad_signature() {
 fn reject_truncated_header() {
     let mut vm = fresh_vm();
     let err = vm
-        .load(&SIMPLE_LUAC[..10], b"=puc52-test")
+        .load(&native(SIMPLE_LUAC)[..10], b"=puc52-test")
         .expect_err("should fail on truncated header");
     let msg = String::from_utf8_lossy(&err.msg);
     assert!(

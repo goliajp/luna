@@ -10,14 +10,20 @@
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
-/// PUC 5.1 binary header (12 bytes, LE, 8-byte size_t, f64 numbers).
+/// PUC 5.1 binary header (12 bytes, LE, the target's size_t, f64 numbers).
 const HEADER_51: [u8; 12] = [
-    0x1b, b'L', b'u', b'a', 0x51, 0x00, 0x01, // LE
-    4,    // sizeof(int)
-    8,    // sizeof(size_t)
-    4,    // sizeof(Instruction)
-    8,    // sizeof(lua_Number)
-    0,    // float numbers (not integral)
+    0x1b,
+    b'L',
+    b'u',
+    b'a',
+    0x51,
+    0x00,
+    0x01,                               // LE
+    4,                                  // sizeof(int)
+    std::mem::size_of::<usize>() as u8, // sizeof(size_t)
+    4,                                  // sizeof(Instruction)
+    8,                                  // sizeof(lua_Number)
+    0,                                  // float numbers (not integral)
 ];
 
 /// Encode a 5.1 instruction in `op:6 | A:8 | C:9 | B:9` layout.
@@ -44,9 +50,9 @@ fn enc_sbx(op: u8, a: u32, sbx: i32) -> u32 {
 fn puc_str(s: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(8 + s.len() + 1);
     if s.is_empty() {
-        v.extend_from_slice(&0u64.to_le_bytes());
+        v.extend_from_slice(&0usize.to_le_bytes());
     } else {
-        let n = (s.len() + 1) as u64;
+        let n = s.len() + 1;
         v.extend_from_slice(&n.to_le_bytes());
         v.extend_from_slice(s);
         v.push(0); // PUC trailing \0
