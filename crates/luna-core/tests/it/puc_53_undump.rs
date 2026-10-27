@@ -13,16 +13,40 @@ use luna_core::vm::Vm;
 /// PUC 5.3 binary header — 33 bytes. Mirrors `lundump.h` 5.3.6 +
 /// `lua-5.3-src/lua-5.3.6/src/lundump.c::checkHeader`.
 const HEADER_53: [u8; 33] = [
-    0x1b, b'L', b'u', b'a', 0x53, 0x00, // signature + version + format
-    0x19, 0x93, b'\r', b'\n', 0x1a, b'\n', // LUAC_DATA
-    4,     // sizeof(int)
-    8,     // sizeof(size_t)
-    4,     // sizeof(Instruction)
-    8,     // sizeof(lua_Integer)
-    8,     // sizeof(lua_Number)
+    0x1b,
+    b'L',
+    b'u',
+    b'a',
+    0x53,
+    0x00, // signature + version + format
+    0x19,
+    0x93,
+    b'\r',
+    b'\n',
+    0x1a,
+    b'\n',                              // LUAC_DATA
+    4,                                  // sizeof(int)
+    std::mem::size_of::<usize>() as u8, // sizeof(size_t)
+    4,                                  // sizeof(Instruction)
+    8,                                  // sizeof(lua_Integer)
+    8,                                  // sizeof(lua_Number)
     // LUAC_INT = 0x5678 (LE i64)
-    0x78, 0x56, 0, 0, 0, 0, 0, 0, // LUAC_NUM = 370.5 (LE f64)
-    0, 0, 0, 0, 0, 0x28, 0x77, 0x40,
+    0x78,
+    0x56,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0, // LUAC_NUM = 370.5 (LE f64)
+    0,
+    0,
+    0,
+    0,
+    0,
+    0x28,
+    0x77,
+    0x40,
 ];
 
 /// Encode a 5.3 iABC instruction in `op:6 | A:8 | C:9 | B:9` layout.
@@ -53,7 +77,7 @@ fn rk(idx: u32) -> u32 {
 }
 
 /// PUC 5.3 length-prefixed string. byte = (len+1) if < 0xFF, else
-/// 0xFF followed by a size_t (8 LE bytes) holding (len+1). Empty
+/// 0xFF followed by a size_t (the target's, LE) holding (len+1). Empty
 /// strings ship as a single `0x00` byte (size==0 → NULL sentinel).
 fn puc53_str(s: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(1 + s.len() + 8);
@@ -61,7 +85,7 @@ fn puc53_str(s: &[u8]) -> Vec<u8> {
         v.push(0);
         return v;
     }
-    let sized = (s.len() as u64) + 1;
+    let sized = s.len() + 1;
     if sized < 0xFF {
         v.push(sized as u8);
     } else {
@@ -221,7 +245,11 @@ fn rejects_bad_sizeof_size_t() {
     vm.set_puc_bytecode_loading(true);
     let mut chunk = build_return_42_chunk();
     // sizeof(size_t) at offset 13
-    chunk[13] = 4;
+    chunk[13] = if std::mem::size_of::<usize>() == 8 {
+        4
+    } else {
+        8
+    };
     let err = vm.load(&chunk, b"=test").unwrap_err();
     let s = String::from_utf8_lossy(&err.msg).into_owned();
     assert_eq!(s, "test: bad binary format (size_t size mismatch)");
