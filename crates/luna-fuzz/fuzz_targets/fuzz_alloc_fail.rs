@@ -24,6 +24,7 @@
 
 use arbitrary::Unstructured;
 use libfuzzer_sys::fuzz_target;
+use luna_core::__private::VmJitState;
 use luna_core::runtime::Value;
 use luna_core::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
 use std::cell::Cell;
