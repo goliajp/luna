@@ -37,6 +37,7 @@ mod scan;
 mod steps;
 mod syntax_msg;
 mod undump;
+mod undump_probe;
 mod view;
 use replay::{Cut, Fs, Replay, walk};
 pub(super) use replay::{PVal, TabOp};

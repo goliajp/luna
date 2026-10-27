@@ -107,9 +107,10 @@ impl Vm {
     ) -> Result<(), SyntaxError> {
         let mut u = crate::vm::dump::Undumping::new(true);
         u.feed(bytes);
-        let Some(evs) = u.events_so_far(bytes) else {
+        let Some(mut evs) = u.events_so_far(bytes) else {
             return Ok(());
         };
+        let refused = self.refused_block(&mut evs, u.cut_long);
         let d = self.heap.dialect();
         let mut h = match d {
             Dialect::L55 => Some(PTab::new(&mut self.heap, 0, 16, true)?),
@@ -145,12 +146,22 @@ impl Vm {
                 }
             }
         }
-        // a long string is made before its bytes are read
-        if let Some(len) = u.cut_long {
+        self.end_failed_undump(u.cut_long.filter(|_| refused.is_none()), buff)?;
+        match refused {
+            Some(_) => Err(SyntaxError::memory()),
+            None => self.undump_error(chunkname, e),
+        }
+    }
+
+    /// The end of a refused binary chunk's load: the cut long string of
+    /// `len` bytes made (before its bytes are read), the buffer of `buff`
+    /// bytes freed.
+    fn end_failed_undump(&mut self, len: Option<usize>, buff: usize) -> Result<(), SyntaxError> {
+        if let Some(len) = len {
             self.heap.ghost_obj(PucObj::Str { len, long: true })?;
         }
         self.heap.acct_block(buff, 0);
-        self.undump_error(chunkname, e)
+        Ok(())
     }
 
     /// 5.1 to 5.3 make the message of a refused binary chunk with
@@ -244,7 +255,7 @@ impl Vm {
 }
 
 /// The parser's array an undumped array of `a` is.
-fn parser_array(a: Arr) -> ParserArray {
+pub(super) fn parser_array(a: Arr) -> ParserArray {
     match a {
         Arr::Code => ParserArray::Code,
         Arr::Protos => ParserArray::Protos,
