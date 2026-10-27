@@ -78,6 +78,11 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
     // the register file, in the entry block (mem2reg / SROA promote it)
     let regs = builder.build_alloca(regs_ty, "regs").ok()?;
 
+    let self_calls = plan
+        .self_call_pcs
+        .iter()
+        .chain(&plan.tail_call_pcs)
+        .any(|&c| c);
     let mut emitter = ComputeEmitter {
         ctx: ctx_static,
         builder: &builder,
@@ -86,6 +91,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         regs_ty,
         regs,
         helpers: &helpers,
+        self_calls,
         read_register: inkwell::intrinsics::Intrinsic::find("llvm.read_register")?
             .get_declaration(&module, &[i64_type.into()])?,
         nils_at: &plan.nils_at,
@@ -113,12 +119,7 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         builder.build_store(slot, arg).ok()?;
     }
 
-    if plan
-        .self_call_pcs
-        .iter()
-        .chain(&plan.tail_call_pcs)
-        .any(|&c| c)
-    {
+    if self_calls {
         emitter.emit_self_guard()?;
     }
 

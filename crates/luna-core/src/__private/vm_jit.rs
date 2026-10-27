@@ -18,6 +18,9 @@ pub trait VmJitFrames {
     /// # Safety
     /// `base` and `pc` are a level compiled code is running: `pc` an instruction of that level's function, `vals` its registers.
     unsafe fn jit_handoff_frame(&mut self, base: Option<u32>, pc: u32, vals: Vec<Value>);
+    /// How many levels compiled code has handed to the interpreter and the
+    /// interpreter has not taken up yet.
+    fn jit_handed_levels(&self) -> usize;
     /// The levels compiled code may enter from the level at `base`
     /// before it calls `Vm::jit_self_level` again. One bound on the base
     /// covers both what can happen: a level whose arguments' top plus its
@@ -186,6 +189,10 @@ impl VmJitFrames for crate::vm::Vm {
     #[inline]
     unsafe fn jit_handoff_frame(&mut self, base: Option<u32>, pc: u32, vals: Vec<Value>) {
         crate::vm::Vm::jit_handoff_frame(self, base, pc, vals)
+    }
+    #[inline]
+    fn jit_handed_levels(&self) -> usize {
+        self.jit.handoff.len()
     }
     #[inline]
     fn jit_limits(&self, cl: Gc<LuaClosure>, base: u32) -> JitLimits {
