@@ -65,7 +65,8 @@ jobs:
       # removed key hashed by its address: both depend on where the
       # compiler and the allocator put things. The count host's PUC (a copy
       # of the sources) gets a bucket for each C string address, and counts
-      # such a node as taken
+      # such a node as taken; the registry keys it makes of static
+      # addresses take the fixed values luna gives them
       - name: Take the coincidences of addresses out of the count host's PUC
         shell: python
         run: |
@@ -121,6 +122,12 @@ jobs:
               s, n = reuse.subn(taken, s, count=1)
               assert n == 1, f"{v}: luaH_newkey's main position test"
               open(p, "w", newline="").write(s)
+              for name in ("ldblib.c", "loadlib.c"):
+                  p = os.path.join(dst, name)
+                  s = open(p, newline="").read()
+                  for key, fixed in (("(void *)&KEY_HOOK", "0x1020"), ("&HOOKKEY", "0x1020"), ("&CLIBS", "0x1010")):
+                      s = s.replace(f", {key})", f", (void *){fixed})")
+                  open(p, "w", newline="").write(s)
 
       - name: Build with MSVC
         shell: cmd
