@@ -5,7 +5,11 @@
 //! `tests/capi/expected/<name>.<5x>.out` (standard output), and when they
 //! exist `<name>.<5x>.err` (standard error) and `<name>.<5x>.status` (`0`,
 //! `1` or `abort`; `0` when absent). The programs are built with the
-//! compatibility flags PUC's makefiles use.
+//! compatibility flags PUC's makefiles use. On Windows a recording of
+//! its own (`<name>.<5x>.windows.out` and so on, from PUC built with MSVC)
+//! comes first where there is one, and the program runs from where that
+//! PUC's ran (`C:\luna-gc-steps`): the default package paths name the
+//! program's directory, strings the collector counts.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -103,7 +107,11 @@ fn build(name: &str, v: &str, inc: &str) -> Result<PathBuf, String> {
         }
         cmd.arg(&src).arg(format!("/Fe{}", exe.display()));
         cmd.arg(format!("/Fo{}\\", out_dir.display()));
-        cmd.arg("/link").arg(lib.join("luna_jit.dll.lib"));
+        // the 8 MB main thread stack Linux gives, which the recordings'
+        // PUC had too (Windows gives 1 MB)
+        cmd.arg("/link")
+            .arg(lib.join("luna_jit.dll.lib"))
+            .arg("/STACK:8388608");
     } else {
         cmd.arg("-w").arg("-I").arg(&include);
         cmd.arg("-I").arg(crate_dir().join("tests/capi"));
@@ -112,7 +120,9 @@ fn build(name: &str, v: &str, inc: &str) -> Result<PathBuf, String> {
         }
         cmd.arg(&src).arg("-o").arg(&exe);
         cmd.arg("-L").arg(&lib).arg("-lluna_jit");
-        if !cfg!(windows) {
+        if cfg!(windows) {
+            cmd.arg("-Wl,--stack,8388608");
+        } else {
             cmd.arg(format!("-Wl,-rpath,{}", lib.display()));
         }
         if cfg!(target_os = "linux") {
@@ -149,6 +159,28 @@ fn read_expected(path: &Path) -> Option<String> {
         .map(|s| s.replace("\r\n", "\n"))
 }
 
+/// The recording `<name>.<v>.<ext>`, this platform's own first.
+fn expected_file(name: &str, v: &str, ext: &str) -> Option<String> {
+    let dir = crate_dir().join("tests/capi/expected");
+    let own = cfg!(windows)
+        .then(|| read_expected(&dir.join(format!("{name}.{v}.windows.{ext}"))))
+        .flatten();
+    own.or_else(|| read_expected(&dir.join(format!("{name}.{v}.{ext}"))))
+}
+
+/// Where the program runs from: on Windows a copy in the directory the
+/// recordings' PUC ran from.
+fn placed(exe: PathBuf, name: &str, v: &str) -> PathBuf {
+    if !cfg!(windows) {
+        return exe;
+    }
+    let dir = Path::new(r"C:\luna-gc-steps");
+    std::fs::create_dir_all(dir).expect("the directory");
+    let copy = dir.join(format!("capi-{name}-{v}.exe"));
+    std::fs::copy(&exe, &copy).expect("a copy of the program");
+    copy
+}
+
 /// Line by line differences, or `None` when equal.
 fn diff(what: &str, want: &str, got: &str) -> Option<String> {
     if want == got {
@@ -173,11 +205,10 @@ fn diff(what: &str, want: &str, got: &str) -> Option<String> {
 /// Build and run `tests/capi/<name>.c` for every dialect with a
 /// recording, and fail with every difference from PUC's output.
 pub fn check(name: &str) {
-    let expected = crate_dir().join("tests/capi/expected");
     let mut failures = Vec::new();
     let mut ran = 0;
     for (v, inc) in DIALECTS {
-        let Some(want_out) = read_expected(&expected.join(format!("{name}.{v}.out"))) else {
+        let Some(want_out) = expected_file(name, v, "out") else {
             continue;
         };
         ran += 1;
@@ -188,7 +219,7 @@ pub fn check(name: &str) {
                 continue;
             }
         };
-        let mut cmd = Command::new(&exe);
+        let mut cmd = Command::new(placed(exe, name, v));
         if cfg!(windows) {
             // the shared library is found next to the program or on PATH
             let path = std::env::var_os("PATH").unwrap_or_default();
@@ -202,12 +233,12 @@ pub fn check(name: &str) {
         if let Some(d) = diff(&format!("{name} {v} stdout"), &want_out, &got_out) {
             failures.push(d);
         }
-        if let Some(want_err) = read_expected(&expected.join(format!("{name}.{v}.err")))
+        if let Some(want_err) = expected_file(name, v, "err")
             && let Some(d) = diff(&format!("{name} {v} stderr"), &want_err, &got_err)
         {
             failures.push(d);
         }
-        let want_status = read_expected(&expected.join(format!("{name}.{v}.status")))
+        let want_status = expected_file(name, v, "status")
             .map_or_else(|| "0".to_string(), |s| s.trim().to_string());
         let got_status = status_text(out.status);
         if want_status != got_status {
