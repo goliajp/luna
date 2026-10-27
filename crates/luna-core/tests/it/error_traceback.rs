@@ -4,10 +4,10 @@
 //! dialect, what a C host gets from PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.9 /
 //! 5.5.1 when it loads the file the same way and calls it with `lua_pcall`
 //! under a message handler returning `luaL_traceback(L, L, NULL, 1)` (5.1:
-//! `debug.traceback("", 2)` without its leading newline). 5.2 names a C
-//! function by walking the global table, in an order that changes from run
-//! to run (`'_G.error'` or `'error'`); the files keep the short form, which
-//! luna prints.
+//! `debug.traceback("", 2)` without its leading newline), PUC built with
+//! hash seed 1 and luna's Vm made with it: 5.2 names a C function by
+//! walking the global table, in the order of its keys, which the seed
+//! decides (`'_G.error'`, `'error'` or `'t8.f'`).
 
 use std::path::PathBuf;
 
@@ -54,6 +54,14 @@ fn programs() -> Vec<String> {
     names
 }
 
+/// A Vm of dialect `v` with the standard libraries, hashing strings with
+/// seed 1, as the recordings' PUC did.
+fn seeded(v: LuaVersion) -> Vm {
+    let mut vm = Vm::new_minimal_with_hash_seed(v, 1);
+    vm.open_all_libs().expect("the libraries open");
+    vm
+}
+
 /// Run `<name>.lua` the way an embedder does and take the traceback.
 fn snapshot(vm: &mut Vm, name: &str) -> String {
     let src = std::fs::read(fixture_dir().join(format!("{name}.lua"))).expect("read");
@@ -71,7 +79,7 @@ fn every_program_matches_puc() {
     let mut failures = Vec::new();
     for name in programs() {
         for (dialect, v) in DIALECTS {
-            let got = snapshot(&mut Vm::new(v), &name);
+            let got = snapshot(&mut seeded(v), &name);
             let want = expected(&name, dialect);
             if got != want {
                 failures.push(format!(
@@ -107,7 +115,7 @@ fn library_functions_are_c_levels() {
 #[test]
 fn a_native_called_by_the_host() {
     for (dialect, v) in DIALECTS {
-        let mut vm = Vm::new(v);
+        let mut vm = seeded(v);
         let error = vm.globals().get(Value::Str(vm.heap.intern(b"error")));
         let msg = Value::Str(vm.heap.intern(b"boom"));
         vm.call_value(error, &[msg]).unwrap_err();
@@ -137,4 +145,48 @@ fn taken_once_and_not_for_caught_errors() {
     assert!(vm.take_error_traceback().is_none());
     vm.eval("pcall(error, 'x')").unwrap();
     assert!(vm.take_error_traceback().is_none());
+}
+
+/// The traceback taken while the error is raised, which makes no Lua
+/// objects, and the one `debug.traceback` makes in a message handler
+/// (string by string, as PUC makes it) are the same text: both name the
+/// levels with one set of rules.
+#[test]
+fn the_snapshot_is_what_debug_traceback_makes() {
+    let mut failures = Vec::new();
+    for name in programs() {
+        for (dialect, v) in DIALECTS {
+            let snap = snapshot(&mut seeded(v), &name);
+            let mut vm = seeded(v);
+            // the handler's levels as the recordings' C handler had them: 5.1
+            // decides where to leave levels out by their number
+            let handler = if v == LuaVersion::Lua51 {
+                "return function(m) return debug.traceback(m, 2) end"
+            } else {
+                "return debug.traceback"
+            };
+            let traceback = vm.eval(handler).expect("the handler")[0];
+            // loaded after the handler: a closure held only here lasts until
+            // the next call
+            let src = std::fs::read(fixture_dir().join(format!("{name}.lua"))).expect("read");
+            let main = vm
+                .load(&src, format!("@{name}.lua").as_bytes())
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            let made = match vm.call_value_with_handler(Value::Closure(main), &[], traceback) {
+                Ok(_) => panic!("{name}: ran without an error"),
+                Err(e) => match e.0 {
+                    Value::Str(s) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
+                    // a message that is not a string comes back as it is
+                    _ => continue,
+                },
+            };
+            let made = &made[made.find("stack traceback:").expect("a traceback")..];
+            if made != snap {
+                failures.push(format!(
+                    "{name} {dialect}\n--- debug.traceback\n{made}\n--- snapshot\n{snap}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }

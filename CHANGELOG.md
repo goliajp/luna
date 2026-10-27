@@ -756,6 +756,11 @@ optimization.
   function's name in the globals' table order, as PUC's do (`t.f` or
   `_G.f` where PUC reaches those first), rather than trying the globals'
   own keys first.
+- `Vm::take_error_traceback`, `Vm::coroutine_error_traceback` and
+  `Vm::traceback` name a C function in 5.2 as PUC's `luaL_traceback`
+  does, `_G.` included where PUC reaches the function through `_G`; the
+  short name was printed. They name every level with the rules
+  `debug.traceback` uses.
 - A finalizer that runs while a library function is using the results of
   a call it made no longer overwrites them: in 5.1 to 5.3, `print` could
   fail with "'tostring' must return a string to 'print'" when a

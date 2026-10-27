@@ -265,8 +265,8 @@ pub(crate) fn arg_error(vm: &mut Vm, n: u32, extra: &str) -> LuaError {
 ///
 /// 5.2 finds the name by walking the global table, whose string hashes are
 /// seeded per run, so it prints `'_G.tonumber'` on some runs and `'tonumber'`
-/// on others (measured on stock 5.2.4). luna gives the short form, the one
-/// 5.3 settled on.
+/// on others; luna walks it in the same order, so with the same seed it
+/// prints what PUC does.
 fn unnamed_native_name(vm: &mut Vm) -> Result<String, LuaError> {
     if vm.version() == crate::version::LuaVersion::Lua51 {
         return Ok("?".to_string());

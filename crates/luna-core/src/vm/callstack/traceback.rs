@@ -5,6 +5,7 @@ use crate::version::LuaVersion;
 use crate::vm::exec::Vm;
 
 use super::Ar;
+use super::func_name::FuncName;
 use super::levels::tail_ar;
 
 mod plan;
@@ -95,57 +96,41 @@ impl Vm {
             out.extend_from_slice(format!("{}:", ar.currentline).as_bytes());
         }
         let name = ar.name.as_ref().filter(|(what, _)| !what.is_empty());
-        let where_: String = if v == LuaVersion::Lua51 {
-            match name {
+        if v == LuaVersion::Lua51 {
+            let where_ = match name {
                 Some((_, n)) => format!(" in function '{n}'"),
                 None if ar.what == "main" => " in main chunk".to_string(),
                 None if matches!(ar.what, "C" | "tail") => " ?".to_string(),
                 None => format!(" in function <{}:{}>", lossy(&ar.short_src), ar.linedefined),
-            }
+            };
+            out.extend_from_slice(where_.as_bytes());
         } else {
-            format!(" in {}", self.traceback_funcname(ar, names))
-        };
-        out.extend_from_slice(where_.as_bytes());
+            out.extend_from_slice(b" in ");
+            self.traceback_funcname(ar, names, out);
+        }
         if ar.istailcall && v >= LuaVersion::Lua52 {
             out.extend_from_slice(b"\n\t(...tail calls...)");
         }
     }
 
     /// PUC `pushfuncname` of 5.2 to 5.5.
-    fn traceback_funcname(&mut self, ar: &Ar, names: &mut GlobalNames) -> String {
-        let v = self.version();
-        let name = ar.name.as_ref().filter(|(what, _)| !what.is_empty());
-        let lua_fallback = || format!("function <{}:{}>", lossy(&ar.short_src), ar.linedefined);
-        match v {
-            LuaVersion::Lua52 => match name {
-                Some((_, n)) => format!("function '{n}'"),
-                None if ar.what == "main" => "main chunk".to_string(),
-                None if ar.what == "C" => match names.lookup(self, ar.func) {
-                    Some(g) => format!("function '{g}'"),
-                    None => "?".to_string(),
-                },
-                None => lua_fallback(),
-            },
-            LuaVersion::Lua53 | LuaVersion::Lua54 => {
-                if let Some(g) = names.lookup(self, ar.func) {
-                    return format!("function '{g}'");
-                }
-                match name {
-                    Some((what, n)) => format!("{what} '{n}'"),
-                    None if ar.what == "main" => "main chunk".to_string(),
-                    None if ar.what != "C" => lua_fallback(),
-                    None => "?".to_string(),
-                }
+    fn traceback_funcname(&mut self, ar: &Ar, names: &mut GlobalNames, out: &mut Vec<u8>) {
+        let name = self.func_name(ar, |vm| Ok::<_, ()>(names.lookup(vm, ar.func)));
+        match name {
+            Ok(FuncName::Global(g)) => {
+                out.extend_from_slice(b"function '");
+                out.extend_from_slice(&g);
+                out.push(b'\'');
             }
-            _ => match name {
-                Some((what, n)) => format!("{what} '{n}'"),
-                None if ar.what == "main" => "main chunk".to_string(),
-                None => match names.lookup(self, ar.func) {
-                    Some(g) => format!("function '{g}'"),
-                    None if ar.what != "C" => lua_fallback(),
-                    None => "?".to_string(),
-                },
-            },
+            Ok(FuncName::Named(word)) => {
+                let n = ar.name.as_ref().map_or("", |(_, n)| n.as_str());
+                out.extend_from_slice(format!("{word} '{n}'").as_bytes());
+            }
+            Ok(FuncName::Main) => out.extend_from_slice(b"main chunk"),
+            Ok(FuncName::Lua) => out.extend_from_slice(
+                format!("function <{}:{}>", lossy(&ar.short_src), ar.linedefined).as_bytes(),
+            ),
+            Ok(FuncName::Unknown) | Err(()) => out.push(b'?'),
         }
     }
 }
@@ -185,10 +170,10 @@ pub(crate) fn traceback_from_lines<L: AsRef<[u8]>>(
 /// a deep stack repeats few functions, and each lookup walks the loaded
 /// modules.
 #[derive(Default)]
-struct GlobalNames(std::collections::HashMap<usize, Option<String>>);
+struct GlobalNames(std::collections::HashMap<usize, Option<Vec<u8>>>);
 
 impl GlobalNames {
-    fn lookup(&mut self, vm: &mut Vm, f: Value) -> Option<String> {
+    fn lookup(&mut self, vm: &mut Vm, f: Value) -> Option<Vec<u8>> {
         let key = match f {
             Value::Closure(c) => c.as_ptr() as usize,
             Value::Native(n) => n.as_ptr() as usize,
@@ -197,7 +182,7 @@ impl GlobalNames {
         if let Some(name) = self.0.get(&key) {
             return name.clone();
         }
-        let name = vm.global_func_name(f);
+        let name = vm.global_path(f).map(|p| p.name(vm.version()));
         self.0.insert(key, name.clone());
         name
     }

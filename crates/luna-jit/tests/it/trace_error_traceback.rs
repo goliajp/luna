@@ -49,8 +49,12 @@ const MODES: [Mode; 5] = [
     Mode::MethodAndTrace,
 ];
 
+/// A Vm hashing strings with seed 1, as the recordings' PUC did: 5.2
+/// names a C function by the global table's order.
 fn vm(v: LuaVersion, mode: Mode) -> Vm {
-    let mut vm = luna_jit::new_with_jit(v);
+    let mut vm = Vm::new_minimal_with_hash_seed(v, 1);
+    luna_jit::install_default_jit(&mut vm);
+    vm.open_all_libs().expect("the libraries open");
     match mode {
         Mode::Interp => {
             vm.set_jit_enabled(false);

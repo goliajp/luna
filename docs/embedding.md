@@ -806,7 +806,7 @@ line: the error value is the `Err` itself.
 | dialect | name |
 |---|---|
 | 5.1 | `function '<name>'` for any name the calling instruction gives (global, local, method, field, upvalue); `main chunk`; `function <src:line>` for an unnamed Lua function; a C function without a name prints ` ?` in place of `in <name>`. A tail call left a level `(tail call): ?` |
-| 5.2 | `function '<name>'` for a name from the calling instruction; `main chunk`; an unnamed C function by the global it is reachable from (`function 'string.gsub'`, else `?`); `function <src:line>` |
+| 5.2 | `function '<name>'` for a name from the calling instruction; `main chunk`; an unnamed C function by the first path to it, two tables deep, in the global table's order (`function 'string.gsub'`, `function 'error'` or `function '_G.error'`, which one depends on the hash seed), else `?`; `function <src:line>` |
 | 5.3, 5.4 | first the name the function is reachable by from `package.loaded`, two tables deep, without `_G.` (`function 'error'`, `function 'string.gsub'`, `function 'mymod.f'`); else `<kind> '<name>'` with kind `global`, `local`, `method`, `field`, `upvalue`, `metamethod`, `for iterator` or `hook`; else `main chunk`, `function <src:line>`, or `?` |
 | 5.5 | first `<kind> '<name>'` from the calling instruction (`global 'error'`, `field 'gsub'`, `method 'rep'`); else `main chunk`; else the `package.loaded` name; else `function <src:line>` or `?` |
 
