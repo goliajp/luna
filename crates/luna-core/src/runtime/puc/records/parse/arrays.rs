@@ -85,6 +85,41 @@ impl ParserSizes {
             ParserArray::Labels | ParserArray::Gotos => dyd_sizes(d).1,
         }
     }
+
+    /// The most elements PUC lets array `a` hold (the `limit` its
+    /// `luaM_growvector` passes; from 5.4 also what `size_t` can count).
+    fn limit(&self, a: ParserArray) -> usize {
+        const MAX_INT: usize = i32::MAX as usize;
+        const SHRT_MAX: usize = i16::MAX as usize;
+        let d = self.d;
+        let modern = matches!(d, Dialect::L54 | Dialect::L55);
+        let n = match a {
+            ParserArray::Code | ParserArray::LineInfo | ParserArray::AbsLines => MAX_INT,
+            // MAXARG_Bx (5.1's constants too) and MAXARG_Ax
+            ParserArray::Consts if d == Dialect::L51 => (1 << 18) - 1,
+            ParserArray::Consts if modern => (1 << 25) - 1,
+            ParserArray::Consts => (1 << 26) - 1,
+            ParserArray::Protos if modern => (1 << 17) - 1,
+            ParserArray::Protos => (1 << 18) - 1,
+            ParserArray::LocVars | ParserArray::Labels | ParserArray::Gotos => SHRT_MAX,
+            // MAXUPVAL; 5.1 checks its own cap of 60 apart
+            ParserArray::Upvals if d == Dialect::L51 => MAX_INT,
+            ParserArray::Upvals => 255,
+            ParserArray::ActVar if modern => SHRT_MAX,
+            ParserArray::ActVar => MAX_INT,
+        };
+        if modern {
+            // `luaM_limitN`, on the counted platform's `size_t`
+            let max_size = if self.s.ptr == 4 {
+                u32::MAX as usize
+            } else {
+                usize::MAX
+            };
+            n.min(max_size / self.elem(a))
+        } else {
+            n
+        }
+    }
 }
 
 impl FuncArrays {
@@ -143,10 +178,17 @@ impl Heap {
         v.n = n;
     }
 
-    /// `v` doubled (at least 4).
+    /// `v` doubled (at least 4), or grown to its limit once doubling would
+    /// pass half of it (`luaM_growaux_`).
     fn parser_grow(&mut self, v: &mut GrowVec, a: ParserArray) {
-        let new = if v.cap < 2 { 4 } else { v.cap * 2 };
-        let elem = self.parser_elem(a);
+        let ps = self.parser_sizes();
+        let limit = ps.limit(a);
+        let new = if v.cap >= limit / 2 {
+            limit
+        } else {
+            (v.cap * 2).max(4)
+        };
+        let elem = ps.elem(a);
         self.acct_block(v.cap * elem, new * elem);
         v.cap = new;
     }
