@@ -216,8 +216,9 @@ jobs:
                   assert r.returncode == 0, (d, mode, r.stdout, r.stderr)
 
       # the C API hosts of luna-jit's tests (`tests/capi`), built with the
-      # same PUC and the defines the tests give luna's, run from
-      # C:\luna-gc-steps as the tests run luna's, from the crate directory;
+      # same PUC and the defines the tests give luna's and an 8 MB main
+      # thread stack as Linux gives, run from C:\luna-gc-steps as the tests
+      # run luna's;
       # and the CLI case `cli_errors::libraries_and_warnings::library_error`
       - name: Record the C API hosts and the CLI cases
         shell: python
@@ -260,14 +261,16 @@ jobs:
               r = subprocess.run([cl, "/nologo", "/w", "/O2", "/MD", "/DLUA_COMPAT_ALL",
                                   "/DLUA_COMPAT_5_2", "/DLUA_COMPAT_5_3", f"/I{src}", f"/I{capi}",
                                   os.path.join(capi, name + ".c"), f"/Fe{exe}", f"/Fo{obj}\\",
-                                  os.path.join(root, f"lua-{ver}", "puc.lib")],
+                                  os.path.join(root, f"lua-{ver}", "puc.lib"),
+                                  "/link", "/STACK:8388608"],
                                  env=env, capture_output=True)
               built = (datetime.datetime.now() - t0).total_seconds()
               if r.returncode != 0:
                   return f"capi/{name}.{v}: not built ({built:.0f}s)"
               t0 = datetime.datetime.now()
               try:
-                  r = subprocess.run([exe], cwd=crate, env=env, capture_output=True, timeout=60)
+                  r = subprocess.run([exe], cwd=tempfile.mkdtemp(), env=run_env,
+                                     capture_output=True, timeout=60)
               except subprocess.TimeoutExpired:
                   return f"capi/{name}.{v}: ran out of its minute (built in {built:.0f}s)"
               ran = (datetime.datetime.now() - t0).total_seconds()
@@ -288,6 +291,10 @@ jobs:
           # the hosts luna's tests run on Unix only: they test what POSIX
           # gives (a command killed by a signal, io.popen of POSIX commands)
           unix_only = {"aux_posix", "io_posix"}
+          # hash seed 1, as the other recordings (a host's output may follow
+          # a table's order), and each in a directory of its own (some write
+          # files of fixed names there, and they run four at a time)
+          run_env = dict(env, LUNA_GC_SEED="1", TZ="UTC")
           jobs = [(f[:-2], v, ver) for f in sorted(os.listdir(capi))
                   if f.endswith(".c") and f[:-2] not in unix_only
                   for v, ver in versions.items()
