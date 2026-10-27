@@ -164,15 +164,18 @@ impl Vm {
                 self.replay_syntax_error(&mut r, e, failed.near, source.as_bytes())
             });
         self.compile_scratch.puc_log = log;
+        // a runtime error runs the message handler where it is raised,
+        // inside the parser, whose objects the stack still holds
+        if replayed.is_ok()
+            && let Some(m) = self.heap.load_msg().filter(|_| e.line == 0)
+            && let Some(v) =
+                self.with_parse_frame(&r, |vm| vm.load_runerror_handled(e, Value::Str(m)))
+        {
+            self.heap.take_load_msg();
+            self.load_raised = Some(LuaError(v));
+        }
         self.replay_left(&r, false);
         if replayed.is_ok() {
-            // a runtime error runs the message handler where it is raised
-            if let Some(m) = self.heap.load_msg().filter(|_| e.line == 0)
-                && let Some(v) = self.load_runerror_handled(e, Value::Str(m))
-            {
-                self.heap.take_load_msg();
-                self.load_raised = Some(LuaError(v));
-            }
             // `luaD_pcall` shrinks the stack, then the parser's buffers go
             self.shrink_caught_error();
             self.heap.load_caught(true);
