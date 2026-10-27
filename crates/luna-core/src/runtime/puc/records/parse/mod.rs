@@ -9,6 +9,8 @@ use crate::runtime::dialect::Dialect;
 use crate::runtime::mem::{LVec, Oom};
 
 mod arrays;
+#[cfg(test)]
+mod arrays_tests;
 mod mark;
 mod table;
 mod unborn;
