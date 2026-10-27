@@ -21,6 +21,9 @@ impl Heap {
                 }
             }
         }
+        // and what a load set aside (a reader's objects among them), live
+        // though on no list
+        live.extend(self.puc_hook_unborn().map(|h| h as usize));
         live
     }
 
