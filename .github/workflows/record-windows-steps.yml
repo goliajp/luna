@@ -214,6 +214,19 @@ jobs:
                   log = dict(env, HOST_ALLOC_LOG=os.path.join(logs, f"{mode}.log"))
                   r = subprocess.run([host, mode, unload], env=log, capture_output=True)
                   assert r.returncode == 0, (d, mode, r.stdout, r.stderr)
+              # luna-core's registry_keys test: the registry's keys in the
+              # order `pairs` lists them, light userdata as `%p` prints them
+              if d in ("5.1", "5.3"):
+                  keys = ('debug.sethook(function() end, "r") debug.sethook() local keys = {} '
+                          'for k in pairs(debug.getregistry()) do keys[#keys + 1] = '
+                          'type(k) == "userdata" and tostring(k) or type(k) end '
+                          'return table.concat(keys, " ")')
+                  r = subprocess.run([host, "running", keys], env=env, capture_output=True)
+                  assert r.returncode == 0, (d, r.stdout, r.stderr)
+                  dest = os.path.join(out_root, "registry_keys", f"{d}.windows.out")
+                  os.makedirs(os.path.dirname(dest), exist_ok=True)
+                  open(dest, "wb").write(r.stdout.replace(b"\r\n", b"\n"))
+                  print(f"registry_keys/{d}:", r.stdout.decode())
 
       # the C API hosts of luna-jit's tests (`tests/capi`), built with the
       # same PUC and the defines the tests give luna's and an 8 MB main
