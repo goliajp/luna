@@ -1,6 +1,7 @@
 //! The package library's C functions as PUC's opening names them, and its
 //! `setpath`.
 
+use super::progdir;
 use super::*;
 use crate::runtime::Builtin;
 use crate::vm::opening::{Ctor, Natives, Opener, run_open};
@@ -139,9 +140,24 @@ pub(crate) fn puc_setpath(
         cpath_default(v)
     };
     let pkg = op.get(vm, if versioned { -2 } else { -1 });
+    let external = v == LuaVersion::Lua55;
     match found {
-        None => push_default(vm, op, field, &luna_def, def, pkg)?,
-        Some(p) => push_env_path(vm, op, &p, &luna_def)?,
+        // PUC's default names the executable's directory as `!`;
+        // `setprogdir`'s copy replaces it and the default is left garbage
+        None if cfg!(windows) => {
+            let def = progdir::windows_default(v, field);
+            let made = progdir::in_exe_dir(&def);
+            push_default(vm, op, field, &def, &def, pkg, external)?;
+            push_default(vm, op, field, &luna_def, &made, pkg, false)?;
+            op.remove(vm, -2);
+        }
+        None => push_default(vm, op, field, &luna_def, def, pkg, external)?,
+        Some(p) => {
+            push_env_path(vm, op, &p, &luna_def)?;
+            if cfg!(windows) {
+                progdir::setprogdir(vm, op)?;
+            }
+        }
     }
     let ix = op.ix(vm, if versioned { -3 } else { -2 });
     op.setfield(vm, ix, field)?;
@@ -163,9 +179,10 @@ fn no_env(vm: &mut Vm, op: &mut Opener) -> Result<bool, LuaError> {
     Ok(b)
 }
 
-/// The default path pushed: luna's, counted as PUC's `def` where they
-/// differ (and in 5.5 as an external string), standing on the package
-/// table `pkg`.
+/// A default path pushed: luna's, counted as PUC's `def` where they
+/// differ (and as an external string where PUC's is one, 5.5's literal),
+/// standing on the package table `pkg`. On Windows `setprogdir`'s copy
+/// of the default is pushed this way too.
 fn push_default(
     vm: &mut Vm,
     op: &mut Opener,
@@ -173,9 +190,10 @@ fn push_default(
     luna: &[u8],
     def: &[u8],
     pkg: Value,
+    external: bool,
 ) -> Result<(), LuaError> {
     let v = vm.version();
-    if v != LuaVersion::Lua55 && luna == def {
+    if !external && luna == def {
         return op.pushstring(vm, luna);
     }
     op.before(vm)?;
@@ -191,7 +209,7 @@ fn push_default(
     if let Value::Table(pkg) = pkg
         && !kept(pkg)
     {
-        let size = if v == LuaVersion::Lua55 {
+        let size = if external {
             vm.heap.puc_size(crate::runtime::puc::PucObj::LongStrHeader)
         } else {
             vm.heap.puc_size(crate::runtime::puc::PucObj::Str {

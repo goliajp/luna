@@ -35,20 +35,7 @@ pub(super) fn cpath_default(v: LuaVersion) -> Vec<u8> {
         _ => "5.5",
     };
     if cfg!(windows) {
-        let d = if v == LuaVersion::Lua51 {
-            ".\\?.dll;!\\?.dll;!\\loadall.dll".to_string()
-        } else if v == LuaVersion::Lua52 {
-            "!\\?.dll;!\\loadall.dll;.\\?.dll".to_string()
-        } else {
-            format!("!\\?.dll;!\\..\\lib\\lua\\{vdir}\\?.dll;!\\loadall.dll;.\\?.dll")
-        };
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| os_bytes(d.as_os_str())));
-        return match exe_dir {
-            Some(dir) => replace(d.as_bytes(), b"!", &dir),
-            None => d.into_bytes(),
-        };
+        return super::progdir::in_exe_dir(&super::progdir::windows_default(v, b"cpath"));
     }
     let cdir = format!("/usr/local/lib/lua/{vdir}/");
     if v == LuaVersion::Lua51 {

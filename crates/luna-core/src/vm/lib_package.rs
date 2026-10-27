@@ -17,6 +17,7 @@ use crate::vm::lib_io::c_str;
 
 mod module51;
 mod path;
+mod progdir;
 mod require;
 mod search_acct;
 mod searchers;
