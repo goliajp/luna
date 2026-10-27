@@ -145,6 +145,11 @@ These rules hold in the interpreter, in compiled traces and in luna-aot
 binaries; on Windows they were checked against PUC 5.1–5.5 built with MSVC (`tostring`,
 `string.format`, `%`, `math.fmod`, with the JIT on and off).
 
+The package library's directory separator is the platform's, as PUC's
+`LUA_DIRSEP` is: `\` on Windows and `/` elsewhere. It is the first line of
+`package.config`, and what `require` and `package.searchpath` (unless
+given another replacement) turn the dots of a module name into.
+
 On Windows `lua.exe` reads and writes through the MSVC C library, and the
 `luna` command does the same: luna keeps that library's `FILE` (its buffer,
 flags and rules) for every file it opens and for standard input, output
