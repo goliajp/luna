@@ -126,7 +126,10 @@ fn reopening_counts_what_puc_counts() {
     assert_eq!(got, [(7016, 515), (7287, 299), (0, 0), (0, 0), (0, 0)]);
 }
 
-// the same with `package.loaded` emptied: 5.3 on open every library again
+// the same with `package.loaded` emptied: 5.3 on open every library again.
+// 5.3 and 5.4 push the default paths through luaS_new's cache, where they
+// are found again or not by where the compiler put the C strings: the
+// answers are those of PUC with each C string address a bucket of its own
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn reopening_unloaded_libraries_counts_what_puc_counts() {
@@ -135,8 +138,8 @@ fn reopening_unloaded_libraries_counts_what_puc_counts() {
     let want = [
         (7016, 515),
         (7287, 299),
-        (7928, 363),
-        (6812, 899),
+        (7660, 363),
+        (6544, 899),
         (5344, 579),
     ];
     assert_eq!(got, want);
