@@ -13,8 +13,8 @@ pub(crate) enum PEv {
     Open,
     /// the innermost function ends (`close_func`)
     Close,
-    /// an instruction, with its line
-    Code(u32),
+    /// `n` instructions in a row, all on a line, at one token
+    Grow(u32, u32),
     /// an instruction of the enclosing function while this one is still
     /// open (5.2+ `codeclosure` comes before `close_func`)
     CodeUp(u32),
@@ -60,6 +60,8 @@ pub(super) struct LogState {
     pub(super) last: super::puc_rec::LastTok,
     /// an event was logged at [`TokRef::Next`]
     pub(super) nexts: bool,
+    /// see [`Compiler::log_seam`]
+    pub(super) seam: usize,
 }
 
 impl<'a> Compiler<'a> {
@@ -231,7 +233,8 @@ impl<'a> Compiler<'a> {
         if n < 2 || final_ret >= n - 1 || !matches!(log[n - 2].ev, PEv::Close) {
             return;
         }
-        if let PEv::Code(line) = log[n - 1].ev {
+        // the closure instruction, after the `Close`, is one of its own
+        if let PEv::Grow(line, 1) = log[n - 1].ev {
             log[final_ret..].rotate_right(1);
             log[final_ret].ev = PEv::CodeUp(line);
         }
@@ -241,8 +244,13 @@ impl<'a> Compiler<'a> {
     /// make it: PUC never codes it.
     pub(super) fn unlog_code(&mut self) {
         let log = &mut self.puc_log;
-        if let Some(i) = log.iter().rposition(|r| matches!(r.ev, PEv::Code(_))) {
-            log.remove(i);
+        if let Some(i) = log.iter().rposition(|r| matches!(r.ev, PEv::Grow(..))) {
+            match &mut log[i].ev {
+                PEv::Grow(_, n) if *n > 1 => *n -= 1,
+                _ => {
+                    log.remove(i);
+                }
+            }
         }
     }
 

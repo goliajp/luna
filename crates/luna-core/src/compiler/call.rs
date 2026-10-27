@@ -48,7 +48,7 @@ impl Compiler<'_> {
         // before 5.4 the name is a constant as it is read (`checkname`),
         // before `luaK_self` puts the object in a register
         let named = (self.version <= LuaVersion::Lua53).then(|| {
-            let from = self.puc_log.len();
+            let from = self.log_seam();
             let c = self.sym_const(method.sym);
             self.log_before_early(from);
             c

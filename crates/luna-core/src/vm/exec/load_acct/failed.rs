@@ -106,12 +106,19 @@ impl Vm {
         );
         r.splice(splices);
         let log = self.compile_scratch.puc_log.take();
-        self.heap.trace_line(format_args!(
-            "F at {} scanning {} log {}",
-            failed.at,
-            failed.scanning,
-            log.len()
-        ));
+        if crate::runtime::gc_hooks::TRACE {
+            // a run of instructions is as many events
+            let n: usize = log
+                .iter()
+                .map(|r| match r.ev {
+                    PEv::Grow(_, n) => n as usize,
+                    _ => 1,
+                })
+                .sum();
+            let (at, scanning) = (failed.at, failed.scanning);
+            self.heap
+                .trace_line(format_args!("F at {at} scanning {scanning} log {n}"));
+        }
         // a token that failed to scan comes after the one the parser was on
         let at = i64::from(failed.at);
         // a goto with no label is found as its function closes, after the

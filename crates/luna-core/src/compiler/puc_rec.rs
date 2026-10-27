@@ -69,31 +69,67 @@ impl Default for LastTok {
 }
 
 impl Compiler<'_> {
-    /// Log `ev` at token `at`, when the parse recorded its marks.
+    /// The number and node of token `at`, when the parse recorded its
+    /// marks.
+    #[inline]
+    fn tok_of(&mut self, at: TokRef) -> Option<(i64, At)> {
+        let m = self.marks?;
+        let last = &mut self.puc_state.last;
+        if at == last.at {
+            return Some((last.tok, last.named));
+        }
+        if at == TokRef::Next {
+            self.puc_state.nexts = true;
+            return Some((NEXT, At::Other));
+        }
+        let tok = match at {
+            TokRef::Start => -1,
+            t => i64::from(t.resolve(self.ast, m)),
+        };
+        *last = LastTok {
+            at,
+            tok,
+            named: At::of(at),
+        };
+        Some((tok, last.named))
+    }
+
+    /// Log `ev` at token `at`.
     #[inline]
     pub(super) fn log_at(&mut self, at: TokRef, ev: PEv) {
-        let Some(m) = self.marks else {
+        if let Some((tok, named)) = self.tok_of(at) {
+            self.puc_log.push_or_abort(Rec { tok, at: named, ev });
+        }
+    }
+
+    /// Log an instruction on `line` at token `at`: one more of the
+    /// instructions just before, when they are at the same token and line
+    /// and logged since [`Self::log_seam`].
+    #[inline]
+    pub(super) fn log_code(&mut self, at: TokRef, line: u32) {
+        let Some((tok, named)) = self.tok_of(at) else {
             return;
         };
-        let last = &mut self.puc_state.last;
-        let (tok, named) = if at == last.at {
-            (last.tok, last.named)
-        } else if at == TokRef::Next {
-            self.puc_state.nexts = true;
-            (NEXT, At::Other)
-        } else {
-            let tok = match at {
-                TokRef::Start => -1,
-                t => i64::from(t.resolve(self.ast, m)),
-            };
-            *last = LastTok {
-                at,
-                tok,
-                named: At::of(at),
-            };
-            (tok, last.named)
-        };
+        let seam = self.puc_state.seam;
+        if self.puc_log.len() > seam
+            && let Some(prev) = self.puc_log.last_mut()
+            && (prev.tok, prev.at) == (tok, named)
+            && let PEv::Grow(l, n) = &mut prev.ev
+            && *l == line
+        {
+            *n += 1;
+            return;
+        }
+        let ev = PEv::Grow(line, 1);
         self.puc_log.push_or_abort(Rec { tok, at: named, ev });
+    }
+
+    /// Where the log is now: the events logged from here on, which may be
+    /// moved, are kept apart from the ones before.
+    pub(super) fn log_seam(&mut self) -> usize {
+        let n = self.puc_log.len();
+        self.puc_state.seam = n;
+        n
     }
 
     /// The compile is over: each event logged at [`TokRef::Next`] takes
