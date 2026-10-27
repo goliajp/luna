@@ -69,6 +69,17 @@ unsafe extern "C" fn quarantine(
 /// library open, the trace JIT recording after `hot` back edges (none when
 /// `hot` is 0), its memory never reused.
 fn run(version: LuaVersion, seed: u32, hot: u32, source: &str) -> String {
+    run_with(version, seed, hot, source, |_| {})
+}
+
+/// [`run`] with `setup` given the Vm before `source` runs.
+fn run_with(
+    version: LuaVersion,
+    seed: u32,
+    hot: u32,
+    source: &str,
+    setup: impl FnOnce(&mut Vm),
+) -> String {
     let held = Box::into_raw(Box::new(Held::default()));
     // SAFETY: `quarantine` follows the `lua_Alloc` contract and `held`
     // outlives the Vm, dropped below before it
@@ -85,6 +96,7 @@ fn run(version: LuaVersion, seed: u32, hot: u32, source: &str) -> String {
         vm.set_trace_tier(TraceTier::Auto);
         vm.set_trace_tier_up_at(37);
     }
+    setup(&mut vm);
     let out = match vm.eval(source) {
         Ok(r) => match r.first() {
             Some(Value::Int(i)) => i.to_string(),
@@ -240,6 +252,24 @@ fn the_hook_table_is_under_its_key() {
 /// the thread's list when the marking ends, no longer names the thread,
 /// which the same sweep may free (the `gc-verify` build checks that no
 /// object the sweep keeps holds one it frees).
+/// `debug.gethook` of a hook set from outside Lua makes "external hook"
+/// and then the mask: in PUC a collection at the second keeps the first,
+/// which is on the C function's stack.
+#[test]
+fn gethook_keeps_the_hook_name_through_the_mask_push() {
+    use luna_core::vm::exec::{HOOK_MASK_CALL, RustHookEvent};
+    // the script names the string in capitals: a constant would keep it
+    let source =
+        "local h, m = debug.gethook() return h:upper() == 'EXTERNAL HOOK' and m == 'c' and 1";
+    for v in [LuaVersion::Lua51, LuaVersion::Lua53, LuaVersion::Lua55] {
+        let quiet: fn(&mut Vm, RustHookEvent) = |_, _| {};
+        let got = run_with(v, 1, 0, source, |vm| {
+            vm.set_rust_debug_hook(Some(quiet), HOOK_MASK_CALL, 0)
+        });
+        assert_eq!(got, "1", "{v:?}");
+    }
+}
+
 #[cfg(feature = "gc-verify")]
 #[test]
 fn a_dead_open_upvalue_names_no_thread() {
