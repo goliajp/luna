@@ -119,7 +119,8 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if v >= LuaVersion::Lua53 && out.reserve(total as usize).is_err() {
         if total as usize > Vm::lual_buffersize(v) {
             // 5.4 on, the protected call that catches the error closes it
-            vm.new_box()?;
+            let slot = vm.native_top();
+            vm.new_box(slot)?;
         }
         return Err(vm.buf_error());
     }

@@ -34,6 +34,8 @@ pub(crate) struct PucBuffer {
     boxed: bool,
     /// 5.3+: the box
     ubox: Option<Gc<Userdata>>,
+    /// the running native's top when the buffer began, the box's slot
+    slot: Option<u32>,
     /// 5.1: where the C buffer's bytes start in the content
     start: usize,
     /// 5.1: where this buffer's strings start in `Vm::lib_roots`
@@ -50,6 +52,7 @@ impl PucBuffer {
             n: 0,
             boxed: false,
             ubox: None,
+            slot: vm.native_top(),
             start: 0,
             base: vm.lib_roots.mark(),
         }
@@ -161,7 +164,7 @@ impl PucBuffer {
             _ => (self.size + self.size / 2).max(self.n + sz + 1),
         };
         let old = self.boxed.then_some(self.size);
-        vm.refuse_box(&mut self.ubox, self.d, old, newsize)?;
+        vm.refuse_box(&mut self.ubox, self.slot, self.d, (old, newsize))?;
         match self.d {
             Dialect::L52 => {
                 vm.api_check_before()?;
@@ -169,7 +172,7 @@ impl PucBuffer {
             }
             _ if self.boxed => vm.heap.trace_raw(self.size, newsize),
             _ => {
-                self.ubox = Some(vm.new_box()?);
+                self.ubox = Some(vm.new_box(self.slot)?);
                 vm.heap.trace_raw(0, newsize);
             }
         }
