@@ -544,6 +544,16 @@ messages. What still differs does so on purpose:
   compiled calls itself on the native stack; when that stack runs low
   the interpreter makes the remaining calls, so deep recursion ends
   where PUC's Lua stack limit ends it.
+
+  The check keeps 96 KB of the stack free in an optimised build and
+  512 KB in an unoptimised one (where each frame is several times
+  larger), so a thread that runs luna needs a stack of at least 128 KB
+  in an optimised build and 544 KB in an unoptimised one (the size
+  given to `std::thread::Builder::stack_size`, measured on Linux
+  x86_64). With less, a `Vm` is made but loading code fails with
+  "C stack overflow" ("chunk has too many syntax levels" in 5.1). With
+  64 KB or less (69 KB unoptimised) making the `Vm` itself overflows the
+  stack, before any check runs, and the process aborts.
 - **Local time.** luna-core links no C library timezone code:
   `os.date` without a leading `!` formats UTC, and `os.time`'s valid
   range is computed rather than taken from the host's `mktime`.
