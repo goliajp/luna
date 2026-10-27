@@ -9,7 +9,9 @@
 //! its own (`<name>.<5x>.windows.out` and so on, from PUC built with MSVC)
 //! comes first where there is one, and the program runs from where that
 //! PUC's ran (`C:\luna-gc-steps`): the default package paths name the
-//! program's directory, strings the collector counts.
+//! program's directory, strings the collector counts. Every program is
+//! built with `tests/capi/seed_one.h` included first, which makes its
+//! states hash strings with seed 1, the seed the recordings' PUC had.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -102,6 +104,7 @@ pub fn build(name: &str, v: &str, inc: &str) -> Result<PathBuf, String> {
             .arg("/w")
             .arg(format!("/I{}", include.display()));
         cmd.arg(format!("/I{}", crate_dir().join("tests/capi").display()));
+        cmd.arg("/FIseed_one.h");
         for d in DEFINES {
             cmd.arg(format!("/D{d}"));
         }
@@ -115,6 +118,7 @@ pub fn build(name: &str, v: &str, inc: &str) -> Result<PathBuf, String> {
     } else {
         cmd.arg("-w").arg("-I").arg(&include);
         cmd.arg("-I").arg(crate_dir().join("tests/capi"));
+        cmd.arg("-include").arg("seed_one.h");
         for d in DEFINES {
             cmd.arg(format!("-D{d}"));
         }
