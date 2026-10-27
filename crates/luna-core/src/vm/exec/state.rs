@@ -19,13 +19,13 @@ use crate::runtime::mem::LVec;
 ///
 /// The constraint is enforced at compile time:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// fn must_be_send<T: Send>() {}
-/// must_be_send::<luna_core::Vm>(); // error[E0277]: `Vm` cannot be sent between threads safely
+/// must_be_send::<luna_core::vm::Vm>(); // error[E0277]: `Vm` cannot be sent between threads safely
 /// ```
 ///
-/// A future `feature = "send"` will gate an opt-in `Arc<RwLock<T>>` mode with a
-/// hard ≤8% perf regression budget.
+/// With the `send` feature, `luna_core::vm::SendVm` wraps a `Vm` for
+/// embedders that move one between threads.
 // fixed field order: the interpreter's hot paths are tuned to this layout
 // (stack, frames and the call counters near the front), and letting the
 // compiler reorder it after an unrelated field change costs instructions
