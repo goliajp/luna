@@ -21,13 +21,20 @@ impl Vm {
         cut_long: Option<usize>,
     ) -> Option<usize> {
         let arrays = evs.iter().enumerate().filter_map(|(i, ev)| match *ev {
-            UEv::Vec(a, n) => Some((i, self.heap.parser_bytes(parser_array(a), n as usize))),
+            // a size past `size_t` asks for more than any allocator gives
+            UEv::Vec(a, n) => {
+                let elem = self.heap.parser_bytes(parser_array(a), 1);
+                Some((i, (n as usize).checked_mul(elem).unwrap_or(usize::MAX)))
+            }
             _ => None,
         });
         let long = cut_long.map(|len| {
             (
                 evs.len(),
-                self.heap.puc_bytes(PucObj::Str { len, long: true }),
+                match len.checked_add(1 << 8) {
+                    Some(_) => self.heap.puc_bytes(PucObj::Str { len, long: true }),
+                    None => usize::MAX,
+                },
             )
         });
         let blocks: Vec<(usize, usize)> = arrays.chain(long).collect();
