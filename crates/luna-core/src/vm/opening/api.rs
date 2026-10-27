@@ -122,7 +122,7 @@ impl Opener {
         let top = self.top(vm) as usize;
         let v = vm.stack[top - 1];
         if let Value::Table(t) = self.at(vm, ix) {
-            let k = crate::vm::exec::light_key(&crate::vm::exec::CLIBS_KEY);
+            let k = crate::vm::exec::light_key(crate::vm::exec::CLIBS_KEY);
             vm.host_raw_set(t, k, v)?;
         }
         self.pop(vm, 1);

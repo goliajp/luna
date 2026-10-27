@@ -138,10 +138,9 @@ impl Vm {
     /// (the function and its userdata on the stack), later with `lua_pcall`
     /// and `argc` and `argv` as arguments.
     fn enter_pmain(&mut self, argc: usize) {
-        // an address standing for the program's own `argv`, or 5.1's
-        // userdata
-        static ARGV: u8 = 0;
-        let argv = Value::LightUserdata(&ARGV as *const u8 as *const ());
+        // a value standing for the program's own `argv`, or 5.1's userdata:
+        // fixed, as the registry keys are (`light_key`)
+        let argv = Value::LightUserdata(std::ptr::without_provenance(0x1030));
         if self.version() == LuaVersion::Lua51 {
             self.host_entry_layout(1, 2);
             self.host_entry_args(&[argv]);

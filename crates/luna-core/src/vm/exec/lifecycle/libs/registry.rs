@@ -2,12 +2,16 @@
 
 use super::*;
 
-/// The addresses PUC keys some registry entries by (light userdata): 5.3's
-/// `CLIBS`, and the debug library's hook table in 5.1 and 5.3.
-pub(crate) static CLIBS_KEY: u8 = 0;
-pub(crate) static HOOK_KEY: u8 = 0;
+/// The light userdata PUC keys some registry entries by: 5.3's `CLIBS`,
+/// and the debug library's hook table in 5.1 and 5.3. PUC's are the
+/// addresses of statics of its own; luna's are fixed values below any page
+/// a system maps, never dereferenced, so that where they sit in the
+/// registry does not move with the build. The PUC the counts are compared
+/// with without coincidences of addresses takes the same values.
+pub(crate) const CLIBS_KEY: usize = 0x1010;
+pub(crate) const HOOK_KEY: usize = 0x1020;
 
-/// A light userdata keyed by the address of `k`.
-pub(crate) fn light_key(k: &'static u8) -> Value {
-    Value::LightUserdata(k as *const u8 as *const ())
+/// The light userdata of the fixed value `k`.
+pub(crate) fn light_key(k: usize) -> Value {
+    Value::LightUserdata(std::ptr::without_provenance(k))
 }
