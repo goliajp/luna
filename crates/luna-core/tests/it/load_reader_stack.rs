@@ -81,7 +81,8 @@ fn unordered(line: &str) -> String {
         .join(" ")
 }
 
-/// The sections of an expected listing: seed, dialect, listing.
+/// The sections of an expected listing (LF line ends): seed, dialect,
+/// listing.
 fn sections(expected: &str) -> Vec<(u32, &str, &str)> {
     let starts: Vec<usize> = expected
         .match_indices("S ")
@@ -102,8 +103,9 @@ fn sections(expected: &str) -> Vec<(u32, &str, &str)> {
 
 #[test]
 fn load_keeps_pucs_objects_below_its_reader() {
+    let expected = EXPECTED.replace("\r\n", "\n");
     let mut runs = 0;
-    for (seed, d, want) in sections(EXPECTED) {
+    for (seed, d, want) in sections(&expected) {
         let got = listing(SCRIPT, dialect(d), seed);
         if d == "5.5" {
             let lines = |s: &str| s.lines().map(unordered).collect::<Vec<_>>();
@@ -120,8 +122,9 @@ fn load_keeps_pucs_objects_below_its_reader() {
 /// a reader is called no more once the chunk is read.
 #[test]
 fn load_keeps_pucs_objects_below_its_reader_undumping() {
+    let expected = BINARY_EXPECTED.replace("\r\n", "\n");
     let mut runs = 0;
-    for (seed, d, want) in sections(BINARY_EXPECTED) {
+    for (seed, d, want) in sections(&expected) {
         assert_eq!(listing(BINARY, dialect(d), seed), want, "{d}");
         runs += 1;
     }
