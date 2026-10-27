@@ -32,16 +32,16 @@ impl Undumping {
                     Some(()) => {
                         let h = r.take(11)?;
                         let l = |i: usize| u32::from_le_bytes([h[i], h[i + 1], h[i + 2], h[i + 3]]);
-                        (u64::from(l(0)), u64::from(l(4)), &h[8..])
+                        (self.int_value(l(0))?, self.int_value(l(4))?, &h[8..])
                     }
-                    None => (r.num(k)?, r.num(k)?, r.take(3)?),
+                    None => (self.int(r, k)?, self.int(r, k)?, r.take(3)?),
                 };
                 if depth == 0 {
                     self.head = Some([line, last, u64::from(h[0]), u64::from(h[1])]);
                 }
             }
             Count(k, arr) => {
-                let n = r.num(k)?;
+                let n = self.int(r, k)?;
                 if let Some(a) = arr {
                     self.ev(UEv::Vec(a, u32::try_from(n).ok()?));
                 }
@@ -56,7 +56,7 @@ impl Undumping {
                 r.take(usize::try_from(n).ok()?.checked_mul(m)?)?;
             }
             Var(k) => {
-                r.num(k)?;
+                self.int(r, k)?;
             }
             Align4 => {
                 r.take((4 - r.p % 4) % 4)?;
@@ -67,7 +67,7 @@ impl Undumping {
                     r.u8()?;
                 }
                 (Sv::S55, 3) => {
-                    r.num(V55)?;
+                    r.num(V55, u64::MAX)?;
                 }
                 (_, 3 | 19) => {
                     r.take(8)?;
@@ -85,7 +85,7 @@ impl Undumping {
                 f.ups = f.n;
             }
             AbsLines => {
-                let n = r.num(V55)?;
+                let n = self.int(r, V55)?;
                 if n > 0 {
                     r.take((4 - r.p % 4) % 4)?;
                     self.ev(UEv::Vec(A::AbsLines, u32::try_from(n).ok()?));
@@ -93,7 +93,7 @@ impl Undumping {
                 }
             }
             Names => {
-                let ups = if r.num(V55)? != 0 {
+                let ups = if self.int(r, V55)? != 0 {
                     self.frames.last().expect("a frame").ups
                 } else {
                     0
@@ -136,6 +136,20 @@ impl Undumping {
         Some(true)
     }
 
+    /// An `int` (`loadInt`): a varint up to `INT_MAX`, or 4 bytes that
+    /// 5.1 and 5.2 refuse when negative.
+    fn int(&self, r: &mut Reader, k: Num) -> Option<u64> {
+        match k {
+            Num::U32 => self.int_value(u32::try_from(r.num(k, 0)?).ok()?),
+            _ => r.num(k, i32::MAX as u64),
+        }
+    }
+
+    /// `x`, 4 bytes read as an `int`, where the dialect takes it.
+    fn int_value(&self, x: u32) -> Option<u64> {
+        (x <= i32::MAX as u32 || !matches!(self.ver, 0x51 | 0x52)).then_some(u64::from(x))
+    }
+
     /// A string: where it is in the bytes (`None`: none, a size of 0).
     pub(super) fn string(&mut self, r: &mut Reader, sv: Sv) -> Option<Option<(usize, usize)>> {
         let n = match sv {
@@ -144,13 +158,14 @@ impl Undumping {
                 0xFF => r.size_t()?,
                 n => u64::from(n),
             },
-            Sv::S54 => r.num(V54)?,
-            Sv::S55 => r.num(V55)?,
+            // `loadSize`: up to `MAX_SIZET`, 5.5's `MAX_SIZE`
+            Sv::S54 => r.num(V54, usize::MAX as u64)?,
+            Sv::S55 => r.num(V55, (usize::MAX as u64).min(i64::MAX as u64))?,
         };
         if n == 0 {
             if matches!(sv, Sv::S55) {
                 // a saved string again
-                r.num(V55)?;
+                r.num(V55, u64::MAX)?;
             }
             return Some(None);
         }
@@ -207,15 +222,25 @@ impl<'a> Reader<'a> {
         b[..usize::BITS as usize / 8].copy_from_slice(self.take(usize::BITS as usize / 8)?);
         Some(u64::from_le_bytes(b))
     }
-    pub(super) fn num(&mut self, k: Num) -> Option<u64> {
+    /// A number in the format `k`; `None` too for a varint past `limit`,
+    /// where `loadUnsigned` / `loadVarint` raise "integer overflow" (the
+    /// bytes read, the walk is bad).
+    pub(super) fn num(&mut self, k: Num, limit: u64) -> Option<u64> {
         if let Num::U32 = k {
             return Some(u64::from(u32::from_le_bytes(
                 self.take(4)?.try_into().ok()?,
             )));
         }
-        let mut x = 0u64;
+        let (mut x, limit) = (0u64, limit >> 7);
         loop {
             let b = self.u8()?;
+            let over = match k {
+                Num::V54 => x >= limit,
+                _ => x > limit,
+            };
+            if over {
+                return None;
+            }
             x = (x << 7) | u64::from(b & 0x7f);
             let last = match k {
                 Num::V54 => b & 0x80 != 0,
