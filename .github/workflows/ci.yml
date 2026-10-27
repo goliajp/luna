@@ -69,6 +69,14 @@ jobs:
       - name: rustup target add x86_64-pc-windows-gnu
         if: runner.os == 'Windows'
         run: rustup target add x86_64-pc-windows-gnu
+      # code under a cfg the other jobs build (unix, a feature) that leaves
+      # Windows an unused item fails here, not only in a log no one reads.
+      # Set on Windows alone: RUSTFLAGS replaces the target rustflags
+      # .cargo/config.toml gives aarch64 Linux
+      - name: warnings are errors on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "RUSTFLAGS=-D warnings" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           # keep what cargo built for workspace crates too: pruning them
