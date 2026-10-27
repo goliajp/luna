@@ -23,25 +23,6 @@ pub(super) fn splice_default(path: &[u8], dft: &[u8]) -> Vec<u8> {
 
 pub(super) use crate::vm::lib_io::os_bytes;
 
-/// PUC's `LUA_CPATH_DEFAULT` outside Windows, its install prefix
-/// included (Windows' is in `progdir`). luna finds C libraries there but
-/// loads none.
-pub(super) fn cpath_default(v: LuaVersion) -> Vec<u8> {
-    let vdir = match v {
-        LuaVersion::Lua51 => "5.1",
-        LuaVersion::Lua52 => "5.2",
-        LuaVersion::Lua53 => "5.3",
-        LuaVersion::Lua54 => "5.4",
-        _ => "5.5",
-    };
-    let cdir = format!("/usr/local/lib/lua/{vdir}/");
-    if v == LuaVersion::Lua51 {
-        format!("./?.so;{cdir}?.so;{cdir}loadall.so").into_bytes()
-    } else {
-        format!("{cdir}?.so;{cdir}loadall.so;./?.so").into_bytes()
-    }
-}
-
 /// `luaL_gsub`: replace every `from` in `src` with `to`.
 pub(super) fn replace(src: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len());

@@ -15,7 +15,6 @@ use records::{parse, strcache};
 
 pub(crate) mod api;
 pub(crate) mod boot;
-pub(crate) use boot::STRT_STAND;
 mod control;
 mod count;
 pub(crate) use count::*;

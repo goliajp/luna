@@ -171,7 +171,7 @@ impl Heap {
             // allocated objects; nothing is freed while marking
             unsafe {
                 blacken(h, &mut m);
-                let w = self.object_work(h, run, &m.lent.stands) + m.leaf_bytes;
+                let w = self.object_work(h, run) + m.leaf_bytes;
                 self.hook_prop(h, w, run);
                 *remaining -= w;
             }

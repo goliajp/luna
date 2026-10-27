@@ -61,8 +61,6 @@ pub(crate) trait PucLoads {
     /// The message of the load that just failed, made as PUC makes it.
     fn set_load_msg(&mut self, m: Gc<LuaStr>);
     fn set_phantoms(&mut self, on: bool);
-    /// The longest string PUC keeps in its string table (5.1: all).
-    fn short_max(&self) -> usize;
     /// Whether the load about to run was checked already; the mark taken.
     fn take_load_checked(&mut self) -> bool;
     /// The message [`Heap::set_load_msg`] left, if any, taken.
@@ -177,11 +175,6 @@ impl PucLoads for Heap {
     #[inline(always)]
     fn set_phantoms(&mut self, on: bool) {
         Heap::set_phantoms(self, on)
-    }
-
-    #[inline(always)]
-    fn short_max(&self) -> usize {
-        Heap::short_max(self)
     }
 
     #[inline(always)]

@@ -221,7 +221,7 @@ impl Heap {
         // SAFETY: the caller's contract
         unsafe {
             if (*h).cls & KEPT == 0 || (*h).tag != ObjTag::Str {
-                return (*h).cls & KEPT != 0 && self.keeper_kept(h);
+                return false;
             }
             (*h).cls &= !KEPT;
             self.trace_line(format_args!(

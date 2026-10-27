@@ -56,26 +56,11 @@ impl Heap {
     /// `gc-verify`, once marking is done (the last sweep over): PUC's
     /// string table holds a place for each counted short string luna has
     /// and each one a record holds. Panics when the count went astray.
-    /// `lent`: the stand-ins a marker holds meanwhile.
-    pub(in crate::runtime) fn verify_string_count(
-        &self,
-        ctx: &str,
-        lent: &[(*mut GcHeader, usize)],
-    ) {
+    pub(in crate::runtime) fn verify_string_count(&self, ctx: &str) {
         // and "not enough memory", which PUC makes at the start and luna
         // does not (a heap no Vm made has no PUC state: its string table
         // is never sized)
         let mut n = self.ghost_short_strings() + usize::from(self.puc.records.strt_size != 0);
-        // and 5.1's strings luna's stand for
-        let strt = crate::runtime::puc::STRT_STAND;
-        n += self
-            .puc
-            .records
-            .stand_ins
-            .iter()
-            .chain(lent)
-            .filter(|s| s.1 & strt != 0)
-            .count();
         // SAFETY: a header on a list or set aside heads an allocated object
         let counted = |h: *mut GcHeader| unsafe {
             (*h).tag == ObjTag::Str

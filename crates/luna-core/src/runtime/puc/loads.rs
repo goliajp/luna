@@ -163,10 +163,4 @@ impl Heap {
     pub(in crate::runtime) fn mark_load_msg(&self, m: &mut Marker) {
         m.mark_strings(self.puc.loads.load_msg.iter());
     }
-
-    /// The longest string PUC keeps in its string table (5.1: all).
-    #[inline]
-    pub(in crate::runtime) fn short_max(&self) -> usize {
-        self.puc.records.short_max
-    }
 }

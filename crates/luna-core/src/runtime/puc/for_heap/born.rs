@@ -27,8 +27,11 @@ pub(in crate::runtime) struct NewStr(pub usize);
 pub(in crate::runtime) struct FoundStr(pub usize);
 /// A string of this many bytes the string sweep took off, found again.
 pub(in crate::runtime) struct RemadeStr(pub usize);
-/// 5.5's external string.
-pub(in crate::runtime) struct ExternalStr;
+/// 5.5's external string: over a block of its own, or (`fixed`) over
+/// bytes PUC does not own, its header alone counted (`LSTRFIX`).
+pub(in crate::runtime) struct ExternalStr {
+    pub fixed: bool,
+}
 /// A library function PUC makes with this many upvalues, made uncounted.
 pub(in crate::runtime) struct PucFunction(pub usize);
 /// PUC 5.1's C closure without upvalues, as the opening makes it.
@@ -151,10 +154,16 @@ impl Born<RemadeStr> for LuaStr {
 
 impl Born<ExternalStr> for LuaStr {
     type Out = ();
-    fn born(heap: &mut Heap, g: Gc<LuaStr>, _: ExternalStr) {
+    fn born(heap: &mut Heap, g: Gc<LuaStr>, how: ExternalStr) {
         if !heap.counting() {
             heap.set_counted(g.hdr(), false);
+        } else if how.fixed {
+            // SAFETY: a handle's string is live; only its kind byte is written
+            unsafe { (*g.header()).sub |= FIXED_EXT };
+            heap.acct_obj(PucKind::LongStr, heap.puc_size(PucObj::LongStrHeader));
         } else {
+            // SAFETY: as above
+            unsafe { (*g.header()).sub |= EXTERNAL };
             heap.acct_obj(PucKind::LongStr, heap.puc_size(PucObj::ExternalStr));
         }
     }

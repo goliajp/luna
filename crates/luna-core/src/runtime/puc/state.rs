@@ -72,8 +72,6 @@ pub(in crate::runtime::puc) struct Records {
     /// given size, one entry for each object of PUC's (see
     /// `Heap::stand_sizes_on`)
     pub(in crate::runtime::puc) stand_ins: Vec<(*mut GcHeader, usize)>,
-    /// keepers (`puc::records::keeper`) and their hosts
-    pub(in crate::runtime::puc) keepers: Vec<(*mut GcHeader, *mut GcHeader)>,
     /// 5.3: the threads this cycle's propagation has shrunk; 5.2: the ones
     /// the sweep kept, for the VM to shrink
     pub(in crate::runtime::puc) shrunk: Vec<*mut GcHeader>,
@@ -145,7 +143,6 @@ impl Default for PucModel {
                 udsize: 0,
                 // the standard libraries make about twenty
                 stand_ins: Vec::with_capacity(32),
-                keepers: Vec::new(),
                 shrunk: Vec::new(),
             },
             loads: Loads {

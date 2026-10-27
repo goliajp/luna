@@ -124,10 +124,7 @@ impl Heap {
     pub(in crate::runtime::puc) fn free_stand_in(&mut self, h: *mut GcHeader) {
         while let Some(i) = self.puc.records.stand_ins.iter().position(|(p, _)| *p == h) {
             let (_, size) = self.puc.records.stand_ins.swap_remove(i);
-            if size & STRT_STAND != 0 {
-                self.puc.records.strt_nuse -= 1;
-            }
-            self.acct_part(size & !STRT_STAND, 0);
+            self.acct_part(size, 0);
         }
     }
 

@@ -3,12 +3,11 @@
 use super::*;
 
 /// What a 5.5 marking needs to count the objects it marks (`GCmarked`):
-/// the sizes, the stand-ins and keepers (lent by the heap meanwhile) and
+/// the sizes, the stand-ins (lent by the heap meanwhile) and
 /// the threads the VM holds.
 pub(crate) struct Sizer {
     sizes: crate::runtime::puc::size::PucSizes,
     stand_ins: Vec<(*mut GcHeader, usize)>,
-    keepers: Vec<(*mut GcHeader, *mut GcHeader)>,
     run: Running,
     pub(in crate::runtime) marked: i64,
 }
@@ -29,9 +28,7 @@ impl Sizer {
                 // (every object with stand-ins is marked STANDS)
                 let stands = if (*h).cls & STANDS != 0 {
                     let s = self.stand_ins.iter().filter(|s| s.0 == h);
-                    (s.map(|s| s.1).sum::<usize>()
-                        + crate::runtime::puc::records::keeper::kept_bytes(&self.keepers, h))
-                        as i64
+                    s.map(|s| s.1).sum::<usize>() as i64
                 } else {
                     0
                 };
@@ -61,7 +58,6 @@ impl Heap {
         Some(Sizer {
             sizes: self.puc.sizes,
             stand_ins: std::mem::take(&mut self.puc.records.stand_ins),
-            keepers: std::mem::take(&mut self.puc.records.keepers),
             run,
             marked: 0,
         })
@@ -74,7 +70,6 @@ impl Heap {
         if let Some(s) = m.take_sizer() {
             self.puc.pace.estimate += s.marked;
             self.puc.records.stand_ins = s.stand_ins;
-            self.puc.records.keepers = s.keepers;
         }
     }
 
@@ -93,7 +88,6 @@ impl Heap {
             let n = unsafe { s.size(h) };
             self.puc.pace.estimate += n;
             self.puc.records.stand_ins = s.stand_ins;
-            self.puc.records.keepers = s.keepers;
         }
     }
 }

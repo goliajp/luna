@@ -1,6 +1,6 @@
 //! What a marker borrows from the model while it marks: moved in when it is
 //! lent out, moved back when it returns, so it reads the records, the
-//! loads in progress and the stand-ins without pointing into the model.
+//! loads in progress without pointing into the model.
 
 use super::*;
 use crate::runtime::puc::records::env51::Env51;
@@ -13,25 +13,14 @@ pub(crate) struct Lent {
     pub(in crate::runtime) env51: Option<Box<Env51>>,
     /// the loads a step runs inside
     pub(in crate::runtime) parse: Vec<ParseFrame>,
-    /// 5.2 and 5.3: the objects of PUC's luna's stand for, when the marking
-    /// counts them
-    pub(in crate::runtime) stands: Vec<(*mut GcHeader, usize)>,
-    /// `stands` was taken (not left to the sizer, or to a full collection)
-    stands_taken: bool,
 }
 
 impl Heap {
-    /// What a marker borrows, `stands` with the stand-ins.
-    pub(in crate::runtime::puc) fn lend_model(&mut self, stands: bool) -> Lent {
+    /// What a marker borrows.
+    pub(in crate::runtime::puc) fn lend_model(&mut self) -> Lent {
         Lent {
             env51: self.puc.records.env51_box.take(),
             parse: std::mem::take(&mut self.puc.loads.parse),
-            stands: if stands {
-                std::mem::take(&mut self.puc.records.stand_ins)
-            } else {
-                Vec::new()
-            },
-            stands_taken: stands,
         }
     }
 
@@ -42,10 +31,6 @@ impl Heap {
         }
         if !l.parse.is_empty() || self.puc.loads.parse.is_empty() {
             self.puc.loads.parse = std::mem::take(&mut l.parse);
-        }
-        if l.stands_taken {
-            self.puc.records.stand_ins = std::mem::take(&mut l.stands);
-            l.stands_taken = false;
         }
     }
 }

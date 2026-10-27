@@ -23,9 +23,6 @@ pub(crate) trait PucCount {
     /// (yet): counted now, freed by the next sweep unless luna makes it
     /// after all ([`Heap::ghost_table_made`]).
     fn acct_ghost_table(&mut self, a: usize, h: usize) -> Result<GhostRef, Oom>;
-    /// A long string of `size` bytes PUC makes now, living as long as the
-    /// object behind `host`: counted now, and freed where PUC frees it.
-    fn acct_kept_string(&mut self, host: Gc<GcHeader>, size: usize) -> Result<(), Oom>;
     /// `cs`, a long string luna's compiler made without counting, is the
     /// one PUC's scanner made as `ss` (counted) and keeps as the constant:
     /// the count moves to `cs`.
@@ -41,16 +38,6 @@ pub(crate) trait PucCount {
     fn acct_stack(&mut self, t: Thread, old: u32, new: u32);
     /// The stack of `t`, `s` slots, reallocated to the size it has.
     fn acct_stack_same(&mut self, t: Thread, s: u32);
-    /// A long string of PUC's of `size` bytes (counted now with `count`)
-    /// lives as long as the object behind `h`, which holds luna's string
-    /// in its place (the package table: luna's default path is a short
-    /// string all package tables share).
-    fn acct_stand_on(&mut self, h: Gc<GcHeader>, size: usize, count: bool);
-    /// 5.1's string of `len` bytes, one of its string table's, lives as
-    /// long as the object behind `h` (the package table, which holds
-    /// luna's default path in place of PUC's): counted now, and the
-    /// table's place given back with it.
-    fn acct_stand_strt(&mut self, h: Gc<GcHeader>, len: usize);
     /// A table's parts going from `old_a` array slots and `old_h` nodes to
     /// `new_a` and `new_h`, as PUC's `luaH_resize` allocates and frees them:
     /// up to 5.3 a growing array first, then the new nodes, a shrinking
@@ -141,11 +128,6 @@ impl PucCount for Heap {
     }
 
     #[inline(always)]
-    fn acct_kept_string(&mut self, host: Gc<GcHeader>, size: usize) -> Result<(), Oom> {
-        Heap::acct_kept_string(self, host, size)
-    }
-
-    #[inline(always)]
     fn acct_move_long(&mut self, ss: Gc<LuaStr>, cs: Gc<LuaStr>) {
         Heap::acct_move_long(self, ss, cs)
     }
@@ -168,16 +150,6 @@ impl PucCount for Heap {
     #[inline(always)]
     fn acct_stack_same(&mut self, t: Thread, s: u32) {
         Heap::acct_stack_same(self, t, s)
-    }
-
-    #[inline(always)]
-    fn acct_stand_on(&mut self, h: Gc<GcHeader>, size: usize, count: bool) {
-        Heap::acct_stand_on(self, h, size, count)
-    }
-
-    #[inline(always)]
-    fn acct_stand_strt(&mut self, h: Gc<GcHeader>, len: usize) {
-        Heap::acct_stand_strt(self, h, len)
     }
 
     #[inline(always)]

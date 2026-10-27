@@ -29,7 +29,7 @@ impl PucBuffer {
                 if self.size != out.len() + 1 {
                     vm.heap.trace_raw(self.size, out.len() + 1);
                 }
-                let r = vm.retry_oom(|vm| vm.heap.new_external_string(out))?;
+                let r = vm.retry_oom(|vm| vm.heap.new_external_string(out, false))?;
                 vm.api_check_after(Value::Str(r))?;
                 vm.box_closed_over(r)?;
                 // `lua_closeslot` leaves nil where the box was: `lua_gc(L,
