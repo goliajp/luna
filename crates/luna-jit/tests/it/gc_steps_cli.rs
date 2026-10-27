@@ -137,6 +137,12 @@ fn steps_5_4() {
     check("5.4", &[false]);
 }
 
+#[test]
+#[ignore = "5.5's minor collections in generational mode, which PUC makes while it loads, are not made yet"]
+fn steps_5_5() {
+    check("5.5", &[false]);
+}
+
 /// `package.path`, `package.cpath` and `package.config` are PUC's (on
 /// Windows naming the directory PUC ran from, where the copy runs).
 #[test]
