@@ -23,15 +23,16 @@
 //! recordings). The 5.2 expectations use the short spelling, and luna's 5.2
 //! output is folded the same way before comparing.
 
-use crate::cli_common::{Case, DIALECTS, Expect, luna, workdir};
-use std::process::{Command, Stdio};
+use crate::cli_common::{Case, DIALECTS, Expect};
 
 /// argv[0] is the program name as given, not the file's name: lua.c's
 /// `progname`.
 #[cfg(unix)]
 #[test]
 fn program_name_is_argv0() {
+    use crate::cli_common::{luna, workdir};
     use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
     let dir = workdir(&[]);
     let out = Command::new(luna())
         .arg0("some/where/lua-x")

@@ -19,7 +19,6 @@ io.output("out.txt")
 io.write("out")
 "#;
 
-#[cfg(unix)]
 #[test]
 fn open_streams_write_out_at_exit() {
     for d in DIALECTS {
