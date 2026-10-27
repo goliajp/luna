@@ -114,8 +114,8 @@ impl Vm {
     /// 5.4's placeholder is a light userdata, 5.2 and 5.3's box a full one,
     /// which luna stands in for with a light userdata as well.
     pub(crate) fn buffer_box() -> Value {
-        static BOX: u8 = 0;
-        Value::LightUserdata(&BOX as *const u8 as *const ())
+        // a fixed value, as the registry keys are (`light_key`)
+        Value::LightUserdata(std::ptr::without_provenance(0x1040))
     }
 
     /// The slots a `luaL_Buffer` holding `len` bytes takes on the stack:

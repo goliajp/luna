@@ -44,7 +44,7 @@ fn hook_table(vm: &mut Vm, init: bool) -> Result<Gc<Table>, LuaError> {
     let v = vm.version();
     let reg = vm.host_registry();
     let key = match v {
-        LuaVersion::Lua51 | LuaVersion::Lua53 => light_key(&HOOK_KEY),
+        LuaVersion::Lua51 | LuaVersion::Lua53 => light_key(HOOK_KEY),
         LuaVersion::Lua52 => vm.str_value(b"_HKEY")?,
         _ => vm.str_value(b"_HOOKKEY")?,
     };

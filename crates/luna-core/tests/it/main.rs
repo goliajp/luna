@@ -86,6 +86,7 @@ mod puc_dump_jumps;
 mod puc_dump_listing;
 mod readonly_tables;
 mod refusing_alloc;
+mod registry_keys;
 mod reopen_libs;
 mod rust_coroutine;
 mod rust_debug_hook;
