@@ -5,8 +5,6 @@ use super::progdir;
 use super::*;
 use crate::runtime::Builtin;
 use crate::vm::opening::{Ctor, Natives, Opener, run_open};
-
-use crate::runtime::puc::api::{PucCount, PucLoads};
 use Ctor::{C, F};
 
 pub(crate) const PUC_FNS: Natives = &[
@@ -90,9 +88,8 @@ fn module_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<Value, L
 
 /// PUC's `setpath`: the field `field` of the package table (below the
 /// top) set to the environment's path (`env`, then `env2`; 5.3 on the
-/// versioned name first), else the default. luna's default Lua path is
-/// its own, standing for PUC's `def` in the count, as 5.5's defaults
-/// are external strings over PUC's bytes (a header each).
+/// versioned name first), else the default `def` (on Windows its own),
+/// 5.5's an external string over the default's bytes.
 pub(crate) fn puc_setpath(
     vm: &mut Vm,
     op: &mut Opener,
@@ -134,27 +131,19 @@ pub(crate) fn puc_setpath(
         Some(p) if !no_env(vm, op)? => Some(path::os_bytes(&p)),
         _ => None,
     };
-    let pkg = op.get(vm, if versioned { -2 } else { -1 });
-    if cfg!(windows) {
-        // PUC's default names the executable's directory as `!`, which
-        // `setprogdir`'s copy replaces (the original left garbage); luna's
-        // path is PUC's
-        let def = progdir::windows_default(v, field);
-        match found {
-            None => push_default(vm, op, field, &def, &def, pkg, v == LuaVersion::Lua55)?,
-            Some(p) => push_env_path(vm, op, &p, &def)?,
-        }
-        progdir::setprogdir(vm, op)?;
+    let def = if cfg!(windows) {
+        progdir::windows_default(v, field)
     } else {
-        let luna_def = if field == b"path" {
-            LUA_PATH_DEFAULT.to_vec()
-        } else {
-            cpath_default(v)
-        };
-        match found {
-            None => push_default(vm, op, field, &luna_def, def, pkg, v == LuaVersion::Lua55)?,
-            Some(p) => push_env_path(vm, op, &p, &luna_def)?,
-        }
+        def.to_vec()
+    };
+    match found {
+        None => push_default(vm, op, &def, v == LuaVersion::Lua55)?,
+        Some(p) => push_env_path(vm, op, &p, &def)?,
+    }
+    // PUC's default names the executable's directory as `!`, which
+    // `setprogdir`'s copy replaces (the original left garbage)
+    if cfg!(windows) {
+        progdir::setprogdir(vm, op)?;
     }
     let ix = op.ix(vm, if versioned { -3 } else { -2 });
     op.setfield(vm, ix, field)?;
@@ -176,62 +165,17 @@ fn no_env(vm: &mut Vm, op: &mut Opener) -> Result<bool, LuaError> {
     Ok(b)
 }
 
-/// A default path pushed: luna's, counted as PUC's `def` where they
-/// differ (and as an external string where PUC's is one, 5.5's literal),
-/// standing on the package table `pkg`. On Windows `setprogdir`'s copy
-/// of the default is pushed this way too.
-fn push_default(
-    vm: &mut Vm,
-    op: &mut Opener,
-    field: &[u8],
-    luna: &[u8],
-    def: &[u8],
-    pkg: Value,
-    external: bool,
-) -> Result<(), LuaError> {
-    let v = vm.version();
-    if !external && luna == def {
-        return op.pushstring(vm, luna);
+/// The default path `def` pushed as PUC pushes it: 5.5's with
+/// `lua_pushexternalstring` and no `falloc`, a long string over bytes PUC
+/// does not own (every default is longer than a short string).
+fn push_default(vm: &mut Vm, op: &mut Opener, def: &[u8], external: bool) -> Result<(), LuaError> {
+    if !external {
+        return op.pushstring(vm, def);
     }
+    debug_assert!(def.len() > crate::runtime::string::MAX_SHORT_LEN);
     op.before(vm)?;
-    let s = vm.uncounted(|vm| vm.str_value(luna));
-    let s = s?;
-    op.push(vm, s)?;
-    // 5.1 finds the string it made before when the package table still
-    // holds it (a second opening fills the same table)
-    let kept = |pkg: crate::runtime::Gc<crate::runtime::Table>| {
-        let k = vm.heap.find_interned(field);
-        v == LuaVersion::Lua51 && k.is_some_and(|k| pkg.get(Value::Str(k)).raw_eq(s))
-    };
-    if let Value::Table(pkg) = pkg
-        && !kept(pkg)
-    {
-        let size = if external {
-            vm.heap.puc_size(crate::runtime::puc::PucObj::LongStrHeader)
-        } else {
-            vm.heap.puc_size(crate::runtime::puc::PucObj::Str {
-                len: def.len(),
-                long: true,
-            })
-        };
-        // 5.1 keeps every string in its string table; later ones stand
-        // PUC's string on luna's where that is a long string of its own,
-        // made now as PUC's is, so that the sweep reaches it where PUC's is
-        if v == LuaVersion::Lua51 {
-            vm.heap.acct_stand_strt(pkg.hdr(), def.len());
-        } else {
-            match s {
-                Value::Str(ls) if luna.len() > vm.heap.short_max() && ls.hdr().is_uncounted() => {
-                    vm.heap.acct_stand_on(ls.hdr(), size, true)
-                }
-                // kept where PUC's list has it, as long as the package table
-                _ => {
-                    let host = pkg.hdr();
-                    vm.retry_oom(|vm| vm.heap.acct_kept_string(host, size))?
-                }
-            }
-        }
-    }
+    let s = vm.retry_oom(|vm| vm.heap.new_external_string(def, true))?;
+    op.push(vm, Value::Str(s))?;
     op.after(vm)
 }
 

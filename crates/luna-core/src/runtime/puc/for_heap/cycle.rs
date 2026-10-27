@@ -21,17 +21,10 @@ impl Heap {
     }
 
     /// What a marker borrows from the model: the sizer that counts what it
-    /// marks (when the pace counts it), and the model's records (with the
-    /// stand-ins, when `stands_unless_sized` and there is no sizer to hold
-    /// them).
+    /// marks (when the pace counts it), and the model's records.
     #[inline]
-    pub(in crate::runtime) fn puc_lend(
-        &mut self,
-        stands_unless_sized: bool,
-    ) -> (Option<Sizer>, Lent) {
-        let sizer = self.lend_sizer();
-        let stands = stands_unless_sized && sizer.is_none();
-        (sizer, self.lend_model(stands))
+    pub(in crate::runtime) fn puc_lend(&mut self) -> (Option<Sizer>, Lent) {
+        (self.lend_sizer(), self.lend_model())
     }
 
     /// The atomic step ended with `fin` bytes of objects found to be

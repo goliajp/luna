@@ -23,6 +23,11 @@ optimization.
 
 ### Breaking
 
+- `package.path` defaults to PUC's default outside Windows too
+  (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in
+  each dialect's order), where it was
+  `./?.lua;./?/init.lua`: `require` now also looks under `/usr/local/`.
+
 - The types, modules and constants hidden from the docs that luna's other
   crates use moved to `luna_core::__private`: the trace JIT's records and
   compiled traces (`TraceRecord`, `RecordedOp`, `CompiledTrace`,

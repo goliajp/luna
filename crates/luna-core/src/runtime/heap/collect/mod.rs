@@ -55,7 +55,7 @@ impl Heap {
         debug_assert!(self.phase == GcPhase::Pause);
         self.grayagain = mark::GrayStack::default();
         self.puc_mark_begins();
-        let (sizer, lent) = self.puc_lend(false);
+        let (sizer, lent) = self.puc_lend();
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
@@ -293,7 +293,7 @@ impl Heap {
             .propagate
             .take()
             .expect("propagate state taken outside Propagate phase");
-        let (sizer, lent) = self.puc_lend(true);
+        let (sizer, lent) = self.puc_lend();
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),

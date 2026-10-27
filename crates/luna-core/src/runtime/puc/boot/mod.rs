@@ -68,49 +68,7 @@ impl Heap {
     }
 }
 
-/// In a stand-in's size: the object is a string of 5.1's string table.
-pub(crate) const STRT_STAND: usize = 1 << (usize::BITS - 1);
-
 impl Heap {
-    /// A long string of PUC's of `size` bytes (counted now with `count`)
-    /// lives as long as the object behind `h`, which holds luna's string
-    /// in its place (the package table: luna's default path is a short
-    /// string all package tables share).
-    pub(in crate::runtime) fn acct_stand_on(&mut self, h: Gc<GcHeader>, size: usize, count: bool) {
-        if count {
-            self.acct_obj(PucKind::LongStr, size);
-        }
-        self.stand_sizes_on(h, [size]);
-    }
-
-    /// 5.1's string of `len` bytes, one of its string table's, lives as
-    /// long as the object behind `h` (the package table, which holds
-    /// luna's default path in place of PUC's): counted now, and the
-    /// table's place given back with it.
-    pub(in crate::runtime) fn acct_stand_strt(&mut self, h: Gc<GcHeader>, len: usize) {
-        self.acct_string(len);
-        self.strt_settle();
-        let size = self.puc.sizes.string(len, false);
-        self.stand_sizes_on(h, [size | STRT_STAND]);
-    }
-
-    /// Objects of PUC's of `sizes` bytes, counted already, live as long
-    /// as the object behind `h`.
-    pub(in crate::runtime::puc) fn stand_sizes_on(
-        &mut self,
-        h: Gc<GcHeader>,
-        sizes: impl IntoIterator<Item = usize>,
-    ) {
-        let h = h.as_ptr();
-        self.puc
-            .records
-            .stand_ins
-            .extend(sizes.into_iter().map(|s| (h, s)));
-        // SAFETY: `h` comes from a handle, so its object is live; only its
-        // class byte is written
-        unsafe { (*h).cls |= super::STANDS };
-    }
-
     /// `cs`, a long string luna's compiler made without counting, is the
     /// one PUC's scanner made as `ss` (counted) and keeps as the constant:
     /// the count moves to `cs`.

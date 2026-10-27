@@ -177,22 +177,22 @@ impl Heap {
     }
 
     /// 5.5 `lua_pushexternalstring` of `bytes` (longer than any short
-    /// string), the block holding them handed over by a `luaL_Buffer`: a
-    /// long string whose header alone `totalbytes` counts.
-    pub(crate) fn new_external_string(&mut self, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
+    /// string): a long string whose header alone `totalbytes` counts, its
+    /// bytes in a block handed over by a `luaL_Buffer`, or (`fixed`) bytes
+    /// PUC does not own (no `falloc`).
+    pub(crate) fn new_external_string(
+        &mut self,
+        bytes: &[u8],
+        fixed: bool,
+    ) -> Result<Gc<LuaStr>, Oom> {
         let p = string::alloc_long_parts(self.mem.mem(), &[bytes], self.seed)?;
-        let silent = !self.counting();
         // SAFETY: `alloc_long_parts` just allocated `p`, linked nowhere
-        // yet; linked, it is a live string of this heap, and only its kind
-        // byte is written
+        // yet; linked, it is a live string of this heap
         let g = unsafe {
             self.link(p as *mut GcHeader);
-            if !silent {
-                (*p).hdr.sub |= EXTERNAL;
-            }
             Gc::from_ptr(p)
         };
-        self.puc_born(g, ExternalStr);
+        self.puc_born(g, ExternalStr { fixed });
         Ok(g)
     }
 

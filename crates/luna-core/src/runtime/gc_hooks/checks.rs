@@ -52,7 +52,7 @@ impl Heap {
         {
             self.verify_tricolor(ctx);
             self.verify_black_children(ctx);
-            self.verify_string_count(ctx, &m.lent.stands);
+            self.verify_string_count(ctx);
         }
         let _ = m;
         self.check_slow_bits(ctx);
