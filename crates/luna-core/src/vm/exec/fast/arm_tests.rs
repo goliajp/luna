@@ -175,11 +175,13 @@ pub(super) fn run_all() {
 }
 
 /// `f` on a thread of its own, so that an arm that keeps running its
-/// instruction fails the test instead of hanging it.
+/// instruction fails the test instead of hanging it (Miri, which runs the
+/// corpus some thousand times slower, is given hours).
 pub(super) fn in_time<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
     let run = std::thread::spawn(move || tx.send(f()).unwrap());
-    match rx.recv_timeout(std::time::Duration::from_secs(60)) {
+    let limit = if cfg!(miri) { 4 * 3600 } else { 60 };
+    match rx.recv_timeout(std::time::Duration::from_secs(limit)) {
         Ok(out) => out,
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("the corpus never finished"),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
