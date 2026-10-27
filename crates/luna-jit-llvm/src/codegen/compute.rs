@@ -109,10 +109,8 @@ pub(super) fn compile_compute_chunk(plan: &ChunkPlan) -> Option<(*const u8, Engi
         ),
     };
 
-    // Populate `regs[0..num_params]` from the fn
-    // arg list. After this prologue the lowerer sees param 0..N-1 as
-    // ordinary live register sources, identical to a chunk that
-    // bound them with `LoadI` / `Move`.
+    // `regs[0..num_params]` from the arguments: the lowerer then sees the
+    // parameters as registers any op set, as `LoadI` or `Move` would
     for i in 0..plan.num_params {
         let slot = emitter.reg_slot_ptr(i, "param_slot")?;
         let arg = function.get_nth_param(i + 4)?.into_int_value();

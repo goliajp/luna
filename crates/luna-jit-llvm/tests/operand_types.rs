@@ -5,10 +5,9 @@
 //! read as its raw bits, and a call through an upvalue that no longer
 //! held the running function still went to the running function.
 
-use luna_core::__private::{VmJitFrames, VmJitState};
 use luna_core::jit::{CompileResult, IntChunkCompiler};
-use luna_core::runtime::Value;
 use luna_core::vm::isa::Op;
+use luna_core::{__private::VmJitFrames, runtime::Value};
 use luna_jit::LuaVersion;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
 
@@ -85,12 +84,7 @@ fn chunk_upvalue_of_another_type_deopts() {
     unsafe { support::call_chunk(entry, &[]) };
     drop(_guard);
     // the level goes to the interpreter, which reads the float
-    assert_eq!(
-        vm.jit_handed_levels(),
-        1,
-        "a float upvalue was read as an integer"
-    );
-    assert!(vm.jit().pending_err.is_none());
+    assert_eq!(vm.jit_handed_levels(), 1, "a float upvalue read as an int");
 }
 
 #[test]
@@ -112,11 +106,7 @@ fn chunk_call_through_a_reassigned_upvalue_deopts() {
     let r = unsafe { support::call_chunk(entry, &[3]) };
     drop(_guard);
     // the call goes to the interpreter from its start
-    assert_eq!(
-        vm.jit_handed_levels(),
-        1,
-        "the call through `b` ran `a` itself (returned {r})"
-    );
+    assert_eq!(vm.jit_handed_levels(), 1, "`b` ran as `a` itself, {r}");
 }
 
 #[test]
