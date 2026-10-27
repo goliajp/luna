@@ -24,7 +24,9 @@ mod luna;
 mod puc;
 mod puc_writer;
 pub(crate) use puc::shape::{Arr, UEv, Undumping};
-pub(crate) use puc_writer::{Shape, shapes};
+pub(crate) use puc_writer::Layout;
+#[cfg(any(debug_assertions, feature = "gc-trace"))]
+pub(crate) use puc_writer::check_compiled;
 mod reader;
 mod verify;
 

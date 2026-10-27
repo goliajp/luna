@@ -25,24 +25,21 @@ impl Vm {
     /// stand for it, with their lines, and the constants PUC adds for it
     /// (an instruction PUC has none for stands for none).
     fn replay_instruction(&mut self, r: &mut Replay, line: u32) {
-        let Replay { fs, shapes, .. } = r;
+        let Replay { fs, opening, .. } = r;
         let Some(f) = fs.last_mut() else {
             return;
         };
         let h = &mut self.heap;
         let pc = f.pc;
         f.pc += 1;
-        let Some(sh) = shapes.get(f.shape) else {
+        let Some(p) = opening.get(f.shape).filter(|p| pc < p.code.len()) else {
             h.parser_code(&mut f.a, line);
             return;
         };
-        let a = sh.pc_map.get(pc).copied().unwrap_or(0) as usize;
-        let b = sh.pc_map.get(pc + 1).copied().unwrap_or(a as u32 + 1) as usize;
-        for j in a..b.max(a) {
-            h.parser_code(&mut f.a, sh.lines.get(j).copied().unwrap_or(line));
-        }
-        for _ in sh.k_added.iter().filter(|&&p| p == pc) {
-            h.parser_push(&mut f.a.k, ParserArray::Consts);
+        let Fs { a, lay, .. } = f;
+        let added = lay.code(p, pc, line, |l| h.parser_code(a, l));
+        for _ in 0..added {
+            h.parser_push(&mut a.k, ParserArray::Consts);
         }
     }
 
@@ -52,17 +49,12 @@ impl Vm {
             PEv::Open => self.replay_open(r)?,
             PEv::Prologue => {
                 // a vararg function's first instructions (`setvararg`)
-                let Some(f) = r.fs.last() else {
+                let Some(f) = r.fs.last_mut() else {
                     return Ok(());
                 };
-                let (shape, ld) = (f.shape, f.a.prev_line);
-                let pro = r
-                    .shapes
-                    .get(shape)
-                    .map_or(0, |sh| sh.pc_map.first().copied().unwrap_or(0));
-                for j in 0..pro as usize {
-                    let line = r.shapes[shape].lines.get(j).copied().unwrap_or(ld);
-                    self.replay_code(r, line);
+                if let Some(p) = r.opening.get(f.shape) {
+                    let Fs { a, lay, .. } = f;
+                    lay.prologue(p, |l| self.heap.parser_code(a, l));
                 }
             }
             PEv::Lit(text) => self.replay_scan(r, text.as_bytes(), ScanKind::Str)?,
@@ -115,13 +107,5 @@ impl Vm {
             }
         }
         Ok(())
-    }
-
-    /// One PUC instruction on `line` (`luaK_code`): the code array, then
-    /// the line info (5.4+ `savelineinfo`, with its absolute entries).
-    pub(super) fn replay_code(&mut self, r: &mut Replay, line: u32) {
-        if let Some(f) = r.fs.last_mut() {
-            self.heap.parser_code(&mut f.a, line);
-        }
     }
 }

@@ -12,9 +12,10 @@ pub(super) struct Fs {
     /// the function's own table: 5.1 and 5.2 key its strings and constants
     /// in it, 5.5 its constants (`kcache`)
     pub(super) h: Option<PTab>,
-    /// which of the shapes is this function's, and the luna instructions
-    /// emitted so far
+    /// which of [`Replay::opening`] is this function's, PUC's layout of
+    /// its code, and the luna instructions emitted so far
     pub(super) shape: usize,
+    pub(super) lay: crate::vm::dump::Layout,
     pub(super) pc: usize,
     /// where its strings start among `Replay::kstr`
     pub(super) kbase: usize,
@@ -122,8 +123,7 @@ pub(super) struct Replay<'s> {
     /// the prototypes in the order their functions open
     pub(super) opening: Vec<Gc<Proto>>,
     pub(super) opened: usize,
-    /// PUC's layout of each function, in the order they open
-    pub(super) shapes: Vec<crate::vm::dump::Shape>,
+    pub(super) version: crate::version::LuaVersion,
     /// the prototypes in the order their functions close (postorder), and
     /// how many have closed
     pub(super) closing: Vec<Gc<Proto>>,
@@ -175,6 +175,8 @@ impl<'s> Replay<'s> {
     ) -> Replay<'s> {
         let (mut opening, mut closing) = (Vec::new(), Vec::new());
         walk(proto, &mut opening, &mut closing);
+        #[cfg(any(debug_assertions, feature = "gc-trace"))]
+        crate::vm::dump::check_compiled(&proto, version);
         Replay {
             d,
             sizes,
@@ -191,7 +193,7 @@ impl<'s> Replay<'s> {
             label: GrowVec::default(),
             opening,
             opened: 0,
-            shapes: crate::vm::dump::shapes(&proto, version).unwrap_or_default(),
+            version,
             closing,
             closed: 0,
             source: proto.source,

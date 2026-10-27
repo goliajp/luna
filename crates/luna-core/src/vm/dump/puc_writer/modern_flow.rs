@@ -2,6 +2,7 @@
 
 use super::asm::{Dist, L, Res, setlist_offset};
 use super::modern::{Caps, M};
+use super::width::{modern_setlist, self_steps};
 use crate::vm::dump::puc::modern::Kind;
 use crate::vm::isa::{ForLayout, Op};
 
@@ -204,8 +205,7 @@ impl M<'_, '_> {
     pub(super) fn set_list(&mut self, l: L) -> Res<usize> {
         let offset = setlist_offset(self.asm, l)?;
         let a = self.asm.run(l.a, l.b + 1)?;
-        let size = if self.f.v55 { 1024 } else { 256 };
-        let (c, extra) = ((offset % size) as u32, offset / size);
+        let (c, extra) = modern_setlist(offset, self.f.v55);
         let w = if self.f.v55 {
             self.vabc(Kind::SetList, a, l.b, c, extra > 0)?
         } else {
@@ -238,12 +238,13 @@ impl M<'_, '_> {
         } else {
             self.asm.r(l.c)?
         };
-        if key == a + 1 {
+        let steps = self_steps(l.k, a, b, key);
+        if steps.move_key {
             let t = self.asm.temp()?;
             self.emit(self.abc(Kind::Move, t, key, 0, false))?;
             key = t;
         }
-        if b != a + 1 {
+        if steps.move_obj {
             self.emit(self.abc(Kind::Move, a + 1, b, 0, false))?;
         }
         self.emit(self.abc(Kind::GetTable, a, b, key, false))
