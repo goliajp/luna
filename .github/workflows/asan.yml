@@ -94,6 +94,19 @@ jobs:
         env:
           RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
 
+      # a reader's load whose checkpoints run collection steps: the sweep
+      # frees objects the load set aside and put on the list since
+      - name: ASAN — load_reader_stack regression
+        run: |
+          cargo +nightly test \
+            -p luna-core \
+            --test it \
+            -Z build-std \
+            --target x86_64-unknown-linux-gnu \
+            -- --nocapture --test-threads=1 load_reader_stack::
+        env:
+          RUSTFLAGS: -Z sanitizer=address -C debuginfo=2 --cfg luna_asan
+
       - name: ASAN — toomanyidx_memory_cap regression
         run: |
           cargo +nightly test \
