@@ -53,6 +53,13 @@ fn run(dir: &Path, dialect: &str, script: &str, jit: bool) -> String {
     if !jit {
         cmd.arg("--no-jit");
     }
+    // the recordings' PUC ran without them: they replace the default paths
+    for (k, _) in std::env::vars_os() {
+        let name = k.to_string_lossy().to_uppercase();
+        if ["LUA_PATH", "LUA_CPATH", "LUA_INIT"].iter().any(|p| name.starts_with(p)) {
+            cmd.env_remove(&k);
+        }
+    }
     let out = cmd
         .arg(script)
         .env("TZ", "UTC")
@@ -128,6 +135,15 @@ fn steps_5_3() {
 #[test]
 fn steps_5_4() {
     check("5.4", &[false]);
+}
+
+/// `package.path`, `package.cpath` and `package.config` are PUC's (on
+/// Windows naming the directory PUC ran from, where the copy runs).
+#[test]
+fn package_paths() {
+    for d in ["5.1", "5.2", "5.3", "5.4", "5.5"] {
+        check_in("tests/package_paths", d, &[false]);
+    }
 }
 
 /// What lua.c's message handler makes counts as PUC's does: an error
