@@ -1,0 +1,111 @@
+# Records what PUC built with MSVC prints for the scripts the CLI step
+# tests run (`crates/luna-jit/tests/gc_steps` and `tests/lua_c`), under
+# the tests' conditions: the string hash seed fixed at 1 (the same patch
+# as the Linux recordings' PUC), the interpreter at C:\luna-gc-steps\lua.exe
+# started through `cmd` as `lua`, from the scripts' directory, TZ=UTC. The
+# outputs, CRLF read as LF, are uploaded as the artifact `windows-steps`.
+# Run by hand when a script or a recording changes.
+
+name: record-windows-steps
+
+on:
+  workflow_dispatch:
+  # a batch branch's push runs it, which also registers the workflow
+  # before it is on develop
+  push:
+    branches: ['batch*']
+
+jobs:
+  record:
+    name: record with MSVC-built PUC
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Fetch PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.9 / 5.5.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/puc" && cd "$RUNNER_TEMP/puc"
+          for v in 5.1.5 5.2.4 5.3.6 5.4.9 5.5.1; do
+            curl -fsSL "https://www.lua.org/ftp/lua-$v.tar.gz" -o "lua-$v.tar.gz"
+          done
+          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  lua-5.5.1.tar.gz" | sha256sum -c -
+          for v in 5.1.5 5.2.4 5.3.6 5.4.9 5.5.1; do tar -xzf "lua-$v.tar.gz"; done
+
+      - name: Fix the hash seed
+        shell: python
+        run: |
+          import os, re
+          seed = ('  { const char *r38s = getenv("LUNA_GC_SEED"); '
+                  'if (r38s) return (unsigned int)strtoul(r38s, NULL, 0); }\n')
+          head = re.compile(r"\n(static unsigned int makeseed \(lua_State \*L\)"
+                            r"|static unsigned int luai_makeseed \(lua_State \*L\)"
+                            r"|LUALIB_API unsigned int luaL_makeseed \(lua_State \*L\)) \{\n")
+          root = os.path.join(os.environ["RUNNER_TEMP"], "puc")
+          for v in ("5.2.4", "5.3.6", "5.4.9", "5.5.1"):
+              src = os.path.join(root, f"lua-{v}", "src")
+              done = 0
+              for name in os.listdir(src):
+                  if not name.endswith(".c"):
+                      continue
+                  p = os.path.join(src, name)
+                  s = open(p, newline="").read()
+                  m = head.search(s)
+                  if m:
+                      s = "#include <stdlib.h>\n" + s[:m.end()] + seed + s[m.end():]
+                      open(p, "w", newline="").write(s)
+                      done += 1
+              assert done == 1, f"{v}: {done} seed functions patched"
+
+      - name: Build with MSVC
+        shell: cmd
+        run: |
+          setlocal enabledelayedexpansion
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VS=%%i
+          call "%VS%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          for %%v in (5.1.5 5.2.4 5.3.6 5.4.9 5.5.1) do (
+            pushd "%RUNNER_TEMP%\puc\lua-%%v\src" || exit /b 1
+            del luac.c
+            if exist onelua.c del onelua.c
+            set DEFS=
+            if "%%v"=="5.2.4" set DEFS=/DLUA_COMPAT_ALL
+            if "%%v"=="5.3.6" set DEFS=/DLUA_COMPAT_5_2
+            if "%%v"=="5.4.9" set DEFS=/DLUA_COMPAT_5_3
+            call cl /nologo /O2 /MD /W0 !DEFS! /Fe:..\lua.exe *.c || exit /b 1
+            popd
+          )
+
+      - name: Record
+        shell: python
+        run: |
+          import os, shutil, subprocess
+          root = os.path.join(os.environ["RUNNER_TEMP"], "puc")
+          versions = {"5.1": "5.1.5", "5.2": "5.2.4", "5.3": "5.3.6", "5.4": "5.4.9", "5.5": "5.5.1"}
+          bin_dir = r"C:\luna-gc-steps"
+          os.makedirs(bin_dir, exist_ok=True)
+          env = dict(os.environ, LUNA_GC_SEED="1", TZ="UTC")
+          env["PATH"] = bin_dir + os.pathsep + env["PATH"]
+          out_root = os.path.join(os.environ["RUNNER_TEMP"], "windows-steps")
+          for base in ("gc_steps", "lua_c"):
+              scripts = os.path.join("crates", "luna-jit", "tests", base)
+              for d in sorted(os.listdir(scripts)):
+                  for name in sorted(os.listdir(os.path.join(scripts, d))):
+                      if not name.endswith(".lua"):
+                          continue
+                      shutil.copy(os.path.join(root, f"lua-{versions[d]}", "lua.exe"),
+                                  os.path.join(bin_dir, "lua.exe"))
+                      r = subprocess.run(["cmd", "/C", "lua", f"{d}/{name}"], cwd=scripts,
+                                         env=env, capture_output=True)
+                      out = r.stdout.replace(b"\r\n", b"\n")
+                      dest = os.path.join(out_root, base, d, name[:-4] + ".windows.out")
+                      os.makedirs(os.path.dirname(dest), exist_ok=True)
+                      open(dest, "wb").write(out)
+                      same = open(os.path.join(scripts, d, name[:-4] + ".out"), "rb").read() == out
+                      print(f"{base}/{d}/{name} exit {r.returncode}", "same as Linux" if same else "own")
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-steps
+          path: ${{ runner.temp }}/windows-steps
