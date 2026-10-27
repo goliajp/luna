@@ -54,7 +54,7 @@ impl Vm {
         };
         let replayed = self
             .replay_begin(&mut r, cl)
-            .and_then(|()| self.replay_log(&mut r, &log, chunk, marks, Some(cut)))
+            .and_then(|()| self.replay_log(&mut r, &log, marks, Some(cut)))
             .and_then(|()| {
                 failed::unclosed(&mut r);
                 self.replay_syntax_error(&mut r, e, near, proto.source.as_bytes())

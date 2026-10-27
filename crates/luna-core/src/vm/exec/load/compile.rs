@@ -25,12 +25,14 @@ impl Vm {
             return Err(self.error_before(src, failed, source).unwrap_or(e));
         }
         let (chunk, end_lines) = self.parse_scratch.parsed();
+        let marks = self.parse_scratch.recorded().map(|(m, _)| m);
         // a counted load that fails is replayed from what it compiled
         let s = &mut self.compile_scratch;
         s.replay.seal = self.parse_scratch.record;
         let made = crate::compiler::compile_parsed(
             chunk,
             end_lines,
+            marks,
             self.version,
             source,
             &mut self.heap,
@@ -49,7 +51,7 @@ impl Vm {
     ) -> Result<Gc<crate::runtime::Proto>, SyntaxError> {
         let src = parsed.src.take();
         let proto = self
-            .compile_parsed(&parsed.chunk, &parsed.end_lines, source)
+            .compile_parsed(&parsed.chunk, &parsed.end_lines, marks_of(&parsed), source)
             .map_err(|e| match &src {
                 Some(src) => {
                     let (v, depth) = (self.version, self.g.nccalls);
@@ -79,15 +81,24 @@ impl Vm {
         &mut self,
         chunk: &crate::frontend::ast::Chunk,
         end_lines: &[u32],
+        marks: Option<&crate::frontend::parser::Marks>,
         source: Gc<crate::runtime::LuaStr>,
     ) -> Result<Gc<crate::runtime::Proto>, SyntaxError> {
         crate::compiler::compile_parsed(
             chunk,
             end_lines,
+            marks,
             self.version,
             source,
             &mut self.heap,
             &mut self.compile_scratch,
         )
     }
+}
+
+/// The marks a parse recorded, if it did.
+pub(super) fn marks_of(
+    p: &crate::frontend::parser::Parsed,
+) -> Option<&crate::frontend::parser::Marks> {
+    p.recorded().map(|(m, _)| m)
 }

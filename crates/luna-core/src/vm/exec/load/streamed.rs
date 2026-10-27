@@ -169,7 +169,8 @@ impl Vm {
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         let source = self.heap.chunk_name(chunkname, name)?;
         self.compile_scratch.replay.seal = true;
-        let made = self.compile_parsed(&parsed.chunk, &parsed.end_lines, source);
+        let marks = super::compile::marks_of(parsed);
+        let made = self.compile_parsed(&parsed.chunk, &parsed.end_lines, marks, source);
         self.compile_scratch.replay.seal = false;
         let proto = made.map_err(|e| match &parsed.src {
             // placed as PUC, which compiles while it reads, meets it

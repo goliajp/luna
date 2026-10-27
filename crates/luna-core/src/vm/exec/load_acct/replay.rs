@@ -2,7 +2,6 @@
 //! and what has been made so far.
 
 use super::*;
-use crate::compiler::TokRef;
 
 /// A function being compiled, in PUC's terms.
 #[derive(Default)]
@@ -43,11 +42,11 @@ pub(super) struct Cut {
 }
 
 impl Cut {
-    /// Whether event `ev`, logged at token `t`, the token of the cut, is
+    /// Whether event `ev`, logged at token `t` (named by `at`), the token of the cut, is
     /// replayed: one of a node that ended before the token (done while
     /// the parser looked at it, before it failed on it), or, when the
     /// error was raised as a function closed, any up to the closing.
-    pub(super) fn takes(&self, t: TokRef, ev: PEv, m: &crate::frontend::parser::Marks) -> bool {
+    pub(super) fn takes(&self, at: At, ev: PEv, m: &crate::frontend::parser::Marks) -> bool {
         if !self.closes {
             return !matches!(ev, PEv::Close);
         }
@@ -58,19 +57,16 @@ impl Cut {
                     .is_some_and(|&f| i64::from(f) <= self.events)
         };
         let (stats, exprs) = self.closed;
-        match t {
+        match at {
             // a statement's last token: what its body leaves is done
             // before the parser checks the token is the `end` it expects
-            TokRef::StatAfter(_, -1) if self.block_ends => true,
+            At::StatLast(_) if self.block_ends => true,
             // done as the scanner reached the expression's first token,
             // before the parser read it (`luaK_infix` after an operator)
-            TokRef::First(..) => true,
-            TokRef::After(e, _) | TokRef::Open(e, _) => ended(e.0, exprs, &m.expr_follow),
-            TokRef::StatFirst(s, _)
-            | TokRef::StatAfter(s, _)
-            | TokRef::StatMark(s, _)
-            | TokRef::MarkPlus(s, ..) => ended(s.0, stats, &m.stat_follow),
-            _ => false,
+            At::First => true,
+            At::Expr(e) => ended(e, exprs, &m.expr_follow),
+            At::Stat(s) | At::StatLast(s) => ended(s, stats, &m.stat_follow),
+            At::Other => false,
         }
     }
 }

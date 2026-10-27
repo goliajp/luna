@@ -51,10 +51,14 @@ impl Vm {
         let made = match parse_in_place(&fixed, v, depth, &mut tree) {
             Ok(()) => {
                 let (ast, end_lines) = tree.parsed();
-                Some(self.compile_parsed(ast, end_lines, source).map_err(|ce| {
-                    let s = &mut self.compile_scratch;
-                    crate::compiler::place_error(s, ast, &fixed, v, depth, ce)
-                }))
+                let marks = tree.recorded().map(|(m, _)| m);
+                Some(
+                    self.compile_parsed(ast, end_lines, marks, source)
+                        .map_err(|ce| {
+                            let s = &mut self.compile_scratch;
+                            crate::compiler::place_error(s, ast, &fixed, v, depth, ce)
+                        }),
+                )
             }
             Err(_) => None,
         };
@@ -86,7 +90,6 @@ impl Vm {
         let (Some(cl), Some((marks, _))) = (built, tree.recorded()) else {
             return self.splices_stand_caught(splices);
         };
-        let chunk = tree.parsed().0;
         let parsed = std::mem::replace(
             &mut self.parse_scratch,
             ParseScratch::new(self.heap.mem_owner()),
@@ -140,7 +143,7 @@ impl Vm {
         };
         let replayed = self
             .replay_begin(&mut r, cl)
-            .and_then(|()| self.replay_log(&mut r, &log, chunk, marks, Some(cut)))
+            .and_then(|()| self.replay_log(&mut r, &log, marks, Some(cut)))
             .and_then(|()| {
                 if failed.scanning {
                     let (start, pos) = (failed.scan.0 as usize, failed.scan.1 as usize);

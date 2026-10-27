@@ -57,6 +57,9 @@ pub(super) struct LogState {
     pub(super) fresh_literal: Option<(usize, u32)>,
     /// see [`super::ReplayOpts::lenient`]
     pub(super) lenient: bool,
+    pub(super) last: super::puc_rec::LastTok,
+    /// an event was logged at [`TokRef::Next`]
+    pub(super) nexts: bool,
 }
 
 impl<'a> Compiler<'a> {
@@ -212,7 +215,7 @@ impl<'a> Compiler<'a> {
         {
             self.l().consts.pop();
             let log = &mut self.puc_log;
-            if let Some(i) = log.iter().rposition(|(_, e)| matches!(e, PEv::Const(..))) {
+            if let Some(i) = log.iter().rposition(|r| matches!(r.ev, PEv::Const(..))) {
                 log.remove(i);
             }
         }
@@ -225,12 +228,12 @@ impl<'a> Compiler<'a> {
     pub(super) fn close_after_closure(&mut self, final_ret: usize) {
         let log = &mut self.puc_log;
         let n = log.len();
-        if n < 2 || final_ret >= n - 1 || !matches!(log[n - 2].1, PEv::Close) {
+        if n < 2 || final_ret >= n - 1 || !matches!(log[n - 2].ev, PEv::Close) {
             return;
         }
-        if let (tok, PEv::Code(line)) = log[n - 1] {
+        if let PEv::Code(line) = log[n - 1].ev {
             log[final_ret..].rotate_right(1);
-            log[final_ret] = (tok, PEv::CodeUp(line));
+            log[final_ret].ev = PEv::CodeUp(line);
         }
     }
 
@@ -238,7 +241,7 @@ impl<'a> Compiler<'a> {
     /// make it: PUC never codes it.
     pub(super) fn unlog_code(&mut self) {
         let log = &mut self.puc_log;
-        if let Some(i) = log.iter().rposition(|(_, e)| matches!(e, PEv::Code(_))) {
+        if let Some(i) = log.iter().rposition(|r| matches!(r.ev, PEv::Code(_))) {
             log.remove(i);
         }
     }
@@ -249,7 +252,7 @@ impl<'a> Compiler<'a> {
         let log = &mut self.puc_log;
         let start = log[..from]
             .iter()
-            .rposition(|(t, _)| *t != TokRef::Next)
+            .rposition(|r| r.tok != super::puc_rec::NEXT)
             .map_or(0, |i| i + 1);
         log[start..].rotate_left(from - start);
     }
@@ -266,8 +269,7 @@ impl<'a> Compiler<'a> {
     /// Log `ev` at the scanner's current token.
     #[inline]
     pub(super) fn log(&mut self, ev: PEv) {
-        let at = self.cur;
-        self.puc_log.push_or_abort((at, ev));
+        self.log_at(self.cur, ev);
     }
 }
 
