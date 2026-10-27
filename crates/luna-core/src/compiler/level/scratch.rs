@@ -16,7 +16,7 @@ pub(crate) struct CompileScratch {
     /// (see [`super::super::TokRef`])
     pub(crate) err_tok: Option<(super::super::TokRef, Vec<u8>, bool)>,
     /// the last compile's log of what PUC allocates (see [`super::super::puc_log`])
-    pub(crate) puc_log: LVec<(super::super::TokRef, super::super::puc_log::PEv)>,
+    pub(crate) puc_log: LVec<super::super::puc_rec::Rec>,
     /// see [`super::super::ReplayOpts`]
     pub(crate) replay: super::super::ReplayOpts,
 }

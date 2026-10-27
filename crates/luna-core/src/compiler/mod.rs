@@ -34,11 +34,12 @@ mod limits;
 mod near;
 pub(crate) mod num_first;
 pub(crate) mod puc_log;
+pub(crate) mod puc_rec;
 pub(crate) use near::{TokRef, error_before, place_error};
 mod lvalue;
 mod main_fn;
-pub use main_fn::compile_chunk_with_last_target;
-use main_fn::compile_main;
+pub(crate) use main_fn::compile_parsed;
+pub use main_fn::{compile_chunk, compile_chunk_with_last_target};
 mod resolve;
 use resolve::VarKind;
 mod return_stat;
@@ -69,36 +70,6 @@ use crate::version::LuaVersion;
 use crate::vm::isa::{
     Inst, MAX_B, MAX_BX, MAX_C, MAX_SC, MAX_SJ, MAX_SJ_FORWARD, MIN_SC, OFFSET_SC, Op,
 };
-
-/// Lower an [`ast::Chunk`] into a [`Proto`] (luna bytecode) for the
-/// given dialect. The interned source name is attached to the proto for
-/// error messages and `debug.getinfo`.
-pub fn compile_chunk(
-    ast: &ast::Chunk,
-    version: LuaVersion,
-    source_name: &[u8],
-    heap: &mut Heap,
-) -> Result<Gc<Proto>, SyntaxError> {
-    let mut scratch = CompileScratch::new(heap.mem());
-    let source = heap.try_intern(source_name)?;
-    compile_parsed(ast, &[], version, source, heap, &mut scratch)
-}
-
-/// [`compile_chunk`] with the `end` lines the parser recorded for loops
-/// ([`crate::frontend::parser::Parsed::end_lines`]); a [`ast::Chunk`] carries no
-/// such lines, so code PUC emits after a loop's `end` is placed on that
-/// line only when they are given. The functions are built in the vectors
-/// of `scratch`.
-pub(crate) fn compile_parsed(
-    ast: &Chunk,
-    end_lines: &[u32],
-    version: LuaVersion,
-    source: Gc<LuaStr>,
-    heap: &mut Heap,
-    scratch: &mut CompileScratch,
-) -> Result<Gc<Proto>, SyntaxError> {
-    compile_main(ast, end_lines, version, source, heap, scratch).map(|(p, _)| p)
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Varg {
@@ -243,8 +214,9 @@ struct Compiler<'a> {
     /// the token of the error being returned, and its message
     err_tok: Option<(TokRef, Vec<u8>, bool)>,
     /// what PUC allocates while it compiles, for the load to count (see
-    /// [`puc_log`])
-    puc_log: LVec<(TokRef, puc_log::PEv)>,
+    /// [`puc_log`]); logged only when the parse recorded these marks
+    puc_log: LVec<puc_rec::Rec>,
+    marks: Option<&'a crate::frontend::parser::Marks>,
     /// when the locals' entries are logged (see [`puc_log::LogState`])
     puc_state: puc_log::LogState,
 }

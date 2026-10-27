@@ -22,7 +22,7 @@ impl<'a> Compiler<'a> {
         } else {
             self.cur
         };
-        self.puc_log.push_or_abort((at, puc_log::PEv::Code(line)));
+        self.log_at(at, puc_log::PEv::Code(line));
         pc
     }
 

@@ -82,7 +82,7 @@ impl Vm {
             depth,
             self.heap.mem_owner(),
         )?;
-        let p = self.compile_parsed(&parsed.chunk, &parsed.end_lines, source)?;
+        let p = self.compile_parsed(&parsed.chunk, &parsed.end_lines, None, source)?;
         self.close_chunk(p)
     }
 

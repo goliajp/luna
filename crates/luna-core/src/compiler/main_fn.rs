@@ -15,33 +15,73 @@ pub fn compile_chunk_with_last_target(
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
     let mut scratch = CompileScratch::new(heap.mem());
     let source = heap.try_intern(source_name)?;
-    compile_main(ast, &[], version, source, heap, &mut scratch)
+    compile_main((ast, &[], None), version, source, heap, &mut scratch)
+}
+
+/// Lower an [`ast::Chunk`] into a [`Proto`] (luna bytecode) for the
+/// given dialect. The interned source name is attached to the proto for
+/// error messages and `debug.getinfo`.
+pub fn compile_chunk(
+    ast: &ast::Chunk,
+    version: LuaVersion,
+    source_name: &[u8],
+    heap: &mut Heap,
+) -> Result<Gc<Proto>, SyntaxError> {
+    let mut scratch = CompileScratch::new(heap.mem());
+    let source = heap.try_intern(source_name)?;
+    compile_parsed(ast, &[], None, version, source, heap, &mut scratch)
+}
+
+/// [`compile_chunk`] with the `end` lines the parser recorded for loops
+/// ([`crate::frontend::parser::Parsed::end_lines`]); a [`ast::Chunk`] carries no
+/// such lines, so code PUC emits after a loop's `end` is placed on that
+/// line only when they are given. The functions are built in the vectors
+/// of `scratch`; what PUC allocates is logged when `marks`, the parse's
+/// recording, are given.
+pub(crate) fn compile_parsed(
+    ast: &Chunk,
+    end_lines: &[u32],
+    marks: Option<&crate::frontend::parser::Marks>,
+    version: LuaVersion,
+    source: Gc<LuaStr>,
+    heap: &mut Heap,
+    scratch: &mut CompileScratch,
+) -> Result<Gc<Proto>, SyntaxError> {
+    let parsed = (ast, end_lines, marks);
+    compile_main(parsed, version, source, heap, scratch).map(|(p, _)| p)
 }
 
 /// Compile the main function; also gives its `last_target`.
 pub(super) fn compile_main(
-    ast: &Chunk,
-    end_lines: &[u32],
+    parsed: Parsed<'_>,
     version: LuaVersion,
     source: Gc<LuaStr>,
     heap: &mut Heap,
     scratch: &mut CompileScratch,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
     crate::cerrno::begin_folds();
-    let r = compile_main_body(ast, end_lines, version, source, heap, scratch);
+    let r = compile_main_body(parsed, version, source, heap, scratch);
     crate::cerrno::end_folds();
     r
 }
 
+/// A parsed chunk: its tree, its loops' `end` lines, and the marks the
+/// parse recorded, if it did.
+type Parsed<'a> = (
+    &'a Chunk,
+    &'a [u32],
+    Option<&'a crate::frontend::parser::Marks>,
+);
+
 fn compile_main_body(
-    ast: &Chunk,
-    end_lines: &[u32],
+    parsed: Parsed<'_>,
     version: LuaVersion,
     source: Gc<LuaStr>,
     heap: &mut Heap,
     scratch: &mut CompileScratch,
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
-    let mut c = compiler_from(ast, end_lines, version, source, heap, scratch);
+    let ast = parsed.0;
+    let mut c = compiler_from(parsed, version, source, heap, scratch);
     c.sym_strs.clear();
     c.sym_strs.resize_or_abort(ast.names.len(), None);
     c.open_level(0, true, 0);
@@ -71,19 +111,20 @@ fn compile_main_body(
         if scratch.replay.seal {
             scratch.replay.sealed = Some(c.seal_levels());
         }
+        c.settle_log();
         scratch.puc_log = std::mem::replace(&mut c.puc_log, LVec::new(c.heap.mem()));
         return Err(e);
     }
     let last_target = c.lr().last_target;
     let proto = c.finish_level(0, 0);
+    c.settle_log();
     keep_scratch(c, scratch);
     Ok((proto, last_target))
 }
 
 /// A compiler over `ast`, its vectors taken from `scratch`.
 fn compiler_from<'a>(
-    ast: &'a Chunk,
-    end_lines: &'a [u32],
+    (ast, end_lines, marks): Parsed<'a>,
     version: LuaVersion,
     source: Gc<LuaStr>,
     heap: &'a mut Heap,
@@ -115,6 +156,7 @@ fn compiler_from<'a>(
             log.clear();
             log
         },
+        marks,
         puc_state: super::puc_log::LogState {
             lenient: scratch.replay.lenient,
             ..Default::default()

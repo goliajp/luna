@@ -57,7 +57,8 @@ impl Vm {
             parse_in_place(&text, v, depth, &mut tree).ok()?;
         }
         let (ast, end_lines) = tree.parsed();
-        let proto = self.compile_parsed(ast, end_lines, source).ok()?;
+        let marks = tree.recorded().map(|(m, _)| m);
+        let proto = self.compile_parsed(ast, end_lines, marks, source).ok()?;
         let cl = self.close_chunk(proto).ok()?;
         let (marks, scanned) = tree.recorded()?;
         let chunk = tree.parsed().0;
@@ -82,7 +83,7 @@ impl Vm {
         let log = self.compile_scratch.puc_log.take();
         let replayed = self
             .replay_begin(&mut r, cl)
-            .and_then(|()| self.replay_log(&mut r, &log, chunk, marks, Some(cut)));
+            .and_then(|()| self.replay_log(&mut r, &log, marks, Some(cut)));
         self.compile_scratch.puc_log = log;
         replayed.ok()?;
         let sizes =

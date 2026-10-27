@@ -197,7 +197,7 @@ pub(crate) fn error_before(
     let mut tree = p::ParseScratch::new(mem.clone());
     p::parse_in_place(&fixed, version, c_depth, &mut tree).ok()?;
     let (ast, end_lines) = tree.parsed();
-    let e = super::compile_parsed(ast, end_lines, version, source, heap, scratch).err()?;
+    let e = super::compile_parsed(ast, end_lines, None, version, source, heap, scratch).err()?;
     let (t, near) = scratch.error_token(&e)?;
     let ix = t.resolve(ast, &p::record_marks(&fixed, version, c_depth, false).ok()?);
     if ix > failed.at {

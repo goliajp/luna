@@ -143,21 +143,18 @@ impl Vm {
     pub(super) fn replay_log(
         &mut self,
         r: &mut Replay,
-        log: &[(TokRef, PEv)],
-        chunk: &crate::frontend::ast::Chunk,
+        log: &[Rec],
         marks: &crate::frontend::parser::Marks,
         cut: Option<Cut>,
     ) -> Result<(), SyntaxError> {
         let scanned = r.scanned;
         let mut strs = scanned.strings.iter().peekable();
         let mut peaks = scanned.peaks.iter().peekable();
-        let mut toks = EventToks::default();
         let mut due = i64::MIN;
-        for (i, &(_, ev)) in log.iter().enumerate() {
-            let (tok, made_at) = toks.of(i, log, chunk, marks);
+        for &Rec { tok, at, ev } in log {
             if let Some(c) = cut
                 && tok >= c.events
-                && !(c.ended && tok == c.events && c.takes(made_at, ev, marks))
+                && !(c.ended && tok == c.events && c.takes(at, ev, marks))
             {
                 break;
             }
@@ -232,66 +229,5 @@ impl Vm {
             self.heap.acct_block(r.buff, size);
             r.buff = size;
         }
-    }
-}
-
-/// The tokens of a log's events: one logged at `TokRef::Next` takes the
-/// token of the next event that names one.
-struct EventToks {
-    /// the token the previous event named
-    last: (TokRef, i64),
-    /// the next event that names a token, and its token
-    next: Option<(usize, i64)>,
-}
-
-impl Default for EventToks {
-    fn default() -> Self {
-        EventToks {
-            last: (TokRef::Start, -1),
-            next: None,
-        }
-    }
-}
-
-impl EventToks {
-    /// The token of event `i`, and the token of the event it is made for.
-    fn of(
-        &mut self,
-        i: usize,
-        log: &[(TokRef, PEv)],
-        chunk: &crate::frontend::ast::Chunk,
-        marks: &crate::frontend::parser::Marks,
-    ) -> (i64, TokRef) {
-        let at = |t: TokRef| match t {
-            TokRef::Start => -1,
-            t => i64::from(t.resolve(chunk, marks)),
-        };
-        let t = log[i].0;
-        let tok = if t == self.last.0 {
-            self.last.1
-        } else if t == TokRef::Next {
-            match self.next {
-                Some((j, tok)) if j > i => tok,
-                _ => {
-                    let j = log[i..]
-                        .iter()
-                        .position(|&(t, _)| t != TokRef::Next)
-                        .map(|n| i + n);
-                    let tok = j.map_or(i64::from(marks.eof), |j| at(log[j].0));
-                    self.next = Some((j.unwrap_or(log.len()), tok));
-                    tok
-                }
-            }
-        } else {
-            let tok = at(t);
-            self.last = (t, tok);
-            tok
-        };
-        // an event at `Next` is done with the one it is made for
-        let made_at = match (t, self.next) {
-            (TokRef::Next, Some((j, _))) if j < log.len() => log[j].0,
-            _ => t,
-        };
-        (tok, made_at)
     }
 }

@@ -14,8 +14,8 @@
 //! the chunk's strings and one per function for its constants.
 
 use super::*;
-use crate::compiler::TokRef;
 use crate::compiler::puc_log::PEv;
+use crate::compiler::puc_rec::{At, Rec};
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::Proto;
 use crate::runtime::dialect::Dialect;
@@ -70,7 +70,7 @@ impl Vm {
         let log = self.compile_scratch.puc_log.take();
         let replayed = self
             .replay_begin(&mut r, cl)
-            .and_then(|()| self.replay_log(&mut r, &log, chunk, marks, None));
+            .and_then(|()| self.replay_log(&mut r, &log, marks, None));
         self.compile_scratch.puc_log = log;
         self.replay_left(&r, replayed.is_ok());
         replayed?;
