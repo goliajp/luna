@@ -107,14 +107,14 @@ const RETURNS_PUC: &[&str] = &[
 
 #[test]
 fn a_new_closure_takes_back_a_dead_open_upvalue() {
-    let want = BACK_PUC.concat();
+    let want = crate::cli_common::as_on_this_platform(&BACK_PUC.concat());
     assert_eq!(luna("back.lua", BACK, Some("--no-jit")), want);
     assert_eq!(luna("back.lua", BACK, None), want);
 }
 
 #[test]
 fn a_return_frees_a_dead_open_upvalue_before_the_sweep() {
-    let want = RETURNS_PUC.concat();
+    let want = crate::cli_common::as_on_this_platform(&RETURNS_PUC.concat());
     assert_eq!(luna("ret.lua", RETURNS, Some("--no-jit")), want);
     assert_eq!(luna("ret.lua", RETURNS, None), want);
 }

@@ -105,7 +105,11 @@ fn collection_after_error() {
         ("5.5", "global\nunreachable\n"),
     ] {
         let o = case.run(d);
-        assert_eq!(o.stdout, stdout, "--lua={d}");
+        assert_eq!(
+            o.stdout,
+            crate::cli_common::as_on_this_platform(stdout),
+            "--lua={d}"
+        );
         assert_eq!(o.status, 1, "--lua={d}");
     }
 }
