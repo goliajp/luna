@@ -169,7 +169,7 @@ impl Undumping {
     fn step(&mut self, r: &mut Reader) -> Option<()> {
         match self.top {
             0 => {
-                r.take(header_len(self.ver))?;
+                r.expect(header(self.ver))?;
                 self.top = 1;
                 return Some(());
             }
@@ -256,14 +256,15 @@ fn prog(v: u8) -> &'static [St] {
     [F51, F52, F53, F54, F55][usize::from(v - 0x51)]
 }
 
-/// The header's length in format `v`.
-fn header_len(v: u8) -> usize {
+/// The header of format `v`, as this target writes it: PUC's
+/// `checkHeader` refuses any other before it makes anything.
+fn header(v: u8) -> &'static [u8] {
     use crate::vm::dump::puc;
     match v {
-        0x51 => puc::puc_51::HEADER.len(),
-        0x52 => puc::puc_52::HEADER.len(),
-        0x53 => puc::puc_53::HEADER.len(),
-        0x54 => puc::puc_54::HEADER.len(),
-        _ => puc::puc_55::HEADER.len(),
+        0x51 => &puc::puc_51::HEADER,
+        0x52 => &puc::puc_52::HEADER,
+        0x53 => &puc::puc_53::HEADER,
+        0x54 => &puc::puc_54::HEADER,
+        _ => &puc::puc_55::HEADER,
     }
 }

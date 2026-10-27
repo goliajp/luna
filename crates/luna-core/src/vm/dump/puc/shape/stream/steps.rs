@@ -213,6 +213,10 @@ impl<'a> Reader<'a> {
         self.p = end;
         Some(s)
     }
+    /// The bytes `want`; `None` too for others (the walk is bad then).
+    pub(super) fn expect(&mut self, want: &[u8]) -> Option<()> {
+        (self.take(want.len())? == want).then_some(())
+    }
     pub(super) fn u8(&mut self) -> Option<u8> {
         Some(self.take(1)?[0])
     }
