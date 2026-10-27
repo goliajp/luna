@@ -30,6 +30,8 @@ mod events;
 mod failed;
 mod failed_compile;
 mod funcs;
+#[cfg(test)]
+mod long_tests;
 mod replay;
 mod scan;
 mod steps;
