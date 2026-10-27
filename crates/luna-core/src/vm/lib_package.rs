@@ -29,8 +29,8 @@ use searchers::*;
 mod puc_fns;
 pub(crate) use puc_fns::{PUC_FNS, puc_setpath};
 
-/// Default Lua search path. PUC compiles in its install prefix; luna has
-/// none, so only the current-directory templates remain.
+/// Default Lua search path outside Windows. PUC compiles in its install
+/// prefix; luna has none, so only the current-directory templates remain.
 const LUA_PATH_DEFAULT: &[u8] = b"./?.lua;./?/init.lua";
 
 /// PUC's `LUA_DIRSEP`: what `require` and `package.searchpath` turn a

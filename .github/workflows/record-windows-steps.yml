@@ -1,5 +1,6 @@
 # Records what PUC built with MSVC prints for the scripts the CLI step
-# tests run (`crates/luna-jit/tests/gc_steps` and `tests/lua_c`), under
+# tests run (`crates/luna-jit/tests/gc_steps`, `tests/lua_c` and
+# `tests/package_paths`, with no LUA_PATH or LUA_CPATH set), under
 # the tests' conditions: the string hash seed fixed at 1 (the same patch
 # as the Linux recordings' PUC), the interpreter at C:\luna-gc-steps\lua.exe
 # started through `cmd` as `lua`, from the scripts' directory, TZ=UTC. The
@@ -82,9 +83,11 @@ jobs:
           bin_dir = r"C:\luna-gc-steps"
           os.makedirs(bin_dir, exist_ok=True)
           env = dict(os.environ, LUNA_GC_SEED="1", TZ="UTC")
+          for k in [k for k in env if k.upper().startswith(("LUA_PATH", "LUA_CPATH", "LUA_INIT"))]:
+              del env[k]
           env["PATH"] = bin_dir + os.pathsep + env["PATH"]
           out_root = os.path.join(os.environ["RUNNER_TEMP"], "windows-steps")
-          for base in ("gc_steps", "lua_c"):
+          for base in ("gc_steps", "lua_c", "package_paths"):
               scripts = os.path.join("crates", "luna-jit", "tests", base)
               for d in sorted(os.listdir(scripts)):
                   for name in sorted(os.listdir(os.path.join(scripts, d))):
@@ -98,7 +101,8 @@ jobs:
                       dest = os.path.join(out_root, base, d, name[:-4] + ".windows.out")
                       os.makedirs(os.path.dirname(dest), exist_ok=True)
                       open(dest, "wb").write(out)
-                      same = open(os.path.join(scripts, d, name[:-4] + ".out"), "rb").read() == out
+                      linux = os.path.join(scripts, d, name[:-4] + ".out")
+                      same = os.path.exists(linux) and open(linux, "rb").read() == out
                       print(f"{base}/{d}/{name} exit {r.returncode}", "same as Linux" if same else "own")
 
       - uses: actions/upload-artifact@v7
