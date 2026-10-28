@@ -31,15 +31,52 @@ pub(crate) enum NameSrc {
 }
 
 impl NameSrc {
-    /// The source of `name`, one of [`LITERALS`].
-    pub(crate) fn literal(name: &str) -> NameSrc {
-        let i = LITERALS
-            .iter()
-            .position(|&l| l == name)
-            .expect("a literal name");
-        NameSrc::Lit(i as u8)
+    /// The source of `name`, one of [`LITERALS`]; meant for constants.
+    pub(crate) const fn literal(name: &str) -> NameSrc {
+        let mut i = 0;
+        while i < LITERALS.len() {
+            if same(LITERALS[i].as_bytes(), name.as_bytes()) {
+                return NameSrc::Lit(i as u8);
+            }
+            i += 1;
+        }
+        panic!("not a literal name")
+    }
+
+    /// The text of a name from one of [`LITERALS`].
+    pub(crate) fn literal_text(self) -> &'static str {
+        match self {
+            NameSrc::Lit(i) => LITERALS[usize::from(i)],
+            NameSrc::Sym(_) => unreachable!("a name of the chunk"),
+        }
+    }
+
+    /// The number of the string PUC's parser makes itself for a local of
+    /// this name (`new_localvarliteral`), if it does.
+    pub(crate) fn local_literal(self) -> Option<u8> {
+        match self {
+            NameSrc::Lit(i) if usize::from(i) < LOCAL_LITERALS => Some(i),
+            _ => None,
+        }
     }
 }
+
+const fn same(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// The `_ENV` upvalue's.
+pub(crate) const ENV: NameSrc = NameSrc::literal("_ENV");
 
 /// The heap strings of one load, by the chunk's name numbers and by
 /// [`LITERALS`], with where the names of each prototype come from.

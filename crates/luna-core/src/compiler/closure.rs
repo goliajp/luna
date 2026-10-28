@@ -44,13 +44,13 @@ impl<'a> Compiler<'a> {
                 name: "_ENV".into(),
                 read_only: false,
             });
-            level.upval_srcs.push_or_abort(NameSrc::literal("_ENV"));
+            level.upval_srcs.push_or_abort(load_strs::ENV);
         }
         self.enter_block(false);
         // the scanner past `(`: `self`, entered at once
         if is_method {
             self.at(open.plus(1));
-            self.declare_local("self", NameSrc::literal("self"), 0, false)?;
+            self.declare_local("self", const { NameSrc::literal("self") }, 0, false)?;
         }
         // each parameter is declared once its name is read; their debug
         // records come at `)` (PUC `parlist`'s `adjustlocalvars`)
@@ -73,7 +73,7 @@ impl<'a> Compiler<'a> {
             let r = self.reserve(1)?;
             self.declare_local(
                 "(vararg table)",
-                NameSrc::literal("(vararg table)"),
+                const { NameSrc::literal("(vararg table)") },
                 r,
                 false,
             )?;
@@ -103,7 +103,7 @@ impl<'a> Compiler<'a> {
         // otherwise it is nil, and it still hides a global `arg`.
         if self.version <= LuaVersion::Lua51 && matches!(body.vararg, ast::Vararg::Anonymous) {
             let r = self.reserve(1)?;
-            self.declare_local("arg", NameSrc::literal("arg"), r, false)?;
+            self.declare_local("arg", const { NameSrc::literal("arg") }, r, false)?;
             if !block_uses_vararg(self.ast, &body.block) {
                 self.l().has_compat_vararg_arg = true;
             }

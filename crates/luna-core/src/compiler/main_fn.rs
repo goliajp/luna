@@ -91,7 +91,7 @@ fn compile_main_body(
             name: "_ENV".into(),
             read_only: false,
         },
-        NameSrc::literal("_ENV"),
+        load_strs::ENV,
     );
     // `setvararg`, then the `_ENV` upvalue (5.1 has none)
     c.log(super::puc_log::PEv::Prologue);

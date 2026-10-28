@@ -6,12 +6,24 @@ use super::*;
 use crate::runtime::mem::LVec;
 use crate::vm::isa::ForLayout;
 
+const FOR_STATE: NameSrc = NameSrc::literal("(for state)");
+const GEN53_HIDDEN: [NameSrc; 3] = [
+    NameSrc::literal("(for generator)"),
+    FOR_STATE,
+    NameSrc::literal("(for control)"),
+];
+const NUM53_HIDDEN: [NameSrc; 3] = [
+    NameSrc::literal("(for index)"),
+    NameSrc::literal("(for limit)"),
+    NameSrc::literal("(for step)"),
+];
+
 impl<'a> Compiler<'a> {
     /// The hidden control values of a loop, as locals `debug.getlocal`
     /// lists, live from here to the end of the loop's block.
-    fn declare_hidden(&mut self, base: u32, names: &[&'a str]) -> Result<(), SyntaxError> {
-        for (i, &name) in names.iter().enumerate() {
-            self.declare_local(name, NameSrc::literal(name), base + i as u32, false)?;
+    fn declare_hidden(&mut self, base: u32, names: &[NameSrc]) -> Result<(), SyntaxError> {
+        for (i, &src) in names.iter().enumerate() {
+            self.declare_local(src.literal_text(), src, base + i as u32, false)?;
         }
         Ok(())
     }
@@ -57,10 +69,10 @@ impl<'a> Compiler<'a> {
         // control (5.4+: and the closing value), then `luaK_checkstack`
         // leaves room to call the iterator past them
         let values = if layout == ForLayout::Gen53 { 3 } else { 4 };
-        let hidden: &[&'a str] = match layout {
-            ForLayout::Gen53 => &["(for generator)", "(for state)", "(for control)"],
-            ForLayout::Gen54 => &["(for state)"; 4],
-            _ => &["(for state)"; 3],
+        let hidden: &[NameSrc] = match layout {
+            ForLayout::Gen53 => &GEN53_HIDDEN,
+            ForLayout::Gen54 => &[FOR_STATE; 4],
+            _ => &[FOR_STATE; 3],
         };
         // 5.5: the control (first) variable is read-only
         let mut names: LVec<(&'a str, NameSrc, bool)> = LVec::new(self.heap.mem());
@@ -160,12 +172,10 @@ impl<'a> Compiler<'a> {
         end_line: Option<u32>,
     ) -> Result<(), SyntaxError> {
         self.last_line = line;
-        let hidden: &[&'a str] = match self.version {
-            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => {
-                &["(for index)", "(for limit)", "(for step)"]
-            }
-            LuaVersion::Lua55 => &["(for state)"; 2],
-            _ => &["(for state)"; 3],
+        let hidden: &[NameSrc] = match self.version {
+            LuaVersion::Lua51 | LuaVersion::Lua52 | LuaVersion::Lua53 => &NUM53_HIDDEN,
+            LuaVersion::Lua55 => &[FOR_STATE; 2],
+            _ => &[FOR_STATE; 3],
         };
         let v55 = self.version >= LuaVersion::Lua55;
         let var = (self.nm(var), NameSrc::Sym(var.sym), v55);
