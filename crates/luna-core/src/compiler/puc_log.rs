@@ -222,17 +222,20 @@ impl<'a> Compiler<'a> {
     /// before it closes the function (`close_func` makes the final return):
     /// the closure instruction just emitted goes before the events from
     /// `final_ret` on, the function's final return and its `Close`.
-    pub(super) fn close_after_closure(&mut self, final_ret: usize) {
+    /// Whether it moved.
+    pub(super) fn close_after_closure(&mut self, final_ret: usize) -> bool {
         let log = &mut self.puc_log;
         let n = log.len();
         if n < 2 || final_ret >= n - 1 || !matches!(log[n - 2].ev, PEv::Close) {
-            return;
+            return false;
         }
         // the closure instruction, after the `Close`, is one of its own
-        if let PEv::Grow(line, 1) = log[n - 1].ev {
-            log[final_ret..].rotate_right(1);
-            log[final_ret].ev = PEv::CodeUp(line);
-        }
+        let PEv::Grow(line, 1) = log[n - 1].ev else {
+            return false;
+        };
+        log[final_ret..].rotate_right(1);
+        log[final_ret].ev = PEv::CodeUp(line);
+        true
     }
 
     /// The last instruction luna emitted is taken back before PUC would
