@@ -138,7 +138,7 @@ impl Vm {
                     Err(e) => {
                         let r = match (&parsed.src, parsed.recorded()) {
                             (Some(src), Some(rec)) if !e.is_memory() => {
-                                vm.acct_failed_compile(src, &e, &parsed.chunk, rec, splices)
+                                vm.acct_failed_compile(src, &e, &parsed.chunk.names, rec, splices)
                             }
                             _ => vm.splices_stand(splices),
                         };
