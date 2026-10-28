@@ -187,15 +187,10 @@ impl Vm {
             }
             if tok >= due {
                 self.scan_until(r, &mut strs, &mut peaks, tok)?;
-                due = [
-                    peaks.peek().map(|&&(t, _)| i64::from(t)),
-                    strs.peek().map(|(t, ..)| i64::from(*t)),
-                    r.splices.front().map(|&(t, _)| t),
-                ]
-                .into_iter()
-                .flatten()
-                .min()
-                .unwrap_or(i64::MAX);
+                let peak = peaks.peek().map_or(i64::MAX, |&&(t, _)| i64::from(t));
+                let str = strs.peek().map_or(i64::MAX, |(t, ..)| i64::from(*t));
+                let splice = r.splices.front().map_or(i64::MAX, |&(t, _)| t);
+                due = peak.min(str).min(splice);
             }
             self.replay_event(r, tok, ev)?;
         }
