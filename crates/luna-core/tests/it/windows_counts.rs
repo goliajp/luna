@@ -64,6 +64,13 @@ pub(super) fn ran_from_puc_dir(test: &str) -> bool {
 /// `package.loaded` emptied. Only the run without `gc-stress` was
 /// recorded.
 pub(super) fn recorded(v: LuaVersion) -> Vec<String> {
+    recorded_in("", v)
+}
+
+/// The lines recorded for `v` in the directory `dir` of
+/// `tests/windows_counts` (`""`: the directory itself). No recording, or
+/// a run with `gc-stress`, fails the test: there is nothing to compare with.
+pub(super) fn recorded_in(dir: &str, v: LuaVersion) -> Vec<String> {
     if cfg!(feature = "gc-stress") {
         panic!(
             "no recording of PUC on Windows collecting at every check \
@@ -79,8 +86,14 @@ pub(super) fn recorded(v: LuaVersion) -> Vec<String> {
     };
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/windows_counts")
+        .join(dir)
         .join(format!("{d}.windows.out"));
-    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| {
+        panic!(
+            "{}: {e} (recorded on Windows by the record-windows-steps workflow)",
+            p.display()
+        )
+    });
     text.lines().map(str::to_owned).collect()
 }
 

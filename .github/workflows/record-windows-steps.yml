@@ -206,6 +206,23 @@ jobs:
               os.makedirs(os.path.dirname(dest), exist_ok=True)
               open(dest, "wb").write(out)
               print(f"windows_counts/{d}:", out.decode())
+              # luna-core's load_cap_after_growth test: the count a load of
+              # n statements leaves, then after a full collection (the
+              # chunk the test builds, byte for byte)
+              lines = []
+              for n in (255, 256, 511, 512, 1023, 1024):
+                  src = ("local load = loadstring or load local f = assert(load([[local x = 0\n"
+                         + "x = x + 1\n" * n
+                         + ']])) local c = collectgarbage("count") * 1024 collectgarbage() '
+                         + 'return string.format("%d %d", c, collectgarbage("count") * 1024)')
+                  r = subprocess.run([host, "running", src], env=env, capture_output=True)
+                  assert r.returncode == 0, (d, n, r.stdout, r.stderr)
+                  last = r.stdout.replace(b"\r\n", b"\n").decode().splitlines()[-1]
+                  lines.append(f"{n} {last}\n")
+              dest = os.path.join(out_root, "windows_counts", "load_cap_after_growth", f"{d}.windows.out")
+              os.makedirs(os.path.dirname(dest), exist_ok=True)
+              open(dest, "w", newline="\n").write("".join(lines))
+              print(f"load_cap_after_growth/{d}:", "".join(lines))
               # the allocations of a second luaL_openlibs with package.loaded
               # emptied, and of none, for comparing with luna's trace
               logs = os.path.join(out_root, "windows_counts_alloc", d)
