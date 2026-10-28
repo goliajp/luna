@@ -158,6 +158,39 @@ impl<K: Copy + Eq + Hash, V: Copy> LMap<K, V> {
         self.insert(k, v).unwrap_or_else(|o| o.fail())
     }
 
+    /// The entry of `k`, set to what `f` returns for its value (`None`:
+    /// left as it was, or not added), with no memory error to return: see
+    /// `oom_abort`.
+    #[inline]
+    pub fn update_or_abort(&mut self, k: K, f: impl FnOnce(Option<V>) -> Option<V>) {
+        let h = word_hash(&k);
+        let mut free = None;
+        if !self.slots.is_empty() {
+            let mask = self.slots.len() - 1;
+            let mut i = h as usize & mask;
+            while let Some((sh, sk, sv)) = &mut self.slots[i] {
+                if *sh == h && *sk == k {
+                    if let Some(v) = f(Some(*sv)) {
+                        *sv = v;
+                    }
+                    return;
+                }
+                i = (i + 1) & mask;
+            }
+            free = Some(i);
+        }
+        let Some(v) = f(None) else {
+            return;
+        };
+        match free {
+            Some(i) if (self.len + 1) * 2 <= self.slots.len() => {
+                self.slots[i] = Some((h, k, v));
+                self.len += 1;
+            }
+            _ => self.insert_hashed(h, k, v).unwrap_or_else(|o| o.fail()),
+        }
+    }
+
     /// Set `k` to `v`, returning the value it replaced.
     pub fn insert(&mut self, k: K, v: V) -> Result<Option<V>, Oom> {
         let h = word_hash(&k);
