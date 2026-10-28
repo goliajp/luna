@@ -135,6 +135,14 @@ pub(super) struct Replay<'s> {
     /// the strings the scanner made, by token, and the chunk's names and
     /// source their text is in
     pub(super) scanned: &'s Scanned,
+    /// how many of `scanned.lines` are at or before the token of the last
+    /// instruction replayed
+    pub(super) line_at: usize,
+    /// 5.4+: a line of the chunk is 128 or more: the lines instructions
+    /// are coded on can then take absolute entries of their own; below it
+    /// only the count of instructions does, and the lines they are left on
+    /// count alike
+    pub(super) far: bool,
     pub(super) names: &'s crate::frontend::ast::Names,
     pub(super) src: &'s [u8],
     /// by name number: its string once made, and the table it was last
@@ -203,6 +211,8 @@ impl<'s> Replay<'s> {
             closed: 0,
             source: proto.source,
             scanned,
+            line_at: 0,
+            far: d >= Dialect::L54 && scanned.lines.last().is_some_and(|&(_, l)| l >= 128),
             names,
             src,
             syms: vec![(None, 0); names.len()],

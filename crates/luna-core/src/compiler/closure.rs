@@ -188,10 +188,12 @@ impl<'a> Compiler<'a> {
             TokRef::StatMark(sid, 0),
             TokRef::StatAfter(sid, 0),
         )?;
-        let saved_force = self.force_line.replace(name.base.line);
+        // the store "happens" on the line of `function` (`funcstat`)
+        let saved_force = self.force_line.replace(body.line);
         let res = self.store(lv, f);
         self.force_line = saved_force;
         res?;
+        self.log_fix(body.line);
         self.set_freereg(saved);
         Ok(())
     }

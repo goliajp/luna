@@ -49,6 +49,10 @@ pub(crate) struct Recording {
     /// with `strings`, a source read piece by piece: where each token ends
     ends: bool,
     pub(crate) scanned: Scanned,
+    /// from 5.4, with `strings`: the lines the last token read ended on
+    /// are noted (see [`Scanned::lines`]), the last one noted
+    lines: bool,
+    lastline: u32,
     last_end: usize,
     /// from 5.3: the names numbered below this one, and the reserved words
     /// whose bits are set, were recorded already
@@ -68,6 +72,8 @@ impl Recording {
         rec.scanned.strings.clear();
         rec.scanned.peaks.clear();
         rec.scanned.ends.clear();
+        rec.scanned.lines.clear();
+        rec.lastline = 1;
         rec.ends = ends;
         rec.strings = true;
         rec.last_end = 0;
@@ -185,7 +191,8 @@ impl Parser<'_> {
     /// Record this parse in `rec` (emptied first, keeping its vectors), or
     /// a new recording, with the strings the scanner makes.
     pub(super) fn record_load(&mut self, rec: Option<Box<Recording>>, ends: bool) {
-        let rec = Recording::cleared(rec, ends || matches!(self.lex, TokenSource::Stream(_)));
+        let mut rec = Recording::cleared(rec, ends || matches!(self.lex, TokenSource::Stream(_)));
+        rec.lines = self.version >= LuaVersion::Lua54;
         self.start_recording(Some(rec));
     }
 
@@ -216,6 +223,10 @@ impl Parser<'_> {
         let r = self.rec.as_deref_mut().expect("recording");
         if r.strings {
             r.scan(version, src, ix, tok, sym);
+            if r.lines && self.last_line != r.lastline {
+                r.lastline = self.last_line;
+                r.scanned.lines.push((ix, self.last_line));
+            }
         }
         if r.target == Some(ix) {
             self.found_target();

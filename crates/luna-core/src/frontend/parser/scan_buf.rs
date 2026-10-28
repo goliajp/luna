@@ -49,6 +49,10 @@ pub(crate) struct Scanned {
     pub(crate) peaks: Vec<(u32, u32)>,
     /// a streamed parse's: where each token ends (the byte read after it)
     pub(crate) ends: Vec<u32>,
+    /// from 5.4: the tokens at which the line the last token read ended on
+    /// (PUC's `lastline`, which the code generator saves with each
+    /// instruction) changes, with the new line; 1 before the first
+    pub(crate) lines: Vec<(u32, u32)>,
 }
 
 /// The most bytes the scanner holds in its buffer while it reads the

@@ -34,6 +34,8 @@ pub(crate) trait PucParse {
     fn parser_code(&mut self, f: &mut FuncArrays, line: u32);
     /// `v` freed (`luaD_protectedparser` frees the descriptor arrays).
     fn parser_free(&mut self, v: GrowVec, a: ParserArray);
+    /// The last instruction moved to `line` (`luaK_fixline`).
+    fn parser_fix(&mut self, f: &mut FuncArrays, line: u32);
     /// One more element in `v`.
     fn parser_push(&mut self, v: &mut GrowVec, a: ParserArray);
     /// `v` grown to hold `n` (the descriptor arrays, which shrink and grow
@@ -116,6 +118,11 @@ impl PucParse for Heap {
     #[inline(always)]
     fn parser_code(&mut self, f: &mut FuncArrays, line: u32) {
         Heap::parser_code(self, f, line)
+    }
+
+    #[inline(always)]
+    fn parser_fix(&mut self, f: &mut FuncArrays, line: u32) {
+        Heap::parser_fix(self, f, line)
     }
 
     #[inline(always)]

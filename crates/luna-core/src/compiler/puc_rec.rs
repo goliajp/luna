@@ -86,6 +86,13 @@ impl Compiler<'_> {
         }
     }
 
+    /// From 5.4, the last instruction moved to `line` (see [`PEv::Fix`]).
+    pub(super) fn log_fix(&mut self, line: u32) {
+        if self.version >= LuaVersion::Lua54 {
+            self.log(PEv::Fix(line));
+        }
+    }
+
     /// Log an instruction on `line` at the current token, or at
     /// [`TokRef::Next`] when `early`: one more of the instructions just
     /// before, when they are at the same token and line and logged since

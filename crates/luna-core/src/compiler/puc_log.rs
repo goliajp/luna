@@ -20,6 +20,9 @@ pub(crate) enum PEv {
     CodeUp(u32),
     /// the last instruction taken back (PUC `removelastinstruction`)
     Uncode,
+    /// 5.4+: the last instruction moved to a line (`luaK_fixline`) where
+    /// no opcode tells it (see `vm::dump::Layout::code`)
+    Fix(u32),
     /// a vararg function's prologue (5.4+ `setvararg`)
     Prologue,
     /// the parser makes a string of its own (`luaX_newliteral`), one of

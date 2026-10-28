@@ -199,6 +199,7 @@ impl<'a> Compiler<'a> {
                 })();
                 self.force_line = saved_force;
                 res?;
+                self.log_fix(name.line);
                 self.set_freereg(saved);
                 Ok(())
             }

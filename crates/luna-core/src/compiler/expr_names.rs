@@ -43,7 +43,11 @@ impl Compiler<'_> {
     pub(super) fn emit_global_redef_check(&mut self, name: &str) -> Result<(), SyntaxError> {
         let saved = self.lr().freereg;
         let e = self.global_access(name)?;
+        let n = self.lr().code.len();
         let r = self.exp_to_anyreg(e)?;
+        if self.lr().code.len() > n {
+            self.log_fix(self.force_line.unwrap_or(self.last_line));
+        }
         let c = self.str_const(name.as_bytes());
         let bx = if c < MAX_BX { c + 1 } else { 0 };
         self.emit(Inst::iabx(Op::ErrNNil, r, bx));
