@@ -76,12 +76,12 @@ impl<'a> Compiler<'a> {
     /// The parser's entries for a new local `name` (PUC `new_localvar`):
     /// its literal string, if the parser makes one, and its active-variable
     /// entry; nothing when [`Self::prelog_localvar`] logged them.
-    pub(super) fn log_new_localvar(&mut self, name: &str) {
+    pub(super) fn log_new_localvar(&mut self, src: NameSrc) {
         if self.lr().prelogged > 0 {
             self.l().prelogged -= 1;
             return;
         }
-        if let Some(lit) = puc_literal(name) {
+        if let Some(lit) = src.local_literal() {
             self.log(PEv::Lit(lit));
         }
         self.log_early_locvar();
@@ -99,7 +99,7 @@ impl<'a> Compiler<'a> {
     /// Log the parser's entries for the local `name` at token `at`, where
     /// PUC makes them before the statement's expressions, ahead of the
     /// declaration.
-    pub(super) fn prelog_localvar(&mut self, at: TokRef, name: &str) -> Result<(), SyntaxError> {
+    pub(super) fn prelog_localvar(&mut self, at: TokRef, src: NameSrc) -> Result<(), SyntaxError> {
         let cur = std::mem::replace(&mut self.cur, at);
         // up to 5.4 `new_localvar` checks the cap as each name is read,
         // before the statement registers any of them
@@ -107,7 +107,7 @@ impl<'a> Compiler<'a> {
         if self.version <= LuaVersion::Lua54 && active + self.lr().prelogged >= MAX_LOCALS {
             return Err(self.limit_err("local variables", MAX_LOCALS));
         }
-        if let Some(lit) = puc_literal(name) {
+        if let Some(lit) = src.local_literal() {
             self.log(PEv::Lit(lit));
         }
         self.log_early_locvar();
@@ -148,7 +148,8 @@ impl<'a> Compiler<'a> {
             } else {
                 0
             };
-            self.prelog_localvar(TokRef::StatFirst(sid, tok + 1 + after), self.nm(&an.name))?;
+            let src = NameSrc::Sym(an.name.sym);
+            self.prelog_localvar(TokRef::StatFirst(sid, tok + 1 + after), src)?;
             tok += 2 + attrib;
         }
         Ok(())
@@ -160,13 +161,13 @@ impl<'a> Compiler<'a> {
     pub(super) fn log_for_names(
         &mut self,
         sid: StatId,
-        hidden: &[&str],
+        hidden: &[NameSrc],
         vars: &[(&str, NameSrc, bool)],
     ) -> Result<(), SyntaxError> {
         for &h in hidden {
             self.prelog_localvar(TokRef::StatFirst(sid, 2), h)?;
         }
-        for (j, &(v, ..)) in vars.iter().enumerate() {
+        for (j, &(_, v, _)) in vars.iter().enumerate() {
             self.prelog_localvar(TokRef::StatFirst(sid, 2 + 2 * j as i32), v)?;
         }
         Ok(())
@@ -273,13 +274,4 @@ impl<'a> Compiler<'a> {
     pub(super) fn log(&mut self, ev: PEv) {
         self.log_at(self.cur, ev);
     }
-}
-
-/// The names PUC's parser makes strings of its own for
-/// (`luaX_newliteral`), when it declares a local by them.
-fn puc_literal(name: &str) -> Option<u8> {
-    super::LITERALS[..super::load_strs::LOCAL_LITERALS]
-        .iter()
-        .position(|&l| l == name)
-        .map(|i| i as u8)
 }

@@ -91,7 +91,7 @@ impl<'a> Compiler<'a> {
             reg: Some(reg),
             global: false,
         });
-        self.log_new_localvar(name);
+        self.log_new_localvar(src);
         // 5.4+ registers the debug record in `adjustlocalvars`
         if self.version >= LuaVersion::Lua54 {
             if self.puc_state.defer {
@@ -146,7 +146,7 @@ impl<'a> Compiler<'a> {
             reg: None,
             global: false,
         });
-        self.log_new_localvar(name);
+        self.log_new_localvar(src);
     }
 
     /// The compile-time constant `name` refers to here, if it does: the
