@@ -130,11 +130,14 @@ fn corpus_runs_the_same_with_the_jit_engaged_early() {
         let mut compiled_chunks = 0usize;
         for f in &fixtures(dialect) {
             let source = std::fs::read(f).expect("read fixture");
+            let _turn = super::trace_corpus::huge_turn(f);
             // one string hash seed for the runs compared (see `seeded`)
             let mut interp_vm = super::trace_corpus::seeded(version, 1);
             interp_vm.set_jit_enabled(false);
             interp_vm.set_trace_jit_enabled(false);
             let interp = masked(run(&mut interp_vm, &source));
+            // one Vm at a time holds what a fixture loaded
+            drop(interp_vm);
             for &hot in HOT {
                 let mut vm = super::trace_corpus::seeded(version, 1);
                 vm.jit_mut().trace_hot_threshold = hot;
