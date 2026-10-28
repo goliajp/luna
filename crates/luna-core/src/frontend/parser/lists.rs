@@ -50,9 +50,9 @@ impl Parser<'_> {
                 Ok(args)
             }
             Token::Str(_) => {
-                let s = self.tok_sym;
+                let (s, at) = (self.tok_sym, self.tok_ix);
                 self.advance()?;
-                let e = self.push_expr(Expr::Str(s));
+                let e = self.push_expr(Expr::Str(s), at);
                 Ok(self.chunk.push_list(&[e]))
             }
             Token::LBrace => {
@@ -101,9 +101,7 @@ impl Parser<'_> {
         }
         self.expect_match(Token::RBrace, "}", "{", line)?;
         let fields = finish(self.chunk, &mut self.stk.fields, mark);
-        let id = self.push_expr(Expr::Table { fields, line });
-        self.opened_expr(id, open);
-        Ok(id)
+        Ok(self.push_expr(Expr::Table { fields, line }, open))
     }
 
     /// Declare a declaration's names to the goto checker: locals, read-only

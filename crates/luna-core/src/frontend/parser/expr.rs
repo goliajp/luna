@@ -9,11 +9,12 @@ impl<'s> Parser<'s> {
 
     pub(super) fn sub_expr(&mut self, limit: u8) -> Result<ExprId, SyntaxError> {
         self.enter()?;
+        let first = self.tok_ix;
         let mut left = if let Some(op) = un_op_of(&self.tok.tok) {
             let line = self.tok.line;
             self.advance()?;
             let operand = self.sub_expr(UNARY_PRIORITY)?;
-            self.push_expr(Expr::UnOp { op, operand, line })
+            self.push_expr(Expr::UnOp { op, operand, line }, first)
         } else {
             self.simple_expr()?
         };
@@ -29,18 +30,20 @@ impl<'s> Parser<'s> {
                 let stamp = crate::cerrno::writes();
                 self.chunk.fold_marks.push_or_abort((rhs.0, stamp));
             }
-            left = self.push_expr(Expr::BinOp {
+            let e = Expr::BinOp {
                 op,
                 lhs: left,
                 rhs,
                 line,
-            });
+            };
+            left = self.push_expr(e, first);
         }
         self.leave();
         Ok(left)
     }
 
     pub(super) fn simple_expr(&mut self) -> Result<ExprId, SyntaxError> {
+        let first = self.tok_ix;
         let e = match &self.tok.tok {
             Token::Nil => {
                 self.advance()?;
@@ -78,30 +81,27 @@ impl<'s> Parser<'s> {
             Token::Function => {
                 let line = self.tok.line;
                 self.advance()?;
-                let open = self.tok_ix;
-                let e = Expr::Function(self.func_body(line)?);
-                let id = self.push_expr(e);
-                self.opened_expr(id, open);
-                return Ok(id);
+                Expr::Function(self.func_body(line)?)
             }
             _ => return self.suffixed_expr(),
         };
-        Ok(self.push_expr(e))
+        Ok(self.push_expr(e, first))
     }
 
     pub(super) fn primary_expr(&mut self) -> Result<ExprId, SyntaxError> {
+        let first = self.tok_ix;
         match &self.tok.tok {
             Token::Name(_) => {
                 let name = self.expect_name()?;
                 self.ident_lookup_51(name.sym)?;
-                Ok(self.push_expr(Expr::Name(name)))
+                Ok(self.push_expr(Expr::Name(name), first))
             }
             Token::LParen => {
                 let line = self.tok.line;
                 self.advance()?;
                 let inner = self.expr()?;
                 self.expect_match(Token::RParen, ")", "(", line)?;
-                Ok(self.push_expr(Expr::Paren(inner)))
+                Ok(self.push_expr(Expr::Paren(inner), first))
             }
             _ => Err(self.error("unexpected symbol")),
         }
@@ -121,22 +121,23 @@ impl<'s> Parser<'s> {
         // 5.4 on take the line of the token the arguments open with. errors.lua's `lineerror` covers both:
         //   - 5.3:  `lineerror([[a\n(\n23)]], 1)` — expects `a`'s line
         //   - 5.4+: `lineerror([[a\n(...)\n23)]], 2)` — expects `(`'s line
-        let primary_line = self.tok.line;
+        let (primary_line, first) = (self.tok.line, self.tok_ix);
         let mut e = self.primary_expr()?;
         loop {
             match &self.tok.tok {
                 Token::Dot => {
                     self.advance()?;
+                    let at = self.tok_ix;
                     let name = self.expect_name()?;
-                    let key = self.push_expr(Expr::Str(name.sym));
+                    let key = self.push_expr(Expr::Str(name.sym), at);
                     self.chunk.dot_keys.push_or_abort(key.0);
-                    e = self.push_expr(Expr::Index { obj: e, key });
+                    e = self.push_expr(Expr::Index { obj: e, key }, first);
                 }
                 Token::LBracket => {
                     self.advance()?;
                     let key = self.expr()?;
                     self.expect(Token::RBracket, "]")?;
-                    e = self.push_expr(Expr::Index { obj: e, key });
+                    e = self.push_expr(Expr::Index { obj: e, key }, first);
                 }
                 Token::Colon => {
                     self.advance()?;
@@ -147,12 +148,13 @@ impl<'s> Parser<'s> {
                         self.tok.line
                     };
                     let args = self.call_args()?;
-                    e = self.push_expr(Expr::MethodCall {
+                    let call = Expr::MethodCall {
                         obj: e,
                         method,
                         args,
                         line,
-                    });
+                    };
+                    e = self.push_expr(call, first);
                 }
                 Token::LParen | Token::Str(_) | Token::LBrace => {
                     let line = if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
@@ -161,11 +163,12 @@ impl<'s> Parser<'s> {
                         self.tok.line
                     };
                     let args = self.call_args()?;
-                    e = self.push_expr(Expr::Call {
+                    let call = Expr::Call {
                         func: e,
                         args,
                         line,
-                    });
+                    };
+                    e = self.push_expr(call, first);
                 }
                 _ => break,
             }

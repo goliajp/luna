@@ -234,10 +234,12 @@ impl<'s> Parser<'s> {
         self.depth -= 1;
     }
 
-    pub(super) fn push_expr(&mut self, e: Expr) -> ExprId {
+    /// Push an expression whose first token was token `first` and whose
+    /// last was just read.
+    pub(super) fn push_expr(&mut self, e: Expr, first: u32) -> ExprId {
         self.chunk.exprs.push_or_abort(e);
         let id = ExprId((self.chunk.exprs.len() - 1) as u32);
-        self.close_expr(id);
+        self.close_expr(id, first);
         id
     }
 

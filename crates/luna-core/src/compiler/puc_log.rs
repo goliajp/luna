@@ -58,7 +58,7 @@ pub(super) struct LogState {
     pub(super) fresh_literal: Option<(usize, u32, ast::Sym)>,
     /// see [`super::ReplayOpts::lenient`]
     pub(super) lenient: bool,
-    pub(super) last: super::puc_rec::LastTok,
+    pub(super) cur_tok: super::puc_rec::CurTok,
     /// an event was logged at [`TokRef::Next`]
     pub(super) nexts: bool,
     /// see [`Compiler::log_seam`]
@@ -100,7 +100,7 @@ impl<'a> Compiler<'a> {
     /// PUC makes them before the statement's expressions, ahead of the
     /// declaration.
     pub(super) fn prelog_localvar(&mut self, at: TokRef, src: NameSrc) -> Result<(), SyntaxError> {
-        let cur = std::mem::replace(&mut self.cur, at);
+        let cur = self.swap_cur(at);
         // up to 5.4 `new_localvar` checks the cap as each name is read,
         // before the statement registers any of them
         let active = self.lr().avars.iter().filter(|a| a.reg.is_some()).count() as u32;
@@ -113,7 +113,7 @@ impl<'a> Compiler<'a> {
         self.log_early_locvar();
         let n = self.actvars() + 1;
         self.log(PEv::ActVar(n));
-        self.cur = cur;
+        self.put_cur(cur);
         self.l().prelogged += 1;
         Ok(())
     }
@@ -185,15 +185,15 @@ impl<'a> Compiler<'a> {
             } else {
                 TokRef::First(id, 0)
             };
-            let cur = std::mem::replace(&mut self.cur, at);
+            let cur = self.swap_cur(at);
             let k = self.sym_const(s);
-            self.cur = cur;
+            self.put_cur(cur);
             return k;
         }
-        let cur = std::mem::replace(&mut self.cur, TokRef::Next);
+        let cur = self.swap_cur(TokRef::Next);
         let n = self.lr().consts.len();
         let k = self.sym_const(s);
-        self.cur = cur;
+        self.put_cur(cur);
         self.puc_state.early = true;
         self.puc_state.fresh_literal = (k as usize == n).then_some((self.depth, k, s));
         k
@@ -267,11 +267,5 @@ impl<'a> Compiler<'a> {
         if std::mem::take(&mut self.puc_state.early) {
             self.log(PEv::Use);
         }
-    }
-
-    /// Log `ev` at the scanner's current token.
-    #[inline]
-    pub(super) fn log(&mut self, ev: PEv) {
-        self.log_at(self.cur, ev);
     }
 }

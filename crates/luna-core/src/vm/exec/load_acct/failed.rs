@@ -58,7 +58,7 @@ impl Vm {
                     self.compile_parsed(ast, end_lines, marks, source)
                         .map_err(|ce| {
                             let s = &mut self.compile_scratch;
-                            crate::compiler::place_error(s, ast, &fixed, v, depth, ce)
+                            crate::compiler::place_error(s, &fixed, v, depth, ce)
                         }),
                 )
             }
