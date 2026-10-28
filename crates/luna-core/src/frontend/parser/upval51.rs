@@ -97,7 +97,7 @@ impl Parser<'_> {
                 .upvalues
                 .insert_or_abort(name, ())
                 .is_none();
-            if inserted && self.upval_chain_51[k].upvalues.len() > MAXUPVAL {
+            if inserted && self.upval_chain_51[k].upvalues.len() > MAXUPVAL && !self.stk.lenient {
                 let line_defined = self.upval_chain_51[k].line_defined;
                 let where_ = if k == 0 {
                     "main function".to_string()
