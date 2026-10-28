@@ -160,6 +160,20 @@ impl<'s, S: Source> Lexer<'s, S> {
         }
     }
 
+    /// Past the blanks from the current one, a run read in place: the
+    /// last of them is left by [`Lexer::bump`], which reads the next piece
+    /// of a stream there.
+    #[inline(always)]
+    fn skip_blanks(&mut self) {
+        let bytes = self.src.bytes();
+        let mut p = self.pos + 1;
+        while p < bytes.len() && matches!(bytes[p], b' ' | b'\t' | 0x0B | 0x0C) {
+            p += 1;
+        }
+        self.pos = p - 1;
+        self.bump();
+    }
+
     fn save(&mut self, c: u8) {
         self.buf.push_or_abort(c);
     }
@@ -259,7 +273,7 @@ impl<'s, S: Source> Lexer<'s, S> {
             };
             match c {
                 b'\n' | b'\r' => self.newline(),
-                b' ' | b'\t' | 0x0B | 0x0C => self.bump(),
+                b' ' | b'\t' | 0x0B | 0x0C => self.skip_blanks(),
                 b'-' if self.at(1) == Some(b'-') => {
                     self.bump();
                     self.bump();
