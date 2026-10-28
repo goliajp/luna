@@ -29,6 +29,11 @@ pub(super) struct Level<'a> {
     pub(super) protos: LVec<Gc<Proto>>,
     /// completed local-variable debug records (flushed on scope exit)
     pub(super) locvars: LVec<crate::runtime::LocVar>,
+    /// where the names of `locvars` and `upvals` come from, and the
+    /// function's number among those of the load (see [`LoadStrs`])
+    pub(super) locvar_srcs: LVec<NameSrc>,
+    pub(super) upval_srcs: LVec<NameSrc>,
+    pub(super) seq: u32,
     pub(super) num_params: u8,
     pub(super) is_vararg: bool,
     /// PUC's `(vararg table)` local: an explicit anonymous `(...)` only
@@ -109,6 +114,9 @@ impl<'a> Level<'a> {
             upvals: bufs.upvals,
             protos: bufs.protos,
             locvars: bufs.locvars,
+            locvar_srcs: bufs.locvar_srcs,
+            upval_srcs: bufs.upval_srcs,
+            seq: 0,
             num_params,
             is_vararg,
             has_vararg_table_pseudo: false,
@@ -221,6 +229,8 @@ impl<'a> Level<'a> {
             upvals: self.upvals,
             protos: self.protos,
             locvars: self.locvars,
+            locvar_srcs: self.locvar_srcs,
+            upval_srcs: self.upval_srcs,
             jexps: self.jexps,
         }
     }
@@ -243,6 +253,8 @@ pub(crate) struct LevelBufs {
     upvals: LVec<UpvalDesc>,
     protos: LVec<Gc<Proto>>,
     locvars: LVec<crate::runtime::LocVar>,
+    locvar_srcs: LVec<NameSrc>,
+    upval_srcs: LVec<NameSrc>,
     jexps: LVec<JExp>,
 }
 
@@ -268,6 +280,8 @@ impl LevelBufs {
             upvals: LVec::new(mem),
             protos: LVec::new(mem),
             locvars: LVec::new(mem),
+            locvar_srcs: LVec::new(mem),
+            upval_srcs: LVec::new(mem),
             jexps: LVec::new(mem),
         }
     }

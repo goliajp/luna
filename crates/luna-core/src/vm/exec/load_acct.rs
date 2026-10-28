@@ -16,6 +16,7 @@
 use super::*;
 use crate::compiler::puc_log::PEv;
 use crate::compiler::puc_rec::{At, Rec};
+use crate::compiler::{LoadStrs, NameSrc};
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::Proto;
 use crate::runtime::dialect::Dialect;
@@ -162,6 +163,39 @@ impl Vm {
     /// scanner's single table of names), in 5.2 one per function.
     pub(super) fn hold_puc_names(&mut self, p: Gc<Proto>) -> Result<(), SyntaxError> {
         self.hold_names_in(p, &mut Vec::new())
+    }
+
+    /// [`Vm::hold_puc_names`] of the chunk just compiled, whose compiler
+    /// noted where its names come from.
+    pub(super) fn hold_text_names(&mut self, p: Gc<Proto>) -> Result<(), SyntaxError> {
+        let empty = LoadStrs::new(self.heap.mem());
+        let strs = std::mem::replace(&mut self.compile_scratch.strs, empty);
+        let held = self
+            .hold_puc_names(p)
+            .and_then(|()| self.hold_names_with(p, &strs, &mut 0));
+        self.compile_scratch.strs = strs;
+        held
+    }
+
+    fn hold_names_with(
+        &mut self,
+        p: Gc<Proto>,
+        strs: &LoadStrs,
+        seq: &mut usize,
+    ) -> Result<(), SyntaxError> {
+        let n = p.locvars.len() + p.upvals.len();
+        let names = p.locvars.iter().map(|v| v.name.as_str());
+        let names = names.chain(p.upvals.iter().map(|u| u.name.as_str()));
+        let srcs = strs.names_of(*seq, n);
+        *seq += 1;
+        debug_assert!(names.zip(srcs).all(|(n, &src)| match src {
+            NameSrc::Sym(_) => true,
+            NameSrc::Lit(i) => crate::compiler::LITERALS[usize::from(i)] == n,
+        }));
+        for &c in p.protos.iter() {
+            self.hold_names_with(c, strs, seq)?;
+        }
+        Ok(())
     }
 
     fn hold_names_in(

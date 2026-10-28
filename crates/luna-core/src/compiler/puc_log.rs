@@ -160,12 +160,12 @@ impl<'a> Compiler<'a> {
         &mut self,
         sid: StatId,
         hidden: &[&str],
-        vars: &[(&str, bool)],
+        vars: &[(&str, NameSrc, bool)],
     ) -> Result<(), SyntaxError> {
         for &h in hidden {
             self.prelog_localvar(TokRef::StatFirst(sid, 2), h)?;
         }
-        for (j, &(v, _)) in vars.iter().enumerate() {
+        for (j, &(v, ..)) in vars.iter().enumerate() {
             self.prelog_localvar(TokRef::StatFirst(sid, 2 + 2 * j as i32), v)?;
         }
         Ok(())
@@ -275,17 +275,8 @@ impl<'a> Compiler<'a> {
 /// The names PUC's parser makes strings of its own for
 /// (`luaX_newliteral`), when it declares a local by them.
 fn puc_literal(name: &str) -> Option<&'static str> {
-    [
-        "self",
-        "arg",
-        "(for index)",
-        "(for limit)",
-        "(for step)",
-        "(for generator)",
-        "(for state)",
-        "(for control)",
-        "(vararg table)",
-    ]
-    .into_iter()
-    .find(|&l| l == name)
+    super::LITERALS[..super::load_strs::LOCAL_LITERALS]
+        .iter()
+        .copied()
+        .find(|&l| l == name)
 }

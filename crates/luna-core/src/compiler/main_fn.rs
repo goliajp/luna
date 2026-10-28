@@ -82,15 +82,17 @@ fn compile_main_body(
 ) -> Result<(Gc<Proto>, Option<usize>), SyntaxError> {
     let ast = parsed.0;
     let mut c = compiler_from(parsed, version, source, heap, scratch);
-    c.sym_strs.clear();
-    c.sym_strs.resize_or_abort(ast.names.len(), None);
+    c.strs.reset(ast.names.len());
     c.open_level(0, true, 0);
-    c.l().upvals.push_or_abort(UpvalDesc {
-        in_stack: false,
-        index: 0,
-        name: "_ENV".into(),
-        read_only: false,
-    });
+    c.push_upval(
+        UpvalDesc {
+            in_stack: false,
+            index: 0,
+            name: "_ENV".into(),
+            read_only: false,
+        },
+        NameSrc::literal("_ENV"),
+    );
     // `setvararg`, then the `_ENV` upvalue (5.1 has none)
     c.log(super::puc_log::PEv::Prologue);
     if version != LuaVersion::Lua51 {
@@ -140,7 +142,7 @@ fn compiler_from<'a>(
         levels: scratch.open.take().recycle(),
         depth: 0,
         pool: scratch.levels.take(),
-        sym_strs: scratch.sym_strs.take(),
+        strs: std::mem::replace(&mut scratch.strs, LoadStrs::new(mem)),
         last_line: 0,
         force_line: None,
         str_cache: LMap::new(mem),
@@ -171,7 +173,7 @@ fn keep_scratch(mut c: Compiler<'_>, scratch: &mut CompileScratch) {
         c.pool.push_or_abort(lvl.into_bufs());
     }
     scratch.levels = c.pool;
-    scratch.sym_strs = c.sym_strs;
+    scratch.strs = c.strs;
     c.spine.clear();
     scratch.spine = c.spine;
     scratch.lvs = c.lvs;

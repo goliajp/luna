@@ -193,7 +193,7 @@ impl Vm {
             }
             None => e,
         })?;
-        self.hold_puc_names(proto)?;
+        self.hold_text_names(proto)?;
         self.close_chunk(proto)
     }
 

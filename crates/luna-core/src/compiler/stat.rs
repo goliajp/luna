@@ -99,14 +99,7 @@ impl<'a> Compiler<'a> {
                 body,
             } => {
                 let end = self.stat_end_line(sid);
-                self.numeric_for(
-                    sid,
-                    self.nm(var),
-                    var.line,
-                    (*start, *limit, *step),
-                    body,
-                    end,
-                )
+                self.numeric_for(sid, var, var.line, (*start, *limit, *step), body, end)
             }
             Stat::GenericFor {
                 vars,
@@ -155,7 +148,7 @@ impl<'a> Compiler<'a> {
                 // declared before the body, when the scanner is on its `(`:
                 // the function can call itself
                 self.at(TokRef::StatMark(sid, 0));
-                self.declare_local(self.nm(name), reg, false)?;
+                self.declare_local(self.nm(name), NameSrc::Sym(name.sym), reg, false)?;
                 // PUC does not reserve the variable's register before the
                 // body: the closure takes the next free one, the variable's
                 self.set_freereg(reg);

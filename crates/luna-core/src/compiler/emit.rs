@@ -173,11 +173,11 @@ impl<'a> Compiler<'a> {
     /// chunk's names is interned on the heap once per load.
     pub(super) fn sym_const(&mut self, s: ast::Sym) -> u32 {
         let i = s.0 as usize;
-        let g = match self.sym_strs[i] {
+        let g = match self.strs.syms[i] {
             Some(g) => g,
             None => {
                 let g = self.intern_str(self.sb(s));
-                self.sym_strs[i] = Some(g);
+                self.strs.syms[i] = Some(g);
                 g
             }
         };
