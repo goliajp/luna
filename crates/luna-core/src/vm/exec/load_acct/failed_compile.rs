@@ -6,18 +6,19 @@
 //! PUC's protected call does on the way out.
 
 use super::*;
-use crate::frontend::ast::Chunk;
+use crate::frontend::ast::Names;
 use crate::frontend::parser::Marks;
 use crate::runtime::puc::api::{PucLoads, PucParse};
 
 impl Vm {
-    /// Count the load of `src` that failed with `e`, `chunk` its tree with
-    /// `rec` recorded, its reader's calls having counted `splices`.
+    /// Count the load of `src` that failed with `e`, its compiled tree's
+    /// marks and what the scanner made of `src` (with the tokens' `names`)
+    /// in `rec`, its reader's calls having counted `splices`.
     pub(in crate::vm::exec) fn acct_failed_compile(
         &mut self,
         src: &[u8],
         e: &SyntaxError,
-        chunk: &Chunk,
+        names: &Names,
         rec: (&Marks, &Scanned),
         splices: Vec<(u32, crate::runtime::puc::Deferred)>,
     ) -> Result<(), SyntaxError> {
@@ -38,7 +39,7 @@ impl Vm {
             proto,
             self.version,
             scanned,
-            &chunk.names,
+            names,
             src,
         );
         r.splice(splices);

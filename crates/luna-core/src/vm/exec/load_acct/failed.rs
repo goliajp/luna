@@ -30,7 +30,9 @@ impl Vm {
                 ParseScratch::new(self.heap.mem_owner()),
             );
             let r = match parsed.recorded() {
-                Some(rec) => self.acct_failed_compile(src, e, parsed.parsed().0, rec, splices),
+                Some(rec) => {
+                    self.acct_failed_compile(src, e, &parsed.parsed().0.names, rec, splices)
+                }
                 None => self.splices_stand_caught(splices),
             };
             self.parse_scratch = parsed;
@@ -77,7 +79,7 @@ impl Vm {
         }
         let built = proto.and_then(|p| self.close_chunk(p).ok());
         self.heap.load_built(building);
-        if let (Some(Err(_)), true, Some(rec)) = (&made, early, tree.recorded()) {
+        if let (Some(Err(_)), true, Some((marks, _))) = (&made, early, tree.recorded()) {
             // the token is shown as the source has it, not the completion
             let opts = &mut self.compile_scratch.replay;
             if let Some((ix, kind)) = &mut opts.at
@@ -85,7 +87,20 @@ impl Vm {
             {
                 *kind = t.kind;
             }
-            return self.acct_failed_compile(&fixed, e, tree.parsed().0, rec, splices);
+            // the scanner read the source, not the completion: the token
+            // the completion put at the error is not the one it read
+            let parsed = std::mem::replace(
+                &mut self.parse_scratch,
+                ParseScratch::new(self.heap.mem_owner()),
+            );
+            let r = match parsed.failed_scan() {
+                Some((scanned, names)) => {
+                    self.acct_failed_compile(src, e, names, (marks, scanned), splices)
+                }
+                None => self.splices_stand_caught(splices),
+            };
+            self.parse_scratch = parsed;
+            return r;
         }
         let (Some(cl), Some((marks, _))) = (built, tree.recorded()) else {
             return self.splices_stand_caught(splices);
