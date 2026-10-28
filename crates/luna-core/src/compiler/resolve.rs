@@ -67,8 +67,11 @@ impl<'a> Compiler<'a> {
         // PUC `new_localvar` calls `checklimit(fs, …, MAXVARS, "local variables")`
         // before recording the slot — luna counts active avars (skip global
         // markers and any pending vararg pseudo) to model the same cap.
-        let active = self.lr().avars.iter().filter(|a| a.reg.is_some()).count() as u32;
-        if active >= MAX_LOCALS {
+        // 5.5 checks it in `adjustlocalvars`, once it has registered the
+        // variable's debug record
+        let active = self.active_locals();
+        let late = self.version >= LuaVersion::Lua55;
+        if !late && active >= MAX_LOCALS {
             return Err(self.limit_err("local variables", MAX_LOCALS));
         }
         let start_pc = self.lr().code.len() as u32;
@@ -93,6 +96,30 @@ impl<'a> Compiler<'a> {
                 self.puc_state.pending += 1;
             } else {
                 self.log(super::puc_log::PEv::LocVar);
+                if late && active >= MAX_LOCALS {
+                    return Err(self.limit_err("local variables", MAX_LOCALS));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The registers the function's active locals hold.
+    fn active_locals(&self) -> u32 {
+        self.lr().avars.iter().filter(|a| a.reg.is_some()).count() as u32
+    }
+
+    /// The local variables declared since [`puc_log::LogState::defer`] was
+    /// set, but the `later` last ones, get their debug records now (PUC
+    /// `adjustlocalvars`), which 5.5 checks the cap at, one by one.
+    pub(super) fn flush_locvars(&mut self, later: u32) -> Result<(), SyntaxError> {
+        let n = std::mem::take(&mut self.puc_state.pending);
+        self.puc_state.defer = false;
+        let first = self.active_locals() - n - later;
+        for k in 1..=n {
+            self.log(super::puc_log::PEv::LocVar);
+            if self.version >= LuaVersion::Lua55 && first + k > MAX_LOCALS {
+                return Err(self.limit_err("local variables", MAX_LOCALS));
             }
         }
         Ok(())

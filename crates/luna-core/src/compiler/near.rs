@@ -3,6 +3,7 @@
 //! shows it (`near 'x'`), as PUC's errors from the code generator do.
 
 use super::*;
+use crate::frontend::error::NearKind;
 use crate::frontend::parser::{Found, Marks};
 
 /// A token, relative to a node of the tree (see [`Marks`]).
@@ -156,7 +157,8 @@ pub(crate) fn place_error(
     c_depth: u32,
     e: SyntaxError,
 ) -> SyntaxError {
-    let Some((t, true)) = scratch.error_token(&e) else {
+    // an error that shows no token (5.1's limits) is raised on one too
+    let Some((t, near)) = scratch.error_token(&e) else {
         return e;
     };
     let lenient = scratch.replay.lenient;
@@ -164,8 +166,9 @@ pub(crate) fn place_error(
     let ix = t.resolve(ast, &marks.expect("the source parsed before"));
     let at = crate::frontend::parser::token_at(src, version, c_depth, ix, lenient);
     let at = at.expect("a token of the source");
-    scratch.replay.at = Some((ix, at.kind));
-    shown_at(e, true, &at)
+    let kind = if near { at.kind } else { NearKind::None };
+    scratch.replay.at = Some((ix, kind));
+    shown_at(e, near, &at)
 }
 
 /// `e` raised on token `at`: on its line, and showing it when `near`.

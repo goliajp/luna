@@ -79,6 +79,7 @@ impl Vm {
             closes: true,
             block_ends: false,
             closed: (u32::MAX, u32::MAX),
+            raised: false,
         };
         let log = self.compile_scratch.puc_log.take();
         let replayed = self

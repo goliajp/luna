@@ -72,15 +72,6 @@ impl<'a> Compiler<'a> {
         self.log(PEv::ActVar(n));
     }
 
-    /// The local variables declared since [`LogState::defer`] was set
-    /// get their debug records now (PUC `adjustlocalvars`).
-    pub(super) fn flush_locvars(&mut self) {
-        for _ in 0..std::mem::take(&mut self.puc_state.pending) {
-            self.log(PEv::LocVar);
-        }
-        self.puc_state.defer = false;
-    }
-
     /// The parser's entries for a new local `name` (PUC `new_localvar`):
     /// its literal string, if the parser makes one, and its active-variable
     /// entry; nothing when [`Self::prelog_localvar`] logged them.
