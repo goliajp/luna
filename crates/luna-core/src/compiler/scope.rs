@@ -44,6 +44,7 @@ impl<'a> Compiler<'a> {
             if l.konst.is_some() {
                 continue;
             }
+            lvl.locvar_srcs.push_or_abort(l.src);
             lvl.locvars.push_or_abort(crate::runtime::LocVar {
                 name: l.name.into(),
                 reg: l.reg,

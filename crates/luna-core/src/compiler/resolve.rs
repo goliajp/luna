@@ -61,6 +61,7 @@ impl<'a> Compiler<'a> {
     pub(super) fn declare_local(
         &mut self,
         name: &'a str,
+        src: NameSrc,
         reg: u32,
         read_only: bool,
     ) -> Result<(), SyntaxError> {
@@ -77,6 +78,7 @@ impl<'a> Compiler<'a> {
         let start_pc = self.lr().code.len() as u32;
         self.l().locals.push_or_abort(LocalVar {
             name,
+            src,
             reg,
             read_only,
             captured: false,
@@ -126,10 +128,12 @@ impl<'a> Compiler<'a> {
     }
 
     /// Declare a compile-time constant local (PUC `RDKCTC`).
-    pub(super) fn declare_ct_const(&mut self, name: &'a str, value: CtConst) {
+    pub(super) fn declare_ct_const(&mut self, name: &Name, value: CtConst) {
         let start_pc = self.lr().code.len() as u32;
+        let (name, src) = (self.nm(name), NameSrc::Sym(name.sym));
         self.l().locals.push_or_abort(LocalVar {
             name,
+            src,
             reg: u32::MAX,
             read_only: true,
             captured: false,
@@ -188,6 +192,12 @@ impl<'a> Compiler<'a> {
         });
     }
 
+    /// A new upvalue of the innermost function, its name from `src`.
+    pub(super) fn push_upval(&mut self, u: UpvalDesc, src: NameSrc) {
+        self.l().upvals.push_or_abort(u);
+        self.l().upval_srcs.push_or_abort(src);
+    }
+
     pub(super) fn resolve_name(&mut self, name: &str) -> Result<VarKind, SyntaxError> {
         let top = self.depth - 1;
         self.resolve_at(top, name)
@@ -225,6 +235,7 @@ impl<'a> Compiler<'a> {
             VarKind::Const(v) => Ok(VarKind::Const(v)),
             VarKind::Local(reg) => {
                 let mut read_only = false;
+                let mut src = None;
                 if let Some(idx) = self.levels[li - 1]
                     .locals
                     .iter()
@@ -232,6 +243,7 @@ impl<'a> Compiler<'a> {
                 {
                     self.levels[li - 1].locals[idx].captured = true;
                     read_only = self.levels[li - 1].locals[idx].read_only;
+                    src = Some(self.levels[li - 1].locals[idx].src);
                 }
                 let ui = self.levels[li].upvals.len() as u32;
                 if self.counted_upvals(li) >= max_upvals(self.version) {
@@ -243,11 +255,14 @@ impl<'a> Compiler<'a> {
                     name: name.into(),
                     read_only,
                 });
+                let src = src.expect("the local an upvalue captures");
+                self.levels[li].upval_srcs.push_or_abort(src);
                 self.log(super::puc_log::PEv::Upval(li as u32));
                 Ok(VarKind::Upval(ui))
             }
             VarKind::Upval(pidx) => {
                 let read_only = self.levels[li - 1].upvals[pidx as usize].read_only;
+                let src = self.levels[li - 1].upval_srcs[pidx as usize];
                 let ui = self.levels[li].upvals.len() as u32;
                 if self.counted_upvals(li) >= max_upvals(self.version) {
                     return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
@@ -258,6 +273,7 @@ impl<'a> Compiler<'a> {
                     name: name.into(),
                     read_only,
                 });
+                self.levels[li].upval_srcs.push_or_abort(src);
                 self.log(super::puc_log::PEv::Upval(li as u32));
                 Ok(VarKind::Upval(ui))
             }

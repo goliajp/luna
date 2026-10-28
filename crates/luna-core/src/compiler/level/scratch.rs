@@ -8,7 +8,8 @@ pub(crate) struct CompileScratch {
     pub(in crate::compiler) levels: LVec<LevelBufs>,
     /// the stack of functions being compiled, empty
     pub(in crate::compiler) open: LVec<Level<'static>>,
-    pub(in crate::compiler) sym_strs: LVec<Option<Gc<LuaStr>>>,
+    /// the last compile's strings (see [`super::super::LoadStrs`])
+    pub(crate) strs: super::super::LoadStrs,
     pub(in crate::compiler) spine: LVec<super::super::expr::Pending>,
     pub(in crate::compiler) lvs: LVec<super::super::lvalue::Lv>,
     pub(in crate::compiler) operands: LVec<ExprId>,
@@ -27,7 +28,7 @@ impl CompileScratch {
         CompileScratch {
             levels: LVec::new(mem),
             open: LVec::new(mem),
-            sym_strs: LVec::new(mem),
+            strs: super::super::LoadStrs::new(mem),
             spine: LVec::new(mem),
             lvs: LVec::new(mem),
             operands: LVec::new(mem),
@@ -55,7 +56,7 @@ impl CompileScratch {
         let mem = self.puc_log.mem();
         self.levels = LVec::new(mem);
         self.open = LVec::new(mem);
-        self.sym_strs = LVec::new(mem);
+        self.strs = super::super::LoadStrs::new(mem);
         self.spine = LVec::new(mem);
         self.lvs = LVec::new(mem);
         self.operands = LVec::new(mem);

@@ -30,6 +30,8 @@ mod labels;
 mod local_stat;
 use jumplist::NO_JUMP;
 mod level;
+mod load_strs;
+pub(crate) use load_strs::{LITERALS, LoadStrs, NameSrc};
 mod limits;
 mod near;
 pub(crate) mod num_first;
@@ -80,6 +82,7 @@ enum Varg {
 
 struct LocalVar<'a> {
     name: &'a str,
+    src: NameSrc,
     reg: u32,
     read_only: bool,
     captured: bool,
@@ -182,8 +185,8 @@ struct Compiler<'a> {
     depth: usize,
     /// emptied vectors of finished functions, for the next function
     pool: LVec<LevelBufs>,
-    /// the heap string of each entry of the chunk's names, once made
-    sym_strs: LVec<Option<Gc<LuaStr>>>,
+    /// the heap strings of the load (see [`LoadStrs`])
+    strs: LoadStrs,
     last_line: u32,
     /// When `Some(line)`, every `emit` ignores `last_line` and attributes the
     /// new instruction to `line` instead. PUC infix discharges its left
@@ -250,6 +253,7 @@ impl<'a> Compiler<'a> {
         } else {
             self.levels[self.depth].reset(num_params, is_vararg, line);
         }
+        self.levels[self.depth].seq = self.strs.open_fn();
         self.depth += 1;
         self.log(puc_log::PEv::Open);
     }

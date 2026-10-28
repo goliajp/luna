@@ -72,10 +72,10 @@ impl<'a> Compiler<'a> {
                 }
                 tbc = Some(reg);
             }
-            self.declare_local(self.nm(&an.name), reg, read_only)?;
+            self.declare_local(self.nm(&an.name), NameSrc::Sym(an.name.sym), reg, read_only)?;
         }
         if let (Some(v), Some(last)) = (ct, all_names.last()) {
-            self.declare_ct_const(self.nm(&last.name), v);
+            self.declare_ct_const(&last.name, v);
         }
         if let Some(reg) = tbc {
             self.emit(Inst::iabc(Op::Tbc, reg, 0, 0, false));

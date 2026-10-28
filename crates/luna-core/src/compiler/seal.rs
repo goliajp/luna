@@ -31,6 +31,10 @@ impl Compiler<'_> {
             }
         }
         let proto = lvl.take_proto(self.source, line, last_line, self.heap);
+        self.strs
+            .close_fn(lvl.seq, &lvl.locvar_srcs, &lvl.upval_srcs);
+        lvl.locvar_srcs.clear();
+        lvl.upval_srcs.clear();
         self.heap.adopt_proto(proto)
     }
 

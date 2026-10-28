@@ -44,12 +44,13 @@ impl<'a> Compiler<'a> {
                 name: "_ENV".into(),
                 read_only: false,
             });
+            level.upval_srcs.push_or_abort(NameSrc::literal("_ENV"));
         }
         self.enter_block(false);
         // the scanner past `(`: `self`, entered at once
         if is_method {
             self.at(open.plus(1));
-            self.declare_local("self", 0, false)?;
+            self.declare_local("self", NameSrc::literal("self"), 0, false)?;
         }
         // each parameter is declared once its name is read; their debug
         // records come at `)` (PUC `parlist`'s `adjustlocalvars`)
@@ -57,7 +58,8 @@ impl<'a> Compiler<'a> {
         let params = self.ls(body.params);
         for (i, p) in params.iter().enumerate() {
             self.at(open.plus(2 + 2 * i as i32));
-            self.declare_local(self.nm(p), (i + is_method as usize) as u32, false)?;
+            let reg = (i + is_method as usize) as u32;
+            self.declare_local(self.nm(p), NameSrc::Sym(p.sym), reg, false)?;
         }
         // 5.5 (PUC `parlist`): an anonymous `...` is a parameter too, with a
         // register after the fixed ones that holds nil
@@ -69,7 +71,12 @@ impl<'a> Compiler<'a> {
         }
         if self.lr().has_vararg_table_pseudo {
             let r = self.reserve(1)?;
-            self.declare_local("(vararg table)", r, false)?;
+            self.declare_local(
+                "(vararg table)",
+                NameSrc::literal("(vararg table)"),
+                r,
+                false,
+            )?;
         }
         if let ast::Vararg::Named(n) = &body.vararg {
             let name: &str = self.nm(n);
@@ -81,11 +88,11 @@ impl<'a> Compiler<'a> {
             let virtual_ok = name != "_ENV" && !self.vararg_forced(&body.block, name);
             self.l().named_vararg = true;
             if virtual_ok {
-                self.declare_local(name, r, true)?;
+                self.declare_local(name, NameSrc::Sym(n.sym), r, true)?;
                 self.l().locals.last_mut().expect("just declared").vararg = Varg::Virtual;
             } else {
                 self.emit(Inst::iabc(Op::GetVarg, r, 0, 0, false));
-                self.declare_local(name, r, true)?;
+                self.declare_local(name, NameSrc::Sym(n.sym), r, true)?;
                 self.l().locals.last_mut().expect("just declared").vararg = Varg::Table;
             }
         }
@@ -96,7 +103,7 @@ impl<'a> Compiler<'a> {
         // otherwise it is nil, and it still hides a global `arg`.
         if self.version <= LuaVersion::Lua51 && matches!(body.vararg, ast::Vararg::Anonymous) {
             let r = self.reserve(1)?;
-            self.declare_local("arg", r, false)?;
+            self.declare_local("arg", NameSrc::literal("arg"), r, false)?;
             if !block_uses_vararg(self.ast, &body.block) {
                 self.l().has_compat_vararg_arg = true;
             }

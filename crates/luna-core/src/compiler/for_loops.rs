@@ -11,7 +11,7 @@ impl<'a> Compiler<'a> {
     /// lists, live from here to the end of the loop's block.
     fn declare_hidden(&mut self, base: u32, names: &[&'a str]) -> Result<(), SyntaxError> {
         for (i, &name) in names.iter().enumerate() {
-            self.declare_local(name, base + i as u32, false)?;
+            self.declare_local(name, NameSrc::literal(name), base + i as u32, false)?;
         }
         Ok(())
     }
@@ -22,13 +22,13 @@ impl<'a> Compiler<'a> {
     fn for_body(
         &mut self,
         sid: StatId,
-        vars: &[(&'a str, bool)],
+        vars: &[(&'a str, NameSrc, bool)],
         vbase: u32,
         body: &'a Block,
     ) -> Result<(), SyntaxError> {
         self.enter_block(false);
-        for (i, &(name, read_only)) in vars.iter().enumerate() {
-            self.declare_local(name, vbase + i as u32, read_only)?;
+        for (i, &(name, src, read_only)) in vars.iter().enumerate() {
+            self.declare_local(name, src, vbase + i as u32, read_only)?;
         }
         self.reserve(vars.len() as u32)?;
         // the loop's code after the body is made on its `end`
@@ -63,9 +63,10 @@ impl<'a> Compiler<'a> {
             _ => &["(for state)"; 3],
         };
         // 5.5: the control (first) variable is read-only
-        let mut names: LVec<(&'a str, bool)> = LVec::new(self.heap.mem());
+        let mut names: LVec<(&'a str, NameSrc, bool)> = LVec::new(self.heap.mem());
         for (i, v) in vars.iter().enumerate() {
-            names.push_or_abort((self.nm(v), i == 0 && self.version >= LuaVersion::Lua55));
+            let read_only = i == 0 && self.version >= LuaVersion::Lua55;
+            names.push_or_abort((self.nm(v), NameSrc::Sym(v.sym), read_only));
         }
         self.log_for_names(sid, hidden, &names)?;
         let base = self.explist_adjust(exprs, values)?;
@@ -152,7 +153,7 @@ impl<'a> Compiler<'a> {
     pub(super) fn numeric_for(
         &mut self,
         sid: StatId,
-        var: &'a str,
+        var: &Name,
         line: u32,
         (start, limit, step): (ExprId, ExprId, Option<ExprId>),
         body: &'a Block,
@@ -167,7 +168,8 @@ impl<'a> Compiler<'a> {
             _ => &["(for state)"; 3],
         };
         let v55 = self.version >= LuaVersion::Lua55;
-        self.log_for_names(sid, hidden, &[(var, v55)])?;
+        let var = (self.nm(var), NameSrc::Sym(var.sym), v55);
+        self.log_for_names(sid, hidden, &[var])?;
         let base = self.lr().freereg;
         self.set_freereg(base);
         let se = self.expr(start)?;
@@ -230,7 +232,7 @@ impl<'a> Compiler<'a> {
         self.at(TokRef::After(step.unwrap_or(limit), 1));
         let prep = self.emit(Inst::iabx(prep_op, base, 0));
         let body_top = self.here();
-        self.for_body(sid, &[(var, v55)], var_reg, body)?;
+        self.for_body(sid, &[var], var_reg, body)?;
         let loop_pc = self.here();
         let back = loop_pc - body_top + 1;
         if back as u32 > MAX_BX {
