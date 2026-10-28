@@ -17,6 +17,23 @@ pub(super) const DIALECTS: &[(&str, LuaVersion)] = &[
     ("5.5", LuaVersion::Lua55),
 ];
 
+/// Fixtures whose loads take gigabytes (chunks of millions of
+/// statements, at the compiler's limits).
+const HUGE: &[&str] = &["1011_jump_limit_forward.lua"];
+
+static HUGE_LOADS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// For a fixture of [`HUGE`], the turn of the corpus run that goes through
+/// it: the corpus tests run side by side, and one at a time holds such a
+/// load.
+pub(super) fn huge_turn(f: &Path) -> Option<std::sync::MutexGuard<'static, ()>> {
+    HUGE.iter().any(|h| f.ends_with(h)).then(|| {
+        HUGE_LOADS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    })
+}
+
 pub(super) fn fixtures(dialect: &str) -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../luna-core/tests/diff_puc")
@@ -166,6 +183,7 @@ pub(super) fn corpus_seeded(tier: TraceTier, tier_up_at: u32, seed: impl Fn(usiz
         let seed = seed(i);
         for f in &fixtures(dialect) {
             let source = std::fs::read(f).expect("read fixture");
+            let _turn = huge_turn(f);
             let want = run(&mut interp_seeded(version, seed), &source);
             for hot in [1, 3] {
                 let mut vm = tiered_seeded(version, seed, hot, tier, tier_up_at);
