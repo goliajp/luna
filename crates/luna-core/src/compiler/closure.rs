@@ -149,8 +149,18 @@ impl<'a> Compiler<'a> {
         let pc = self.emit(Inst::iabx(Op::Closure, 0, idx));
         // 5.2+ `codeclosure` puts the closure in the next register at once
         if self.version >= LuaVersion::Lua52 {
-            self.close_after_closure(final_ret);
-            return Ok(Exp::Reg(self.exp_to_nextreg(Exp::Reloc(pc))?));
+            let moved = self.close_after_closure(final_ret);
+            return match self.exp_to_nextreg(Exp::Reloc(pc)) {
+                Ok(r) => Ok(Exp::Reg(r)),
+                Err(e) => {
+                    // the error leaves the function open: PUC never makes
+                    // its final return nor closes it
+                    if moved {
+                        self.puc_log.truncate(final_ret + 1);
+                    }
+                    Err(e)
+                }
+            };
         }
         Ok(Exp::Reloc(pc))
     }
