@@ -250,7 +250,7 @@ impl<'a> Compiler<'a> {
         }
         // PUC attributes FORLOOP (the per-iteration back-edge) to the `for` line,
         // so each loop iteration re-fires a line event there.
-        self.last_line = line;
+        self.last_line = self.ast.stat_line(sid);
         self.emit(Inst::iabx(loop_op, base, back as u32));
         let skip = self.here() - prep - 1;
         if skip as u32 > MAX_BX {

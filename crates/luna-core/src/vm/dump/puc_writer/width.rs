@@ -17,6 +17,13 @@ use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
 use crate::vm::isa::{MAX_SC, MIN_SC, Op};
 
+#[cfg(any(debug_assertions, feature = "gc-trace"))]
+mod check;
+#[cfg(any(debug_assertions, feature = "gc-trace"))]
+pub(super) use check::check;
+#[cfg(any(debug_assertions, feature = "gc-trace"))]
+pub(crate) use check::check_compiled;
+
 /// A 5.4 / 5.5 key the fast field ops take: a string PUC 5.3+ interns.
 pub(super) fn short_key(consts: &[Value], k: u32) -> bool {
     matches!(consts.get(k as usize), Some(Value::Str(s)) if s.len() <= 40)
@@ -104,6 +111,45 @@ pub(super) fn vatab(p: &Proto, d: Dialect) -> bool {
             .is_some_and(|i| i.op() == Op::GetVarg && i.a() == p.num_params as u32)
 }
 
+/// How many of the last PUC instructions standing for a luna instruction
+/// of `op` PUC's parser moves to a line of its own once coded
+/// (`luaK_fixline`): a call's, an operator's with its metamethod fallback,
+/// a numeric or generic loop's; the operands loaded before them stay on the
+/// line they were coded on.
+fn moved(op: Op) -> u32 {
+    match op {
+        Op::Call
+        | Op::TailCall
+        | Op::Concat
+        | Op::Unm
+        | Op::BNot
+        | Op::Len
+        | Op::ErrNNil
+        | Op::ForLoop
+        | Op::ForLoopF
+        | Op::ForLoop55
+        | Op::ForLoop55F
+        | Op::TForCall
+        | Op::TForCall55
+        | Op::TForLoop
+        | Op::TForLoop55 => 1,
+        Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Mod
+        | Op::Pow
+        | Op::Div
+        | Op::IDiv
+        | Op::BAnd
+        | Op::BOr
+        | Op::BXor
+        | Op::Shl
+        | Op::Shr => 2,
+        op if op.arith_const_op().is_some() || op.arith_kk_op().is_some() => 2,
+        _ => 0,
+    }
+}
+
 /// PUC's layout of one function, for counting its code as PUC's code
 /// generator writes it.
 #[derive(Default)]
@@ -167,8 +213,17 @@ impl Layout {
         0
     }
 
+    /// How many of the PUC instructions [`Self::code`] gives for luna
+    /// instruction `pc` PUC's parser moves to their line once coded ([`moved`]);
+    /// it codes the others on the line the last token read ended on.
+    #[inline]
+    pub(crate) fn moved(&self, p: &Proto, pc: usize) -> u32 {
+        moved(p.code[pc].op())
+    }
+
     /// How many PUC instructions stand for luna instruction `pc` of a
     /// function with fewer than 256 constants.
+    #[inline(always)]
     pub(super) fn width(&self, p: &Proto, pc: usize) -> u32 {
         let i = p.code[pc];
         let op = i.op();
@@ -228,55 +283,5 @@ impl Layout {
             Op::SetList => 1 + u32::from(modern_setlist(setlist_offset(p, pc), self.v55).1 > 0),
             _ => 1,
         }
-    }
-}
-
-/// What the encoder emitted for `p` against [`Layout::width`], when the
-/// widths do not need the constant indices.
-#[cfg(any(debug_assertions, feature = "gc-trace"))]
-pub(super) fn check(p: &Proto, d: Dialect, body: &super::asm::Body) {
-    if p.consts.len() > 255 || !body.k_added.is_empty() {
-        return;
-    }
-    let lay = Layout {
-        modern: d >= Dialect::V54,
-        v51: d == Dialect::V51,
-        v55: d == Dialect::V55,
-        vatab: vatab(p, d),
-        encoded: None,
-    };
-    let mut lines = Vec::new();
-    lay.prologue(p, |l| lines.push(l));
-    assert_eq!(
-        body.pc_map[0] as usize,
-        lines.len(),
-        "{}: prologue",
-        d.name()
-    );
-    for pc in 0..p.code.len() {
-        let n = body.pc_map[pc + 1] - body.pc_map[pc];
-        assert_eq!(lay.width(p, pc), n, "{}: width at {pc}", d.name());
-        lay.code(p, pc, 0, |l| lines.push(l));
-    }
-    if !p.lines.is_empty() {
-        assert_eq!(body.lines, lines, "{}: lines", d.name());
-    }
-}
-
-/// A text load's functions as the encoder lays them out against
-/// [`Layout`]: the encoder adds no constant to code luna compiled.
-#[cfg(any(debug_assertions, feature = "gc-trace"))]
-pub(crate) fn check_compiled(proto: &Proto, version: LuaVersion) {
-    let Some(d) = Dialect::of(version) else {
-        return;
-    };
-    if let Ok(sh) = super::shape_one(proto, d) {
-        assert!(
-            sh.k_added.is_empty(),
-            "the encoder added a constant to compiled code"
-        );
-    }
-    for c in proto.protos.iter() {
-        check_compiled(c, version);
     }
 }

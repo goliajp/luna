@@ -79,9 +79,10 @@ impl<'s> Parser<'s> {
             }
             Token::LBrace => return self.table_constructor(),
             Token::Function => {
-                let line = self.tok.line;
                 self.advance()?;
-                Expr::Function(self.func_body(line)?)
+                // a function expression is defined on the line of the token
+                // after `function`
+                Expr::Function(self.func_body(self.tok.line)?)
             }
             _ => return self.suffixed_expr(),
         };

@@ -14,17 +14,21 @@ impl Vm {
     ) -> Result<(), SyntaxError> {
         match ev {
             PEv::Grow(line, n) => {
-                self.replay_code(r, line, n);
+                self.replay_code(r, tok, line, n);
                 Ok(())
             }
             ev => self.replay_other(r, tok, ev),
         }
     }
 
-    /// `n` instructions luna emitted on `line`: the PUC instructions that
-    /// stand for each, with their lines, and the constants PUC adds for it
-    /// (an instruction PUC has none for stands for none).
-    fn replay_code(&mut self, r: &mut Replay, line: u32, n: u32) {
+    /// `n` instructions luna emitted on `line` at token `tok`: the PUC
+    /// instructions that stand for each, with their lines, and the
+    /// constants PUC adds for it (an instruction PUC has none for stands
+    /// for none).
+    fn replay_code(&mut self, r: &mut Replay, tok: i64, line: u32, n: u32) {
+        if r.far {
+            return self.replay_code_far(r, tok, line, n);
+        }
         let Replay { fs, opening, .. } = r;
         let Some(f) = fs.last_mut() else {
             return;
@@ -46,18 +50,56 @@ impl Vm {
         }
     }
 
+    /// [`Self::replay_code`] in a chunk whose lines count (see
+    /// [`Replay::far`]): each PUC instruction coded on the line the last
+    /// token read ended on, the ones PUC moves then moved to their own line.
+    #[inline(never)]
+    fn replay_code_far(&mut self, r: &mut Replay, tok: i64, line: u32, n: u32) {
+        let emit = r.lastline(tok);
+        let Replay { fs, opening, .. } = r;
+        let Some(f) = fs.last_mut() else {
+            return;
+        };
+        let h = &mut self.heap;
+        let from = f.pc;
+        f.pc += n as usize;
+        let p = opening.get(f.shape);
+        let Fs { a, lay, .. } = f;
+        for pc in from..from + n as usize {
+            let Some(p) = p.filter(|p| pc < p.code.len()) else {
+                h.parser_code(a, emit);
+                continue;
+            };
+            let mut left = 0;
+            let added = lay.code(p, pc, line, |_| left += 1);
+            let moved = lay.moved(p, pc).min(left);
+            lay.code(p, pc, line, |l| {
+                h.parser_code(a, emit);
+                left -= 1;
+                if left < moved && l != emit {
+                    h.parser_fix(a, l);
+                }
+            });
+            for _ in 0..added {
+                h.parser_push(&mut a.k, ParserArray::Consts);
+            }
+        }
+    }
+
     /// An event other than an instruction.
     fn replay_other(&mut self, r: &mut Replay, tok: i64, ev: PEv) -> Result<(), SyntaxError> {
         match ev {
             PEv::Open => self.replay_open(r)?,
             PEv::Prologue => {
                 // a vararg function's first instructions (`setvararg`)
+                // `setvararg` codes it where it is: no line moves it
+                let emit = r.emit_line(tok);
                 let Some(f) = r.fs.last_mut() else {
                     return Ok(());
                 };
                 if let Some(p) = r.opening.get(f.shape) {
                     let Fs { a, lay, .. } = f;
-                    lay.prologue(p, |l| self.heap.parser_code(a, l));
+                    lay.prologue(p, |l| self.heap.parser_code(a, emit.unwrap_or(l)));
                 }
             }
             PEv::Lit(i) => {
@@ -66,13 +108,18 @@ impl Vm {
                 self.replay_scan(r, text.as_bytes(), known)?
             }
             PEv::Close => self.replay_close(r, tok)?,
-            PEv::Grow(line, n) => self.replay_code(r, line, n),
+            PEv::Grow(line, n) => self.replay_code(r, tok, line, n),
             PEv::CodeUp(line) => {
                 let child = r.fs.pop();
-                self.replay_code(r, line, 1);
+                self.replay_code(r, tok, line, 1);
                 r.fs.extend(child);
             }
             PEv::Use => {}
+            PEv::Fix(line) => {
+                if let Some(f) = r.fs.last_mut() {
+                    self.heap.parser_fix(&mut f.a, line);
+                }
+            }
             PEv::Uncode => {
                 if let Some(f) = r.fs.last_mut() {
                     f.pc -= 1;
@@ -113,5 +160,35 @@ impl Vm {
             }
         }
         Ok(())
+    }
+}
+
+impl Replay<'_> {
+    /// From 5.4: the line the last token read ended on while the scanner
+    /// is on token `tok`. Instructions come in the order of their tokens,
+    /// but for a closure's, which a function closing after it takes back.
+    #[inline]
+    pub(super) fn lastline(&mut self, tok: i64) -> u32 {
+        let lines = &self.scanned.lines;
+        let mut i = self.line_at;
+        if i > 0 && tok < i64::from(lines[i - 1].0) {
+            i = lines.partition_point(|&(t, _)| i64::from(t) <= tok);
+        }
+        while i < lines.len() && i64::from(lines[i].0) <= tok {
+            i += 1;
+        }
+        self.line_at = i;
+        i.checked_sub(1).map_or(1, |j| lines[j].1)
+    }
+
+    /// The line an instruction made at token `tok` is coded on, when it
+    /// counts ([`Self::far`]): the last token's (see [`Self::lastline`]).
+    #[inline]
+    pub(super) fn emit_line(&mut self, tok: i64) -> Option<u32> {
+        if self.far {
+            Some(self.lastline(tok))
+        } else {
+            None
+        }
     }
 }

@@ -29,6 +29,7 @@ pub(super) enum Pending {
         args: List<ExprId>,
         line: u32,
         base: u32,
+        force: Option<u32>,
     },
     Method {
         id: ExprId,
@@ -36,6 +37,7 @@ pub(super) enum Pending {
         args: List<ExprId>,
         line: u32,
         base: u32,
+        force: Option<u32>,
     },
 }
 
@@ -91,11 +93,13 @@ impl<'a> Compiler<'a> {
                 },
                 Expr::Call { func, args, line } => {
                     let base = self.lr().freereg;
+                    let force = self.unpin();
                     self.spine.push_or_abort(Pending::Call {
                         id: cur,
                         args,
                         line,
                         base,
+                        force,
                     });
                     cur = func;
                 }
@@ -106,12 +110,14 @@ impl<'a> Compiler<'a> {
                     line,
                 } => {
                     let base = self.lr().freereg;
+                    let force = self.unpin();
                     self.spine.push_or_abort(Pending::Method {
                         id: cur,
                         method,
                         args,
                         line,
                         base,
+                        force,
                     });
                     cur = obj;
                 }
@@ -134,17 +140,40 @@ impl<'a> Compiler<'a> {
                     args,
                     line,
                     base,
-                } => self.call_close(id, e, args, line, base)?,
+                    force,
+                } => {
+                    let e = self.call_close(id, e, args, line, base)?;
+                    self.force_line = force;
+                    e
+                }
                 Pending::Method {
                     id,
                     method,
                     args,
                     line,
                     base,
-                } => self.method_close(id, e, method, args, line, base)?,
+                    force,
+                } => {
+                    let e = self.method_close(id, e, method, args, line, base)?;
+                    self.force_line = force;
+                    e
+                }
             };
         }
         Ok(e)
+    }
+
+    /// From 5.2, the line a binary operator after the expression pinned
+    /// lifted while it compiles, for an expression PUC codes in full before
+    /// the scanner reads past it (a call, an operator's operand with the
+    /// operator, which `luaK_prefix` moves to its own line); what to put
+    /// back.
+    fn unpin(&mut self) -> Option<u32> {
+        if self.version == LuaVersion::Lua51 {
+            self.force_line
+        } else {
+            self.force_line.take()
+        }
     }
 
     /// An expression that is not a node of a left spine (see [`Self::expr`]).
@@ -187,7 +216,10 @@ impl<'a> Compiler<'a> {
             }
             Expr::UnOp { op, operand, line } => {
                 let (op, operand, line) = (*op, *operand, *line);
-                self.unop(id, op, operand, line)
+                let saved = self.unpin();
+                let e = self.unop(id, op, operand, line);
+                self.force_line = saved;
+                e
             }
             Expr::BinOp { lhs, rhs, line, .. } => {
                 let (lhs, rhs, line) = (*lhs, *rhs, *line);

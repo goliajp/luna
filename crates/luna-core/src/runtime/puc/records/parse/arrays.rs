@@ -7,6 +7,8 @@
 use super::*;
 use crate::runtime::puc::size::{PucSizes, dyd_sizes};
 
+mod lines;
+
 /// One of the parser's arrays.
 #[derive(Clone, Copy)]
 pub(crate) enum ParserArray {
@@ -236,40 +238,6 @@ impl Heap {
         let elem = self.parser_elem(a);
         self.acct_block(v.cap * elem, v.n * elem);
         v.cap = v.n;
-    }
-
-    /// One instruction on `line` (`luaK_code`): the code array, then the
-    /// line info (5.4+ `savelineinfo`, with its absolute entries).
-    #[inline(always)]
-    pub(in crate::runtime) fn parser_code(&mut self, f: &mut FuncArrays, line: u32) {
-        self.parser_push(&mut f.code, ParserArray::Code);
-        if matches!(self.puc.dialect, Dialect::L54 | Dialect::L55) {
-            let dif = i64::from(line) - i64::from(f.prev_line);
-            let wthabs = f.iwthabs;
-            f.iwthabs += 1;
-            f.last_prev = f.prev_line;
-            f.last_abs = dif.abs() >= 0x80 || wthabs >= 128;
-            if f.last_abs {
-                self.parser_push(&mut f.abs, ParserArray::AbsLines);
-                f.iwthabs = 1;
-            }
-            f.prev_line = line;
-        }
-        self.parser_push(&mut f.line, ParserArray::LineInfo);
-    }
-
-    /// The last instruction taken back, with its line info (5.4+
-    /// `removelastlineinfo`).
-    pub(in crate::runtime) fn parser_uncode(&mut self, f: &mut FuncArrays) {
-        f.code.n -= 1;
-        f.line.n -= 1;
-        if f.last_abs {
-            f.abs.n -= 1;
-            f.iwthabs = 129;
-        } else {
-            f.prev_line = f.last_prev;
-            f.iwthabs = f.iwthabs.saturating_sub(1);
-        }
     }
 
     /// The function ends (`close_func`): each array trimmed to its count.

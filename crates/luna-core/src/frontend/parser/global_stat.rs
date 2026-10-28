@@ -6,8 +6,9 @@ impl<'s> Parser<'s> {
     pub(super) fn global_stat(&mut self) -> Result<StatId, SyntaxError> {
         self.advance()?;
         if self.accept(Token::Function)? {
-            let line = self.prev_line;
             let name = self.expect_name()?;
+            // defined on the line of the token after the name
+            let line = self.tok.line;
             self.declare([name.sym], VarKind::Global);
             self.mark();
             let body = self.func_body(line)?;

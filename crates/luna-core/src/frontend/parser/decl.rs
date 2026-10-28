@@ -78,8 +78,9 @@ impl<'s> Parser<'s> {
     pub(super) fn local_stat(&mut self) -> Result<StatId, SyntaxError> {
         self.advance()?;
         if self.accept(Token::Function)? {
-            let line = self.prev_line;
             let name = self.expect_name()?;
+            // defined on the line of the token after the name
+            let line = self.tok.line;
             // `local function f` declares `f` in the enclosing function before
             // the body is parsed (PUC `localfunc`'s pre-declare); count it.
             self.new_local()?;
