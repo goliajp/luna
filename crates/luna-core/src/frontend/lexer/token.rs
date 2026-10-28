@@ -84,10 +84,22 @@ impl<S: Source> Lexer<'_, S> {
 
     fn name_or_keyword(&mut self) -> Tok {
         let start = self.pos;
-        while matches!(
-            self.cur(),
-            Some(b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_')
-        ) {
+        // the name's bytes read in place; the last one is left by `bump`,
+        // which reads a stream's next piece past it
+        let bytes = self.src.bytes();
+        let mut p = start + 1;
+        while p < bytes.len() && matches!(bytes[p], b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_')
+        {
+            p += 1;
+        }
+        self.pos = p - 1;
+        self.bump();
+        while S::STREAMS
+            && matches!(
+                self.cur(),
+                Some(b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_')
+            )
+        {
             self.bump();
         }
         let text = &self.src.bytes()[start..self.pos];
