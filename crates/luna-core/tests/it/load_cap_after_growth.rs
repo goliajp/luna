@@ -116,9 +116,14 @@ fn a_cap_after_the_code_grows_is_met_at_the_count_puc_has() {
             // at the count the load left: nothing happens
             assert_eq!(at(after), Ok(after), "{v:?} n={n}");
             // one byte under it: the first instruction after the load
-            // collects in full before the chunk reads the count
-            let read = at(after - 1).expect("under the cap once collected");
+            // collects in full before the chunk reads the count, and the
+            // chunk's own full collection then leaves what it leaves without
+            // the cap (the count read in between differs by what the calls
+            // after the first collection grow, the stack among them)
+            let (read, again) =
+                run(v, n, Some(after as usize - 1)).expect("under the cap once collected");
             assert!(read < after, "{v:?} n={n}: {read}");
+            assert_eq!(again, collected, "{v:?} n={n}");
         }
     }
 }
