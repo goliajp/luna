@@ -106,8 +106,12 @@ impl<'a> Compiler<'a> {
         let cur = self.swap_cur(at);
         // up to 5.4 `new_localvar` checks the cap as each name is read,
         // before the statement registers any of them
-        let active = self.lr().avars.iter().filter(|a| a.reg.is_some()).count() as u32;
-        if self.version <= LuaVersion::Lua54 && active + self.lr().prelogged >= MAX_LOCALS {
+        // the active ones are among `avars`: counted only near the cap
+        let l = self.lr();
+        if self.version <= LuaVersion::Lua54
+            && l.avars.len() as u32 + l.prelogged >= MAX_LOCALS
+            && l.avars.iter().filter(|a| a.reg.is_some()).count() as u32 + l.prelogged >= MAX_LOCALS
+        {
             return Err(self.limit_err("local variables", MAX_LOCALS));
         }
         if let Some(lit) = src.local_literal() {
