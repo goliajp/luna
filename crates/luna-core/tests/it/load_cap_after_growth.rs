@@ -45,7 +45,8 @@ fn run(v: LuaVersion, n: u32, cap: Option<usize>) -> Result<(u64, u64), String> 
     Ok((a.parse().expect("a count"), b.parse().expect("a count")))
 }
 
-/// PUC's counts after the load and after a full collection, by `n`.
+/// PUC's counts after the load and after a full collection, by `n`, on
+/// Linux.
 const RECORDED: [(LuaVersion, [(u32, u64, u64); 6]); 5] = [
     (
         LuaVersion::Lua51,
@@ -104,13 +105,38 @@ const RECORDED: [(LuaVersion, [(u32, u64, u64); 6]); 5] = [
     ),
 ];
 
-// the package paths in the count are another directory's on Windows, and
-// with `gc-stress` every checkpoint collects
+/// PUC's counts after the load and after a full collection to compare
+/// with, by `n`: on Windows the MSVC build's, run from the directory its
+/// package paths name.
+fn expected(v: LuaVersion, cases: [(u32, u64, u64); 6]) -> Vec<(u32, u64, u64)> {
+    if cfg!(windows) {
+        let lines = super::windows_counts::recorded_in("load_cap_after_growth", v);
+        return lines
+            .iter()
+            .map(|l| {
+                let w: Vec<u64> = l.split(' ').map(|x| x.parse().expect("a number")).collect();
+                (w[0] as u32, w[1], w[2])
+            })
+            .collect();
+    }
+    cases.to_vec()
+}
+
 #[test]
-#[cfg(all(target_pointer_width = "64", not(windows), not(feature = "gc-stress")))]
+#[cfg(target_pointer_width = "64")]
+#[cfg_attr(
+    feature = "gc-stress",
+    ignore = "every check collects in full: the load leaves no garbage for the cap's collection to free"
+)]
 fn a_cap_after_the_code_grows_is_met_at_the_count_puc_has() {
+    use super::windows_counts::ran_from_puc_dir;
+    if ran_from_puc_dir(
+        "load_cap_after_growth::a_cap_after_the_code_grows_is_met_at_the_count_puc_has",
+    ) {
+        return;
+    }
     for (v, cases) in RECORDED {
-        for (n, after, collected) in cases {
+        for (n, after, collected) in expected(v, cases) {
             let at = |cap: u64| run(v, n, Some(cap as usize)).map(|(c, _)| c);
             assert_eq!(run(v, n, None), Ok((after, collected)), "{v:?} n={n}");
             // at the count the load left: nothing happens
