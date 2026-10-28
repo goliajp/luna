@@ -153,6 +153,9 @@ pub(super) struct Replay<'s> {
     pub(super) splices: std::collections::VecDeque<(i64, crate::runtime::puc::Deferred)>,
     /// the writes into the parser tables, when they are to be shown
     pub(super) rec: Option<Vec<TabOp>>,
+    /// the load's strings, when its compile was of these names and left
+    /// the prototypes being replayed holding them
+    pub(super) strs: Option<&'s crate::compiler::LoadStrs>,
 }
 
 /// The prototypes under `p` in the order their functions open (preorder)
@@ -208,6 +211,7 @@ impl<'s> Replay<'s> {
             longs: Vec::new(),
             splices: Default::default(),
             rec: None,
+            strs: None,
         }
     }
 

@@ -56,6 +56,8 @@ impl Heap {
         for w in reserved_words(d) {
             let s = self.try_intern(w.as_bytes())?;
             self.fix_string(s);
+            let k = reserved_words(Dialect::L55).iter().position(|x| x == w);
+            self.puc.records.reserved[k.expect("a reserved word")] = Some(s);
         }
         if d <= Dialect::L52 {
             self.acct_string(memerr);
@@ -127,6 +129,13 @@ impl Heap {
         }
         self.acct_string(len);
         self.strt_enter(s);
+    }
+
+    /// Reserved word number `k` (in the order of 5.5's `luaX_tokens`),
+    /// which the state made and fixed, if the dialect has it.
+    #[inline]
+    pub(crate) fn reserved_word(&self, k: u8) -> Option<Gc<LuaStr>> {
+        self.puc.records.reserved[usize::from(k)]
     }
 
     /// The parser's string of the chunk name `s`: counted now if luna made

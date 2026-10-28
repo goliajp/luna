@@ -60,7 +60,11 @@ impl Vm {
                     lay.prologue(p, |l| self.heap.parser_code(a, l));
                 }
             }
-            PEv::Lit(text) => self.replay_scan(r, text.as_bytes(), ScanKind::Str)?,
+            PEv::Lit(i) => {
+                let known = r.strs.and_then(|t| t.lits[usize::from(i)]);
+                let text = crate::compiler::LITERALS[usize::from(i)];
+                self.replay_scan(r, text.as_bytes(), known)?
+            }
             PEv::Close => self.replay_close(r, tok)?,
             PEv::Grow(line, n) => self.replay_code(r, line, n),
             PEv::CodeUp(line) => {
