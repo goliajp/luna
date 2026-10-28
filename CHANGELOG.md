@@ -293,6 +293,10 @@ optimization.
 
 ### Changed
 
+- A Vm gives back the memory its parser and compiler took for a huge
+  chunk once the load is over, as PUC does: loading a chunk of millions
+  of statements no longer leaves gigabytes in use (`Vm::memory_in_use`
+  falls back). Ordinary chunks keep reusing that room.
 - A memory error runs no message handler, in every dialect, as PUC's
   `LUA_ERRMEM` does not: `xpcall(f, h)` returns `false` and "not enough
   memory" when `f` runs out of memory, without calling `h`, and the

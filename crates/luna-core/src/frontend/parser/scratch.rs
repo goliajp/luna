@@ -170,17 +170,26 @@ impl ParseScratch {
         s
     }
 
+    /// Give back the vectors of a huge chunk's parse, rather than hold on
+    /// to them: whether they were.
+    pub(crate) fn release_huge(&mut self) -> bool {
+        if self.chunk.exprs.capacity() <= Self::MAX_EXPRS {
+            return false;
+        }
+        let record = self.record;
+        *self = ParseScratch::new(self.chunk.mem_owner().clone());
+        self.record = record;
+        true
+    }
+
     /// Empty the tree's vectors (left filled by the last parse, or half
     /// filled by one that failed), giving back a huge chunk's.
     pub(super) fn clear(&mut self) {
         self.recorded = false;
-        let chunk = &mut self.chunk;
-        if chunk.exprs.capacity() > Self::MAX_EXPRS {
-            let record = self.record;
-            *self = ParseScratch::new(self.chunk.mem_owner().clone());
-            self.record = record;
+        if self.release_huge() {
             return;
         }
+        let chunk = &mut self.chunk;
         chunk.exprs.clear();
         chunk.stats.clear();
         chunk.stat_lines.clear();

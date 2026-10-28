@@ -84,6 +84,18 @@ impl Vm {
         name: Option<Gc<crate::runtime::LuaStr>>,
         splices: Vec<(u32, crate::runtime::puc::Deferred)>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
+        let r = self.load_parsed_counted(parsed, chunkname, name, splices);
+        self.release_huge_scratch();
+        r
+    }
+
+    fn load_parsed_counted(
+        &mut self,
+        parsed: ParsedText,
+        chunkname: &[u8],
+        name: Option<Gc<crate::runtime::LuaStr>>,
+        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+    ) -> Result<Gc<LuaClosure>, SyntaxError> {
         self.heap.set_load_checked(false);
         let counted = match &parsed.0 {
             Ok(p) => p.recorded().is_some(),

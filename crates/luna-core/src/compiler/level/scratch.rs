@@ -37,6 +37,31 @@ impl CompileScratch {
         }
     }
 
+    /// The most instructions (and records of what PUC allocates) whose
+    /// room is kept between loads: a huge chunk's vectors are given back
+    /// rather than held on to.
+    const MAX_CODE: usize = 1 << 14;
+
+    /// Give back the vectors of a huge chunk's compile.
+    pub(crate) fn release_huge(&mut self) {
+        let huge = self.puc_log.capacity() > Self::MAX_CODE
+            || self
+                .levels
+                .iter()
+                .any(|b| b.code_capacity() > Self::MAX_CODE);
+        if !huge {
+            return;
+        }
+        let mem = self.puc_log.mem();
+        self.levels = LVec::new(mem);
+        self.open = LVec::new(mem);
+        self.sym_strs = LVec::new(mem);
+        self.spine = LVec::new(mem);
+        self.lvs = LVec::new(mem);
+        self.operands = LVec::new(mem);
+        self.puc_log = LVec::new(mem);
+    }
+
     /// The token PUC reports `e`, the error the last compile returned, at.
     pub(crate) fn error_token(&mut self, e: &SyntaxError) -> Option<(super::super::TokRef, bool)> {
         self.err_tok
