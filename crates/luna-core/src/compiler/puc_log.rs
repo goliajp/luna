@@ -54,7 +54,7 @@ pub(super) struct LogState {
     pub(super) pending: u32,
     /// the constant the newest 5.4+ string literal made, in the function
     /// at this depth ([`Compiler::drop_literal`])
-    pub(super) fresh_literal: Option<(usize, u32)>,
+    pub(super) fresh_literal: Option<(usize, u32, ast::Sym)>,
     /// see [`super::ReplayOpts::lenient`]
     pub(super) lenient: bool,
     pub(super) last: super::puc_rec::LastTok,
@@ -193,7 +193,7 @@ impl<'a> Compiler<'a> {
         let k = self.sym_const(s);
         self.cur = cur;
         self.puc_state.early = true;
-        self.puc_state.fresh_literal = (k as usize == n).then_some((self.depth, k));
+        self.puc_state.fresh_literal = (k as usize == n).then_some((self.depth, k, s));
         k
     }
 
@@ -202,11 +202,13 @@ impl<'a> Compiler<'a> {
     /// the function's newest, is taken back.
     pub(super) fn drop_literal(&mut self, e: Exp) {
         let fresh = self.puc_state.fresh_literal.take();
-        if let Exp::Const(k) = e
-            && fresh == Some((self.depth, k))
+        if let (Exp::Const(k), Some((depth, fk, sym))) = (e, fresh)
+            && (depth, fk) == (self.depth, k)
             && k as usize + 1 == self.lr().consts.len()
         {
             self.l().consts.pop();
+            // no prototype holds the string for this constant any more
+            self.strs.syms[sym.0 as usize] = None;
             let log = &mut self.puc_log;
             if let Some(i) = log.iter().rposition(|r| matches!(r.ev, PEv::Const(..))) {
                 log.remove(i);

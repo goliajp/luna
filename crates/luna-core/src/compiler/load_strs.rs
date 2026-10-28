@@ -50,8 +50,8 @@ impl NameSrc {
 /// Code that takes a constant or a name away from a prototype must clear
 /// its entry here at the same time.
 pub(crate) struct LoadStrs {
-    /// by name number: short strings only (any length in 5.1, which
-    /// interns every string)
+    /// by name number; only the interned ones (see [`Heap::interns`]) are
+    /// taken from here outside the compiler
     pub(crate) syms: LVec<Option<Gc<LuaStr>>>,
     pub(crate) lits: [Option<Gc<LuaStr>>; LITERALS.len()],
     /// by function, in the order they open: where the sources of its names
@@ -94,10 +94,17 @@ impl LoadStrs {
         self.srcs.extend_from_slice_or_abort(upvals);
     }
 
-    /// The sources of the names of function `seq` (in opening order), `n`
-    /// of them.
-    pub(crate) fn names_of(&self, seq: usize, n: usize) -> &[NameSrc] {
-        let start = self.named[seq] as usize;
-        &self.srcs[start..start + n]
+    /// Where the `i`th name of function `seq` (in opening order) comes
+    /// from.
+    pub(crate) fn name_src(&self, seq: usize, i: usize) -> NameSrc {
+        self.srcs[self.named[seq] as usize + i]
+    }
+
+    /// The entry of the string of a name from `src`.
+    pub(crate) fn slot(&mut self, src: NameSrc) -> &mut Option<Gc<LuaStr>> {
+        match src {
+            NameSrc::Sym(s) => &mut self.syms[s.0 as usize],
+            NameSrc::Lit(i) => &mut self.lits[usize::from(i)],
+        }
     }
 }
