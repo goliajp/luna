@@ -63,6 +63,9 @@ pub(in crate::runtime::puc) struct Records {
     pub(in crate::runtime::puc) open_dead: super::records::open_upvals::OpenDead,
     /// strings PUC's libraries keep and luna's may not: kept alive
     pub(in crate::runtime::puc) pins: Vec<Gc<crate::runtime::LuaStr>>,
+    /// the reserved words `luaX_init` made and fixed, by their number among
+    /// all dialects' (`boot::counts::reserved_words` of 5.5)
+    pub(in crate::runtime::puc) reserved: [Option<Gc<crate::runtime::LuaStr>>; 23],
     /// 5.1 and 5.2: the size of the buffer concatenations are made in
     /// (`G(L)->buff`)
     pub(in crate::runtime::puc) gbuff: fmt::Gbuff,
@@ -139,6 +142,7 @@ impl Default for PucModel {
                 env51_box: None,
                 open_dead: Default::default(),
                 pins: Vec::new(),
+                reserved: [None; 23],
                 gbuff: fmt::Gbuff::default(),
                 udsize: 0,
                 // the standard libraries make about twenty

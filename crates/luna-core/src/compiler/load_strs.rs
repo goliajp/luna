@@ -72,7 +72,7 @@ impl LoadStrs {
     }
 
     /// Emptied for a chunk of `names` names.
-    pub(super) fn reset(&mut self, names: usize) {
+    pub(crate) fn reset(&mut self, names: usize) {
         self.syms.clear();
         self.syms.resize_or_abort(names, None);
         self.lits = [None; LITERALS.len()];

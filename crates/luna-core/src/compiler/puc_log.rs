@@ -22,8 +22,9 @@ pub(crate) enum PEv {
     Uncode,
     /// a vararg function's prologue (5.4+ `setvararg`)
     Prologue,
-    /// the parser makes a string of its own (`luaX_newliteral`)
-    Lit(&'static str),
+    /// the parser makes a string of its own (`luaX_newliteral`), one of
+    /// [`super::LITERALS`]
+    Lit(u8),
     /// a new constant, with luna's key for it (none: PUC adds it under no
     /// key), and its value (from which the replay makes PUC's key)
     Const(Option<const_map::ConstKey>, Value),
@@ -276,9 +277,9 @@ impl<'a> Compiler<'a> {
 
 /// The names PUC's parser makes strings of its own for
 /// (`luaX_newliteral`), when it declares a local by them.
-fn puc_literal(name: &str) -> Option<&'static str> {
+fn puc_literal(name: &str) -> Option<u8> {
     super::LITERALS[..super::load_strs::LOCAL_LITERALS]
         .iter()
-        .copied()
-        .find(|&l| l == name)
+        .position(|&l| l == name)
+        .map(|i| i as u8)
 }

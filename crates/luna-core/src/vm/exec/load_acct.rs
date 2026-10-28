@@ -14,9 +14,9 @@
 //! the chunk's strings and one per function for its constants.
 
 use super::*;
+use crate::compiler::LoadStrs;
 use crate::compiler::puc_log::PEv;
 use crate::compiler::puc_rec::{At, Rec};
-use crate::compiler::LoadStrs;
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::Proto;
 use crate::runtime::dialect::Dialect;
@@ -59,6 +59,10 @@ impl Vm {
         let proto = cl.proto;
         let (marks, scanned) = rec;
         let d = self.heap.dialect();
+        // the strings the compile of these names left, held by `proto`
+        let empty = LoadStrs::new(self.heap.mem());
+        let mut strs = std::mem::replace(&mut self.compile_scratch.strs, empty);
+        debug_assert_eq!(strs.syms.len(), chunk.names.len());
         let mut r = Replay::new(
             (d, self.heap.parser_sizes()),
             proto,
@@ -67,6 +71,7 @@ impl Vm {
             &chunk.names,
             src,
         );
+        r.strs = Some(&strs);
         r.splice(splices);
         let log = self.compile_scratch.puc_log.take();
         let replayed = self
@@ -95,6 +100,9 @@ impl Vm {
             }
         }
         self.replay_end(&r);
+        drop(r);
+        strs.reset(0);
+        self.compile_scratch.strs = strs;
         Ok(())
     }
 
