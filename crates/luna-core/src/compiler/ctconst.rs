@@ -84,6 +84,13 @@ fn value(
     named: &mut dyn FnMut(&Name) -> Option<CtConst>,
     compiled: bool,
 ) -> Option<CtConst> {
+    // a leaf that holds no expression needs no stack check
+    if !matches!(
+        ast.expr(id),
+        Expr::BinOp { .. } | Expr::UnOp { .. } | Expr::Paren(_)
+    ) {
+        return value_leaf(ast, id, named, compiled);
+    }
     if crate::native_stack::is_low(crate::native_stack::RESERVE) {
         return None;
     }
