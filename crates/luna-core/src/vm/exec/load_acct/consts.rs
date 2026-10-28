@@ -200,15 +200,16 @@ impl Vm {
     }
 
     /// The scanner's string `s` keyed in parser table `t` (`luaH_set` on a
-    /// new key; one already there allocates nothing).
+    /// new key; one already there allocates nothing): whether it is new.
     pub(super) fn set_str_in(
         &mut self,
         t: &mut PTab,
         d: Dialect,
         s: Gc<LuaStr>,
         k: PKey,
-    ) -> Result<(), crate::runtime::mem::Oom> {
-        if crate::runtime::gc_hooks::TRACE && !t.contains(k) {
+    ) -> Result<bool, crate::runtime::mem::Oom> {
+        let new = t.insert(&mut self.heap, d, k, Some(s.hdr()))?;
+        if crate::runtime::gc_hooks::TRACE && new {
             self.heap.trace_line(format_args!(
                 "K {} {} {:08x}",
                 t.id,
@@ -216,6 +217,6 @@ impl Vm {
                 s.hash()
             ));
         }
-        t.insert(&mut self.heap, d, k, Some(s.hdr()))
+        Ok(new)
     }
 }
