@@ -232,7 +232,7 @@ impl<'s> Parser<'s> {
         // the loop's locals, hidden ones included, are in scope for the
         // body (PUC `forbody`) and out of it after
         let active = self.func_local_count.last().expect("func ctx").0;
-        self.activate_locals()?;
+        self.activate_locals();
         let body = self.block()?;
         self.func_local_count.last_mut().expect("func ctx").0 = active;
         self.goto_step(|g| {

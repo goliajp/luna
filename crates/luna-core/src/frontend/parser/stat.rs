@@ -85,7 +85,7 @@ impl<'s> Parser<'s> {
                     None
                 };
                 // 5.5 opens the hidden ones on the `do`
-                self.activate_hidden_55(hidden)?;
+                self.activate_hidden_55(hidden);
                 self.expect(Token::Do, "do")?;
                 self.add_local_51(first.sym);
                 let var = self.chunk.push_list(&[first]);
@@ -121,7 +121,7 @@ impl<'s> Parser<'s> {
                 self.expect(Token::In, "in")?;
                 let expr_line = self.tok.line;
                 let exprs = self.exprlist()?;
-                self.activate_hidden_55(hidden)?;
+                self.activate_hidden_55(hidden);
                 self.expect(Token::Do, "do")?;
                 for i in vars.range() {
                     self.add_local_51(self.chunk.name_lists[i].sym);

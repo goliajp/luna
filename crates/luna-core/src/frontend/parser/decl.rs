@@ -84,7 +84,7 @@ impl<'s> Parser<'s> {
             // `local function f` declares `f` in the enclosing function before
             // the body is parsed (PUC `localfunc`'s pre-declare); count it.
             self.new_local()?;
-            self.activate_locals()?;
+            self.activate_locals();
             self.add_local_51(name.sym);
             self.declare([name.sym], VarKind::Local);
             self.mark();
@@ -92,7 +92,7 @@ impl<'s> Parser<'s> {
             return Ok(self.push_stat(Stat::LocalFunction { name, body }));
         }
         let (collective, names, exprs) = self.attnamelist()?;
-        self.activate_locals()?;
+        self.activate_locals();
         self.declare_attrib_names(names, collective, false);
         for i in names.range() {
             self.add_local_51(self.chunk.attrib_name_lists[i].name.sym);
