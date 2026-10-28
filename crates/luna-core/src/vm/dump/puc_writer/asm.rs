@@ -200,7 +200,7 @@ impl<'p> Asm<'p> {
         let (ver, map) = &mut self.kmap;
         let map = map.get_or_insert_with(|| const_map_of(*ver, &self.consts));
         let n = self.consts.len();
-        let k = add_const(*ver, &mut self.consts, map, v);
+        let (k, _) = add_const(*ver, &mut self.consts, map, v);
         if self.consts.len() > n {
             self.k_added.push(self.pc);
             if let (Some(key), Some(first)) = (key, &mut self.kfirst) {

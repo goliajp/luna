@@ -21,25 +21,33 @@ pub(crate) type DumpConstMap =
 
 /// The scanner table the rules below read and write: either map.
 pub(crate) trait KeyMap {
-    fn find(&self, k: &ConstKey) -> Option<u32>;
-    fn put(&mut self, k: ConstKey, i: u32);
+    /// The entry under `k`, set to what `f` returns for it (`None`: left
+    /// as it was, or not added).
+    fn update(&mut self, k: ConstKey, f: impl FnOnce(Option<u32>) -> Option<u32>);
 }
 
 impl KeyMap for ConstMap {
-    fn find(&self, k: &ConstKey) -> Option<u32> {
-        self.get(k)
-    }
-    fn put(&mut self, k: ConstKey, i: u32) {
-        self.insert_or_abort(k, i);
+    #[inline]
+    fn update(&mut self, k: ConstKey, f: impl FnOnce(Option<u32>) -> Option<u32>) {
+        self.update_or_abort(k, f);
     }
 }
 
 impl KeyMap for DumpConstMap {
-    fn find(&self, k: &ConstKey) -> Option<u32> {
-        self.get(k).copied()
-    }
-    fn put(&mut self, k: ConstKey, i: u32) {
-        self.insert(k, i);
+    fn update(&mut self, k: ConstKey, f: impl FnOnce(Option<u32>) -> Option<u32>) {
+        use std::collections::hash_map::Entry;
+        match self.entry(k) {
+            Entry::Occupied(mut e) => {
+                if let Some(i) = f(Some(*e.get())) {
+                    e.insert(i);
+                }
+            }
+            Entry::Vacant(e) => {
+                if let Some(i) = f(None) {
+                    e.insert(i);
+                }
+            }
+        }
     }
 }
 
@@ -131,7 +139,7 @@ fn raw_equal(v: LuaVersion, a: &Value, b: &Value) -> bool {
         _ => None,
     };
     match (a, b) {
-        (Value::Str(x), Value::Str(y)) => x.as_bytes() == y.as_bytes(),
+        (Value::Str(x), Value::Str(y)) => x.ptr_eq(*y) || x.as_bytes() == y.as_bytes(),
         (Value::Int(x), Value::Int(y)) => x == y,
         (Value::Float(x), Value::Float(y)) => x == y,
         (Value::Bool(x), Value::Bool(y)) => x == y,
@@ -193,44 +201,44 @@ fn plan(v: LuaVersion, c: &Value) -> (Plan, bool) {
 }
 
 /// The index of constant `c` in `consts` of a function of dialect `v`,
-/// whose scanner table is `map`: added when PUC would add a new entry.
+/// whose scanner table is `map`: added when PUC would add a new entry;
+/// and the key PUC's table has for it, if any.
+#[inline]
 pub(crate) fn add_const(
     v: LuaVersion,
     consts: &mut impl ConstList,
     map: &mut impl KeyMap,
     c: Value,
-) -> u32 {
+) -> (u32, Option<ConstKey>) {
     let (plan, trusted) = plan(v, &c);
+    let Plan::Key(key) = plan else {
+        let i = consts.items().len() as u32;
+        consts.add(c);
+        return (i, None);
+    };
     // 5.3 and 5.4 key all the functions of a chunk in one table: an entry
     // may name another function's constant
     let trusted = trusted && !shares_keys(v);
-    let key = match plan {
-        Plan::Key(key) => {
-            if let Some(i) = map.find(&key)
-                && let Some(old) = consts.items().get(i as usize)
-                && (trusted || raw_equal(v, old, &c))
-            {
-                return i;
-            }
-            Some(key)
+    let mut i = 0;
+    map.update(key, |found| {
+        if let Some(f) = found
+            && let Some(old) = consts.items().get(f as usize)
+            && (trusted || raw_equal(v, old, &c))
+        {
+            i = f;
+            return None;
         }
-        Plan::New => None,
-    };
-    let i = consts.items().len() as u32;
-    consts.add(c);
-    if let Some(key) = key {
-        remember(v, map, key, i);
-    }
-    i
+        i = consts.items().len() as u32;
+        consts.add(c);
+        remembers(v, key, found).then_some(i)
+    });
+    (i, Some(key))
 }
 
-/// Records a new entry `i` under `key`; 5.5 caches a float only under a
-/// key that was free.
-fn remember(v: LuaVersion, map: &mut impl KeyMap, key: ConstKey, i: u32) {
-    if v == LuaVersion::Lua55 && matches!(key, ConstKey::Float(_)) && map.find(&key).is_some() {
-        return;
-    }
-    map.put(key, i);
+/// Whether a new entry is recorded under `key`, where `found` was: 5.5
+/// caches a float only under a key that was free.
+fn remembers(v: LuaVersion, key: ConstKey, found: Option<u32>) -> bool {
+    !(v == LuaVersion::Lua55 && matches!(key, ConstKey::Float(_)) && found.is_some())
 }
 
 /// The scanner table PUC would have after adding `consts` in order, each
@@ -239,7 +247,7 @@ pub(crate) fn const_map_of(v: LuaVersion, consts: &[Value]) -> DumpConstMap {
     let mut map = DumpConstMap::default();
     for (i, c) in consts.iter().enumerate() {
         if let (Plan::Key(key), _) = plan(v, c) {
-            remember(v, &mut map, key, i as u32);
+            map.update(key, |found| remembers(v, key, found).then_some(i as u32));
         }
     }
     map
@@ -265,15 +273,11 @@ impl Compiler<'_> {
             _ => &mut l.const_map,
         };
         let n = l.consts.len();
-        let i = add_const(v, &mut l.consts, map, c);
-        if v == LuaVersion::Lua53 && i as usize == n {
-            super::num_first::note(l, &c, i);
-        }
+        let (i, key) = add_const(v, &mut l.consts, map, c);
         if i as usize == n {
-            let key = match plan(v, &c).0 {
-                Plan::Key(k) => Some(k),
-                Plan::New => None,
-            };
+            if v == LuaVersion::Lua53 {
+                super::num_first::note(l, &c, i);
+            }
             self.log(super::puc_log::PEv::Const(key, c));
         }
         i
