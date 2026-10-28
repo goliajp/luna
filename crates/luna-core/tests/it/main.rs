@@ -53,6 +53,7 @@ mod jit_default_off;
 mod lib_pairs_order;
 mod lib_roots_under_gc;
 mod library_edge_arguments;
+mod load_cap_after_growth;
 mod load_memory_errors;
 mod load_oom_paths;
 mod load_reader_stack;
