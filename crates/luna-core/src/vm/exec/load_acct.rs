@@ -16,7 +16,7 @@
 use super::*;
 use crate::compiler::puc_log::PEv;
 use crate::compiler::puc_rec::{At, Rec};
-use crate::compiler::{LoadStrs, NameSrc};
+use crate::compiler::LoadStrs;
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::Proto;
 use crate::runtime::dialect::Dialect;
@@ -162,56 +162,52 @@ impl Vm {
     /// From 5.3 one long name is one string for the whole chunk (the
     /// scanner's single table of names), in 5.2 one per function.
     pub(super) fn hold_puc_names(&mut self, p: Gc<Proto>) -> Result<(), SyntaxError> {
-        self.hold_names_in(p, &mut Vec::new())
+        self.hold_names_in(p, &mut Vec::new(), None)
     }
 
     /// [`Vm::hold_puc_names`] of the chunk just compiled, whose compiler
-    /// noted where its names come from.
+    /// noted where its names come from: a name's string is looked up once
+    /// for the load.
     pub(super) fn hold_text_names(&mut self, p: Gc<Proto>) -> Result<(), SyntaxError> {
         let empty = LoadStrs::new(self.heap.mem());
-        let strs = std::mem::replace(&mut self.compile_scratch.strs, empty);
-        let held = self
-            .hold_puc_names(p)
-            .and_then(|()| self.hold_names_with(p, &strs, &mut 0));
+        let mut strs = std::mem::replace(&mut self.compile_scratch.strs, empty);
+        let held = self.hold_names_in(p, &mut Vec::new(), Some((&mut strs, &mut 0)));
         self.compile_scratch.strs = strs;
         held
-    }
-
-    fn hold_names_with(
-        &mut self,
-        p: Gc<Proto>,
-        strs: &LoadStrs,
-        seq: &mut usize,
-    ) -> Result<(), SyntaxError> {
-        let n = p.locvars.len() + p.upvals.len();
-        let names = p.locvars.iter().map(|v| v.name.as_str());
-        let names = names.chain(p.upvals.iter().map(|u| u.name.as_str()));
-        let srcs = strs.names_of(*seq, n);
-        *seq += 1;
-        debug_assert!(names.zip(srcs).all(|(n, &src)| match src {
-            NameSrc::Sym(_) => true,
-            NameSrc::Lit(i) => crate::compiler::LITERALS[usize::from(i)] == n,
-        }));
-        for &c in p.protos.iter() {
-            self.hold_names_with(c, strs, seq)?;
-        }
-        Ok(())
     }
 
     fn hold_names_in(
         &mut self,
         p: Gc<Proto>,
         longs: &mut Vec<Gc<crate::runtime::LuaStr>>,
+        mut strs: Option<(&mut LoadStrs, &mut usize)>,
     ) -> Result<(), SyntaxError> {
         let shared = !matches!(self.heap.dialect(), Dialect::L51 | Dialect::L52);
         let names = p.locvars.iter().map(|v| v.name.as_str());
         let names = names.chain(p.upvals.iter().map(|u| u.name.as_str()));
         let mut held = Vec::with_capacity(p.locvars.len() + p.upvals.len());
-        for n in names {
+        let seq = strs.as_mut().map(|(_, seq)| {
+            **seq += 1;
+            **seq - 1
+        });
+        for (i, n) in names.enumerate() {
             let n = n.as_bytes();
-            let s = match longs.iter().find(|s| shared && s.as_bytes() == n) {
-                Some(&s) => s,
-                None => self.heap.try_intern(n)?,
+            let known = match (&mut strs, seq) {
+                (Some((t, _)), Some(seq)) if self.heap.interns(n.len()) => {
+                    Some(t.slot(t.name_src(seq, i)))
+                }
+                _ => None,
+            };
+            let s = match known {
+                Some(&mut Some(s)) => {
+                    debug_assert_eq!(s.as_bytes(), n);
+                    self.heap.refind(s)
+                }
+                Some(slot) => *slot.insert(self.heap.try_intern(n)?),
+                None => match longs.iter().find(|s| shared && s.as_bytes() == n) {
+                    Some(&s) => s,
+                    None => self.heap.try_intern(n)?,
+                },
             };
             if shared && n.len() > crate::runtime::string::MAX_SHORT_LEN {
                 longs.push(s);
@@ -220,7 +216,8 @@ impl Vm {
         }
         *p.puc_names.borrow_mut() = held;
         for &c in p.protos.iter() {
-            self.hold_names_in(c, longs)?;
+            let strs = strs.as_mut().map(|(t, seq)| (&mut **t, &mut **seq));
+            self.hold_names_in(c, longs, strs)?;
         }
         Ok(())
     }

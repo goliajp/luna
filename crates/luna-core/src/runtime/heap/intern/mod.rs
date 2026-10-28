@@ -4,6 +4,8 @@ use super::*;
 use crate::runtime::mem::{Oom, oom_abort};
 use std::alloc::Layout;
 
+mod refind;
+
 impl Heap {
     /// Create (or find) a string. Short strings (≤ 40 bytes) are interned,
     /// in 5.1 every string.
