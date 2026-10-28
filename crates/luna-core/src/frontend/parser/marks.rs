@@ -18,9 +18,8 @@ use super::*;
 pub(crate) struct Marks {
     /// by `ExprId`: the token after the expression
     pub(crate) expr_follow: Vec<u32>,
-    /// `(ExprId, token)` of each table constructor's `{` and function
-    /// literal's `(`, by `ExprId`
-    pub(crate) expr_open: Vec<(u32, u32)>,
+    /// by `ExprId`: the expression's first token
+    pub(crate) expr_first: Vec<u32>,
     /// by `StatId`: the statement's first token
     pub(crate) stat_first: Vec<u32>,
     /// by `StatId`: the token after the statement
@@ -92,14 +91,6 @@ impl Marks {
     pub(crate) fn stat_marks(&self, sid: StatId) -> &[u32] {
         let (start, len) = self.stat_marks[sid.0 as usize];
         &self.marks[start as usize..(start + len) as usize]
-    }
-
-    /// The `{` or `(` token expression `eid` opened with.
-    pub(crate) fn expr_open(&self, eid: ExprId) -> Option<u32> {
-        self.expr_open
-            .binary_search_by_key(&eid.0, |&(e, _)| e)
-            .ok()
-            .map(|i| self.expr_open[i].1)
     }
 }
 
@@ -179,7 +170,7 @@ impl Marks {
     /// Emptied for the next parse, keeping its vectors.
     fn clear(&mut self) {
         self.expr_follow.clear();
-        self.expr_open.clear();
+        self.expr_first.clear();
         self.stat_first.clear();
         self.stat_follow.clear();
         self.stat_marks.clear();
@@ -283,18 +274,14 @@ impl Parser<'_> {
         }
     }
 
-    /// Expression `eid`, pushed, ended before the current token.
-    pub(super) fn close_expr(&mut self, eid: ExprId) {
+    /// Expression `eid`, pushed, started at token `first` and ended before
+    /// the current token.
+    pub(super) fn close_expr(&mut self, eid: ExprId, first: u32) {
         if let Some(r) = &mut self.rec {
-            debug_assert_eq!(r.marks.expr_follow.len(), eid.0 as usize);
-            r.marks.expr_follow.push(self.tok_ix);
-        }
-    }
-
-    /// Expression `eid` (a table or a function) opened at token `open`.
-    pub(super) fn opened_expr(&mut self, eid: ExprId, open: u32) {
-        if let Some(r) = &mut self.rec {
-            r.marks.expr_open.push((eid.0, open));
+            let m = &mut r.marks;
+            debug_assert_eq!(m.expr_follow.len(), eid.0 as usize);
+            m.expr_follow.push(self.tok_ix);
+            m.expr_first.push(first);
         }
     }
 }

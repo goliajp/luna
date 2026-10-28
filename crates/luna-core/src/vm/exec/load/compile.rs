@@ -39,7 +39,7 @@ impl Vm {
             s,
         );
         s.replay.seal = false;
-        made.map_err(|e| crate::compiler::place_error(s, chunk, src, self.version, depth, e))
+        made.map_err(|e| crate::compiler::place_error(s, src, self.version, depth, e))
     }
 
     /// Compile a parsed chunk named `source`, keeping the parse's vectors
@@ -56,7 +56,7 @@ impl Vm {
                 Some(src) => {
                     let (v, depth) = (self.version, self.g.nccalls);
                     let s = &mut self.compile_scratch;
-                    crate::compiler::place_error(s, &parsed.chunk, src, v, depth, e)
+                    crate::compiler::place_error(s, src, v, depth, e)
                 }
                 None => e,
             })?;

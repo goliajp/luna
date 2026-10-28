@@ -189,7 +189,7 @@ impl Vm {
             Some(src) => {
                 let (v, depth) = (self.version, self.g.nccalls);
                 let s = &mut self.compile_scratch;
-                crate::compiler::place_error(s, &parsed.chunk, src, v, depth, e)
+                crate::compiler::place_error(s, src, v, depth, e)
             }
             None => e,
         })?;

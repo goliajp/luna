@@ -35,79 +35,69 @@ pub(crate) enum At {
     Other,
 }
 
-impl At {
-    fn of(t: TokRef) -> At {
-        match t {
-            TokRef::First(..) => At::First,
-            TokRef::After(e, _) | TokRef::Open(e, _) => At::Expr(e.0),
-            TokRef::StatAfter(s, -1) => At::StatLast(s.0),
-            TokRef::StatFirst(s, _)
-            | TokRef::StatAfter(s, _)
-            | TokRef::StatMark(s, _)
-            | TokRef::MarkPlus(s, ..) => At::Stat(s.0),
-            TokRef::Eof | TokRef::Start | TokRef::Next => At::Other,
-        }
-    }
-}
-
-/// The last token resolved, kept for the events after it at the same one.
-#[derive(Clone, Copy)]
-pub(super) struct LastTok {
-    at: TokRef,
-    tok: i64,
-    named: At,
-}
-
-impl Default for LastTok {
-    fn default() -> Self {
-        LastTok {
-            at: TokRef::Start,
-            tok: -1,
-            named: At::Other,
-        }
-    }
-}
+/// The current token as a [`Rec`] names it, kept until it changes.
+pub(super) type CurTok = Option<(i64, At)>;
 
 impl Compiler<'_> {
     /// The number and node of token `at`, when the parse recorded its
     /// marks.
     #[inline]
-    fn tok_of(&mut self, at: TokRef) -> Option<(i64, At)> {
+    fn tok_at(&mut self, at: TokRef) -> Option<(i64, At)> {
         let m = self.marks?;
-        let last = &mut self.puc_state.last;
-        if at == last.at {
-            return Some((last.tok, last.named));
-        }
-        if at == TokRef::Next {
+        if matches!(at, TokRef::Next) {
             self.puc_state.nexts = true;
             return Some((NEXT, At::Other));
         }
-        let tok = match at {
-            TokRef::Start => -1,
-            t => i64::from(t.resolve(self.ast, m)),
-        };
-        *last = LastTok {
-            at,
-            tok,
-            named: At::of(at),
-        };
-        Some((tok, last.named))
+        Some(at.numbered(m))
     }
 
-    /// Log `ev` at token `at`.
+    /// [`Self::tok_at`] of the current token.
     #[inline]
-    pub(super) fn log_at(&mut self, at: TokRef, ev: PEv) {
-        if let Some((tok, named)) = self.tok_of(at) {
+    fn cur_tok(&mut self) -> Option<(i64, At)> {
+        if let Some(t) = self.puc_state.cur_tok {
+            return Some(t);
+        }
+        let t = self.tok_at(self.cur);
+        self.puc_state.cur_tok = t;
+        t
+    }
+
+    /// Make `t` the current token; what was current, to put back with
+    /// [`Self::put_cur`].
+    #[inline]
+    pub(super) fn swap_cur(&mut self, t: TokRef) -> (TokRef, CurTok) {
+        let old = (self.cur, self.puc_state.cur_tok);
+        self.cur = t;
+        self.puc_state.cur_tok = None;
+        old
+    }
+
+    #[inline]
+    pub(super) fn put_cur(&mut self, (t, tok): (TokRef, CurTok)) {
+        self.cur = t;
+        self.puc_state.cur_tok = tok;
+    }
+
+    /// Log `ev` at the scanner's current token.
+    #[inline]
+    pub(super) fn log(&mut self, ev: PEv) {
+        if let Some((tok, named)) = self.cur_tok() {
             self.puc_log.push_or_abort(Rec { tok, at: named, ev });
         }
     }
 
-    /// Log an instruction on `line` at token `at`: one more of the
-    /// instructions just before, when they are at the same token and line
-    /// and logged since [`Self::log_seam`].
+    /// Log an instruction on `line` at the current token, or at
+    /// [`TokRef::Next`] when `early`: one more of the instructions just
+    /// before, when they are at the same token and line and logged since
+    /// [`Self::log_seam`].
     #[inline]
-    pub(super) fn log_code(&mut self, at: TokRef, line: u32) {
-        let Some((tok, named)) = self.tok_of(at) else {
+    pub(super) fn log_code(&mut self, early: bool, line: u32) {
+        let t = if early {
+            self.tok_at(TokRef::Next)
+        } else {
+            self.cur_tok()
+        };
+        let Some((tok, named)) = t else {
             return;
         };
         let seam = self.puc_state.seam;
