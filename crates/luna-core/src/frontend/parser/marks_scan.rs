@@ -8,8 +8,15 @@ impl Recording {
     /// and the string PUC's scanner makes for it. Up to 5.2 each function
     /// keys the strings in its own table, so every one is kept; later the
     /// chunk's one table takes each string once, so only the first of each.
-    #[inline]
-    pub(super) fn scan(&mut self, version: LuaVersion, src: &[u8], ix: u32, tok: LexTok, sym: Sym) {
+    #[inline(always)]
+    pub(super) fn scan(
+        &mut self,
+        version: LuaVersion,
+        lex: &TokenSource,
+        ix: u32,
+        tok: LexTok,
+        sym: Sym,
+    ) {
         use crate::frontend::token::Token as T;
         let span = tok.span;
         let (start, end) = (span.start as usize, span.end as usize);
@@ -19,7 +26,7 @@ impl Recording {
         // the scanner holds no more than the gap's bytes or the token's
         // and a terminating zero
         if start > self.last_end + 32 || end - start >= 32 {
-            self.peak(version, src, ix, span);
+            self.peak(version, lex.src(), ix, span);
         }
         self.last_end = end;
         let (text, kind) = match tok.tok {
