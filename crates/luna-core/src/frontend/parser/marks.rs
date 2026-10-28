@@ -216,13 +216,13 @@ impl Parser<'_> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn reached_recording(&mut self) {
         let (ix, tok, sym) = (self.tok_ix, self.tok, self.tok_sym);
-        let (src, version) = (self.lex.src(), self.version);
+        let (lex, version) = (&self.lex, self.version);
         let r = self.rec.as_deref_mut().expect("recording");
         if r.strings {
-            r.scan(version, src, ix, tok, sym);
+            r.scan(version, lex, ix, tok, sym);
             if r.lines && self.last_line != r.lastline {
                 r.lastline = self.last_line;
                 r.scanned.lines.push((ix, self.last_line));
