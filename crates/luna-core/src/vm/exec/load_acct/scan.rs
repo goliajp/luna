@@ -64,9 +64,8 @@ impl Vm {
         let k = PKey::of_str(s, &mut r.long_keys);
         let val = r.scan_val(s);
         if let Some(t) = r.scan_table(kind) {
-            let (new, id) = (!t.contains(k), t.id);
-            self.set_str_in(t, d, s, k)?;
-            if new {
+            let id = t.id;
+            if self.set_str_in(t, d, s, k)? {
                 r.note(id, PVal::V(Value::Str(s)), Some(val));
                 self.scan_checkpoint(r, s)?;
             }
@@ -124,8 +123,8 @@ impl Vm {
         let Some(t) = r.scan_table(kind).filter(|_| in_table != id) else {
             return Ok(());
         };
-        let (new, tab) = (!t.contains(k), t.id);
-        self.set_str_in(t, d, s, k)?;
+        let tab = t.id;
+        let new = self.set_str_in(t, d, s, k)?;
         match text {
             ScanText::Sym(sym) => r.syms[sym.0 as usize].1 = id,
             ScanText::Reserved(k, _) => r.reserved[usize::from(k)].1 = id,

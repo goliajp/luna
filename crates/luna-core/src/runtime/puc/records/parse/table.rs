@@ -140,16 +140,17 @@ impl PTab {
     }
 
     /// `k` put in the table (PUC `luaH_newkey`), when it is not there;
-    /// `obj` the object among the key and its value, if any.
+    /// `obj` the object among the key and its value, if any. Whether the
+    /// key is new.
     pub(crate) fn insert(
         &mut self,
         heap: &mut Heap,
         d: Dialect,
         k: PKey,
         obj: Option<Gc<GcHeader>>,
-    ) -> Result<(), crate::runtime::mem::Oom> {
+    ) -> Result<bool, crate::runtime::mem::Oom> {
         if !self.keys.insert(k) {
-            return Ok(());
+            return Ok(false);
         }
         let in_array = k.index().is_some_and(|i| i <= self.asize);
         if !in_array && self.used == self.nodes {
@@ -160,10 +161,10 @@ impl PTab {
         if let Some(i) = k.index() {
             self.nums[ceil_log2(i)] += 1;
         }
-        match (self.tab, obj) {
-            (Some(t), Some(o)) => heap.load_tab_ref(t, o),
-            _ => Ok(()),
+        if let (Some(t), Some(o)) = (self.tab, obj) {
+            heap.load_tab_ref(t, o)?;
         }
+        Ok(true)
     }
 
     /// `k` set to nil: the key goes, its node stays taken.
