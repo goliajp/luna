@@ -15,10 +15,9 @@ impl<'a> Compiler<'a> {
         close: TokRef,
     ) -> Result<Exp, SyntaxError> {
         let line = body.line;
-        let nparams = body.params.len as usize + is_method as usize;
-        if nparams > 200 {
-            return Err(self.err(line, "too many parameters"));
-        }
+        // past 200 the parameter that is one too many fails as it is
+        // declared, in the function opened for it, as PUC's `new_localvar`
+        let nparams = (body.params.len as usize + is_method as usize).min(usize::from(u8::MAX));
         let is_vararg = !matches!(body.vararg, ast::Vararg::None);
         self.at(open);
         self.open_level(nparams as u8, is_vararg, line);
@@ -115,12 +114,14 @@ impl<'a> Compiler<'a> {
         if late {
             self.puc_state.pending -= 1;
         }
-        self.flush_locvars();
+        self.flush_locvars(u32::from(late))?;
         if is_vararg {
             self.log(super::puc_log::PEv::Prologue);
         }
         if late {
-            self.log(super::puc_log::PEv::LocVar);
+            self.puc_state.defer = true;
+            self.puc_state.pending = 1;
+            self.flush_locvars(0)?;
         }
         self.stat_block(&body.block)?;
         self.at(close);

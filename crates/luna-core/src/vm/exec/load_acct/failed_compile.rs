@@ -52,6 +52,7 @@ impl Vm {
             closes: true,
             block_ends: false,
             closed: (u32::MAX, u32::MAX),
+            raised: true,
         };
         let replayed = self
             .replay_begin(&mut r, cl)

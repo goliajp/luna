@@ -83,6 +83,7 @@ impl Vm {
             // the token is shown as the source has it, not the completion
             let opts = &mut self.compile_scratch.replay;
             if let Some((ix, kind)) = &mut opts.at
+                && *kind != crate::frontend::error::NearKind::None
                 && let Some(t) = crate::frontend::parser::token_at(src, v, depth, *ix, false)
             {
                 *kind = t.kind;
@@ -152,6 +153,7 @@ impl Vm {
                 closes,
                 block_ends,
                 closed,
+                raised: false,
             }
         } else {
             Cut {
@@ -161,6 +163,7 @@ impl Vm {
                 closes,
                 block_ends,
                 closed,
+                raised: false,
             }
         };
         let replayed = self

@@ -39,6 +39,9 @@ pub(super) struct Cut {
     /// (see `ParseScratch::failed_closed`): only theirs are done when the
     /// parser fails on the token
     pub(super) closed: (u32, u32),
+    /// the code generator raised the error on the token: what it did there
+    /// before is done
+    pub(super) raised: bool,
 }
 
 impl Cut {
@@ -47,6 +50,9 @@ impl Cut {
     /// the parser looked at it, before it failed on it), or, when the
     /// error was raised as a function closed, any up to the closing.
     pub(super) fn takes(&self, at: At, ev: PEv, m: &crate::frontend::parser::Marks) -> bool {
+        if self.raised {
+            return true;
+        }
         if !self.closes {
             return !matches!(ev, PEv::Close);
         }
