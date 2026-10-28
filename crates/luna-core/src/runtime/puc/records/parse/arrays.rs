@@ -59,6 +59,37 @@ impl FuncArrays {
     }
 }
 
+/// Each array's element bytes and the most elements PUC lets it hold
+/// ([`ParserSizes`]), by [`ParserArray`], for each dialect from 5.1.
+const DIMS: [[(usize, usize); 10]; 5] = {
+    use ParserArray::*;
+    let all = [
+        Code, Protos, Consts, LineInfo, AbsLines, LocVars, Upvals, ActVar, Labels, Gotos,
+    ];
+    let ds = [
+        Dialect::L51,
+        Dialect::L52,
+        Dialect::L53,
+        Dialect::L54,
+        Dialect::L55,
+    ];
+    let mut dims = [[(0, 0); 10]; 5];
+    let mut i = 0;
+    while i < 5 {
+        let ps = ParserSizes {
+            d: ds[i],
+            s: PucSizes::of(ds[i]),
+        };
+        let mut j = 0;
+        while j < 10 {
+            dims[i][j] = (ps.elem(all[j]), ps.limit(all[j]));
+            j += 1;
+        }
+        i += 1;
+    }
+    dims
+};
+
 /// What the bytes of the parser's arrays depend on (the dialect, the
 /// sizes), for a count made away from the heap.
 #[derive(Clone, Copy)]
@@ -70,7 +101,7 @@ pub(crate) struct ParserSizes {
 impl ParserSizes {
     /// The bytes of one element of array `a`.
     #[inline(always)]
-    fn elem(&self, a: ParserArray) -> usize {
+    const fn elem(&self, a: ParserArray) -> usize {
         let (s, d) = (&self.s, self.d);
         match a {
             ParserArray::Code => 4,
@@ -88,7 +119,7 @@ impl ParserSizes {
 
     /// The most elements PUC lets array `a` hold (the `limit` its
     /// `luaM_growvector` passes; from 5.4 also what `size_t` can count).
-    fn limit(&self, a: ParserArray) -> usize {
+    const fn limit(&self, a: ParserArray) -> usize {
         const MAX_INT: usize = i32::MAX as usize;
         const SHRT_MAX: usize = i16::MAX as usize;
         let d = self.d;
@@ -96,14 +127,14 @@ impl ParserSizes {
         let n = match a {
             ParserArray::Code | ParserArray::LineInfo | ParserArray::AbsLines => MAX_INT,
             // MAXARG_Bx (5.1's constants too) and MAXARG_Ax
-            ParserArray::Consts if d == Dialect::L51 => (1 << 18) - 1,
+            ParserArray::Consts if matches!(d, Dialect::L51) => (1 << 18) - 1,
             ParserArray::Consts if modern => (1 << 25) - 1,
             ParserArray::Consts => (1 << 26) - 1,
             ParserArray::Protos if modern => (1 << 17) - 1,
             ParserArray::Protos => (1 << 18) - 1,
             ParserArray::LocVars | ParserArray::Labels | ParserArray::Gotos => SHRT_MAX,
             // MAXUPVAL; 5.1 checks its own cap of 60 apart
-            ParserArray::Upvals if d == Dialect::L51 => MAX_INT,
+            ParserArray::Upvals if matches!(d, Dialect::L51) => MAX_INT,
             ParserArray::Upvals => 255,
             ParserArray::ActVar if modern => SHRT_MAX,
             ParserArray::ActVar => MAX_INT,
@@ -115,7 +146,8 @@ impl ParserSizes {
             } else {
                 usize::MAX
             };
-            n.min(max_size / self.elem(a))
+            let most = max_size / self.elem(a);
+            if n < most { n } else { most }
         } else {
             n
         }
@@ -180,15 +212,15 @@ impl Heap {
 
     /// `v` doubled (at least 4), or grown to its limit once doubling would
     /// pass half of it (`luaM_growaux_`).
+    #[cold]
+    #[inline(never)]
     fn parser_grow(&mut self, v: &mut GrowVec, a: ParserArray) {
-        let ps = self.parser_sizes();
-        let limit = ps.limit(a);
+        let (elem, limit) = DIMS[self.puc.dialect as usize - 1][a as usize];
         let new = if v.cap >= limit / 2 {
             limit
         } else {
             (v.cap * 2).max(4)
         };
-        let elem = ps.elem(a);
         self.acct_block(v.cap * elem, new * elem);
         v.cap = new;
     }
