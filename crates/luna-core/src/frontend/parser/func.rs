@@ -10,7 +10,7 @@ impl<'s> Parser<'s> {
         self.enter_fn_51(line);
         let mark = self.stk.names.len();
         let vararg = self.param_list()?;
-        self.activate_locals()?;
+        self.activate_locals();
         self.goto_step(|g| {
             g.enter_function();
             Ok(())
@@ -119,32 +119,24 @@ impl<'s> Parser<'s> {
     }
 
     /// PUC `adjustlocalvars`: the pending locals come into scope. 5.5 checks
-    /// the cap here instead of at declaration.
-    pub(super) fn activate_locals(&mut self) -> Result<(), SyntaxError> {
-        let (active, _, pending) = *self.func_local_count.last().expect("func ctx");
-        if self.version >= LuaVersion::Lua55 && active + pending > MAXVARS && !self.stk.lenient {
-            return Err(self.local_limit_error());
-        }
+    /// the cap here against the registers the locals take, which a constant
+    /// folded at compile time does not; only the compiler knows which those
+    /// are, so the check is its.
+    pub(super) fn activate_locals(&mut self) {
         let slot = self.func_local_count.last_mut().expect("func ctx");
-        slot.0 += pending;
+        slot.0 += slot.2;
         slot.2 = 0;
-        Ok(())
     }
 
     /// 5.5 `forbody`'s caller: the loop's `hidden` control locals, pending
-    /// first, come into scope (and are checked) before the `do`.
-    pub(super) fn activate_hidden_55(&mut self, hidden: u32) -> Result<(), SyntaxError> {
+    /// first, come into scope before the `do` (the compiler checks the cap).
+    pub(super) fn activate_hidden_55(&mut self, hidden: u32) {
         if self.version < LuaVersion::Lua55 {
-            return Ok(());
-        }
-        let (active, _, _) = *self.func_local_count.last().expect("func ctx");
-        if active + hidden > MAXVARS && !self.stk.lenient {
-            return Err(self.local_limit_error());
+            return;
         }
         let slot = self.func_local_count.last_mut().expect("func ctx");
         slot.0 += hidden;
         slot.2 -= hidden;
-        Ok(())
     }
 
     pub(super) fn local_limit_error(&self) -> SyntaxError {

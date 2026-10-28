@@ -65,14 +65,12 @@ impl<'a> Compiler<'a> {
         reg: u32,
         read_only: bool,
     ) -> Result<(), SyntaxError> {
-        // PUC `new_localvar` calls `checklimit(fs, …, MAXVARS, "local variables")`
-        // before recording the slot — luna counts active avars (skip global
-        // markers and any pending vararg pseudo) to model the same cap.
-        // 5.5 checks it in `adjustlocalvars`, once it has registered the
-        // variable's debug record
-        let active = self.active_locals();
+        // up to 5.4 PUC `new_localvar` checks the cap before recording the
+        // slot, counting every variable declared; 5.5 checks it in
+        // `adjustlocalvars`, once it has registered the variable's debug
+        // record, against the registers the locals take
         let late = self.version >= LuaVersion::Lua55;
-        if !late && active >= MAX_LOCALS {
+        if !late && self.lr().avars.len() as u32 >= MAX_LOCALS {
             return Err(self.limit_err("local variables", MAX_LOCALS));
         }
         let start_pc = self.lr().code.len() as u32;
@@ -98,7 +96,7 @@ impl<'a> Compiler<'a> {
                 self.puc_state.pending += 1;
             } else {
                 self.log(super::puc_log::PEv::LocVar);
-                if late && active >= MAX_LOCALS {
+                if late && self.active_locals() > MAX_LOCALS {
                     return Err(self.limit_err("local variables", MAX_LOCALS));
                 }
             }
