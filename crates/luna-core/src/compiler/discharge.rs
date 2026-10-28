@@ -58,11 +58,12 @@ impl Compiler<'_> {
     fn discharge_to_reg(&mut self, e: Exp, reg: u32) -> Result<(), SyntaxError> {
         match e {
             Exp::Nil => {
-                // PUC 5.1 `luaK_nil`: at function start a register above the
-                // active variables is nil already
+                // PUC 5.1 `luaK_nil`: at function start (no jump target yet)
+                // a register above the active variables is nil already
                 let fresh = || {
                     let lvl = self.lr();
                     lvl.code.is_empty()
+                        && lvl.last_target.is_none()
                         && lvl.locals.iter().all(|v| v.konst.is_some() || v.reg < reg)
                 };
                 if !(self.version == LuaVersion::Lua51 && fresh()) {
