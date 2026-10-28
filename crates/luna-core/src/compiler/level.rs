@@ -247,6 +247,11 @@ pub(crate) struct LevelBufs {
 }
 
 impl LevelBufs {
+    /// The instructions there is room for.
+    pub(super) fn code_capacity(&self) -> usize {
+        self.code.capacity()
+    }
+
     /// Vectors sized for a small function, past most of the regrowth steps.
     pub(super) fn new(mem: MemRef) -> LevelBufs {
         LevelBufs {

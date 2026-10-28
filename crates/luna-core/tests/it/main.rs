@@ -57,6 +57,7 @@ mod load_memory_errors;
 mod load_oom_paths;
 mod load_reader_stack;
 mod load_refused_in_turn;
+mod load_scratch_release;
 mod loop_trap;
 mod lua_error_structured;
 mod macro_lua;

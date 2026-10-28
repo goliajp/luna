@@ -77,7 +77,7 @@ impl Vm {
         // is held only by them), so a load that ran out of memory is run
         // once more after an emergency collection, as PUC's allocations
         // inside the parser retry; the source is all in `src`
-        self.protected_parse(|vm| {
+        let r = self.protected_parse(|vm| {
             match vm.guarded_load(|vm| vm.load_named_inner(src, chunkname, name)) {
                 Err(e) if e.is_memory() && src.len() <= vm.loader_input_budget => {
                     if !vm.emergency_collect() {
@@ -87,7 +87,16 @@ impl Vm {
                 }
                 r => r,
             }
-        })
+        });
+        self.release_huge_scratch();
+        r
+    }
+
+    /// A load is over: the parser's and the compiler's vectors are kept
+    /// for the next one, unless a huge chunk grew them.
+    pub(in crate::vm::exec) fn release_huge_scratch(&mut self) {
+        self.parse_scratch.release_huge();
+        self.compile_scratch.release_huge();
     }
 
     /// `f`, a load run inside `luaD_protectedparser`: `luaD_pcall` shrinks
