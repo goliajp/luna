@@ -8,6 +8,11 @@ fn load_reader() {
 }
 
 #[test]
+fn load_collects() {
+    check("load_collects");
+}
+
+#[test]
 fn load_binary() {
     check("load_binary");
 }
