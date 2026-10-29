@@ -190,7 +190,22 @@ impl<'a> Compiler<'a> {
 
     /// The key of `obj[k]` on this function's named vararg table (5.5,
     /// PUC's `VVARGIND`), which goes into a register whatever it is.
+    #[inline]
     pub(super) fn varg_key(
+        &mut self,
+        obj: ExprId,
+        t: TabRef,
+        ke: Exp,
+    ) -> Result<Option<KeyRef>, SyntaxError> {
+        // only a function with a named vararg table has one
+        if !self.lr().named_vararg {
+            return Ok(None);
+        }
+        self.named_varg_key(obj, t, ke)
+    }
+
+    #[inline(never)]
+    fn named_varg_key(
         &mut self,
         obj: ExprId,
         t: TabRef,
@@ -215,7 +230,8 @@ impl<'a> Compiler<'a> {
         let ast = self.ast;
         // a read `t[k]` / `t.n` of a virtual named vararg: index the stack
         // varargs directly (OP_VARGIDX), allocating no table.
-        if let Expr::Name(n) = ast.expr(obj)
+        if self.lr().named_vararg
+            && let Expr::Name(n) = ast.expr(obj)
             && self.vararg_local(self.nm(n)) == Varg::Virtual
         {
             let saved = self.lr().freereg;

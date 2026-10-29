@@ -182,14 +182,20 @@ impl Compiler<'_> {
     }
 
     /// The error [`Self::discharge_jpc`] met, raised at the next statement.
+    #[inline]
     pub(super) fn jump_error(&mut self) -> Result<(), SyntaxError> {
-        match self.l().jump_err.take() {
-            Some((e, at)) => {
-                self.err_tok = Some((at, e.msg.clone(), true));
-                Err(e)
-            }
-            None => Ok(()),
+        match self.lr().jump_err.is_some() {
+            true => Err(self.raise_jump_error()),
+            false => Ok(()),
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn raise_jump_error(&mut self) -> SyntaxError {
+        let (e, at) = self.l().jump_err.take().expect("a jump error");
+        self.err_tok = Some((at, e.msg.clone(), true));
+        e
     }
 
     /// PUC 5.2 / 5.3 `luaK_patchclose`: every jump of the list also closes
