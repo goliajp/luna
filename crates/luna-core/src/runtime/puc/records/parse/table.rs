@@ -42,6 +42,7 @@ impl PKey {
 
     /// The key of string `s` (a long string by its bytes, the first of
     /// them keyed standing for all, in `longs`).
+    #[inline]
     pub(crate) fn of_str(
         s: Gc<crate::runtime::LuaStr>,
         longs: &mut std::collections::HashMap<Box<[u8]>, Gc<crate::runtime::LuaStr>>,
@@ -49,6 +50,14 @@ impl PKey {
         if s.is_short() {
             return PKey::Ptr(s.as_ptr() as usize);
         }
+        Self::of_long(s, longs)
+    }
+
+    #[inline(never)]
+    fn of_long(
+        s: Gc<crate::runtime::LuaStr>,
+        longs: &mut std::collections::HashMap<Box<[u8]>, Gc<crate::runtime::LuaStr>>,
+    ) -> PKey {
         PKey::Ptr(longs.entry(s.as_bytes().into()).or_insert(s).as_ptr() as usize)
     }
 
