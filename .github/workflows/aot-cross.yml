@@ -236,7 +236,8 @@ jobs:
         run: |
           set -eu
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends wine lld-18 llvm-18 > /dev/null
+          # clang-cl is in clang-tools-18; the runner image is not relied on for any of them
+          sudo apt-get install -y --no-install-recommends wine clang-18 clang-tools-18 lld-18 llvm-18 > /dev/null
           # clang-cl, lld-link and llvm-lib carry no version suffix here
           echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
       - uses: actions/cache@v6
