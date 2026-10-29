@@ -54,7 +54,7 @@ impl Vm {
         // f's results sit where f was called (`callee_shift` above the
         // slot after the continuation): moved to that slot, writing `true`
         // at the continuation's makes `true, results…` contiguous
-        let mut callee = (i64::from(nc.func_slot) + 1 + i64::from(nc.kind.callee_shift())) as u32;
+        let callee = (i64::from(nc.func_slot) + 1 + i64::from(nc.kind.callee_shift())) as u32;
         let nret = self.top - callee;
         // 5.1's `luaD_call` checks for a collection when the call returns,
         // still inside the protection: what a finalizer raises there the
@@ -65,8 +65,8 @@ impl Vm {
             self.host_pcall_popped();
         }
         self.cont_popped(false, nc.kind.is_level());
-        if self.hook.ret && nc.kind.ci_top() != 0 && self.ret_hook_armed() {
-            callee = self.protected_returned(nc, callee, nret)?;
+        if self.hook.ret {
+            self.protected_returned(nc, callee, nret)?;
         }
         if callee != nc.func_slot + 1 {
             // the results may end past the stack's length (`top` runs ahead

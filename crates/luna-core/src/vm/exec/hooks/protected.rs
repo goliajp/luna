@@ -50,10 +50,10 @@ impl Vm {
         r
     }
 
-    /// The `pcall` / `xpcall` of `nc` (one Lua called) returned the `nret`
+    /// The `pcall` / `xpcall` of `nc`, if Lua called it, returned the `nret`
     /// results at `callee`: its return hook, the results with `true`
-    /// below them as PUC's C function returns them. Where the results are
-    /// now.
+    /// below them as PUC's C function returns them; the results are back
+    /// at `callee` after it.
     #[cold]
     #[inline(never)]
     pub(in crate::vm::exec) fn protected_returned(
@@ -61,18 +61,23 @@ impl Vm {
         nc: NativeCont,
         callee: u32,
         nret: u32,
-    ) -> Result<u32, LuaError> {
-        let mut callee = callee;
-        // 5.1's `pcall` puts `true` where its function was
-        if callee == nc.func_slot + 1 {
-            self.grow_stack((callee + 1 + nret) as usize)?;
-            let (from, to) = (callee as usize, callee as usize + 1);
-            self.stack.copy_within(from..from + nret as usize, to);
-            callee += 1;
+    ) -> Result<(), LuaError> {
+        if nc.kind.ci_top() == 0 || !self.ret_hook_armed() {
+            return Ok(());
         }
-        self.stack[callee as usize - 1] = Value::Bool(true);
-        self.protected_return_hook(nc, callee - 1, nret + 1)?;
-        Ok(callee)
+        // 5.1's `pcall` puts `true` where its function was
+        let at = if callee == nc.func_slot + 1 {
+            callee + 1
+        } else {
+            callee
+        };
+        let (from, to, n) = (callee as usize, at as usize, nret as usize);
+        self.grow_stack(to + n)?;
+        self.stack.copy_within(from..from + n, to);
+        self.stack[to - 1] = Value::Bool(true);
+        let r = self.protected_return_hook(nc, at - 1, nret + 1);
+        self.stack.copy_within(to..to + n, from);
+        r
     }
 
     /// The `pcall` / `xpcall` of `nc` (one Lua called) caught `err`: its

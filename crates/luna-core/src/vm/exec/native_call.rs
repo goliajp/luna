@@ -93,7 +93,17 @@ impl Vm {
         func_slot: u32,
         nargs: u32,
         nresults: i32,
+        ccmt: u8,
     ) -> Option<Result<bool, LuaError>> {
+        // `pcall` and `xpcall` are C functions of PUC's: the call hook runs
+        // for them before they call
+        if self.hook.call
+            && matches!(nc.kind, NativeKind::Pcall | NativeKind::Xpcall)
+            && self.call_hook_armed()
+            && let Err(e) = self.protected_call_hook(nc, func_slot, nargs, ccmt)
+        {
+            return Some(Err(e));
+        }
         match nc.kind {
             NativeKind::Async => {
                 // Async-marked NativeClosure.
