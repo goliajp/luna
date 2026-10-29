@@ -20,6 +20,13 @@ pub(super) struct Fs {
     pub(super) kbase: usize,
 }
 
+impl Fs {
+    /// The number of its table up to 5.2 (see `Replay::table_id`).
+    pub(super) fn table_id(&self) -> u32 {
+        self.shape as u32 + 1
+    }
+}
+
 /// Where the replay of a load that failed stops: before the events at
 /// token `events` (with `ended`, after those at it that finish what ended
 /// before it: PUC finishes them seeing the token, then fails on it), after
@@ -154,8 +161,9 @@ pub(super) struct Replay<'s> {
     /// a distinct key for each object 5.5 anchors that luna has no object
     /// for
     pub(super) anchors: usize,
-    /// the long strings the scanner made that no constant has taken yet
-    pub(super) longs: Vec<Gc<crate::runtime::LuaStr>>,
+    /// the long strings the scanner made that no constant has taken yet,
+    /// each with the table that keys it (see [`Replay::table_id`])
+    pub(super) longs: Vec<(Gc<crate::runtime::LuaStr>, u32)>,
     /// what the reader of a load read piece by piece counted, and the token
     /// whose scan called it (-1: before the parse starts)
     pub(super) splices: std::collections::VecDeque<(i64, crate::runtime::puc::Deferred)>,

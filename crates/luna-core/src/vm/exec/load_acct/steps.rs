@@ -42,7 +42,7 @@ impl Vm {
         // gc-verify: the long strings the scanner made and no constant took
         // are held by its table, so the step left them
         #[cfg(feature = "gc-verify")]
-        for l in &r.longs {
+        for (l, _) in &r.longs {
             assert!(
                 self.heap.holds_live(l.header()),
                 "a scanned long string was freed"
