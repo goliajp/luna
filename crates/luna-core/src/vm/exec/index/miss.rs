@@ -7,19 +7,28 @@ use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
 use fast_arith::{raw_gc, raw_tag};
 
+/// Where [`Vm::index_op_miss`] finds a read's operands.
+pub(in super::super) const MISS_BY_OP: u8 = 0;
+pub(in super::super) const MISS_RR: u8 = 1;
+pub(in super::super) const MISS_RK: u8 = 2;
+pub(in super::super) const MISS_SELF: u8 = 3;
+
 impl Vm {
-    /// The rest of a `GetI` or `GetTabUp` read the fast loop's probe could
-    /// not finish: the operands are decoded again from `inst` and the frame
-    /// here (PUC `luaV_finishget` after `luaV_fastget`), so that none of
-    /// them stays live across the probe's own out-of-line calls in the loop,
-    /// where they would push the loop's state out of registers. The other
-    /// reads go on through [`Self::index_miss_at`] from their arm.
+    /// The rest of a read the fast loop's probe could not finish: the
+    /// operands are decoded again from `inst` and the frame here (PUC
+    /// `luaV_finishget` after `luaV_fastget`), so that none of them stays
+    /// live across the probe in the loop, where they would push the loop's
+    /// state out of registers. `AT` says where the operands are:
+    /// [`MISS_BY_OP`] by the opcode (`GetI`, `GetTabUp`, `GetGlobal`,
+    /// `GetTabUpR`); the object and the key in place, `R[B][R[C]]`
+    /// ([`MISS_RR`], `GetTable`), `R[B][K[C]]` ([`MISS_RK`], `GetTableK`,
+    /// `GetField`) or `SelfOp`'s ([`MISS_SELF`]).
     ///
     /// # Safety
     /// `fr` points at the running frame, and `regs` / `kptr` at its
     /// register window and its proto's constants.
     #[inline(never)]
-    pub(in super::super) unsafe fn index_op_miss(
+    pub(in super::super) unsafe fn index_op_miss<const AT: u8>(
         &mut self,
         inst: Inst,
         regs: *const Value,
@@ -30,6 +39,17 @@ impl Vm {
         // the operands inside the register window and the constants
         let (t, key, dst) = unsafe {
             let dst = (*fr).base + inst.a();
+            if AT != MISS_BY_OP {
+                let (pt, pk) = match AT {
+                    MISS_RR => (regs.add(inst.b() as usize), regs.add(inst.c() as usize)),
+                    MISS_RK => (regs.add(inst.b() as usize), kptr.add(inst.c() as usize)),
+                    _ => (
+                        regs.add(inst.a() as usize + 1),
+                        super::fast::self_key(regs as *mut Value, kptr, inst),
+                    ),
+                };
+                return self.index_miss_at(pt, pk, dst);
+            }
             match inst.op() {
                 Op::GetI => (
                     *regs.add(inst.b() as usize),
@@ -63,9 +83,7 @@ impl Vm {
 
     /// The rest of a table read with the object and the key in place (a
     /// register, or a constant for the key): a string key goes straight on
-    /// to the `__index` chain, the rest out of line. `GetTable`, `GetField`
-    /// and `SelfOp` call this from their arm, after the probe, with the
-    /// pointers worked out again from the instruction there.
+    /// to the `__index` chain, the rest out of line.
     ///
     /// # Safety
     /// `pt` and `pk` point at initialised values.

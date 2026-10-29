@@ -74,7 +74,7 @@ macro_rules! fast_arm_helper_macros {
         macro_rules! index_op_miss {
             () => {
                 // SAFETY: `fr`, `regs` and `kptr` are the running frame's
-                unsafe { $vm.index_op_miss($inst, $regs, $kptr, $fr) }
+                unsafe { $vm.index_op_miss::<{ index::miss::MISS_BY_OP }>($inst, $regs, $kptr, $fr) }
             };
         }
         macro_rules! newindex_op_miss {
@@ -83,9 +83,10 @@ macro_rules! fast_arm_helper_macros {
                 unsafe { $vm.newindex_op_miss($inst, $fr) }
             };
         }
-        // `R[A] := R[B][*pk]` for a key in a register or a constant
+        // `R[A] := R[B][*pk]` for a key in a register or a constant, `at`
+        // saying which for the miss (see `Vm::index_op_miss`)
         macro_rules! get_arm {
-            ($d pk:expr, $d probe:ident) => {{
+            ($d pk:expr, $d probe:ident, $d at:expr) => {{
                 let pt = $regs.wrapping_add($inst.b() as usize);
                 let pk: *const Value = $d pk;
                 // SAFETY: a register and a register or constant of the
@@ -94,10 +95,8 @@ macro_rules! fast_arm_helper_macros {
                     next!()
                 }
                 save!();
-                let dst = base!() + $inst.a();
-                // SAFETY: as above; the pointers are worked out again
-                // here so that none of them stays live across the probe
-                unsafe { $vm.index_miss_at($regs.wrapping_add($inst.b() as usize), $d pk, dst) }?;
+                // SAFETY: `fr`, `regs` and `kptr` are the running frame's
+                unsafe { $vm.index_op_miss::<{ $d at }>($inst, $regs, $kptr, $fr) }?;
                 resume_same!()
             }};
         }
