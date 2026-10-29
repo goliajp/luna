@@ -272,3 +272,17 @@ pub unsafe extern "C" fn luna_jit_str_sub(s: i64, i: i64, j: i64) -> i64 {
     // allocating helpers do
     luna_core::__private::str_sub(vm, s, i, j).map_or(0, |r| r.as_ptr() as i64)
 }
+
+/// [`luna_jit_str_sub`] for 5.1 and 5.2, which check for a collection
+/// before the string is made: 0 without a deopt when one is due.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread; `s` is a live string.
+// SAFETY: no other item in the link is named `luna_jit_str_sub_checked`: only this crate
+// defines `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_str_sub_checked(s: i64, i: i64, j: i64) -> i64 {
+    // SAFETY: as for `luna_jit_str_sub`
+    let (vm, s) = unsafe { (current_jit_vm(), str_arg(s)) };
+    luna_core::__private::str_sub_checked(vm, s, i, j).map_or(0, |r| r.as_ptr() as i64)
+}
