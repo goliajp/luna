@@ -124,9 +124,10 @@ impl Vm {
 
     /// A plain native called from the fast loop (PUC `precallC`): what
     /// `begin_call` does for one, without the call and return hooks, which
-    /// the fast loop runs without, and staying in the calling frame.
+    /// the fast loop runs without, and staying in the calling frame. `PRE`
+    /// as for [`Vm::push_lua_frame_fast`].
     #[inline(never)]
-    pub(super) fn call_native_plain(
+    pub(super) fn call_native_plain<const PRE: bool>(
         &mut self,
         nc: Gc<crate::runtime::NativeClosure>,
         func_slot: u32,
@@ -136,7 +137,7 @@ impl Vm {
         // what comes before and after the call are functions of their own:
         // in an unoptimised build their locals are then off the stack while
         // the native runs, which a chain of resumes repeats on every level
-        self.enter_native_plain(nc, func_slot, nargs, nresults)?;
+        self.enter_native_plain::<PRE>(nc, func_slot, nargs, nresults)?;
         // no guard here: a panic unwinds to `exec_with`, which raises it as
         // this native's error (see `Vm::unguarded_native_panic`)
         let result = (nc.f)(self, func_slot, nargs);
@@ -145,7 +146,7 @@ impl Vm {
 
     /// `call_native_plain` up to the call.
     #[cfg_attr(luna_hot, inline(always))]
-    fn enter_native_plain(
+    fn enter_native_plain<const PRE: bool>(
         &mut self,
         nc: Gc<crate::runtime::NativeClosure>,
         func_slot: u32,
@@ -167,7 +168,11 @@ impl Vm {
             self.frames.len(),
             ccmt,
         ))?;
-        self.precall_checkpoint(func_slot + 1 + nargs)
+        // only 5.2 checks here
+        if PRE {
+            self.precall_checkpoint(func_slot + 1 + nargs)?;
+        }
+        Ok(())
     }
 
     /// `call_native_plain` once the native returned `result`.

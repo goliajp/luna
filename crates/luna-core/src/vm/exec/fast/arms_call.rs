@@ -88,7 +88,7 @@ macro_rules! fast_call_arms {
                     };
                     if let Some(callee) = lua {
                         let n = nargs.unwrap_or_else(|| $vm.top - (abs + 1));
-                        if let Some(nf) = $vm.push_lua_frame_fast(callee, abs, n, wanted) {
+                        if let Some(nf) = $vm.push_lua_frame_fast::<DBL>(callee, abs, n, wanted) {
                             $fr = nf;
                             frames!()
                         }
@@ -96,7 +96,7 @@ macro_rules! fast_call_arms {
                         && nc.kind == NativeKind::Plain
                     {
                         let n = nargs.unwrap_or_else(|| $vm.top - (abs + 1));
-                        $vm.call_native_plain(nc, abs, n, wanted)?;
+                        $vm.call_native_plain::<DBL>(nc, abs, n, wanted)?;
                         resume!()
                     }
                 }
