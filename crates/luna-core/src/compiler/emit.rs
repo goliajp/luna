@@ -166,8 +166,13 @@ impl<'a> Compiler<'a> {
     }
 
     /// The constant of the tree's string (or name) `s`: each entry of the
-    /// chunk's names is interned on the heap once per load.
+    /// chunk's names is interned on the heap once per load (a long one
+    /// once per [`Compiler::long_scope`]).
     pub(super) fn sym_const(&mut self, s: ast::Sym) -> u32 {
+        if self.long_scope() != 0 && self.sb(s).len() > crate::runtime::string::MAX_SHORT_LEN {
+            let g = self.long_str(self.sb(s));
+            return self.const_idx(Value::Str(g));
+        }
         let i = s.0 as usize;
         let g = match self.strs.syms[i] {
             Some(g) => g,
@@ -193,14 +198,29 @@ impl<'a> Compiler<'a> {
 
     pub(super) fn long_str(&mut self, bytes: &[u8]) -> Gc<LuaStr> {
         let h = word_hash(bytes);
-        if let Some(s) = self.str_cache.find_with(h, |k| k.as_bytes() == bytes) {
+        let scope = self.long_scope();
+        if let Some(s) = self
+            .str_cache
+            .find_with(h, |&(sc, k)| sc == scope && k.as_bytes() == bytes)
+        {
             return s;
         }
         let s = self.heap.try_intern(bytes).unwrap_or_else(|o| o.fail());
         self.str_cache
-            .insert_hashed(h, s, s)
+            .insert_hashed(h, (scope, s), s)
             .unwrap_or_else(|o| o.fail());
         s
+    }
+
+    /// Which functions share a long string constant: 5.2's scanner keys
+    /// it in each function's own table, so each function has its own
+    /// string (the function's number plus one); from 5.3 the chunk's
+    /// single table keys one for the whole chunk (0).
+    pub(super) fn long_scope(&self) -> u32 {
+        match self.version {
+            LuaVersion::Lua52 => self.lr().seq + 1,
+            _ => 0,
+        }
     }
 
     pub(super) fn load_const(&mut self, reg: u32, c: u32) {

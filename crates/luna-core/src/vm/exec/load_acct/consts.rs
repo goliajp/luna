@@ -10,29 +10,57 @@ impl Vm {
     /// The long names PUC's scanner made that its prototypes keep as the
     /// names of local variables and upvalues: their count moves to the
     /// strings luna's prototypes hold for them (`hold_puc_names`), which
-    /// live as long as PUC's. 5.2 keeps one per function (each has its own
-    /// table of names), later dialects one per chunk; the scanner's other
-    /// copies are garbage.
+    /// live as long as PUC's. From 5.3 the chunk keeps one per name (the
+    /// scanner's single table of names); the scanner's other copies are
+    /// garbage. 5.2 moves each function's as it closes
+    /// ([`Vm::replay_close_longs`]).
     pub(super) fn replay_long_names(&mut self, r: &mut Replay, p: Gc<crate::runtime::Proto>) {
-        if r.rec.is_some() {
+        if r.rec.is_some() || r.d == Dialect::L52 {
             return;
         }
-        let per_chunk = r.d != Dialect::L52;
         let mut moved: Vec<Gc<LuaStr>> = Vec::new();
         let mut protos = vec![p];
         while let Some(p) = protos.pop() {
             for &held in p.puc_names.borrow().iter() {
-                if per_chunk && moved.iter().any(|m| m.as_bytes() == held.as_bytes()) {
+                if moved.iter().any(|m| m.as_bytes() == held.as_bytes()) {
                     continue;
                 }
-                if let Some(i) = r.longs.iter().position(|l| l.as_bytes() == held.as_bytes()) {
+                if let Some(i) = r
+                    .longs
+                    .iter()
+                    .position(|(l, _)| l.as_bytes() == held.as_bytes())
+                {
                     moved.push(held);
-                    let ss = r.longs.swap_remove(i);
+                    let (ss, _) = r.longs.swap_remove(i);
                     self.heap.acct_move_long(ss, held);
                 }
             }
             protos.extend(p.protos.iter().copied());
         }
+    }
+
+    /// 5.2's `close_func` pops the function's table (`id`): of the long
+    /// strings it keys, the names prototype `p` keeps move their count to
+    /// luna's strings, as [`Vm::replay_long_names`] does, and the others
+    /// are garbage, PUC's and luna's alike, so the replay lets them go.
+    pub(super) fn replay_close_longs(
+        &mut self,
+        r: &mut Replay,
+        id: u32,
+        p: Option<Gc<crate::runtime::Proto>>,
+    ) {
+        if let Some(p) = p {
+            for &held in p.puc_names.borrow().iter() {
+                let mine = |(l, t): &(Gc<LuaStr>, u32)| *t == id && l.as_bytes() == held.as_bytes();
+                if let Some(i) = r.longs.iter().position(mine) {
+                    let (ss, _) = r.longs.swap_remove(i);
+                    if r.rec.is_none() {
+                        self.heap.acct_move_long(ss, held);
+                    }
+                }
+            }
+        }
+        r.longs.retain(|&(_, t)| t != id);
     }
 
     /// A new constant (`addk`): its entry under PUC's key, in the table
@@ -67,13 +95,18 @@ impl Vm {
         Ok(())
     }
 
-    /// A long string constant is the string the scanner made (luna's
-    /// compiler made its own): the count moves to luna's.
+    /// A long string constant is the string the scanner made in the
+    /// function's table (luna's compiler made its own): the count moves to
+    /// luna's.
     fn take_scanned_long(&mut self, r: &mut Replay, v: Value) {
+        let id = r.table_id();
         if let Value::Str(cs) = v
-            && let Some(i) = r.longs.iter().position(|l| l.as_bytes() == cs.as_bytes())
+            && let Some(i) = r
+                .longs
+                .iter()
+                .position(|&(l, t)| t == id && l.as_bytes() == cs.as_bytes())
         {
-            let ss = r.longs.swap_remove(i);
+            let (ss, _) = r.longs.swap_remove(i);
             if r.rec.is_none() {
                 self.heap.acct_move_long(ss, cs);
             }

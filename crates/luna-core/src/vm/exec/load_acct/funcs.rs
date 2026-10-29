@@ -114,6 +114,9 @@ impl Vm {
                 anchored?;
             }
         }
+        if d == Dialect::L52 {
+            self.replay_close_longs(r, f.table_id(), closed);
+        }
         if d == Dialect::L51
             && let Some(parent) = r.fs.last_mut()
         {

@@ -199,8 +199,9 @@ struct Compiler<'a> {
     /// string literals anywhere in the chunk — short *or* long — share one
     /// object, so e.g. `string.format("%p", ...)` reports equal addresses for
     /// equal constants. The runtime interner only dedups short strings, so
-    /// only long ones are kept here.
-    str_cache: LMap<Gc<LuaStr>, Gc<LuaStr>>,
+    /// only long ones are kept here, under the scope that shares them (see
+    /// [`Compiler::long_scope`]).
+    str_cache: LMap<(u32, Gc<LuaStr>), Gc<LuaStr>>,
     /// the left spines of the expressions being compiled (see [`Self::expr`])
     spine: LVec<expr::Pending>,
     /// an assignment's targets, taken while one is compiled

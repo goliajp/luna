@@ -30,7 +30,7 @@ impl Replay<'_> {
         if held.ptr_eq(s) || !self.scan_table(kind).is_some_and(|t| t.contains(k)) {
             return s;
         }
-        self.longs.retain(|l| !l.ptr_eq(s));
+        self.longs.retain(|(l, _)| !l.ptr_eq(s));
         match text {
             ScanText::Sym(sym) => self.syms[sym.0 as usize].0 = Some(held),
             ScanText::Reserved(k, _) => self.reserved[usize::from(k)].0 = Some(held),
@@ -40,9 +40,9 @@ impl Replay<'_> {
 
     /// A number for that table, other than 0: the innermost function's
     /// up to 5.2, the chunk's after.
-    fn table_id(&self) -> u32 {
+    pub(super) fn table_id(&self) -> u32 {
         match self.d {
-            Dialect::L51 | Dialect::L52 => self.fs.last().map_or(u32::MAX, |f| f.shape as u32 + 1),
+            Dialect::L51 | Dialect::L52 => self.fs.last().map_or(u32::MAX, Fs::table_id),
             _ => u32::MAX,
         }
     }
@@ -156,7 +156,7 @@ impl Vm {
             ScanText::Reserved(k, _) => r.reserved[usize::from(k)].0 = Some(s),
         }
         if bytes.len() > crate::runtime::string::MAX_SHORT_LEN && r.d != Dialect::L51 {
-            r.longs.push(s);
+            r.longs.push((s, r.table_id()));
         }
         Ok(s)
     }
