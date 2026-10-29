@@ -48,13 +48,20 @@ fn max_item(v: LuaVersion) -> usize {
 }
 
 pub(crate) fn s_format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    // 5.1's buffer keeps its strings on the stack: an error lets them go
-    if PRE && vm.heap.dialect() == crate::runtime::dialect::Dialect::L51 {
-        return vm.lib_scope(|vm| format::<PRE>(vm, fs, nargs));
+    // 5.1's buffer keeps its strings on the stack: an error lets them go.
+    // Every other way out leaves the stack as it found it (a 5.1 result
+    // takes the strings off as it joins them).
+    let m = vm.lib_roots.mark();
+    let at = m.at();
+    let r = format::<PRE>(vm, fs, nargs);
+    if PRE && r.is_err() {
+        vm.lib_roots.release(m);
     }
-    format::<PRE>(vm, fs, nargs)
+    debug_assert!(r.is_err() || vm.lib_roots.len() == at);
+    r
 }
 
+#[inline(always)]
 fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let f = argcheck::check_string(vm, a, 0)?;
