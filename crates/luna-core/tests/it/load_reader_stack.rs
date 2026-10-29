@@ -10,6 +10,7 @@
 //! are compared as a set; the objects are still checked to be keyed by
 //! themselves, and each constants table's entries in full.
 
+use super::panic_free::panic_free;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -36,7 +37,8 @@ fn dialect(name: &str) -> LuaVersion {
 fn listing(script: &str, v: LuaVersion, seed: u32) -> String {
     let mut vm = Vm::new_minimal_with_hash_seed(v, seed);
     vm.open_all_libs().expect("libraries");
-    let out = match vm.eval(script).expect("listing").first() {
+    let r = panic_free("listing", || vm.eval(script));
+    let out = match r.expect("listing").first() {
         Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
         other => panic!("a listing, got {other:?}"),
     };
@@ -160,7 +162,8 @@ fn a_reader_makes_objects_with_finalizers() {
         LuaVersion::Lua55,
     ] {
         let mut vm = Vm::new(v);
-        let got = match vm.eval(SCRIPT).expect("script").first() {
+        let r = panic_free("script", || vm.eval(SCRIPT));
+        let got = match r.expect("script").first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             other => panic!("{v:?}: got {other:?}"),
         };
@@ -189,7 +192,7 @@ fn a_collection_in_a_reader_finds_what_it_made_live() {
         LuaVersion::Lua55,
     ] {
         let mut vm = Vm::new(v);
-        let got = vm.eval(SCRIPT).expect("script");
+        let got = panic_free("script", || vm.eval(SCRIPT)).expect("script");
         let four = matches!(got.first(), Some(Value::Int(4)))
             || matches!(got.first(), Some(Value::Float(f)) if *f == 4.0);
         assert!(four, "{v:?}: {got:?}");
