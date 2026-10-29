@@ -36,7 +36,9 @@ pub(crate) fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<L
 }
 
 /// [`str_sub`] in the interpreter, raising a memory error when the string
-/// cannot be made.
+/// cannot be made. Inlined into each build of `s_sub`: out of line it
+/// costs more than the copy.
+#[inline(always)]
 pub(crate) fn try_str_sub(
     vm: &mut Vm,
     s: Gc<LuaStr>,
