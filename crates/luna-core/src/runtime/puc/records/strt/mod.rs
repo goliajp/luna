@@ -38,7 +38,8 @@ pub(in crate::runtime) struct StrtSweep {
 
 impl StrtSweep {
     /// `dead` in bucket order, a bucket's strings in the order found: by
-    /// counting when the table is not much bigger than the list.
+    /// counting when the table is not much bigger than the list. Every
+    /// entry's bucket is below `buckets`.
     #[inline(never)]
     fn sort_dead(&mut self, buckets: u32) {
         let n = self.dead.len();
@@ -48,20 +49,31 @@ impl StrtSweep {
         }
         let counts = &mut self.counts;
         counts.clear();
-        counts.resize(buckets as usize + 1, 0);
+        counts.resize(buckets as usize, 0);
         for &(b, _) in &self.dead {
-            counts[b as usize + 1] += 1;
+            debug_assert!(b < buckets);
+            // SAFETY: `b < buckets`, the length of `counts`
+            unsafe { *counts.get_unchecked_mut(b as usize) += 1 };
         }
-        for i in 1..counts.len() {
-            counts[i] += counts[i - 1];
+        // each bucket's first place
+        let mut at = 0;
+        for c in counts.iter_mut() {
+            (*c, at) = (at, at + *c);
         }
         self.sorted.clear();
-        self.sorted.resize(n, (0, std::ptr::null_mut()));
+        self.sorted.reserve(n);
+        let out = self.sorted.as_mut_ptr();
         for &e in &self.dead {
-            let at = &mut counts[e.0 as usize];
-            self.sorted[*at as usize] = e;
-            *at += 1;
+            // SAFETY: `e.0 < buckets`; the places of the buckets' entries
+            // are the distinct indices below `n`, within the room reserved
+            unsafe {
+                let at = counts.get_unchecked_mut(e.0 as usize);
+                out.add(*at as usize).write(e);
+                *at += 1;
+            }
         }
+        // SAFETY: the loop wrote every index below `n`
+        unsafe { self.sorted.set_len(n) };
         std::mem::swap(&mut self.dead, &mut self.sorted);
     }
 }
@@ -76,6 +88,9 @@ impl Heap {
             return;
         }
         let size = self.puc.records.strt_size as u32;
+        // PUC's table sizes are powers of two
+        debug_assert!(size <= 1 || size.is_power_of_two());
+        let mask = size.max(1) - 1;
         let new_white = self.white();
         let mut cur = self.list_head();
         // SAFETY: the links of `all` lead to live objects; no object is
@@ -99,7 +114,7 @@ impl Heap {
                             _ if b.len() < 32 => Gc::from_ptr(cur as *mut LuaStr).stored_hash(),
                             _ => hash_52(b, self.seed()),
                         };
-                        self.puc.records.strt.dead.push((h % size.max(1), cur));
+                        self.puc.records.strt.dead.push((h & mask, cur));
                     }
                 }
                 cur = (*cur).next_obj();
@@ -179,6 +194,7 @@ impl Heap {
     /// buckets before it leave the count. Returns the bytes freed.
     pub(in crate::runtime::puc) fn sweep_strings_upto(&mut self, upto: i64) -> i64 {
         let before = self.puc.count.bytes as i64;
+        let new_white = self.white();
         while let Some(&(b, h)) = self.puc.records.strt.dead.get(self.puc.records.strt.next) {
             if i64::from(b) >= upto {
                 break;
@@ -188,7 +204,7 @@ impl Heap {
             // which comes after this one; a resurrected one is skipped
             unsafe {
                 let f = (*h).flags();
-                if !is_white(f) || f & self.white() != 0 {
+                if !is_white(f) || f & new_white != 0 {
                     continue;
                 }
                 (*h).sub |= SWEPT;
