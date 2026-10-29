@@ -60,7 +60,7 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     // room for the format and an item before the buffer regrows
     let mut out = vm.new_buf();
     vm.buf_reserve(&mut out, fmt.len() + cfmt::ITEM_MAX)?;
-    let mut b = PucBuffer::new(vm);
+    let mut b = PucBuffer::new_by::<PRE>(vm);
     let mut arg = 0u32;
     let mut i = 0;
     // the buffer's slot counts only when a callback runs or an error is
