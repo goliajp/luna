@@ -104,7 +104,7 @@ impl Vm {
                 jit_top: 0,
                 host_frames: 0,
                 host_ci_top: 0,
-                ci_hint: 0,
+                ci_hint: i32::MIN,
                 host_slots: 0,
                 meta_conts: 0,
                 host_conts: 0,

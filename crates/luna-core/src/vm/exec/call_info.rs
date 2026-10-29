@@ -26,7 +26,7 @@ impl Vm {
     /// push.
     #[inline(always)]
     pub(super) fn note_call_level(&mut self) {
-        if self.frames.len() as u32 > self.g.ci_hint {
+        if self.frames.len() as i32 > self.g.ci_hint {
             self.note_level_out_of_line();
         }
         self.assert_levels_counted();
@@ -80,7 +80,7 @@ impl Vm {
         } else {
             len.checked_add(self.g.ci_alloc - n)
         };
-        self.g.ci_hint = free.map_or(room, |h| h.min(room));
+        self.g.ci_hint = free.map_or(room, |h| h.min(room)) as i32;
     }
 
     /// PUC calls a C function one level above the running one, which luna

@@ -65,9 +65,11 @@ pub(crate) struct CallGuards {
     pub(crate) host_ci_top: u32,
     /// the frame count below which a Lua frame pushed needs no new
     /// `CallInfo` and has room in the frame stack (see
-    /// `Vm::note_call_level`): 0, worked out again at the next call, after
-    /// anything else that counts as a level changes
-    pub(crate) ci_hint: u32,
+    /// `Vm::note_call_level`): stale, worked out again at the next call,
+    /// after anything else that counts as a level changes. Stale is far
+    /// below any frame count, where the levels the natives still running
+    /// give back as they return leave it
+    pub(crate) ci_hint: i32,
     /// the stack slots the host holds below the main thread's
     /// (`host_entry_layout`): its C function and its arguments
     pub(crate) host_slots: u32,
@@ -83,4 +85,12 @@ pub(crate) struct CallGuards {
     /// PUC 5.2+: the `CallInfo`s the running thread has allocated besides
     /// its base one (see `call_info.rs`); `u32::MAX` in 5.1. Per-thread.
     pub(crate) ci_alloc: u32,
+}
+
+impl CallGuards {
+    /// The frame count bound made stale: the next push works it out again.
+    #[inline]
+    pub(crate) fn forget_ci_hint(&mut self) {
+        self.ci_hint = i32::MIN;
+    }
 }

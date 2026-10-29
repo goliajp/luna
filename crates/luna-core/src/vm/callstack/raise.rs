@@ -135,7 +135,7 @@ impl Vm {
         }
         let mem = self.is_new_memory_error(err);
         let (at, base) = self.relist_raisers(err);
-        self.g.ci_hint = 0;
+        self.g.forget_ci_hint();
         let catcher = self.nearest_catcher();
         let to_host = catcher.is_none() && self.current.is_none() && self.keep_error_traceback;
         let mut handled = false;

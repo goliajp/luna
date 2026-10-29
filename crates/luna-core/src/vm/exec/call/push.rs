@@ -53,7 +53,7 @@ impl Vm {
         // function a native calls back finds the stack shorter than its
         // frame on most calls: that room is made here, so the frame is
         // entered by the one copy of the code the common path runs
-        if at.need + nargs >= self.g.stack_last || self.frames.len() as u32 >= self.g.ci_hint {
+        if at.need + nargs >= self.g.stack_last || self.frames.len() as i32 >= self.g.ci_hint {
             return self.push_frame_after_room(cl, func_slot, nargs, nresults, from_c);
         }
         self.grow_stack(at.need as usize)?;
