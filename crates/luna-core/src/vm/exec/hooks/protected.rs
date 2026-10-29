@@ -5,8 +5,9 @@ use super::*;
 
 impl Vm {
     /// `pcall` / `xpcall` (`nc`) at `func_slot`, called from Lua with
-    /// `nargs` arguments: the call hook PUC's `luaD_precall` runs before
-    /// the C function, which is level 1 in it.
+    /// `nargs` arguments while a call hook is set: the call hook PUC's
+    /// `luaD_precall` runs before the C function, which is level 1 in it,
+    /// unless hooks are off.
     #[cold]
     #[inline(never)]
     pub(in crate::vm::exec) fn protected_call_hook(
@@ -16,6 +17,9 @@ impl Vm {
         nargs: u32,
         ccmt: u8,
     ) -> Result<(), LuaError> {
+        if !self.hook_armed() {
+            return Ok(());
+        }
         let depth = self.frames.len();
         self.push_native(crate::vm::callstack::NativeAct::new(
             nc, func_slot, nargs, depth, ccmt,

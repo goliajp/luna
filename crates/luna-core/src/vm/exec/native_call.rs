@@ -86,6 +86,9 @@ impl Vm {
     /// `stack[func_slot]` is `nc`, a native whose kind is not
     /// [`NativeKind::Plain`]. `None` when it is to be called like any other
     /// native after all (`pairs` without a `__pairs` to honour).
+    ///
+    /// Lua's `pcall` and `xpcall` only tail-call from here, so their path
+    /// saves no registers; the other kinds are in [`Vm::begin_rare_native`].
     #[inline(never)]
     pub(super) fn begin_special_native(
         &mut self,
@@ -95,15 +98,52 @@ impl Vm {
         nresults: i32,
         ccmt: u8,
     ) -> Option<Result<bool, LuaError>> {
-        // `pcall` and `xpcall` are C functions of PUC's: the call hook runs
-        // for them before they call
-        if self.hook.call
-            && matches!(nc.kind, NativeKind::Pcall | NativeKind::Xpcall)
-            && self.call_hook_armed()
-            && let Err(e) = self.protected_call_hook(nc, func_slot, nargs, ccmt)
-        {
-            return Some(Err(e));
+        // pcall/xpcall are yieldable: rather than calling the protected
+        // function through the Rust stack (which cannot be suspended), push
+        // a continuation frame and drive the call through the interpreter
+        // loop (PUC lua_pcallk). A yield inside it is preserved with the
+        // thread's saved frames. They are C functions of PUC's: the call
+        // hook runs for them before they call.
+        match nc.kind {
+            NativeKind::Pcall => {
+                if self.hook.call
+                    && let Err(e) = self.protected_call_hook(nc, func_slot, nargs, ccmt)
+                {
+                    return Some(Err(e));
+                }
+                Some(self.begin_pcall(func_slot, nargs, nresults, ProtectedBy::Lua))
+            }
+            // 5.1 `xpcall(f, err)` calls `f` with no arguments
+            NativeKind::Xpcall => {
+                if self.hook.call
+                    && let Err(e) = self.protected_call_hook(nc, func_slot, nargs, ccmt)
+                {
+                    return Some(Err(e));
+                }
+                let forward = self.version > LuaVersion::Lua51;
+                Some(self.begin_xpcall(
+                    func_slot,
+                    nargs,
+                    nresults,
+                    forward,
+                    false,
+                    ProtectedBy::Lua,
+                ))
+            }
+            _ => self.begin_rare_native(nc, func_slot, nargs, nresults),
         }
+    }
+
+    /// [`Vm::begin_special_native`] of the kinds other than Lua's `pcall`
+    /// and `xpcall`.
+    #[inline(never)]
+    fn begin_rare_native(
+        &mut self,
+        nc: Gc<crate::runtime::NativeClosure>,
+        func_slot: u32,
+        nargs: u32,
+        nresults: i32,
+    ) -> Option<Result<bool, LuaError>> {
         match nc.kind {
             NativeKind::Async => {
                 // Async-marked NativeClosure.
@@ -172,31 +212,11 @@ impl Vm {
                 // Value::Nil — never seen by user code.
                 Some(Err(LuaError(Value::Nil)))
             }
-            // pcall/xpcall are yieldable: rather than calling the
-            // protected function through the Rust stack (which cannot be
-            // suspended), push a continuation frame and drive the call
-            // through the interpreter loop (PUC lua_pcallk). A yield
-            // inside it is preserved with the thread's saved frames.
-            NativeKind::Pcall => {
-                Some(self.begin_pcall(func_slot, nargs, nresults, ProtectedBy::Lua))
-            }
             NativeKind::HostPcallInC => {
                 Some(self.begin_pcall(func_slot, nargs, nresults, ProtectedBy::HostInC))
             }
             NativeKind::HostPcall => {
                 Some(self.begin_pcall(func_slot, nargs, nresults, ProtectedBy::Host))
-            }
-            // 5.1 `xpcall(f, err)` calls `f` with no arguments
-            NativeKind::Xpcall => {
-                let forward = self.version > LuaVersion::Lua51;
-                Some(self.begin_xpcall(
-                    func_slot,
-                    nargs,
-                    nresults,
-                    forward,
-                    false,
-                    ProtectedBy::Lua,
-                ))
             }
             NativeKind::HostXpcallInC => Some(self.begin_xpcall(
                 func_slot,
@@ -222,6 +242,9 @@ impl Vm {
                 None
             }
             NativeKind::Plain => None,
+            NativeKind::Pcall | NativeKind::Xpcall => {
+                unreachable!("begin_special_native runs Lua's protected calls")
+            }
         }
     }
 }
