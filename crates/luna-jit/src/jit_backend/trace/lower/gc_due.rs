@@ -8,17 +8,16 @@ use luna_core::version::LuaVersion;
 
 /// Whether some op of the trace may check for a collection: an allocating
 /// op; in 5.1 an iterator call and the loop back to it; in 5.2 an inlined
-/// call; from 5.3 on a folded `string.sub`.
+/// call. A folded `string.sub` (from 5.3 on) learns it from its helper.
 fn may_check(pl: &Plan<'_>) -> bool {
     let d = pl.opts.dialect;
     let v51 = d == Some(LuaVersion::Lua51);
     let v52 = d == Some(LuaVersion::Lua52);
-    let sub = pl.math_folds.iter().any(|f| f.kind == FoldKind::StrSub);
     pl.record.ops.iter().any(|r| match r.inst.op() {
         Op::NewTable | Op::Closure | Op::Concat => true,
         Op::TForCall | Op::TForCall53 | Op::TForCall55 => v51,
         Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => v51,
-        Op::Call => v52 || sub,
+        Op::Call => v52,
         _ => false,
     })
 }
@@ -98,6 +97,26 @@ pub(super) fn gc_due_exit_as<E: Emit>(
         let due = call_gc_due(lw, check);
         due_exit(lw, pl, due, i, next_pc);
     });
+}
+
+/// [`gc_due_exit`] where the count has reached the due point when `reached`
+/// is not 0.
+pub(super) fn gc_due_exit_if<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    reached: Value,
+    i: usize,
+    next_pc: u32,
+) {
+    let (slow_blk, cont) = (lw.bcx.create_block(), lw.bcx.create_block());
+    lw.bcx.ins().brif(reached, slow_blk, &[], cont, &[]);
+    lw.bcx.switch_to_block(slow_blk);
+    lw.bcx.seal_block(slow_blk);
+    let due = call_gc_due(lw, pl.record.ops[i].pc);
+    due_exit(lw, pl, due, i, next_pc);
+    lw.bcx.ins().jump(cont, &[]);
+    lw.bcx.switch_to_block(cont);
+    lw.bcx.seal_block(cont);
 }
 
 /// Notes a step due at the check `check` names for whichever exit the

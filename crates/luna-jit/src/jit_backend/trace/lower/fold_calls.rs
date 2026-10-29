@@ -56,12 +56,17 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     // the fold's start and the interpreter makes the call
     let made = lw.bcx.ins().icmp_imm_s(IntCC::NotEqual, r, 0);
     guard!(lw, pl, made, oc.i, record.ops[fold.start_idx].pc);
-    lw.bcx.def_var(regs[a as usize], r);
     lw.current_kinds[off + a as usize] = RegKind::Str;
-    // 5.3 on check after `lua_pushlstring` pushed it
-    if !checks_before {
-        gc_due_exit(lw, pl, oc.i, oc.rop.pc + 1);
+    if checks_before {
+        lw.bcx.def_var(regs[a as usize], r);
+        return Some(());
     }
+    // 5.3 on check after `lua_pushlstring` pushed it, where the helper set
+    // the low bit
+    let reached = lw.bcx.ins().band_imm_s(r, 1);
+    let r = lw.bcx.ins().bxor(r, reached);
+    lw.bcx.def_var(regs[a as usize], r);
+    gc_due_exit_if(lw, pl, reached, oc.i, oc.rop.pc + 1);
     Some(())
 }
 
