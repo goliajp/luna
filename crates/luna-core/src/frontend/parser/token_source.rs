@@ -167,13 +167,26 @@ impl<'s> TokenSource<'s> {
 impl<'s> TokenSource<'s> {
     /// The next token written into `tok`, with the byte no token starts
     /// with and the token's name or literal; `tok` is left as it was on an
-    /// error.
+    /// error. `line` is set first to [`TokenSource::line`].
     #[inline]
-    pub(super) fn next_into(&mut self, tok: &mut LexTok) -> Result<(Option<u8>, Sym), SyntaxError> {
+    pub(super) fn next_into(
+        &mut self,
+        tok: &mut LexTok,
+        line: &mut u32,
+    ) -> Result<(Option<u8>, Sym), SyntaxError> {
         let l = match self {
-            TokenSource::Lexer(l) => return lexed_into(l, tok),
-            TokenSource::Stream(l) => return lexed_into(l, tok),
-            TokenSource::PreExpanded { .. } => self.next_token()?,
+            TokenSource::Lexer(l) => {
+                *line = l.line();
+                return lexed_into(l, tok);
+            }
+            TokenSource::Stream(l) => {
+                *line = l.line();
+                return lexed_into(l, tok);
+            }
+            TokenSource::PreExpanded { .. } => {
+                *line = self.line();
+                self.next_token()?
+            }
         };
         *tok = l.info;
         Ok((l.char, l.sym))
