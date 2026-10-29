@@ -150,6 +150,19 @@ impl PucBuffer {
         Ok(())
     }
 
+    /// The bytes a fresh buffer holds before anything it does allocates.
+    pub(crate) fn first_size(&self) -> usize {
+        self.size
+    }
+
+    /// The count of a fresh buffer that was not told of its additions
+    /// while they fit its first block (see [`PucBuffer::first_size`]): `n`
+    /// bytes, all of them still in that block.
+    pub(crate) fn set_count(&mut self, n: usize) {
+        debug_assert!(!self.boxed && self.start == 0 && n <= self.size);
+        self.n = n;
+    }
+
     /// The last `n` bytes taken off (`luaL_buffsub`).
     pub(crate) fn sub(&mut self, n: usize) {
         self.n -= n;
