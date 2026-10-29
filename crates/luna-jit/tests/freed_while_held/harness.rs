@@ -7,7 +7,7 @@ use std::alloc::{Layout, alloc, dealloc};
 use std::cell::RefCell;
 use std::ffi::c_void;
 
-use luna_core::__private::{VmJitState, panics_seen, watch_panics};
+use luna_core::__private::{VmJitState, panic_free};
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::runtime::Value;
 use luna_jit::runtime::mem::MemOwner;
@@ -87,9 +87,8 @@ pub(crate) fn run_with(
         vm.set_trace_tier_up_at(37);
     }
     setup(&mut vm);
-    watch_panics();
-    let panics = panics_seen();
-    let out = match vm.eval(source) {
+    // a native's panic, which a `pcall` may have taken as an error
+    let out = panic_free("the run", || match vm.eval(source) {
         Ok(r) => match r.first() {
             Some(Value::Int(i)) => i.to_string(),
             // 5.1's numbers are all floats
@@ -97,9 +96,7 @@ pub(crate) fn run_with(
             other => format!("{other:?}"),
         },
         Err(e) => format!("error: {}", vm.error_display(&e)),
-    };
-    // a native's panic, which a `pcall` may have taken as an error
-    assert_eq!(panics_seen(), panics, "a panic in the run");
+    });
     drop(vm);
     // SAFETY: made above; the Vm, its only user, is gone
     let held = unsafe { Box::from_raw(held) };

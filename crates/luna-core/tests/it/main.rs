@@ -79,7 +79,6 @@ mod open_running;
 mod open_upval_lifetimes;
 mod os_time_isdst;
 mod package_dirsep;
-mod panic_free;
 mod pointer_text;
 mod proto51_value;
 mod proto_stable_hash;
