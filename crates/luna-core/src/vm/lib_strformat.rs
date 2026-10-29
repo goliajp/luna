@@ -49,7 +49,10 @@ fn max_item(v: LuaVersion) -> usize {
 
 pub(crate) fn s_format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // 5.1's buffer keeps its strings on the stack: an error lets them go
-    vm.lib_scope(|vm| format::<PRE>(vm, fs, nargs))
+    if PRE && vm.heap.dialect() == crate::runtime::dialect::Dialect::L51 {
+        return vm.lib_scope(|vm| format::<PRE>(vm, fs, nargs));
+    }
+    format::<PRE>(vm, fs, nargs)
 }
 
 fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -61,6 +64,23 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     let mut out = vm.new_buf();
     vm.buf_reserve(&mut out, fmt.len() + cfmt::ITEM_MAX)?;
     let mut b = PucBuffer::new_by::<PRE>(vm);
+    // While the content, and the room asked for before an item, fit the
+    // buffer's first block, nothing the buffer does allocates and its count
+    // is the content's length: it is told only once that stops holding
+    // (`quick` cleared), from the length it had before that step.
+    let first = b.first_size();
+    let mut quick = true;
+    macro_rules! tell {
+        ($fits:expr, $before:expr, $step:expr) => {
+            if !(quick && $fits) {
+                if quick {
+                    quick = false;
+                    b.set_count($before);
+                }
+                $step;
+            }
+        };
+    }
     let mut arg = 0u32;
     let mut i = 0;
     // the buffer's slot counts only when a callback runs or an error is
@@ -75,22 +95,25 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
                 .position(|&b| b == b'%')
                 .map_or(fmt.len(), |k| i + k);
             vm.buf_push(&mut out, &fmt[i - 1..end])?;
-            b.add_chars(vm, &out, end - (i - 1))?;
+            let k = end - (i - 1);
+            tell!(out.len() <= first, out.len() - k, b.add_chars(vm, &out, k)?);
             i = end;
             continue;
         }
         // a '%' at the very end pairs with the string's terminating zero
         if fmt.get(i) == Some(&b'%') {
             vm.buf_push(&mut out, b"%")?;
-            b.add_chars(vm, &out, 1)?;
+            tell!(out.len() <= first, out.len() - 1, b.add_chars(vm, &out, 1)?);
             i += 1;
             continue;
         }
         if v >= LuaVersion::Lua52 {
-            b.prep(vm, &out, max_item(v))?;
+            let m = max_item(v);
+            tell!(out.len() + m <= first, out.len(), b.prep(vm, &out, m)?);
             // 5.4 on ask for more for a `%f`
             if v >= LuaVersion::Lua54 && item_conv(fmt, i) == b'f' {
-                b.prep(vm, &out, 110 + 308)?;
+                let m = 110 + 308;
+                tell!(out.len() + m <= first, out.len(), b.prep(vm, &out, m)?);
             }
         }
         arg += 1;
@@ -107,19 +130,22 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         };
         i = match item {
             Ok((i, Added::Value(s))) => {
-                b.add_value(vm, &out, s)?;
+                tell!(out.len() <= first, before, b.add_value(vm, &out, s)?);
                 i
             }
             Ok((i, Added::Chars)) => {
-                b.add_chars(vm, &out, out.len() - before)?;
+                let k = out.len() - before;
+                tell!(out.len() <= first, before, b.add_chars(vm, &out, k)?);
                 i
             }
             Ok((i, Added::Sized)) if v == LuaVersion::Lua51 => {
-                b.add_chars(vm, &out, out.len() - before)?;
+                let k = out.len() - before;
+                tell!(out.len() <= first, before, b.add_chars(vm, &out, k)?);
                 i
             }
             Ok((i, Added::Sized)) => {
-                b.add_size(out.len() - before);
+                let k = out.len() - before;
+                tell!(out.len() <= first, before, b.add_size(k));
                 i
             }
             Err(e) => {
@@ -131,6 +157,9 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     }
     if out.len() > crate::runtime::string::MAX_LEN {
         return Err(vm.rt_err("string length overflow"));
+    }
+    if quick {
+        b.set_count(out.len());
     }
     let s = b.finish::<PRE>(vm, &out)?;
     vm.recycle_buf(out);
@@ -153,6 +182,7 @@ fn byte_at(fmt: &[u8], i: usize) -> u8 {
 /// ≤5.3 `scanformat`: at most five flag bytes, two width digits, two
 /// precision digits; the next byte is the conversion, whatever it is.
 /// Returns the position of the conversion byte.
+#[inline]
 fn scanformat(vm: &mut Vm, fmt: &[u8], start: usize) -> Result<usize, LuaError> {
     let mut p = start;
     while fmt.get(p).is_some_and(|c| FLAGS.contains(c)) {
