@@ -93,12 +93,21 @@ impl Vm {
 
     /// The stack grown to `need` slots with `vals`, which the caller holds
     /// to put there, rooted meanwhile: growing may collect in an emergency.
-    #[cold]
+    #[inline]
     pub(crate) fn grow_stack_holding(
         &mut self,
         need: usize,
         vals: &[Value],
     ) -> Result<(), LuaError> {
+        if self.stack.len() >= need {
+            return Ok(());
+        }
+        self.grow_stack_holding_slow(need, vals)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow_stack_holding_slow(&mut self, need: usize, vals: &[Value]) -> Result<(), LuaError> {
         self.rooted(vals, |vm| vm.grow_stack(need))
     }
 }

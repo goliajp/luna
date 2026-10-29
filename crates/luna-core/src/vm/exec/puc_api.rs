@@ -74,15 +74,14 @@ impl Vm {
         // collection the checks run finds it (a table that just lost it as
         // its metatable holds it no more)
         let mt = [Value::Table(mt)];
-        let on_stack = self.native_on_top();
-        if on_stack {
-            self.native_push_vals(&mt)?;
+        if !self.native_on_top() {
+            return self
+                .rooted(&mt, |vm| vm.metafield_name_pushed(event))
+                .map(Some);
         }
-        let held: &[Value] = if on_stack { &[] } else { &mt };
-        let r = self.rooted(held, |vm| vm.metafield_name_pushed(event));
-        if on_stack {
-            self.native_pop(1);
-        }
+        self.native_push_vals(&mt)?;
+        let r = self.metafield_name_pushed(event);
+        self.native_pop(1);
         r.map(Some)
     }
 
