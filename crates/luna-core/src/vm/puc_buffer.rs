@@ -58,6 +58,25 @@ impl PucBuffer {
         }
     }
 
+    /// [`PucBuffer::new`] in code built for the rule `PRE` (see
+    /// `vm/rules.rs`): 5.1 and 5.2 make no box, so need no slot for one.
+    #[inline]
+    pub(crate) fn new_by<const PRE: bool>(vm: &mut Vm) -> PucBuffer {
+        if !PRE {
+            return PucBuffer::new(vm);
+        }
+        PucBuffer {
+            d: vm.heap.dialect(),
+            size: crate::vm::lib_io::BUFSIZ,
+            n: 0,
+            boxed: false,
+            ubox: None,
+            slot: None,
+            start: 0,
+            base: vm.lib_roots.mark(),
+        }
+    }
+
     /// `luaL_buffinitsize(sz)` (5.2+)
     pub(crate) fn with_size(vm: &mut Vm, sz: usize) -> Result<PucBuffer, LuaError> {
         let mut b = PucBuffer::new(vm);
