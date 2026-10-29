@@ -184,7 +184,13 @@ impl Vm {
         call_args.push(msgh);
         call_args.push(f);
         call_args.extend_from_slice(args);
-        let r = self.call_value_host_level_at(level, &call_args, 0);
+        // the call takes the slots from the bottom: what they held (`pmain`
+        // and its own values) and the handler stay live under it, as on
+        // PUC's stack, where 5.1 checks for a collection as the call returns
+        let held = [&saved[..], &[msgh]].concat();
+        let r = self.rooted(&held, |vm| {
+            vm.call_value_host_level_at(level, &call_args, 0)
+        });
         self.stack[..k].copy_from_slice(&saved);
         self.top = k as u32;
         r
