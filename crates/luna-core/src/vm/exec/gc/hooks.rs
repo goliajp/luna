@@ -16,6 +16,16 @@ pub(in super::super) use super::stress::Stress as StressState;
 pub(in super::super) struct StressState;
 
 impl Vm {
+    /// Changes when a checkpoint collects without the collector being due
+    /// (gc-stress); the same in the product.
+    #[inline(always)]
+    pub(in super::super) fn checkpoint_mark(&self) -> u64 {
+        #[cfg(feature = "gc-stress")]
+        return self.stress_mark();
+        #[cfg(not(feature = "gc-stress"))]
+        0
+    }
+
     /// A checkpoint: gc-trace writes it, gc-verify checks the live top
     /// cuts into no running Lua frame, gc-stress collects (true: the
     /// checkpoint is done).
