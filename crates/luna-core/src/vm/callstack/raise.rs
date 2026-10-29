@@ -12,7 +12,7 @@ use super::NativeAct;
 /// A native that raised the error in flight, and where it ran.
 #[derive(Clone, Copy)]
 pub(crate) struct ErroredNative {
-    act: NativeAct,
+    pub(super) act: NativeAct,
     err: Value,
 }
 
@@ -84,7 +84,16 @@ impl Vm {
     /// The natives recorded for `err` that were running at the top of the
     /// stack, innermost first.
     fn take_errored_natives(&mut self, err: Value) -> LVec<ErroredNative> {
-        let mut list = self.errored_natives.take();
+        let list = self.errored_natives.take();
+        self.raised_at_top(list, err)
+    }
+
+    /// Those of `list` that raised `err` at the top of the stack, or none.
+    pub(super) fn raised_at_top(
+        &self,
+        mut list: LVec<ErroredNative>,
+        err: Value,
+    ) -> LVec<ErroredNative> {
         let depth = self.frames.len() as u32;
         if !list
             .iter()
