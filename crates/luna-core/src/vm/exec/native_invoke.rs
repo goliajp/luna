@@ -222,6 +222,7 @@ impl Vm {
             // past the results: the hook runs above them (PUC `rethook`)
             let saved_off = self.running_natives.last().map_or(0, |act| act.top_off);
             if let Some(act) = self.running_natives.last_mut() {
+                act.raise_ci_top(0);
                 act.nargs = nargs + nret;
                 act.top_off = 0;
             }

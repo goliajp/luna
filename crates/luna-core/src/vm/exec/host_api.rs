@@ -57,7 +57,7 @@ impl Vm {
     pub(crate) fn reserve_native_room(&mut self, end: u32) {
         if self.running_natives.len() > self.natives_base {
             if let Some(a) = self.running_natives.last_mut() {
-                a.ci_top = a.ci_top.max(end);
+                a.raise_ci_top(end);
             }
         } else if self.current.is_none() {
             self.g.host_ci_top = self.g.host_ci_top.max(end);

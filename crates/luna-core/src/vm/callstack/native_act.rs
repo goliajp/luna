@@ -17,11 +17,9 @@ pub(crate) struct NativeAct {
     /// with its arguments, counted from the slot past them (see
     /// `Vm::native_push`); nothing is computed when it is pushed
     pub(crate) top_off: i32,
-    /// the slot past what PUC's `CallInfo` of the C function reserves
-    /// (`ci->top`): `LUA_MINSTACK` above its arguments, raised by the
-    /// room `lua_checkstack` grants it. A protected call's catch and the
-    /// collector shrink the stack to what the frames reserve.
-    pub(crate) ci_top: u32,
+    /// what `lua_checkstack` raised [`NativeAct::ci_top`] to; 0 until it
+    /// does, nothing computed on entry
+    ci_top_raised: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<NativeAct>() <= 32);
@@ -44,7 +42,7 @@ impl NativeAct {
             nargs,
             depth_ccmt,
             top_off: 0,
-            ci_top: func_slot + 1 + nargs + crate::vm::exec::stack_size::MIN_STACK,
+            ci_top_raised: 0,
         }
     }
 
@@ -57,6 +55,21 @@ impl NativeAct {
     /// The frames below it when it was entered.
     pub(crate) fn depth(&self) -> u32 {
         self.depth_ccmt & 0x00ff_ffff
+    }
+
+    /// The slot past what PUC's `CallInfo` of the C function reserves
+    /// (`ci->top`): `LUA_MINSTACK` above its arguments, raised by the room
+    /// `lua_checkstack` grants it. A protected call's catch and the
+    /// collector shrink the stack to what the frames reserve.
+    pub(crate) fn ci_top(&self) -> u32 {
+        let min = self.func_slot + 1 + self.nargs + crate::vm::exec::stack_size::MIN_STACK;
+        min.max(self.ci_top_raised)
+    }
+
+    /// `ci->top` raised to at least `end`; kept where it is while its
+    /// argument window changes.
+    pub(crate) fn raise_ci_top(&mut self, end: u32) {
+        self.ci_top_raised = self.ci_top().max(end);
     }
 
     /// `__call` metamethods resolved to reach it.

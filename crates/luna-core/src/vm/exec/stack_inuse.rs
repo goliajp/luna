@@ -31,7 +31,7 @@ fn thread_in_use(frames: &[CallFrame], top: u32, natives: &[NativeAct]) -> u32 {
             )
     };
     for a in natives.iter().filter(|a| !host_level(a)) {
-        lim = lim.max(a.ci_top);
+        lim = lim.max(a.ci_top());
     }
     lim + 2
 }
