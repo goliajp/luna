@@ -47,13 +47,16 @@ impl StrtSweep {
             self.dead.sort_by_key(|e| e.0);
             return;
         }
-        let counts = &mut self.counts;
-        counts.clear();
-        counts.resize(buckets as usize, 0);
+        // a power of two: masking a bucket keeps it in `counts`, which the
+        // compiler then sees without a bounds check
+        let m = (buckets as usize).max(1) - 1;
+        debug_assert!(buckets <= 1 || buckets.is_power_of_two());
+        self.counts.clear();
+        self.counts.resize(m + 1, 0);
+        let counts = &mut self.counts[..=m];
         for &(b, _) in &self.dead {
-            debug_assert!(b < buckets);
-            // SAFETY: `b < buckets`, the length of `counts`
-            unsafe { *counts.get_unchecked_mut(b as usize) += 1 };
+            debug_assert!(b < buckets.max(1));
+            counts[b as usize & m] += 1;
         }
         // each bucket's first place
         let mut at = 0;
@@ -61,19 +64,13 @@ impl StrtSweep {
             (*c, at) = (at, at + *c);
         }
         self.sorted.clear();
-        self.sorted.reserve(n);
-        let out = self.sorted.as_mut_ptr();
+        self.sorted.resize(n, (0, std::ptr::null_mut()));
+        let sorted = &mut self.sorted[..n];
         for &e in &self.dead {
-            // SAFETY: `e.0 < buckets`; the places of the buckets' entries
-            // are the distinct indices below `n`, within the room reserved
-            unsafe {
-                let at = counts.get_unchecked_mut(e.0 as usize);
-                out.add(*at as usize).write(e);
-                *at += 1;
-            }
+            let at = &mut counts[e.0 as usize & m];
+            sorted[*at as usize] = e;
+            *at += 1;
         }
-        // SAFETY: the loop wrote every index below `n`
-        unsafe { self.sorted.set_len(n) };
         std::mem::swap(&mut self.dead, &mut self.sorted);
     }
 }

@@ -24,7 +24,7 @@ public API) see [`security.md`](security.md) §5.
 | `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1802** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 250 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; nine more in `luna_core::__private`, which is not public API, see §5 |
-| **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
+| **`pub unsafe extern "C" fn`** | 210 | the C API (143), the `luna_jit_*` helpers compiled code calls (61, re-exported by `luna-jit`), the AOT entries (6); see §5 |
 | **`unsafe impl Send` / `Sync`** | 10 | see §5 |
 
 A "site" is a line matching `unsafe (\{|fn |impl |trait |extern )`,
@@ -57,7 +57,7 @@ quotes the pattern counts too.
 | | other | 1 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 66 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 54 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
-| `luna-jit-helpers` | | 185 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
+| `luna-jit-helpers` | | 189 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 8 | LLVM execution engines (one per compiled method or trace), `Send` for an engine compiled on the background compile thread, and the register-file GEPs |
 | | `tests/` | 34 | calling LLVM-compiled chunks |
 | `luna-runtime-helpers` | | 46 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
@@ -497,6 +497,17 @@ of a 5.1 closure) is marked so that its free is not counted either: the
 two accessors of that header flag hold a block each, and a text load
 keeps the tables PUC's parser fills, written through one block: 3 more in
 the heap and `vm/exec`. That is 1479, the ceiling now.
+
+Two `luna_jit_*` helpers were added in `luna-jit-helpers/src/guards.rs`,
+each a `pub unsafe extern "C" fn` whose body takes the current Vm (one
+block), as every helper does: `luna_jit_due_words`, which tells compiled
+code where the allocation count and the point a collection step falls
+due at lie, so that a check compares them inline and calls into the
+runtime only once the count has reached that point; and
+`luna_jit_str_sub_checked`, the `string.sub` of 5.1 and 5.2 traces,
+which check for a collection before the string is made, so that neither
+helper reads the dialect as it runs. 4 more in `luna-jit-helpers`; the
+tree's count stays at the ceiling, 1802, other sites having gone since.
 
 ## 5. Public `unsafe` surface
 
