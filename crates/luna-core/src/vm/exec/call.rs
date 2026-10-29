@@ -145,7 +145,10 @@ macro_rules! native_call {
         if nc.kind != NativeKind::Plain {
             // `pcall` and `xpcall` are C functions of PUC's: the call hook
             // runs for them before they call
-            if matches!(nc.kind, NativeKind::Pcall | NativeKind::Xpcall) && $vm.call_hook_armed() {
+            if $vm.hook.call
+                && matches!(nc.kind, NativeKind::Pcall | NativeKind::Xpcall)
+                && $vm.call_hook_armed()
+            {
                 $vm.protected_call_hook(nc, func_slot, nargs, tail_ccmt + chain as u8)?;
             }
             if let Some(r) = $vm.begin_special_native(nc, func_slot, nargs, nresults) {
