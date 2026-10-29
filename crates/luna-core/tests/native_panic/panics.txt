@@ -60,7 +60,7 @@ stack traceback:
 	panics.lua:31: in function <panics.lua:31>
 	[C]: in function 'xpcall'
 	panics.lua:80: in main chunk
-hook-events 3 return,call,call
+hook-events 5 return,call,call,return,call
 loop 2 false native panic: boomif
 loop-n 1499
 tfor 2 false native panic: boomiter
@@ -145,7 +145,7 @@ stack traceback:
 	panics.lua:31: in function <panics.lua:31>
 	[C]: in function 'xpcall'
 	panics.lua:80: in main chunk
-hook-events 3 return,call,call
+hook-events 5 return,call,call,return,call
 loop 2 false native panic: boomif
 loop-n 1499
 tfor 2 false native panic: boomiter
@@ -230,7 +230,7 @@ stack traceback:
 	panics.lua:31: in function <panics.lua:31>
 	[C]: in function 'xpcall'
 	panics.lua:80: in main chunk
-hook-events 3 return,call,call
+hook-events 5 return,call,call,return,call
 loop 2 false native panic: boomif
 loop-n 1499
 tfor 2 false native panic: boomiter
@@ -315,7 +315,7 @@ stack traceback:
 	panics.lua:31: in function <panics.lua:31>
 	[C]: in function 'xpcall'
 	panics.lua:80: in main chunk
-hook-events 3 return,call,call
+hook-events 5 return,call,call,return,call
 close-saw native panic: boom
 tbc 2 false native panic: boom
 loop 2 false native panic: boomif
@@ -402,7 +402,7 @@ stack traceback:
 	panics.lua:31: in function <panics.lua:31>
 	[C]: in global 'xpcall'
 	panics.lua:80: in main chunk
-hook-events 3 return,call,call
+hook-events 5 return,call,call,return,call
 close-saw native panic: boom
 tbc 2 false native panic: boom
 loop 2 false native panic: boomif
