@@ -10,9 +10,11 @@ impl Vm {
     /// hook and no trace JIT. The new frame, or `None`, having done nothing
     /// but clear registers of the callee's, to leave the call to
     /// `begin_call` (which grows a frame stack with no room left, where
-    /// running out of memory can be raised).
+    /// running out of memory can be raised). `PRE` is false for 5.3 on,
+    /// where neither the 5.2 call check nor 5.1's whole-window clear can
+    /// apply, so that the fast loop does not read the dialect for them.
     #[cfg_attr(luna_hot, inline(always))]
-    pub(super) fn push_lua_frame_fast(
+    pub(super) fn push_lua_frame_fast<const PRE: bool>(
         &mut self,
         cl: Gc<LuaClosure>,
         func_slot: u32,
@@ -32,13 +34,13 @@ impl Vm {
         }
         // 5.2 checks for a collection on every call: one due is
         // `begin_call`'s to make (and to log, in the trace)
-        if self.heap.rules().check_on_call() && !self.checkpoint_idle() {
+        if PRE && self.heap.rules().check_on_call() && !self.checkpoint_idle() {
             return None;
         }
         // as `push_frame`: missing parameters are nil, and 5.1 clears the
         // whole window
         let kept = nargs.min(p.num_params as u32);
-        let end = if self.version == LuaVersion::Lua51 {
+        let end = if PRE && self.version == LuaVersion::Lua51 {
             need
         } else {
             base as usize + p.num_params as usize
