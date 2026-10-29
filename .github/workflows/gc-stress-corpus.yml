@@ -3,7 +3,12 @@
 # freed (`gc_stress_corpus` in luna-core's tests): an object the runtime
 # holds only in a Rust local across such a point shows up as a freed
 # block written, as the fill in a fixture's output, or as a crash. One
-# job per dialect.
+# job per dialect. The same again with the collector's checks built in
+# (`gc-verify`), which find a dead value still rooted, a freed string a
+# load still holds and the like at the collection itself; any panic in a
+# run fails it. A dialect's compile limit fixture takes about half of
+# that time, so it runs in a job of its own. Then the luna command, with
+# both, running chunks one after another as lua.c does.
 
 name: gc-stress-corpus
 
@@ -39,3 +44,49 @@ jobs:
           cargo test --release -p luna-core --features gc-stress --test it --
           --ignored --exact gc_stress_corpus::the_corpus_reads_and_writes_nothing_freed
           --nocapture
+
+  corpus-verify:
+    name: gc-stress and gc-verify corpus (${{ matrix.dialect }} ${{ matrix.part }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dialect: ['5.1', '5.2', '5.3', '5.4', '5.5']
+        part: ['1010_', '!1010_']
+    timeout-minutes: 90
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run the dialect's fixtures
+        env:
+          LUNA_STRESS_CORPUS: ${{ matrix.dialect }}:${{ matrix.part }}
+        run: >-
+          cargo test --release -p luna-core --features gc-stress,gc-verify --test it --
+          --ignored --exact gc_stress_corpus::the_corpus_reads_and_writes_nothing_freed
+          --nocapture
+
+  command-verify:
+    name: the luna command with gc-stress and gc-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: gc_checkpoints
+        run: cargo test -p luna-jit --release --features gc-stress,gc-verify --test gc_checkpoints
