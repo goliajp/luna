@@ -16,7 +16,7 @@
 use std::path::Path;
 use std::sync::mpsc;
 
-use luna_core::__private::{panics_seen, watch_panics};
+use luna_core::__private::panics_in;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -30,18 +30,17 @@ fn run_one(file: &str) -> Result<(), String> {
     std::thread::Builder::new()
         .stack_size(16 << 20)
         .spawn(move || {
-            watch_panics();
             let mut vm = Vm::new(LuaVersion::Lua55);
             vm.set_global("_U", Value::Bool(true)).unwrap();
-            let r: Result<(), String> = match vm.load(&stripped, chunkname.as_bytes()) {
+            let (r, panics) = panics_in(|| match vm.load(&stripped, chunkname.as_bytes()) {
                 Ok(cl) => match vm.call_value(Value::Closure(cl), &[]) {
                     Ok(_) => Ok(()),
                     Err(e) => Err(format!("runtime: {:.300}", vm.error_text(&e))),
                 },
                 Err(e) => Err(format!("compile: {e}")),
-            };
+            });
             // a native's panic, which a `pcall` may have taken as an error
-            let r = match panics_seen() {
+            let r: Result<(), String> = match panics {
                 0 => r,
                 n => Err(format!("{n} panics in the run")),
             };

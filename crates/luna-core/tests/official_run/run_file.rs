@@ -6,7 +6,7 @@ use super::byte_diff::{
     run_official_on_puc,
 };
 use super::*;
-use luna_core::__private::{panics_seen, watch_panics};
+use luna_core::__private::panics_in;
 
 /// Lua snippet prepended to every PUC chunk. **MUST be newline-free** so
 /// reported source-line numbers (used by `error("…", level)` and the
@@ -84,16 +84,15 @@ pub(super) fn run_file(name: &str, version: LuaVersion) -> FileCoverage {
     std::thread::Builder::new()
         .stack_size(16 << 20)
         .spawn(move || {
-            watch_panics();
             let mut vm = new_vm(version, &label);
             configure_vm(&mut vm, &label);
             // compared with PUC built with MSVC, whose files luna then keeps
             if windows::recording(version, &label).is_some() {
                 vm.set_crt_text_mode(true);
             }
-            let r = run_chunk(&mut vm, &src, &label, version);
+            let (r, panics) = panics_in(|| run_chunk(&mut vm, &src, &label, version));
             // a native's panic, which a `pcall` may have taken as an error
-            let r = match panics_seen() {
+            let r = match panics {
                 0 => r,
                 n => Err(format!("{n} panics in the run")),
             };

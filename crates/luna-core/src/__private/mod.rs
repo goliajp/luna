@@ -27,7 +27,7 @@ pub use capi_state::VmCApiState;
 pub use capi_values::VmCApiValues;
 pub use fields::{CoroHostInternals, ProtoTraceInternals, TRACE_HEADS_NONE, VmJitState};
 pub use free::*;
-pub use panic_watch::{panics_seen, watch_panics};
+pub use panic_watch::{panic_free, panics_in};
 pub use runtime::*;
 pub use types::*;
 pub use vm_alloc::VmJitAlloc;

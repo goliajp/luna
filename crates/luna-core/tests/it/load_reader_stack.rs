@@ -10,7 +10,7 @@
 //! are compared as a set; the objects are still checked to be keyed by
 //! themselves, and each constants table's entries in full.
 
-use super::panic_free::panic_free;
+use luna_core::__private::panic_free;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
