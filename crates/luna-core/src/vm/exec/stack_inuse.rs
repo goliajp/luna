@@ -175,7 +175,7 @@ impl Vm {
         self.set_stack_size(sz.stack);
         self.g.frame_size = sz.frames51;
         self.g.ci_alloc = sz.ci;
-        self.g.ci_hint = 0;
+        self.g.forget_ci_hint();
     }
 
     /// PUC's collector visiting the running thread and the main thread it

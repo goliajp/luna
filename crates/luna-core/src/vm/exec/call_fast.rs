@@ -53,7 +53,7 @@ impl Vm {
         // a frame stack with no room left, a level with no `CallInfo`
         // counted yet or 5.1's array full (`CallGuards::ci_hint`, at most
         // the room)
-        if self.frames.len() as u32 >= self.g.ci_hint {
+        if self.frames.len() as i32 >= self.g.ci_hint {
             return None;
         }
         let frame = CallFrame::Lua(self.fresh_frame(cl, base, func_slot, nresults));

@@ -95,7 +95,7 @@ impl Vm {
         self.set_stack_size(c.stack_size);
         self.g.frame_size = c.frame_size;
         self.g.ci_alloc = c.ci_alloc;
-        self.g.ci_hint = 0;
+        self.g.forget_ci_hint();
         self.hook = c.hook;
         self.globals = c.globals;
         self.frames_resync(); // sync shadow to new Vec
@@ -123,7 +123,7 @@ impl Vm {
             n => n,
         };
         self.g.ci_alloc = m.ci_alloc;
-        self.g.ci_hint = 0;
+        self.g.forget_ci_hint();
         self.frames_resync(); // sync shadow to coro's frames
         self.g.meta_conts = m.meta_conts;
         self.g.host_conts = m.host_conts;

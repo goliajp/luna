@@ -130,7 +130,7 @@ impl Vm {
         let entry = self.jit.levels_base;
         // the levels below are entered; the deeper ones returned
         self.g.frames_native = entry + depth;
-        self.g.ci_hint = 0;
+        self.g.forget_ci_hint();
         self.g.jit_top = base + max;
         if self.jit_level_checks(base + nparams, max) {
             return Ok(None);

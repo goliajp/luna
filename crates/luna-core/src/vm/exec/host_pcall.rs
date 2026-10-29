@@ -103,7 +103,7 @@ impl Vm {
         args: &[Value],
     ) -> Result<Vec<Value>, LuaError> {
         let r = self.call_value(level, args);
-        self.g.ci_hint = 0;
+        self.g.forget_ci_hint();
         r
     }
 
@@ -117,7 +117,7 @@ impl Vm {
         self.nny += 1;
         let r = self.call_value_k_at(level, args, at);
         self.nny -= 1;
-        self.g.ci_hint = 0;
+        self.g.forget_ci_hint();
         r
     }
 

@@ -53,7 +53,7 @@ impl Vm {
             .acct_ci51(self.running_blocks(), self.g.frame_size, n);
         self.g.frame_size = n;
         // the frame count bound counts the array's size
-        self.g.ci_hint = 0;
+        self.g.forget_ci_hint();
     }
 
     /// PUC `luaD_checkstack` past the fast bound: the stack grows, or past

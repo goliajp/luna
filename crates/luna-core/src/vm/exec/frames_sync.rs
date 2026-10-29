@@ -219,7 +219,7 @@ impl Vm {
     #[cold]
     pub(super) fn host_pcall_popped(&mut self) {
         self.g.host_conts -= 1;
-        self.g.ci_hint = 0;
+        self.g.forget_ci_hint();
     }
 
     /// A continuation frame left the frame stack (`meta`: one of a
@@ -230,7 +230,7 @@ impl Vm {
     pub(super) fn cont_popped(&mut self, meta: bool, level: bool) {
         self.g.meta_conts -= u32::from(meta);
         if meta {
-            self.g.ci_hint = 0;
+            self.g.forget_ci_hint();
         }
         let depth = self.frames.len() as u32;
         if depth < self.g.stale_frames {

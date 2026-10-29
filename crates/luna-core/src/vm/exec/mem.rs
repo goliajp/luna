@@ -114,7 +114,7 @@ impl Vm {
         &mut self,
         act: crate::vm::callstack::NativeAct,
     ) -> Result<(), LuaError> {
-        if self.frames.len() as u32 >= self.g.ci_hint {
+        if self.frames.len() as i32 >= self.g.ci_hint {
             return self.push_native_counted(act);
         }
         if self.running_natives.len() == self.running_natives.capacity() {
@@ -132,7 +132,7 @@ impl Vm {
         &mut self,
         act: crate::vm::callstack::NativeAct,
     ) -> Result<(), LuaError> {
-        if self.frames.len() as u32 >= self.g.ci_hint {
+        if self.frames.len() as i32 >= self.g.ci_hint {
             return self.push_native_counted(act);
         }
         if self.running_natives.len() == self.running_natives.capacity() {

@@ -79,7 +79,7 @@ impl Vm {
                     for x in raised_by.iter().rev() {
                         self.running_natives.push_or_abort(x.act);
                     }
-                    self.g.ci_hint = 0;
+                    self.g.forget_ci_hint();
                 }
             }
         };
