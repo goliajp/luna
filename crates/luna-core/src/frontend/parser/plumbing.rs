@@ -5,10 +5,9 @@ use crate::frontend::error::NearKind;
 
 impl<'s> Parser<'s> {
     pub(super) fn advance(&mut self) -> Result<(), SyntaxError> {
-        self.last_line = self.lex.line();
         let prev_line = self.tok.line;
         match self.peeked.take() {
-            None => match self.lex.next_into(&mut self.tok) {
+            None => match self.lex.next_into(&mut self.tok, &mut self.last_line) {
                 Ok((char, sym)) => {
                     self.tok_char = char;
                     self.tok_sym = sym;
@@ -19,6 +18,7 @@ impl<'s> Parser<'s> {
                 }
             },
             Some(t) => {
+                self.last_line = self.lex.line();
                 self.tok_char = t.char;
                 self.tok_sym = t.sym;
                 self.tok = t.info;
