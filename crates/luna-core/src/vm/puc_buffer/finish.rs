@@ -6,28 +6,36 @@ use super::*;
 impl PucBuffer {
     /// `luaL_pushresult`: the string of `out`.
     #[inline(always)]
-    pub(crate) fn finish(self, vm: &mut Vm, out: &[u8]) -> Result<Gc<LuaStr>, LuaError> {
+    pub(crate) fn finish<const PRE: bool>(
+        self,
+        vm: &mut Vm,
+        out: &[u8],
+    ) -> Result<Gc<LuaStr>, LuaError> {
         match self.d {
             // every byte still in the C buffer: `emptybuffer` pushes them as
             // the one string, which `lua_concat(L, 1)` leaves as it is
             Dialect::L51 if self.n > 0 && vm.lib_roots.len() == self.base.at() => {
-                vm.api_check_before()?;
+                vm.api_check_before::<true>()?;
                 vm.alloc_str(&out[self.start..self.start + self.n])
             }
-            Dialect::L51 => self.finish_slow(vm, out),
+            Dialect::L51 => self.finish_slow::<true>(vm, out),
             _ if !self.boxed => {
-                vm.api_check_before()?;
+                vm.api_check_before::<PRE>()?;
                 let r = vm.alloc_str(out)?;
-                vm.api_check_after(Value::Str(r))?;
+                vm.api_check_after::<PRE>(Value::Str(r))?;
                 Ok(r)
             }
-            _ => self.finish_slow(vm, out),
+            _ => self.finish_slow::<PRE>(vm, out),
         }
     }
 
     #[cold]
     #[inline(never)]
-    fn finish_slow(mut self, vm: &mut Vm, out: &[u8]) -> Result<Gc<LuaStr>, LuaError> {
+    fn finish_slow<const PRE: bool>(
+        mut self,
+        vm: &mut Vm,
+        out: &[u8],
+    ) -> Result<Gc<LuaStr>, LuaError> {
         match self.d {
             Dialect::L51 => {
                 self.empty_51(vm, out)?;
@@ -52,7 +60,7 @@ impl PucBuffer {
                     vm.heap.trace_raw(self.size, out.len() + 1);
                 }
                 let r = vm.retry_oom(|vm| vm.heap.new_external_string(out, false))?;
-                vm.api_check_after(Value::Str(r))?;
+                vm.api_check_after::<false>(Value::Str(r))?;
                 vm.box_closed_over(r)?;
                 // `lua_closeslot` leaves nil where the box was: `lua_gc(L,
                 // LUA_GCSTEP, len)` finds the string on the stack, not the
@@ -71,9 +79,9 @@ impl PucBuffer {
                 Ok(r)
             }
             _ => {
-                vm.api_check_before()?;
+                vm.api_check_before::<PRE>()?;
                 let r = vm.alloc_str(out)?;
-                vm.api_check_after(Value::Str(r))?;
+                vm.api_check_after::<PRE>(Value::Str(r))?;
                 if self.boxed && self.d >= Dialect::L53 {
                     if self.d >= Dialect::L54 {
                         // `lua_closeslot` calls the box's `__close`

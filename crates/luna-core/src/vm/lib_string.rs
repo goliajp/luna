@@ -48,32 +48,32 @@ fn s_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.nat_ret(fs, &[Value::Int(s.len() as i64)])
 }
 
-fn s_upper(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn s_upper<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
     let mut out = vm.new_buf();
     vm.buf_push(&mut out, s.as_bytes())?;
     out.make_ascii_uppercase();
-    let r = vm.buffer_result(&out)?;
+    let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
 
-fn s_lower(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn s_lower<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
     let mut out = vm.new_buf();
     vm.buf_push(&mut out, s.as_bytes())?;
     out.make_ascii_lowercase();
-    let r = vm.buffer_result(&out)?;
+    let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
 
-fn s_reverse(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn s_reverse<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
     let mut out = vm.new_buf();
     vm.buf_push(&mut out, s.as_bytes())?;
     out.reverse();
-    let r = vm.buffer_result(&out)?;
+    let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
@@ -83,7 +83,7 @@ fn s_reverse(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// what a failing allocator would.
 pub(crate) const MAX_STR: u64 = 1 << 30;
 
-fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn s_rep<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     let s = argcheck::check_string(vm, a, 0)?;
@@ -105,9 +105,9 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         // 5.1 builds it in a buffer, whose empty result checks for no
         // collection (`lua_concat` of nothing); later ones push a literal
         let r = if v == LuaVersion::Lua51 {
-            vm.buffer_result(&[])?
+            vm.buffer_result::<PRE>(&[])?
         } else {
-            vm.api_push_string(b"")?
+            vm.api_push_string::<PRE>(b"")?
         };
         return vm.nat_ret(fs, &[r]);
     }
@@ -133,7 +133,7 @@ fn s_rep(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             vm.buf_push(&mut out, sep.as_bytes())?;
         }
     }
-    let r = vm.buffer_result(&out)?;
+    let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
@@ -187,7 +187,7 @@ fn s_byte(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     vm.nat_ret_iter(fs, n, bytes.iter().map(|&b| Value::Int(i64::from(b))))
 }
 
-fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn s_char<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     let mut out = vm.new_buf();
@@ -218,12 +218,12 @@ fn s_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
         vm.buf_push(&mut out, &[c as u8])?;
     }
-    let r = vm.buffer_result(&out)?;
+    let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[r])
 }
 
-fn s_dump(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn s_dump<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     // the strip flag arrived in 5.3
@@ -253,6 +253,6 @@ fn s_dump(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
         bytes
     };
-    let r = vm.api_push_string(&bytes)?;
+    let r = vm.api_push_string::<PRE>(&bytes)?;
     vm.nat_ret(fs, &[r])
 }

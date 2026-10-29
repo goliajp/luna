@@ -39,7 +39,7 @@ impl Vm {
             size: 0,
             slot,
         });
-        self.api_check_after_rooted()?;
+        self.api_check_after_rooted::<false>()?;
         let mt = self.box_metatable()?;
         // SAFETY: `u` is a live userdata held in `buffer_boxes`; the borrow covers one store, which allocates nothing
         unsafe { u.as_mut() }.set_metatable(Some(mt));
@@ -147,7 +147,7 @@ impl Vm {
         }
         let mt = self.alloc_table_sized(0, 2)?;
         let mtv = Value::Table(mt);
-        self.api_check_after(mtv)?;
+        self.api_check_after::<false>(mtv)?;
         // `luaL_newmetatable` pushes the name again: the string looked up
         // first may have been collected at the check just made
         let r = self.rooted(&[mtv], |vm| vm.fill_box_metatable(mt, name, reg, l53));
@@ -168,7 +168,7 @@ impl Vm {
         // 5.3's `luaL_newmetatable` pushes the name; 5.4's `getBoxMT` only
         // keys the registry with it
         if l53 {
-            self.api_check_after(key)?;
+            self.api_check_after::<false>(key)?;
         }
         self.lib_roots.push(key);
         // `boxgc`, a light C function: no object of PUC's

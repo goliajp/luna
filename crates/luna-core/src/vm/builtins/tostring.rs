@@ -2,7 +2,11 @@
 
 use super::*;
 
-pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(super) fn nat_tostring<const PRE: bool>(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+) -> Result<u32, LuaError> {
     let v = argcheck::check_any(vm, Args::new(fs, nargs), 0)?;
     // A number metatable (debug.setmetatable) could carry `__tostring`.
     if let Value::Int(i) = v
@@ -23,7 +27,7 @@ pub(super) fn nat_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     let s = if vm.version() == LuaVersion::Lua51 {
         vm.tostring_51(v, fs, 0)?
     } else {
-        vm.tolstring(v, 0)?
+        vm.tolstring::<PRE>(v, 0)?
     };
     vm.nat_ret(fs, &[Value::Str(s)])
 }
@@ -43,7 +47,7 @@ fn int_text(vm: &mut Vm, fs: u32, i: i64) -> Result<Value, LuaError> {
     // 5.1 and 5.2 convert the number in place (`lua_tolstring`); 5.3
     // on push the string (`%I`, 5.5 `lua_pushstring`) and check then
     if vm.version() >= LuaVersion::Lua53 {
-        vm.api_check_pushed(s)?;
+        vm.api_check_pushed::<false>(s)?;
     } else {
         vm.api_check_converted(s)?;
     }
@@ -62,7 +66,7 @@ fn meta_text_52(vm: &mut Vm, v: Value) -> Result<Option<Value>, LuaError> {
     // `luaL_callmeta(L, 1, "__tostring")` (5.2 makes it in
     // `luaL_tolstring`, which takes the check itself)
     if vm.version() == LuaVersion::Lua51 || !mm.is_nil() {
-        vm.metafield_check(v, b"__tostring")?;
+        vm.metafield_check::<true>(v, b"__tostring")?;
     }
     if mm.is_nil() {
         return Ok(None);

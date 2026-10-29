@@ -52,9 +52,9 @@ fn hook_table(vm: &mut Vm, init: bool) -> Result<Gc<Table>, LuaError> {
         return Ok(t);
     }
     let t = match v {
-        LuaVersion::Lua51 => vm.api_new_table(0, 1)?,
-        LuaVersion::Lua53 => vm.api_new_table(0, 2)?,
-        _ => vm.api_new_table(0, 0)?,
+        LuaVersion::Lua51 => with_rules!(vm, P => vm.api_new_table::<P>(0, 1))?,
+        LuaVersion::Lua53 => with_rules!(vm, P => vm.api_new_table::<P>(0, 2))?,
+        _ => with_rules!(vm, P => vm.api_new_table::<P>(0, 0))?,
     };
     // `lua_setfield` makes the key's string again: the one read with
     // `lua_getfield` may have been collected by the table's allocation
@@ -68,7 +68,7 @@ fn hook_table(vm: &mut Vm, init: bool) -> Result<Gc<Table>, LuaError> {
     };
     vm.raw_set(reg, key, Value::Table(t))?;
     if init && v >= LuaVersion::Lua52 {
-        let k = vm.api_push_string(b"k")?;
+        let k = vm.api_push_string_dyn(b"k")?;
         let mode = vm.str_value(b"__mode")?;
         vm.raw_set(t, mode, k)?;
         vm.host_set_metatable(Value::Table(t), Some(t))?;
@@ -103,7 +103,7 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         hook_table(vm, false)?;
     }
     let hook = match state.func {
-        _ if armed && external => vm.api_push_string(b"external hook")?,
+        _ if armed && external => vm.api_push_string_dyn(b"external hook")?,
         Some(h) if armed => h,
         _ if v >= LuaVersion::Lua54 => return vm.nat_ret(fs, &[Value::Nil]),
         Some(h) if v <= LuaVersion::Lua52 => h,
@@ -120,6 +120,6 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         mask.push(b'l');
     }
     // the hook is on PUC's stack while the mask is made
-    let m = vm.rooted(&[hook], |vm| vm.api_push_string(&mask))?;
+    let m = vm.rooted(&[hook], |vm| vm.api_push_string_dyn(&mask))?;
     vm.nat_ret(fs, &[hook, m, Value::Int(state.count_base)])
 }

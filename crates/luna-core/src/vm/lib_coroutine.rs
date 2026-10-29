@@ -235,10 +235,10 @@ fn co_yield(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     Err(vm.do_yield(fs, vals))
 }
 
-fn co_status(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn co_status<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let co = check_co(vm, Args::new(fs, nargs))?;
     let s = vm.coro_status_str(co);
-    let v = vm.api_push_string(s.as_bytes())?;
+    let v = vm.api_push_string::<PRE>(s.as_bytes())?;
     vm.nat_ret(fs, &[v])
 }
 

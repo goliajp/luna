@@ -2,15 +2,15 @@
 
 use super::*;
 
-pub(super) fn s_sub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(super) fn s_sub<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let s = argcheck::check_string(vm, a, 0)?;
     let i = start_pos(vm.version(), argcheck::check_integer(vm, a, 1)?);
     let j = argcheck::opt_integer(vm, a, 2, -1)?;
     // `lua_pushlstring`, checked for as PUC checks
-    vm.api_check_before()?;
+    vm.api_check_before::<PRE>()?;
     let r = Value::Str(try_str_sub(vm, s, i, j)?);
-    vm.api_check_after(r)?;
+    vm.api_check_after::<PRE>(r)?;
     vm.nat_ret(fs, &[r])
 }
 

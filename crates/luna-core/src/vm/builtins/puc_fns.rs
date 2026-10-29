@@ -20,10 +20,13 @@ pub(crate) const PUC_FNS: Natives = &[
         "luaB_dofile",
         F(crate::vm::lib_os_io::nat_dofile, Builtin::None),
     ),
-    ("luaB_error", F(nat_error, Builtin::Error)),
+    ("luaB_error", Ctor::R(by_rules!(nat_error), Builtin::Error)),
     ("luaB_gcinfo", F(nat_gcinfo, Builtin::None)),
     ("luaB_getfenv", F(nat_getfenv, Builtin::None)),
-    ("luaB_getmetatable", F(nat_getmetatable, Builtin::None)),
+    (
+        "luaB_getmetatable",
+        Ctor::R(by_rules!(nat_getmetatable), Builtin::None),
+    ),
     ("luaB_ipairs", C(luab_ipairs)),
     ("luaB_load", F(nat_load, Builtin::None)),
     (
@@ -31,7 +34,10 @@ pub(crate) const PUC_FNS: Natives = &[
         F(crate::vm::lib_os_io::nat_loadfile, Builtin::None),
     ),
     ("luaB_loadstring", F(nat_loadstring, Builtin::None)),
-    ("luaB_newproxy", F(nat_newproxy, Builtin::None)),
+    (
+        "luaB_newproxy",
+        Ctor::R(by_rules!(nat_newproxy), Builtin::None),
+    ),
     ("luaB_next", F(nat_next, Builtin::None)),
     ("luaB_pairs", C(luab_pairs)),
     ("luaB_pcall", F(nat_pcall, Builtin::Pcall)),
@@ -42,10 +48,16 @@ pub(crate) const PUC_FNS: Natives = &[
     ("luaB_rawset", F(nat_rawset, Builtin::None)),
     ("luaB_select", F(nat_select, Builtin::None)),
     ("luaB_setfenv", F(nat_setfenv, Builtin::None)),
-    ("luaB_setmetatable", F(nat_setmetatable, Builtin::None)),
+    (
+        "luaB_setmetatable",
+        Ctor::R(by_rules!(nat_setmetatable), Builtin::None),
+    ),
     ("luaB_tonumber", F(nat_tonumber, Builtin::None)),
-    ("luaB_tostring", F(nat_tostring, Builtin::Tostring)),
-    ("luaB_type", F(nat_type, Builtin::None)),
+    (
+        "luaB_tostring",
+        Ctor::R(by_rules!(nat_tostring), Builtin::Tostring),
+    ),
+    ("luaB_type", Ctor::R(by_rules!(nat_type), Builtin::None)),
     (
         "luaB_unpack",
         F(crate::vm::lib_table::t_unpack, Builtin::None),
@@ -77,7 +89,8 @@ fn luab_ipairs(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<Value,
         0 => vm.builtin(ipairs_iter, &[], Builtin::IpairsIter)?,
         _ => op.upval(vm, 0, nup),
     };
-    op.func(vm, id, nat_ipairs, Builtin::None, &[it], nup)
+    let f = with_rules!(vm, P => nat_ipairs::<P> as crate::runtime::value::NativeFn);
+    op.func(vm, id, f, Builtin::None, &[it], nup)
 }
 
 /// `pairs`: luna's keeps the `next` it returns; 5.1's is PUC's upvalue,
@@ -87,5 +100,6 @@ fn luab_pairs(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<Value, 
         0 => op.global(vm, b"next"),
         _ => op.upval(vm, 0, nup),
     };
-    op.func(vm, id, nat_pairs, Builtin::Pairs, &[next], nup)
+    let f = with_rules!(vm, P => nat_pairs::<P> as crate::runtime::value::NativeFn);
+    op.func(vm, id, f, Builtin::Pairs, &[next], nup)
 }

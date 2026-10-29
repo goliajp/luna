@@ -38,7 +38,7 @@ pub(crate) const PUC_FNS: Natives = &[
     ("math_tan", F(m_tan, Builtin::MathTan)),
     ("math_tanh", F(m_tanh, Builtin::None)),
     ("math_toint", F(m_tointeger, Builtin::None)),
-    ("math_type", F(m_type, Builtin::None)),
+    ("math_type", Ctor::R(by_rules!(m_type), Builtin::None)),
     ("math_ult", F(m_ult, Builtin::None)),
 ];
 

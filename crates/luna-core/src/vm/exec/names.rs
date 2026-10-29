@@ -105,19 +105,22 @@ impl Vm {
     ) -> Result<(), crate::vm::error::LuaError> {
         if let Some(inner) = path.inner {
             // each made by an API call that checks for a collection
-            self.api_check_before()?;
+            with_rules!(self, P => self.api_check_before::<P>())?;
             let dot = self.heap.try_intern(b".")?;
-            self.api_check_after(Value::Str(dot))?;
+            with_rules!(self, P => self.api_check_after::<P>(Value::Str(dot)))?;
             let mut st = vec![Value::Str(path.outer), Value::Str(dot), Value::Str(inner)];
-            let r = self.rooted(&[Value::Str(dot)], |vm| vm.api_check_before());
+            let r = self.rooted(
+                &[Value::Str(dot)],
+                |vm| with_rules!(vm, P => vm.api_check_before::<P>()),
+            );
             r?;
             self.heap.puc_concat(&mut st, 3)?;
-            self.api_check_after(st[0])?;
+            with_rules!(self, P => self.api_check_after::<P>(st[0]))?;
         }
         if path.under_g() && self.version >= LuaVersion::Lua53 {
             // 5.2's name is the joined one, before 5.3 drops the prefix
             let s = self.heap.try_intern(&path.name(LuaVersion::Lua52)[3..])?;
-            self.api_check_after(Value::Str(s))?;
+            with_rules!(self, P => self.api_check_after::<P>(Value::Str(s)))?;
         }
         Ok(())
     }

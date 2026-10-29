@@ -210,7 +210,7 @@ fn switch_mode(vm: &mut Vm, a: Args, opt: &'static str) -> Result<Vec<Value>, Lu
         Value::Int(0)
     } else {
         // `pushmode`'s `lua_pushstring`
-        vm.api_push_string(prev.as_bytes())?
+        vm.api_push_string_dyn(prev.as_bytes())?
     }])
 }
 

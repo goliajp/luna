@@ -150,10 +150,10 @@ pub(super) fn file_fail_values(
     let m = match fname {
         Some(n) => {
             let args = [FmtArg::S(c_str(n)), FmtArg::S(text.as_bytes())];
-            let pushed = |vm: &mut Vm| vm.api_pushing(|vm| vm.pushfstring(b"%s: %s", &args));
+            let pushed = |vm: &mut Vm| with_rules!(vm, P => vm.api_pushing::<P>(|vm| vm.pushfstring(b"%s: %s", &args)));
             Value::Str(vm.lib_scope(pushed)?)
         }
-        None => vm.api_push_string(text.as_bytes())?,
+        None => vm.api_push_string_dyn(text.as_bytes())?,
     };
     let code = errno(e).map_or(0, i64::from);
     Ok([Value::Nil, m, Value::Int(code)])
@@ -190,7 +190,7 @@ pub(crate) fn exec_result(
     } else {
         Value::Nil
     };
-    let w = vm.api_push_string(what.as_bytes())?;
+    let w = vm.api_push_string_dyn(what.as_bytes())?;
     vm.nat_ret(fs, &[ok, w, Value::Int(code as i64)])
 }
 

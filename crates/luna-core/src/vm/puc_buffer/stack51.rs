@@ -22,7 +22,7 @@ impl PucBuffer {
         if self.n == 0 {
             return Ok(false);
         }
-        vm.api_check_before()?;
+        vm.api_check_before::<true>()?;
         let s = vm.alloc_str(&out[self.start..self.start + self.n])?;
         vm.lib_roots.push(Value::Str(s));
         self.start += self.n;
@@ -65,7 +65,7 @@ impl PucBuffer {
         }
         let from = vm.lib_roots.len() - n;
         let mut st: Vec<Value> = vm.lib_roots[from..].to_vec();
-        vm.api_check_before()?;
+        vm.api_check_before::<true>()?;
         vm.concat_pieces(&mut st, n)?;
         vm.lib_roots.pop_n(n);
         vm.lib_roots.push(st[0]);

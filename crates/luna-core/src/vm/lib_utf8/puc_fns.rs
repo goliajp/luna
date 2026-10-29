@@ -11,7 +11,7 @@ pub(crate) const PUC_FNS: Natives = &[
     ("codepoint", F(u_codepoint, Builtin::None)),
     ("iter_codes", F(u_codes, Builtin::None)),
     ("luaopen_utf8", Ctor::Open(luaopen_utf8)),
-    ("utfchar", F(u_char, Builtin::None)),
+    ("utfchar", Ctor::R(by_rules!(u_char), Builtin::None)),
     ("utflen", F(u_len, Builtin::None)),
 ];
 

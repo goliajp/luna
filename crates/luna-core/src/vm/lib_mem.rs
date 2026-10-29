@@ -44,7 +44,7 @@ impl Vm {
 
     /// [`Vm::lib_native_with`] for a function PUC makes with `puc_nup`
     /// upvalues where luna keeps more.
-    pub(crate) fn lib_native_puc(
+    pub(crate) fn lib_native_puc<const PRE: bool>(
         &mut self,
         f: NativeFn,
         upvals: &[Value],
@@ -53,14 +53,14 @@ impl Vm {
         // `lua_pushcclosure`, which checks for a collection with the
         // upvalues on the stack
         let f = self.rooted(upvals, |vm| {
-            vm.api_check_before()?;
+            vm.api_check_before::<PRE>()?;
             vm.retry_oom(|vm| {
                 vm.heap
                     .try_new_native_puc(f, upvals, crate::runtime::Builtin::None, puc_nup)
             })
             .map(Value::Native)
         })?;
-        self.api_check_after(f)?;
+        self.api_check_after::<PRE>(f)?;
         Ok(f)
     }
 

@@ -50,7 +50,7 @@ pub(super) fn find_loader(
         let Value::Str(n) = name else {
             unreachable!("require passes the name as a string");
         };
-        let arg = vm.api_push_string_at(name_at(n), n.as_bytes())?;
+        let arg = with_rules!(vm, P => vm.api_push_string_at::<P>(name_at(n), n.as_bytes()))?;
         let r = vm.call_value(s, &[arg])?;
         let first = r.first().copied().unwrap_or(Value::Nil);
         let second = r.get(1).copied().unwrap_or(Value::Nil);
@@ -101,7 +101,7 @@ fn searched_all(
         msg.truncate(msg.len() - 2);
         b.sub(2);
     }
-    let m = b.finish(vm, msg)?;
+    let m = with_rules!(vm, P => b.finish::<P>(vm, msg))?;
     if v <= LuaVersion::Lua53 {
         vm.native_push_vals(&[Value::Str(m)])?;
         return Ok(None);
@@ -157,7 +157,7 @@ fn add_message(
         }
         if v == LuaVersion::Lua51 {
             // `lua_concat(L, 2)` of the message so far and this one
-            vm.api_check_before()?;
+            with_rules!(vm, P => vm.api_check_before::<P>())?;
             let m = crate::vm::builtins::concat2(vm, *acc, first)?;
             *acc = m;
             let top = vm.running_natives.last().map_or(0, |a| a.top_off);
@@ -212,7 +212,8 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     // pass the argument itself; 5.1 hands the loader only the name
     let arg = if v <= LuaVersion::Lua53 {
         vm.lib_roots.extend([loader, data]);
-        let pushed = vm.api_push_string_at(name_at(name_s), name_s.as_bytes());
+        let pushed =
+            with_rules!(vm, P => vm.api_push_string_at::<P>(name_at(name_s), name_s.as_bytes()));
         vm.lib_roots.pop_n(2);
         pushed?
     } else {

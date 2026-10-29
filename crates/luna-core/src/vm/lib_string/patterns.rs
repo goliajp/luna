@@ -46,9 +46,9 @@ fn pat_err(vm: &mut Vm, e: PatError) -> LuaError {
     crate::vm::builtins::raise_lib(vm, fmt.as_bytes(), &[], conv as u32)
 }
 
-fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Result<Value, LuaError> {
+fn cap_value<const PRE: bool>(vm: &mut Vm, src: &[u8], c: CapValue) -> Result<Value, LuaError> {
     match c {
-        CapValue::Span(a, b) => vm.api_push_string(&src[a..b]),
+        CapValue::Span(a, b) => vm.api_push_string::<PRE>(&src[a..b]),
         CapValue::Pos(p) => Ok(Value::Int(p as i64 + 1)),
     }
 }
@@ -57,7 +57,7 @@ fn cap_value(vm: &mut Vm, src: &[u8], c: CapValue) -> Result<Value, LuaError> {
 /// there are none and `whole` is set. `pushed` values are on the stack
 /// above the native's arguments already; `out` holds those of them it
 /// returns.
-fn push_captures(
+fn push_captures<const PRE: bool>(
     vm: &mut Vm,
     ms: &MatchState,
     src: &[u8],
@@ -77,12 +77,12 @@ fn push_captures(
     // collect
     let base = vm.lib_roots.mark();
     vm.lib_roots.extend_from_slice(out);
-    let r = push_each(vm, ms, src, (s, e, n), out);
+    let r = push_each::<PRE>(vm, ms, src, (s, e, n), out);
     vm.lib_roots.release(base);
     r
 }
 
-fn push_each(
+fn push_each<const PRE: bool>(
     vm: &mut Vm,
     ms: &MatchState,
     src: &[u8],
@@ -98,7 +98,7 @@ fn push_each(
                 return Err(pat_err(vm, err));
             }
         };
-        let v = cap_value(vm, src, c)?;
+        let v = cap_value::<PRE>(vm, src, c)?;
         vm.lib_roots.push(v);
         out.push(v);
     }
@@ -110,7 +110,12 @@ fn no_specials(v: LuaVersion, p: &[u8]) -> bool {
     !pattern::has_specials(pattern_bytes(v, p))
 }
 
-fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaError> {
+fn find_aux<const PRE: bool>(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+    find: bool,
+) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     let s = argcheck::check_string(vm, a, 0)?;
@@ -149,7 +154,7 @@ fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaErro
                 out.push(Value::Int(s1 as i64 + 1));
                 out.push(Value::Int(e as i64));
             }
-            push_captures(vm, &ms, src, (s1, e), !find, out.len() as u32, &mut out)?;
+            push_captures::<PRE>(vm, &ms, src, (s1, e), !find, out.len() as u32, &mut out)?;
             return vm.nat_ret(fs, &out);
         }
         if anchor || s1 >= ls {
@@ -159,12 +164,12 @@ fn find_aux(vm: &mut Vm, fs: u32, nargs: u32, find: bool) -> Result<u32, LuaErro
     }
 }
 
-pub(super) fn s_find(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    find_aux(vm, fs, nargs, true)
+pub(super) fn s_find<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    find_aux::<PRE>(vm, fs, nargs, true)
 }
 
-pub(super) fn s_match(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
-    find_aux(vm, fs, nargs, false)
+pub(super) fn s_match<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    find_aux::<PRE>(vm, fs, nargs, false)
 }
 
 /// gmatch iterator; upvalues [subject, pattern, next start, end of the last
@@ -172,7 +177,7 @@ pub(super) fn s_match(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
 ///
 /// Before 5.3 an empty match simply moves the next start one byte on; 5.3
 /// instead rejects a match ending where the previous one ended.
-fn gmatch_iter(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
+fn gmatch_iter<const PRE: bool>(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let (Value::Str(s), Value::Str(p), Value::Int(pos), Value::Int(last)) = (
         vm.nat_upval(fs, 0),
         vm.nat_upval(fs, 1),
@@ -195,7 +200,7 @@ fn gmatch_iter(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
             vm.nat_set_upval(fs, 2, Value::Int(next as i64));
             vm.nat_set_upval(fs, 3, Value::Int(e as i64));
             let mut out = Vec::new();
-            push_captures(vm, &ms, src, (from, e), true, 0, &mut out)?;
+            push_captures::<PRE>(vm, &ms, src, (from, e), true, 0, &mut out)?;
             return vm.nat_ret(fs, &out);
         }
         from += 1;
@@ -203,7 +208,7 @@ fn gmatch_iter(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     Ok(0)
 }
 
-pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(super) fn s_gmatch<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let s = argcheck::check_string(vm, a, 0)?;
     let p = argcheck::check_string(vm, a, 1)?;
@@ -229,12 +234,12 @@ pub(super) fn s_gmatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         use crate::runtime::puc::PucObj;
         let objs = [PucObj::GMatchState, PucObj::CClosure(3)];
         vm.heap.new_obj(objs[0]);
-        vm.api_check_after_rooted()?;
-        let it = vm.lib_native_stand_in(gmatch_iter, &ups, &objs, 1)?;
-        vm.api_check_after(it)?;
+        vm.api_check_after_rooted::<PRE>()?;
+        let it = vm.lib_native_stand_in(gmatch_iter::<PRE>, &ups, &objs, 1)?;
+        vm.api_check_after::<PRE>(it)?;
         it
     } else {
-        vm.lib_native_puc(gmatch_iter, &ups, 3)?
+        vm.lib_native_puc::<PRE>(gmatch_iter::<PRE>, &ups, 3)?
     };
     vm.nat_ret(fs, &[it])
 }

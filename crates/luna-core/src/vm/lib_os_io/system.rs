@@ -12,7 +12,7 @@ pub(super) fn os_getenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         Some(val) => {
             use crate::runtime::puc::records::strcache::{CStr, site};
             let at = CStr::Fixed(site::GETENV, site::name_hash(&name));
-            vm.api_push_string_at(at, &os_bytes(&val))?
+            with_rules!(vm, P => vm.api_push_string_at::<P>(at, &os_bytes(&val)))?
         }
         None => Value::Nil,
     };
@@ -281,7 +281,7 @@ pub(super) fn os_setlocale(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             .collect::<Vec<_>>()
             .join("/"),
     };
-    let r = vm.api_push_string(text.as_bytes())?;
+    let r = vm.api_push_string_dyn(text.as_bytes())?;
     vm.nat_ret(fs, &[r])
 }
 

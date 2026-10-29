@@ -24,9 +24,12 @@ fn mode_ok(v: LuaVersion, mode: &[u8]) -> bool {
 /// the Vm opens files as PUC built with MSVC does.
 fn opened(vm: &mut Vm, o: Opened, pipe: bool) -> Result<Gc<Userdata>, LuaError> {
     // `lua_newuserdata(uv)`, which checks for a collection
-    let u = new_file(vm, FileHandle::File(o.file), o.spec.writable(), |vm, u| {
-        vm.api_check_after(Value::Userdata(u))
-    })?;
+    let u = new_file(
+        vm,
+        FileHandle::File(o.file),
+        o.spec.writable(),
+        |vm, u| with_rules!(vm, P => vm.api_check_after::<P>(Value::Userdata(u))),
+    )?;
     if vm.crt_text {
         let mut f = msvc::CrtFile::open(&o.spec, pipe);
         f.io.mode = o.mode;
@@ -220,7 +223,7 @@ pub(super) fn open_checked(
                 return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 2));
             }
             // 5.1 pushes the message, then raises the argument error with it
-            vm.api_check_before()?;
+            with_rules!(vm, P => vm.api_check_before::<P>())?;
             let m = vm.pushfstring(b"%s: %s", &args)?;
             vm.native_push(1);
             vm.lib_roots.push(Value::Str(m));

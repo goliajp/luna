@@ -35,7 +35,7 @@ fn set_field(vm: &mut Vm, t: Gc<Table>, k: &str, v: Value) -> Result<(), LuaErro
 }
 
 fn set_str(vm: &mut Vm, t: Gc<Table>, k: &str, bytes: &[u8]) -> Result<(), LuaError> {
-    let v = vm.api_push_string(bytes)?;
+    let v = vm.api_push_string_dyn(bytes)?;
     set_field(vm, t, k, v)?;
     Ok(())
 }
@@ -50,11 +50,11 @@ fn push_name(
 ) -> Result<Value, LuaError> {
     use crate::runtime::puc::records::strcache::{CStr, site};
     match src {
-        Some(s) => vm.api_push_string_at(
+        Some(s) => with_rules!(vm, P => vm.api_push_string_at::<P>(
             CStr::Named(s.as_ptr() as *const _, site::name_hash(name)),
             name,
-        ),
-        None => vm.api_push_string(name),
+        )),
+        None => vm.api_push_string_dyn(name),
     }
 }
 
@@ -66,7 +66,7 @@ fn set_str_at(
     at: crate::runtime::puc::records::strcache::CStr,
     bytes: &[u8],
 ) -> Result<(), LuaError> {
-    let v = vm.api_push_string_at(at, bytes)?;
+    let v = with_rules!(vm, P => vm.api_push_string_at::<P>(at, bytes))?;
     set_field(vm, t, k, v)
 }
 

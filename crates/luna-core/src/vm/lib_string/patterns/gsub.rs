@@ -7,18 +7,18 @@ use crate::vm::puc_buffer::PucBuffer;
 mod template;
 use template::add_s;
 
-pub(crate) fn s_gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(crate) fn s_gsub<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // a frame of `sort_scratch`, a GC root, for the replacement in hand
     let mut frame = LVec::new(vm.heap.mem());
     frame.push(Value::Nil)?;
     vm.sort_scratch.push(frame)?;
     // 5.1's buffer keeps its strings on the stack: an error lets them go
-    let r = vm.lib_scope(|vm| gsub(vm, fs, nargs));
+    let r = vm.lib_scope(|vm| gsub::<PRE>(vm, fs, nargs));
     vm.sort_scratch.pop();
     r
 }
 
-fn gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn gsub<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     let (s, p, repl, max_s, template) = gsub_args(vm, a)?;
@@ -51,7 +51,7 @@ fn gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             // the buffer's slot counts only for a callback or an error
             let buf = vm.buffer_slot(out.len());
             let to = (&mut out, &mut b);
-            changed |= add_value(vm, &ms, src, pos, e, repl, template, buf, to)?;
+            changed |= add_value::<PRE>(vm, &ms, src, pos, e, repl, template, buf, to)?;
             last = Some(e);
         }
         match m {
@@ -76,7 +76,7 @@ fn gsub(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         if out.len() > crate::runtime::string::MAX_LEN {
             return Err(vm.rt_err("string length overflow"));
         }
-        let r = b.finish(vm, &out)?;
+        let r = b.finish::<PRE>(vm, &out)?;
         vm.recycle_buf(out);
         Value::Str(r)
     };
@@ -130,7 +130,7 @@ fn gsub_args(
 /// PUC `add_value`: append the replacement for the match `[s, e)`; false
 /// when a function or table kept the original text.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn add_value(
+pub(crate) fn add_value<const PRE: bool>(
     vm: &mut Vm,
     ms: &MatchState,
     src: &[u8],
@@ -142,7 +142,7 @@ pub(crate) fn add_value(
     (out, b): (&mut LVec<u8>, &mut PucBuffer),
 ) -> Result<bool, LuaError> {
     if let Some(t) = template {
-        if let Err(err) = add_s(vm, ms, src, (s, e), t.as_bytes(), (out, b)) {
+        if let Err(err) = add_s::<PRE>(vm, ms, src, (s, e), t.as_bytes(), (out, b)) {
             vm.native_push(buf);
             return Err(err);
         }
@@ -159,7 +159,7 @@ pub(crate) fn add_value(
                     return Err(pat_err(vm, err));
                 }
             };
-            let k = cap_value(vm, src, k)?;
+            let k = cap_value::<PRE>(vm, src, k)?;
             // the key is pushed for `lua_gettable`
             let held = [Vm::buffer_box(), k];
             vm.index_value_holding(repl, k, &held[1 - buf as usize..])?
@@ -168,7 +168,7 @@ pub(crate) fn add_value(
             let mut args = Vec::new();
             // the function, then its arguments, are pushed for the call;
             // a capture error counts the function
-            if let Err(err) = push_captures(vm, ms, src, (s, e), true, buf + 1, &mut args) {
+            if let Err(err) = push_captures::<PRE>(vm, ms, src, (s, e), true, buf + 1, &mut args) {
                 vm.native_push(buf + 1);
                 return Err(err);
             }
@@ -183,14 +183,14 @@ pub(crate) fn add_value(
     // the value may be held by nothing else now; the scratch frame keeps it
     // rooted while it is copied (a 5.2 buffer collects when it cannot grow)
     vm.sort_scratch.last_mut().expect("gsub frame")[0] = r;
-    add_replacement(vm, r, &src[s..e], buf, (out, b))
+    add_replacement::<PRE>(vm, r, &src[s..e], buf, (out, b))
 }
 
 /// The replacement value `r` added for the match `orig`: a string or a
 /// number as text, the match itself for nil or false (false returned);
 /// anything else is an error.
 #[inline]
-fn add_replacement(
+fn add_replacement<const PRE: bool>(
     vm: &mut Vm,
     r: Value,
     orig: &[u8],
@@ -200,7 +200,7 @@ fn add_replacement(
     Ok(match r {
         // up to 5.3 the original text is pushed as a string first
         Value::Nil | Value::Bool(false) if vm.version() <= LuaVersion::Lua53 => {
-            let k = vm.api_push_string(orig)?;
+            let k = vm.api_push_string::<PRE>(orig)?;
             let Value::Str(k) = k else {
                 unreachable!("a pushed string")
             };

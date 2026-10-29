@@ -257,7 +257,7 @@ impl Opener {
     #[inline]
     pub(super) fn make_fn(&mut self, vm: &mut Vm, f: u32, nup: u32) -> Result<Value, LuaError> {
         let (ctor, id) = native(f);
-        match ctor {
+        match ctor.for_rules(vm.heap.rules().api_checks_before()) {
             // a light function (5.2 on), made once
             super::Ctor::F(g, b) if nup == 0 && self.v != LuaVersion::Lua51 => {
                 if let Some(n) = vm.heap.light(id) {
@@ -283,6 +283,7 @@ impl Opener {
                 self.func(vm, id as u32, g, b, &held[..up.len()], nup)
             }
             super::Ctor::C(c) => c(vm, self, id as u32, nup),
+            super::Ctor::R(..) => unreachable!("made for the VM's rules"),
             super::Ctor::Open(g) => {
                 self.func(vm, id as u32, g, crate::runtime::Builtin::None, &[], nup)
             }

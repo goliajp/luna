@@ -79,12 +79,27 @@ pub(crate) enum Ctor {
     /// light C function when PUC's has none, a C closure of PUC's
     /// upvalues otherwise
     F(crate::runtime::value::NativeFn, Builtin),
+    /// [`Ctor::F`] built for each rule of where the C API checks for a
+    /// collection (see `by_rules!`), the one of the VM's dialect made
+    R([crate::runtime::value::NativeFn; 2], Builtin),
     /// made by its own code, with PUC's upvalues the top `nup` values of
     /// the opener's stack
     C(fn(&mut Vm, &mut Opener, u32, u32) -> Result<Value, LuaError>),
     /// a library's `luaopen_*`, a native that runs its part of the script
     /// (see [`run_open`])
     Open(crate::runtime::value::NativeFn),
+}
+
+impl Ctor {
+    /// The function a VM whose C API checks before it allocates (`pre`)
+    /// makes, as a [`Ctor::F`].
+    #[inline]
+    pub(crate) fn for_rules(self, pre: bool) -> Ctor {
+        match self {
+            Ctor::R(fs, b) => Ctor::F(fs[usize::from(pre)], b),
+            c => c,
+        }
+    }
 }
 
 /// A table of PUC's C functions: its name in PUC, and how luna makes it.
