@@ -1,6 +1,8 @@
 //! Running an xpcall message handler on an error (PUC `luaG_errormsg`).
 
+use super::ErroredNative;
 use crate::runtime::Value;
+use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 use crate::vm::exec::Vm;
 
@@ -34,6 +36,56 @@ impl Vm {
     /// [`Vm::call_msgh`] with the handler called at stack slot `at` (PUC
     /// `luaG_errormsg`, see `raise_top`).
     pub(crate) fn call_msgh_at(&mut self, handler: Value, err: Value, at: Option<u32>) -> Value {
+        // a handler that fails with no nested run to see it is run again
+        // on that error one C level deeper, the failed call's level kept
+        // as PUC's nested `luaG_errormsg` keeps it, until the levels run out
+        let mut held = 0;
+        let (mut err, mut at) = (err, at);
+        let base = self.running_natives.len();
+        let r = loop {
+            // a call refused at the C-level limit keeps its level while
+            // the handler runs on its error, and while every run nested in
+            // that one does (PUC's `ccall` counts it before refusing and
+            // never takes it back)
+            if self.c_overflow_err.take().is_some_and(|v| v.raw_eq(err)) {
+                self.g.nccalls += 1;
+                held += 1;
+            }
+            match self.msgh_once(handler, err, at) {
+                Ok(v) => break v,
+                Err((e, raised_by)) => {
+                    // a call refused at the C-level limit takes its level
+                    // at the next run (above)
+                    if !self.c_overflow_err.is_some_and(|v| v.raw_eq(e)) {
+                        self.g.nccalls += 1;
+                        held += 1;
+                    }
+                    err = e;
+                    // the failed call stays below the next run, its
+                    // `CallInfo` too, which runs where the error object is
+                    // on the failed call's stack
+                    let raised_by = self.raised_at_top(raised_by, e);
+                    at = self.overflow_top.take();
+                    at = at.or_else(|| raised_by.first().map(|x| x.act.top() - 1));
+                    for x in raised_by.iter().rev() {
+                        self.running_natives.push_or_abort(x.act);
+                    }
+                }
+            }
+        };
+        self.g.nccalls -= held;
+        self.running_natives.truncate(base);
+        r
+    }
+
+    /// One run of the message handler: its result, or the error to run it
+    /// again on when it failed with no nested run to see that.
+    fn msgh_once(
+        &mut self,
+        handler: Value,
+        err: Value,
+        at: Option<u32>,
+    ) -> Result<Value, (Value, LVec<ErroredNative>)> {
         // 5.4+ `lua_error` raises the memory error message itself as a
         // memory error, which no handler runs on
         if self.version() >= LuaVersion::Lua54
@@ -41,41 +93,33 @@ impl Vm {
             && s.as_bytes() == b"not enough memory"
         {
             self.heap.mem_ctx().raise_oom();
-            return err;
+            return Ok(err);
         }
         // ≤5.2 `luaG_errormsg` raises LUA_ERRERR at once when the handler
         // is not a function
         if self.version() <= LuaVersion::Lua52
             && !matches!(handler, Value::Closure(_) | Value::Native(_))
         {
-            return self.errerr();
+            return Ok(self.errerr());
         }
         self.msgh_runs += 1;
         let runs = self.msgh_runs;
         let errerrs = self.errerr_raised;
-        // a call refused at the C-level limit keeps its level while its
-        // handler runs (PUC's `luaD_call` never takes it back)
-        let held = self.c_overflow_err.take().is_some_and(|v| v.raw_eq(err));
-        self.g.nccalls += u32::from(held);
         self.msgh_depth += 1;
-        let r = self.call_protected_with(handler, &[err], Some(handler), at);
+        let (r, raised_by) = self.call_protected_keeping(handler, &[err], Some(handler), at);
         self.msgh_depth -= 1;
-        self.g.nccalls -= u32::from(held);
         match r {
-            Ok(results) => results.first().copied().unwrap_or(Value::Nil),
+            Ok(results) => Ok(results.first().copied().unwrap_or(Value::Nil)),
             // the handler's own call was refused with LUA_ERRERR
-            Err(e) if self.msgh_runs == runs && self.errerr_raised != errerrs => e.0,
+            Err(e) if self.msgh_runs == runs && self.errerr_raised != errerrs => Ok(e.0),
             // already the result of the handler run nested at that error
-            Err(e) if self.msgh_runs != runs => e.0,
+            Err(e) if self.msgh_runs != runs => Ok(e.0),
             // raised with no Lua frame to unwind (a native handler such as
             // `error` failing at once, or the call refused at the C-level
-            // limit or for want of stack): no nested run saw it, so run the
-            // handler on it here, one level deeper, where the refused call's
-            // error was raised when that was the stack's end
-            Err(e) => {
-                let at = self.overflow_top.take();
-                self.call_msgh_at(handler, e.0, at)
-            }
+            // limit or for want of stack): no nested run saw it, so the
+            // handler runs on it again, where the refused call's error was
+            // raised when that was the stack's end
+            Err(e) => Err((e.0, raised_by)),
         }
     }
 }

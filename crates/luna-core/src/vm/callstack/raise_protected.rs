@@ -1,6 +1,7 @@
 //! Protected calls made from Rust, with the error bookkeeping saved around them.
 
 use crate::runtime::Value;
+use crate::runtime::mem::LVec;
 use crate::vm::exec::Vm;
 
 impl Vm {
@@ -35,6 +36,21 @@ impl Vm {
         handler: Option<Value>,
         at: Option<u32>,
     ) -> Result<Vec<Value>, crate::vm::error::LuaError> {
+        self.call_protected_keeping(f, args, handler, at).0
+    }
+
+    /// [`Vm::call_protected_with`], with the natives the error it ended in
+    /// was raised by (see [`Vm::note_errored_native`]).
+    pub(super) fn call_protected_keeping(
+        &mut self,
+        f: Value,
+        args: &[Value],
+        handler: Option<Value>,
+        at: Option<u32>,
+    ) -> (
+        Result<Vec<Value>, crate::vm::error::LuaError>,
+        LVec<super::ErroredNative>,
+    ) {
         let running = std::mem::replace(&mut self.msgh_running, handler);
         let floor = std::mem::replace(&mut self.msgh_floor, self.frames.len());
         let applied = self.msgh_applied.take();
@@ -47,7 +63,7 @@ impl Vm {
         self.msgh_floor = floor;
         self.msgh_applied = applied;
         self.error_traceback = traceback;
-        self.errored_natives = natives;
-        r
+        let inner = std::mem::replace(&mut self.errored_natives, natives);
+        (r, inner)
     }
 }
