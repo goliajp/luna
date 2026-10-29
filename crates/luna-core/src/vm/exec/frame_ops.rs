@@ -262,6 +262,13 @@ impl Vm {
         due
     }
 
+    /// Where compiled code reads the count and the point a step falls due
+    /// at (see `Heap::due_words`), so that it calls [`Vm::jit_gc_due`]
+    /// only once the count has reached that point.
+    pub(crate) fn jit_due_words(&self) -> *const usize {
+        self.heap.due_words()
+    }
+
     /// Whether a check for a collection now would step it.
     pub(crate) fn step_due(&self) -> bool {
         self.heap.gc_due()

@@ -166,6 +166,7 @@ impl Vm {
         self.native_checkpoint_due()
     }
 
+    #[cold]
     #[inline(never)]
     #[track_caller]
     pub(crate) fn native_checkpoint_due(&mut self) -> Result<(), LuaError> {

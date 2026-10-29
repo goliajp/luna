@@ -166,8 +166,6 @@ fn out_slot() -> cranelift_codegen::ir::StackSlotData {
 /// step due is noted for whichever exit the loop takes next.
 fn note_return_check_51<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32) {
     if pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua51) {
-        let fref = lw.bcx.import_func(lw.h.rt.gc_due_id);
-        let pc = lw.bcx.ins().iconst(types::I64, i64::from(pc));
-        lw.bcx.ins().call(fref, &[pc]);
+        note_gc_due(lw, pc);
     }
 }

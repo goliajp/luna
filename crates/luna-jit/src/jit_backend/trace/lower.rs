@@ -13,6 +13,7 @@ mod finish;
 mod fold;
 mod fold_calls;
 mod fold_fmod;
+mod gc_due;
 mod gc_roots;
 mod helpers;
 mod loop_tail;
@@ -28,6 +29,7 @@ use alt::*;
 use begin::*;
 use body::*;
 use clif_driver::*;
+pub(super) use commit::ops_all_pure;
 use commit::*;
 use downrec_tail::*;
 use exit::*;
@@ -35,6 +37,7 @@ use finish::*;
 use fold::*;
 use fold_calls::*;
 use fold_fmod::*;
+use gc_due::*;
 use gc_roots::*;
 pub(in crate::jit_backend::trace) use helpers::Helpers;
 use helpers::*;
@@ -126,6 +129,8 @@ struct Lower<E: Emit> {
     /// The iteration count the back edge keeps for tiering up, and the
     /// count to leave at.
     tier_count: Option<(Box<TCellU32>, u32)>,
+    /// The count's address, read on entry by a trace that may check (`gc_due`).
+    due_words: Option<Value>,
 }
 
 /// `always_codegen = false` leaves the function undefined in `module`
@@ -210,13 +215,6 @@ fn with_plan<R>(
     out
 }
 
-/// Whether every op of `record` is one the optimizing tiers lower with
-/// values kept to the exits (`Lower::at_exits`); for any other record
-/// lowering again gives the baseline tier's instructions.
-pub(super) fn ops_all_pure(record: &TraceRecord) -> bool {
-    record.ops.iter().all(|r| commit::pure_op(r.inst.op()))
-}
-
 /// The trace recorded for the baseline code generator, with what the
 /// emit pass decided; `None` when it cannot be lowered. `at_exits`: see
 /// `Lower::at_exits`.
@@ -265,6 +263,7 @@ fn emit_trace<E: Emit>(
     // around `define_data`, not `declare_data`.
     let defined_aot_data: std::collections::HashSet<DataId> = std::collections::HashSet::new();
     let head = emit_entry(&mut bcx, pl);
+    let due_words = emit_due_words(&mut bcx, pl)?;
     let mut escape = escape;
     let sunk = alloc_sunk_sites(&mut bcx, pl, &mut escape);
     let flush_ctx = start_accum(&mut bcx, pl, h, &head.regs_full);
@@ -283,6 +282,7 @@ fn emit_trace<E: Emit>(
     if count_at > 0 {
         lower.tier_count = Some((Box::new(TCellU32::new(0)), count_at));
     }
+    lower.due_words = due_words;
     // only a body of pure ops gains: elsewhere every op that is not pure
     // commits everything anyway, and the exits store more
     lower.at_exits = at_exits && (0..pl.effective_end).all(|i| !syncs_before(pl.record, pl, i));

@@ -229,3 +229,10 @@ pub(super) fn commit_back_edge<E: Emit>(lw: &mut Lower<E>) {
         }
     }
 }
+
+/// Whether every op of `record` is one the optimizing tiers lower with
+/// values kept to the exits (`Lower::at_exits`); for any other record
+/// lowering again gives the baseline tier's instructions.
+pub(in crate::jit_backend::trace) fn ops_all_pure(record: &TraceRecord) -> bool {
+    record.ops.iter().all(|r| pure_op(r.inst.op()))
+}

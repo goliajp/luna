@@ -31,7 +31,9 @@ pub(crate) struct PucModel {
 }
 
 /// PUC's count. A safe point compares `bytes` with `gc_limit`, side by
-/// side here.
+/// side here, in this order: compiled code reads the two words itself
+/// (see [`GC_LIMIT_OFFSET`]).
+#[repr(C)]
 pub(in crate::runtime::puc) struct Count {
     /// PUC's `totalbytes`: every object and block at the size PUC gives it
     /// (`sizes`), not what luna's own objects take (see `runtime::puc`)
@@ -44,6 +46,9 @@ pub(in crate::runtime::puc) struct Count {
     /// [`CountingMark`]
     pub(in crate::runtime::puc) silent: u32,
 }
+
+/// Where `gc_limit` lies from `bytes` in [`Count`].
+pub(crate) const GC_LIMIT_OFFSET: usize = std::mem::offset_of!(Count, gc_limit);
 
 /// The records of objects PUC has and luna does not, and the state of
 /// PUC's structures luna keeps none of.

@@ -52,6 +52,21 @@ pub unsafe extern "C" fn luna_jit_gc_due(op_pc: i64) -> i64 {
     i64::from(vm.jit_gc_due(op_pc as u32))
 }
 
+/// Where the count and the point a collection step falls due at lie
+/// (`VmJitAlloc::jit_due_words`): compiled code loads it once on entry and
+/// compares the two words itself before it calls [`luna_jit_gc_due`].
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread.
+// SAFETY: no other item in the link is named `luna_jit_due_words`: only this crate defines
+// `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_due_words() -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
+    let vm = unsafe { current_jit_vm() };
+    vm.jit_due_words() as i64
+}
+
 /// Parks a deopt for the running method-JIT call, which then returns at
 /// once: the dispatcher discards its result and runs the call in the
 /// interpreter. Used where compiled code finds, before doing anything

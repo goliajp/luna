@@ -31,7 +31,7 @@ pub(crate) mod rebind;
 pub(crate) use abi::TraceCompiler;
 pub use abi::{
     CompileResult, IntChunkCompiler, IntChunkFn, IntFn1, IntFn2, IntFn3, IntFn4, JIT_GC_CALL,
-    JIT_GC_PREV, MAX_JIT_ARITY, NullJitBackend,
+    JIT_GC_LIMIT_OFFSET, JIT_GC_PREV, MAX_JIT_ARITY, NullJitBackend,
 };
 pub(crate) use rebind::JitVmRebindRestore;
 
