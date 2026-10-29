@@ -18,11 +18,14 @@ pub(crate) const SWEPT: u8 = 0x10;
 /// string sweep reaches, and those taken off the object list before it.
 #[derive(Default)]
 pub(in crate::runtime) struct StrtSweep {
+    /// the dead strings found, with their buckets
+    found: Vec<(u32, *mut GcHeader)>,
+    /// `found` by bucket in the first `len` places; the buffer only grows,
+    /// so a collection writes its places without clearing them first
     dead: Vec<(u32, *mut GcHeader)>,
+    len: usize,
     next: usize,
     pub(in crate::runtime) held: Vec<*mut GcHeader>,
-    /// room for sorting `dead` by bucket
-    sorted: Vec<(u32, *mut GcHeader)>,
     counts: Vec<u32>,
     /// the place the newest string of each bucket has in its chain
     seq: Vec<u16>,
@@ -42,40 +45,43 @@ impl StrtSweep {
     /// entry's bucket is below `buckets`.
     #[inline(never)]
     fn sort_dead(&mut self, buckets: u32) {
-        let n = self.dead.len();
+        let n = self.found.len();
+        self.len = n;
+        // every place below `n` is written; a power of two long, so that a
+        // place masked with it is seen to be within it
+        let pm = n.next_power_of_two() - 1;
+        if self.dead.len() <= pm {
+            self.dead.resize(pm + 1, (0, std::ptr::null_mut()));
+        }
+        let dead = &mut self.dead[..=pm];
         if buckets as usize > 8 * n {
-            self.dead.sort_by_key(|e| e.0);
+            self.found.sort_by_key(|e| e.0);
+            dead[..n].copy_from_slice(&self.found);
             return;
         }
         // a power of two: masking a bucket keeps it in `counts`, which the
         // compiler then sees without a bounds check
-        let m = (buckets as usize).max(1) - 1;
+        let m = buckets.max(1) - 1;
         debug_assert!(buckets <= 1 || buckets.is_power_of_two());
         self.counts.clear();
-        self.counts.resize(m + 1, 0);
-        let counts = &mut self.counts[..=m];
-        for &(b, _) in &self.dead {
-            debug_assert!(b < buckets.max(1));
-            counts[b as usize & m] += 1;
+        self.counts.resize(m as usize + 1, 0);
+        let counts = &mut self.counts[..=m as usize];
+        for &(b, _) in &self.found {
+            debug_assert!(b <= m);
+            counts[(b & m) as usize] += 1;
         }
         // each bucket's first place
         let mut at = 0;
         for c in counts.iter_mut() {
             (*c, at) = (at, at + *c);
         }
-        // every place below `n` is written: what the buffer held is not
-        // cleared, and its length a power of two, so that a place masked
-        // with it is seen to be within it
-        let pm = n.next_power_of_two() - 1;
-        self.sorted.resize(pm + 1, (0, std::ptr::null_mut()));
-        let sorted = &mut self.sorted[..=pm];
-        for &e in &self.dead {
-            let at = &mut counts[e.0 as usize & m];
-            sorted[*at as usize & pm] = e;
+        for &(b, p) in &self.found {
+            // the bucket is below `buckets`: masked, it is the same
+            let b = b & m;
+            let at = &mut counts[b as usize];
+            dead[*at as usize & pm] = (b, p);
             *at += 1;
         }
-        self.sorted.truncate(n);
-        std::mem::swap(&mut self.dead, &mut self.sorted);
     }
 }
 
@@ -83,7 +89,8 @@ impl Heap {
     /// The atomic step ended (5.1, 5.2): the dead strings of PUC's string
     /// table, by bucket.
     pub(in crate::runtime) fn collect_dead_strings(&mut self) {
-        self.puc.records.strt.dead.clear();
+        self.puc.records.strt.found.clear();
+        self.puc.records.strt.len = 0;
         self.puc.records.strt.next = 0;
         if !matches!(self.puc.dialect, Dialect::L51 | Dialect::L52) {
             return;
@@ -115,7 +122,7 @@ impl Heap {
                             _ if b.len() < 32 => Gc::from_ptr(cur as *mut LuaStr).stored_hash(),
                             _ => hash_52(b, self.seed()),
                         };
-                        self.puc.records.strt.dead.push((h & mask, cur));
+                        self.puc.records.strt.found.push((h & mask, cur));
                     }
                 }
                 cur = (*cur).next_obj();
@@ -126,7 +133,8 @@ impl Heap {
         if !crate::runtime::gc_hooks::TRACE {
             return;
         }
-        let dead = &mut self.puc.records.strt.dead;
+        let strt = &mut self.puc.records.strt;
+        let dead = &mut strt.dead[..strt.len];
         let mut i = 0;
         while i < dead.len() {
             let b = dead[i].0;
@@ -152,7 +160,7 @@ impl Heap {
     pub(in crate::runtime::puc) unsafe fn in_string_sweep(&self, h: *mut GcHeader) -> bool {
         // SAFETY: the caller's contract
         unsafe {
-            self.puc.records.strt.next < self.puc.records.strt.dead.len()
+            self.puc.records.strt.next < self.puc.records.strt.len
                 && (*h).tag == ObjTag::Str
                 && (*h).sub & (UNCOUNTED | EXTERNAL | SWEPT) == 0
                 && (self.puc.dialect == Dialect::L51 || (*(h as *const LuaStr)).is_short())
@@ -187,7 +195,7 @@ impl Heap {
                 }
             }
         }
-        self.puc.records.strt.dead.clear();
+        self.puc.records.strt.len = 0;
         self.puc.records.strt.next = 0;
     }
 
@@ -196,11 +204,15 @@ impl Heap {
     pub(in crate::runtime::puc) fn sweep_strings_upto(&mut self, upto: i64) -> i64 {
         let before = self.puc.count.bytes as i64;
         let new_white = self.white();
-        while let Some(&(b, h)) = self.puc.records.strt.dead.get(self.puc.records.strt.next) {
+        // taken for the walk, so that it is not read again each step
+        let s = &mut self.puc.records.strt;
+        let dead = std::mem::take(&mut s.dead);
+        let mut next = s.next;
+        for &(b, h) in &dead[next..s.len] {
             if i64::from(b) >= upto {
                 break;
             }
-            self.puc.records.strt.next += 1;
+            next += 1;
             // SAFETY: a dead string stays allocated until the object sweep,
             // which comes after this one; a resurrected one is skipped
             unsafe {
@@ -213,6 +225,8 @@ impl Heap {
                 self.acct_string_free((*(h as *const LuaStr)).len());
             }
         }
+        self.puc.records.strt.next = next;
+        self.puc.records.strt.dead = dead;
         before - self.puc.count.bytes as i64
     }
 }
@@ -255,11 +269,11 @@ mod tests {
             let mut want = dead.clone();
             want.sort_by_key(|e| e.0);
             let mut s = StrtSweep {
-                dead,
+                found: dead,
                 ..Default::default()
             };
             s.sort_dead(buckets);
-            assert_eq!(s.dead, want, "{n} in {buckets}");
+            assert_eq!(s.dead[..s.len], want, "{n} in {buckets}");
         }
     }
 }
