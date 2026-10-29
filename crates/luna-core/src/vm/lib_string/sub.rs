@@ -17,7 +17,9 @@ pub(super) fn s_sub<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result
 /// `string.sub(s, i, j)` past its argument checks, for compiled code of
 /// 5.3 on, whose check after it is the compiled code's: `None`, with a
 /// deopt parked, when the string cannot be made (compiled code may not
-/// collect in an emergency; the interpreter runs the call again).
+/// collect in an emergency; the interpreter runs the call again). Inlined
+/// into both helpers that make the string for compiled code.
+#[inline(always)]
 pub(crate) fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
     let b = sub_bytes(&s, i, j);
     if let Some(r) = vm.heap.find_single(b) {
