@@ -146,7 +146,7 @@ impl Vm {
             load_raised: None,
             host_cont_hooks: None,
             host_warn: None,
-            host_light: std::collections::HashMap::new(),
+            host_light: Default::default(),
             warn_state: WarnState::Off,
             warn_buf: LVec::new(mem),
             warn_cont: false,
@@ -161,6 +161,7 @@ impl Vm {
             crt_text: false,
             hook: HookState::default(),
             in_hook: false,
+            hook_failed_at: 0,
             opening_sandbox: false,
             trap: true,
             pending_tailcalls: 0,
@@ -195,9 +196,8 @@ impl Vm {
             jit: crate::vm::jit_state::JitState::with_null_backend(),
             // host roots ticket pool for the `Lua` facade
             host_roots: LVec::new(mem),
-            // MacroLua registry. Pre-populated with
-            // built-ins (`@quote` / `@unquote` / `@if` / `@gensym`)
-            // when this Vm is constructed under `LuaVersion::MacroLua`.
+            // the macro registry, with the built-ins (`@quote`, `@unquote`,
+            // `@if`, `@gensym`) under `LuaVersion::MacroLua`
             macro_registry: if version == LuaVersion::MacroLua {
                 crate::frontend::macro_expander::MacroRegistry::with_builtins()
             } else {
@@ -209,8 +209,7 @@ impl Vm {
             name_cache: Default::default(),
             lib_roots: Default::default(),
             buffer_boxes: Vec::new(),
-            // LuaUserdata trait sugar's per-Vm
-            // metatable cache. Populated lazily by register_userdata.
+            // `register_userdata`'s metatables, made as they are asked for
             userdata_metatables: std::collections::HashMap::new(),
             // Error classification metadata. Defaults to
             // Runtime; set at known sites (syntax / budget trip /

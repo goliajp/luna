@@ -70,6 +70,8 @@ impl Vm {
                         self.heap.barrier_back(co);
                     }
                     if let Err(e) = drive {
+                        // a hook that failed in it is over with it
+                        self.hooks_caught(0);
                         let kind = self.error_status(e.0, special_before);
                         self.set_coro_error(co, e.0, kind);
                     }

@@ -3,6 +3,9 @@
 
 use super::*;
 
+mod allow;
+mod protected;
+
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
 /// hookcount). `func` is the Lua hook; the booleans are the PUC mask bits.
 #[derive(Clone, Copy, Default)]
@@ -205,10 +208,11 @@ impl Vm {
         let at = top + 1;
         // `hookf` calls the hook with `lua_call`: it cannot yield
         self.nny += 1;
+        let frames = self.frames.len();
         let r = self.call_value_impl(hook, &[name, lv], from_native, Some(at));
         self.nny -= 1;
         self.pending_is_hook = false;
-        self.in_hook = false;
+        self.hook_left(frames, r.is_ok());
         self.trap = true;
         self.stack.truncate(saved_len);
         self.top = saved_top;
@@ -229,10 +233,11 @@ impl Vm {
         let gc_top = self.gc_top;
         self.gc_top = gc_top.max(self.stack.len() as u32);
         let saved_top = self.top;
+        let frames = self.frames.len();
         let r = host(self, cf, event, line);
         self.gc_top = gc_top;
         self.top = saved_top;
-        self.in_hook = false;
+        self.hook_left(frames, r.is_ok());
         self.trap = true;
         r
     }
@@ -268,9 +273,7 @@ impl Vm {
 
     /// A call hook would fire now.
     pub(super) fn call_hook_armed(&self) -> bool {
-        self.hook.call
-            && !self.in_hook
-            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
+        self.hook.call && self.hook_armed()
     }
 
     /// The call hook of a 5.1–5.3 tail call into Lua function `cl` at
@@ -313,10 +316,7 @@ impl Vm {
         ftransfer: u32,
         nresults: u32,
     ) -> Result<(), LuaError> {
-        if self.hook.ret
-            && !self.in_hook
-            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
-        {
+        if self.ret_hook_armed() {
             self.hook_ftransfer = ftransfer.min(u16::MAX as u32) as u16;
             self.hook_ntransfer = nresults.min(u16::MAX as u32) as u16;
             self.run_hook(b"return", None, from_native)?;
@@ -328,10 +328,7 @@ impl Vm {
     /// into the activation now returning, *after* its own "return" event.
     /// 5.1 hook mask `"r"` covers both `return` and `tail return`.
     pub(super) fn hook_tail_return(&mut self) -> Result<(), LuaError> {
-        if self.hook.ret
-            && !self.in_hook
-            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
-        {
+        if self.ret_hook_armed() {
             self.run_hook(b"tail return", None, false)?;
         }
         Ok(())

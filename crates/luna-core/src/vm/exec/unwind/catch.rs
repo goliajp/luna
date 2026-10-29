@@ -13,6 +13,7 @@ impl Vm {
         entry_depth: usize,
     ) -> Unwound {
         frames_pop_sync(&mut self.frames, &mut self.frames_top, &mut self.trap);
+        self.hooks_caught(self.frames.len());
         if nc.kind.is_host_pcall() {
             self.host_pcall_popped();
         }
@@ -62,6 +63,13 @@ impl Vm {
         // traceback was for that error and is no longer in flight.
         self.error_traceback = None;
         self.dead_snapshot = None;
+        // `pcall` / `xpcall` returns `false` and the error (PUC `rethook`)
+        if nc.kind.ci_top() != 0
+            && self.ret_hook_armed()
+            && let Err(e) = self.protected_caught(nc, result)
+        {
+            return Unwound::Propagated(e);
+        }
         let fs = nc.func_slot as usize;
         // the catcher's own window already holds these slots unless the
         // stack shrank under it; with no memory to regrow it the memory
