@@ -64,7 +64,8 @@ impl Vm {
         self.error_traceback = None;
         self.dead_snapshot = None;
         // `pcall` / `xpcall` returns `false` and the error (PUC `rethook`)
-        if nc.kind.ci_top() != 0
+        if self.hook.ret
+            && nc.kind.ci_top() != 0
             && self.ret_hook_armed()
             && let Err(e) = self.protected_caught(nc, result)
         {

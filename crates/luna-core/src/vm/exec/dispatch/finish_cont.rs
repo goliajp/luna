@@ -65,7 +65,7 @@ impl Vm {
             self.host_pcall_popped();
         }
         self.cont_popped(false, nc.kind.is_level());
-        if nc.kind.ci_top() != 0 && self.ret_hook_armed() {
+        if self.hook.ret && nc.kind.ci_top() != 0 && self.ret_hook_armed() {
             callee = self.protected_returned(nc, callee, nret)?;
         }
         if callee != nc.func_slot + 1 {
