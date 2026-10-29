@@ -100,18 +100,20 @@ pub(super) fn gc_due_exit_as<E: Emit>(
 }
 
 /// [`gc_due_exit`] where the count has reached the due point when `reached`
-/// is not 0.
+/// is not 0, after `slow` emits what that way needs first.
 pub(super) fn gc_due_exit_if<E: Emit>(
     lw: &mut Lower<E>,
     pl: &Plan<'_>,
     reached: Value,
     i: usize,
     next_pc: u32,
+    slow: impl FnOnce(&mut Lower<E>),
 ) {
     let (slow_blk, cont) = (lw.bcx.create_block(), lw.bcx.create_block());
     lw.bcx.ins().brif(reached, slow_blk, &[], cont, &[]);
     lw.bcx.switch_to_block(slow_blk);
     lw.bcx.seal_block(slow_blk);
+    slow(lw);
     let due = call_gc_due(lw, pl.record.ops[i].pc);
     due_exit(lw, pl, due, i, next_pc);
     lw.bcx.ins().jump(cont, &[]);
