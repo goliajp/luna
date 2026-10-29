@@ -57,3 +57,28 @@ fn every_checkpoint_collecting() {
     assert!(ran > 0, "no scripts ran");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// lua.c runs each `-e` with `docall`, one after the other in `pmain`: a
+/// collection at every check in each, and in what comes between, keeps
+/// what `pmain` holds (a `gc-verify` build checks the stack's values are
+/// live after each collection).
+#[test]
+fn chunks_run_one_after_another() {
+    for dialect in ["5.1", "5.2", "5.3", "5.4", "5.5"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_luna"))
+            .arg(format!("--lua={dialect}"))
+            .args(["-e", "t = {}", "-e", "t[#t + 1] = ('x'):rep(3)", "-e"])
+            .arg("t[#t + 1] = 'y' print(#t, t[1] .. t[2])")
+            .env("MALLOC_PERTURB_", "219")
+            .output()
+            .expect("run luna");
+        let text = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
+        assert!(
+            out.status.success(),
+            "{dialect}: {:?} {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(text, "2\txxxy\n", "{dialect}");
+    }
+}
