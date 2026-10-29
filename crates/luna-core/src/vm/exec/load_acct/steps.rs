@@ -34,6 +34,7 @@ impl Vm {
             return Ok(());
         }
         let due = self.heap.gc_due();
+        let mark = self.checkpoint_mark();
         let frame = self.parse_frame(r, temp);
         let open = self.heap.open_parse_frame(frame);
         let stepped = self.native_checkpoint_due();
@@ -48,8 +49,10 @@ impl Vm {
             );
         }
         // 5.1 and 5.2 drop a function's table when it ends: a name the step
-        // freed is made again where it is scanned next
-        if due && matches!(r.d, Dialect::L51 | Dialect::L52) {
+        // freed is made again where it is scanned next. gc-stress collects
+        // here when no step is due
+        let collected = due || self.checkpoint_mark() != mark;
+        if collected && matches!(r.d, Dialect::L51 | Dialect::L52) {
             for s in &mut r.syms {
                 s.0 = None;
             }

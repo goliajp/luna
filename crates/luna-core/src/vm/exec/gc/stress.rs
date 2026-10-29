@@ -49,6 +49,11 @@ impl Vm {
         self.stress.log.as_deref().unwrap_or_default()
     }
 
+    /// Changes when a checkpoint collects.
+    pub(in super::super) fn stress_mark(&self) -> u64 {
+        self.stress.next
+    }
+
     /// The checkpoint at `live_top` with the collector running.
     pub(in super::super) fn stress_checkpoint(&mut self, live_top: u32) {
         self.heap.safe_point();
