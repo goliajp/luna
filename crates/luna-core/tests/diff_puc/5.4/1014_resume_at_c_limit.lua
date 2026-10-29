@@ -1,7 +1,6 @@
 -- rule: ldo.lua_resume.2
 -- coroutine.resume at the C level limit: the error, the thread's status,
--- and resuming / closing it again (the depth it fails at depends on how
--- deep the script itself runs, so it is not shown)
+-- and resuming / closing it again, and the depth it fails at
 local e = 0
 local function h()
   e = e + 1
@@ -18,12 +17,12 @@ local function h()
   end
 end
 h()
-print(table.concat(R, " | "))
+print(e, table.concat(R, " | "))
 R = nil
 e = 0
 pcall(h)
-print(table.concat(R, " | "))
+print(e, table.concat(R, " | "))
 local d = 0
 local function w() d = d + 1 return coroutine.wrap(w)() end
 local ok, m = pcall(w)
-print(ok, (tostring(m):gsub("^.*: ", "")), d > 100)
+print(ok, (tostring(m):gsub("^.*: ", "")), d)
