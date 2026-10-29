@@ -113,7 +113,7 @@ pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
         }
     };
     crate::cerrno::set(2);
-    let s = vm.api_push_string(name.as_bytes())?;
+    let s = vm.api_push_string_dyn(name.as_bytes())?;
     vm.nat_ret(fs, &[s])
 }
 
