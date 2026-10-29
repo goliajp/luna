@@ -125,8 +125,13 @@ impl Vm {
             self.retry_oom(|vm| vm.heap.open_gbuff(tl))?;
         }
         let r = self.retry_oom(|vm| {
-            let mut parts: [&[u8]; 16] = [&[]; 16];
             let from = (top - n) as usize;
+            if n == 2
+                && let (Value::Str(a), Value::Str(b)) = (vm.stack[from], vm.stack[from + 1])
+            {
+                return vm.heap.try_intern_parts(&[a.as_bytes(), b.as_bytes()]);
+            }
+            let mut parts: [&[u8]; 16] = [&[]; 16];
             let strs = vm.stack[from..top as usize].iter().map(|v| match v {
                 Value::Str(s) => s.as_bytes(),
                 _ => unreachable!("converted above"),
@@ -180,10 +185,7 @@ impl Vm {
         let Some(b) = concat_piece_into(v, self.float_fmt(), &mut text) else {
             return Ok(false);
         };
-        let mut buf = [0u8; 64];
-        let len = b.len();
-        buf[..len].copy_from_slice(b);
-        let s = self.retry_oom(|vm| vm.heap.try_intern(&buf[..len]))?;
+        let s = self.retry_oom(|vm| vm.heap.try_intern(b))?;
         self.stack[slot as usize] = Value::Str(s);
         Ok(true)
     }
