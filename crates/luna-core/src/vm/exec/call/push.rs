@@ -44,24 +44,20 @@ impl Vm {
         nresults: i32,
         from_c: bool,
     ) -> Result<(), LuaError> {
-        // 5.1's `CallInfo` array is grown after the stack test
-        let grow51 = self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size;
         let at = FrameAt::new(self.version, cl.proto, func_slot, nargs);
         // PUC's stack test (`luaD_precall`) wants the arguments' top plus
         // the frame's size below the stack's end: `need + nargs` is that for
         // a function of fixed parameters and no less for a vararg one, so a
-        // test of it and the frame stack go out of line together. A function
-        // a native calls back finds the stack shorter than its frame on most
-        // calls: that room is made here, so the frame is entered by the one
-        // copy of the code the common path runs
-        if grow51
-            || at.need + nargs >= self.g.stack_last
-            || self.frames.len() == self.frames.capacity()
-        {
+        // test of it and the frame count bound (a frame stack with room, no
+        // new `CallInfo`, 5.1's array not full) go out of line together. A
+        // function a native calls back finds the stack shorter than its
+        // frame on most calls: that room is made here, so the frame is
+        // entered by the one copy of the code the common path runs
+        if at.need + nargs >= self.g.stack_last || self.frames.len() as u32 >= self.g.ci_hint {
             return self.push_frame_after_room(cl, func_slot, nargs, nresults, from_c);
         }
         self.grow_stack(at.need as usize)?;
-        self.enter_frame(cl, func_slot, nargs, nresults, from_c, at)
+        self.enter_frame::<true>(cl, func_slot, nargs, nresults, from_c, at)
     }
 
     /// [`Vm::push_frame`] near the stack's end, with the frame stack full
@@ -93,13 +89,14 @@ impl Vm {
         if self.frames.len() == self.frames.capacity() {
             self.retry_oom(|vm| vm.frames.reserve(1))?;
         }
-        self.enter_frame(cl, func_slot, nargs, nresults, from_c, at)
+        self.enter_frame::<false>(cl, func_slot, nargs, nresults, from_c, at)
     }
 
     /// Push the frame of a call [`FrameAt`] places, the stack and the frame
-    /// stack having room for it.
+    /// stack having room for it. `BELOW`: the frame count was below its
+    /// bound, so the level needs counting no more.
     #[inline(always)]
-    fn enter_frame(
+    fn enter_frame<const BELOW: bool>(
         &mut self,
         cl: Gc<LuaClosure>,
         func_slot: u32,
@@ -135,7 +132,11 @@ impl Vm {
             ccmt: std::mem::take(&mut self.pending_ccmt),
         });
         frames_push_sync(&mut self.frames, &mut self.frames_top, &mut self.trap, cf);
-        self.note_call_level();
+        if BELOW {
+            self.assert_levels_counted();
+        } else {
+            self.note_call_level();
+        }
         // 5.5 vararg layout (PUC luaT_adjustvarargs): the extra args stay on the
         // stack just below the new `base`, so a named vararg can be indexed
         // virtually without allocating a table.

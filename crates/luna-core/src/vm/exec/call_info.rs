@@ -21,15 +21,25 @@ impl Vm {
     /// has not been this deep before. `ci_alloc` stays at its maximum in
     /// 5.1, which counts its array where it grows (`grow_frames`). Only
     /// the frame count is compared here, against the count below which a
-    /// push needs no `CallInfo` (`CallGuards::ci_hint`); the fast loop's
-    /// calls test it before they push.
+    /// push needs no `CallInfo` and no larger 5.1 array
+    /// (`CallGuards::ci_hint`); the fast loop's calls test it before they
+    /// push.
     #[inline(always)]
     pub(super) fn note_call_level(&mut self) {
         if self.frames.len() as u32 > self.g.ci_hint {
             self.note_level_out_of_line();
         }
+        self.assert_levels_counted();
+    }
+
+    /// The levels in use are within what the thread has counted: its
+    /// `CallInfo`s, and 5.1's array.
+    #[inline(always)]
+    pub(super) fn assert_levels_counted(&self) {
         assert!(
-            !crate::runtime::gc_hooks::DEBUG_CHECKS || self.ci_in_use() <= self.g.ci_alloc,
+            !crate::runtime::gc_hooks::DEBUG_CHECKS
+                || self.ci_in_use() <= self.g.ci_alloc
+                    && (self.g.frame_size == u32::MAX || self.frames_in_use() <= self.g.frame_size),
             "a call level went uncounted: the frame count bound is stale"
         );
     }
@@ -39,19 +49,13 @@ impl Vm {
         self.note_level();
     }
 
-    /// A native was entered: one level more, so the frame count bound one
-    /// less (given back when it returns, see `finish_native_call`).
+    /// A native was entered, below the frame count bound (which
+    /// [`Vm::push_native`] tested): one level more, so the bound one less
+    /// (given back when it returns, see `finish_native_call`).
     #[inline(always)]
     pub(crate) fn note_native_level(&mut self) {
-        if self.frames.len() as u32 >= self.g.ci_hint {
-            self.note_level();
-        } else {
-            self.g.ci_hint -= 1;
-        }
-        assert!(
-            !crate::runtime::gc_hooks::DEBUG_CHECKS || self.ci_in_use() <= self.g.ci_alloc,
-            "a native's level went uncounted: the frame count bound is stale"
-        );
+        self.g.ci_hint -= 1;
+        self.assert_levels_counted();
     }
 
     /// A call level was entered, of a native or of a compiled call (whose
@@ -63,10 +67,14 @@ impl Vm {
         if n > self.g.ci_alloc {
             self.extend_ci_to(n);
         }
-        let room = self.frames.capacity() as u32;
+        let (room, len) = (self.frames.capacity() as u32, self.frames.len() as u32);
         // 5.1 counts no `CallInfo` here (`ci_alloc` stays at its maximum):
-        // only the room bounds the frames then
-        let free = (self.frames.len() as u32).checked_add(self.g.ci_alloc - n);
+        // its array bounds the frames, a level more than it holds growing it
+        let free = if self.g.frame_size != u32::MAX {
+            Some(len + self.g.frame_size.saturating_sub(self.frames_in_use()))
+        } else {
+            len.checked_add(self.g.ci_alloc - n)
+        };
         self.g.ci_hint = free.map_or(room, |h| h.min(room));
     }
 
