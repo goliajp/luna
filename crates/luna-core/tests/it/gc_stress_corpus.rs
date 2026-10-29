@@ -112,11 +112,12 @@ fn the_corpus_reads_and_writes_nothing_freed() {
             eprintln!("{d} {} {:.1}s", f.display(), t.elapsed().as_secs_f64());
             ran += 1;
             // bytes no UTF-8 reads (the fill among them), as many as the
-            // fixture prints on an ordinary Vm
+            // fixture prints on an ordinary Vm; that run collects at every
+            // checkpoint too in this build, so it is made only when needed
             let odd = |s: &str| s.matches('\u{FFFD}').count();
             if got.starts_with("a freed block written")
-                || odd(&got) > odd(&plain(v, &source))
                 || panics > 0
+                || (odd(&got) > 0 && odd(&got) > odd(&plain(v, &source)))
             {
                 let head: String = got.chars().take(200).collect();
                 bad.push(format!("{d} {}: {head}", f.display()));
