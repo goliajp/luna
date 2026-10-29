@@ -70,7 +70,7 @@ fn info_value(
         None => {
             // `lua_pushfstring(L, ">%s", options)`, which stays pushed
             let fmt = crate::runtime::puc::fmt::FmtArg::S(options);
-            vm.api_pushing(|vm| vm.pushfstring(b">%s", &[fmt]))?;
+            with_rules!(vm, P => vm.api_pushing::<P>(|vm| vm.pushfstring(b">%s", &[fmt])))?;
             let ar = vm.function_ar(subject);
             let lines = lines_if(vm, want_lines, subject)?;
             (ar, lines)
@@ -188,14 +188,14 @@ fn info_fields(
     activelines: Value,
 ) -> Result<Gc<Table>, LuaError> {
     let v = vm.version();
-    vm.api_check_before()?;
+    with_rules!(vm, P => vm.api_check_before::<P>())?;
     let t = if v <= LuaVersion::Lua52 {
         vm.alloc_table_sized(0, 2)?
     } else {
         vm.alloc_table()?
     };
     vm.lib_roots.push(Value::Table(t));
-    vm.api_check_after_rooted()?;
+    with_rules!(vm, P => vm.api_check_after_rooted::<P>())?;
     let has = |c: u8| options.contains(&c);
     if has(b'S') {
         // ≤5.3 push the source as a C string (up to a NUL); 5.4+ keep its
@@ -241,7 +241,7 @@ fn info_fields(
                 // `settabss(L, "name", NULL)`: from 5.3 `lua_pushstring` of
                 // NULL pushes nil and still checks for a collection
                 if v >= LuaVersion::Lua53 {
-                    vm.api_check_after(Value::Nil)?;
+                    with_rules!(vm, P => vm.api_check_after::<P>(Value::Nil))?;
                 }
                 // `lua_setfield` makes its key all the same
                 set_field(vm, t, "name", Value::Nil)?;

@@ -7,7 +7,7 @@ use super::*;
 
 /// Expand `%0`-`%9` and `%%` in template `t` for the match `[s, e)`. 5.1
 /// copies any other escaped byte literally; later versions reject it.
-pub(super) fn add_s(
+pub(super) fn add_s<const PRE: bool>(
     vm: &mut Vm,
     ms: &MatchState,
     src: &[u8],
@@ -42,8 +42,8 @@ pub(super) fn add_s(
                     .map_err(|err| pat_err(vm, err))?;
                 // `push_onecapture`, then (5.3) `luaL_tolstring` of it: the
                 // capture is on PUC's stack meanwhile
-                let v = cap_value(vm, src, c)?;
-                let r = vm.rooted(&[v], |vm| add_capture(vm, v, (out, b)));
+                let v = cap_value::<PRE>(vm, src, c)?;
+                let r = vm.rooted(&[v], |vm| add_capture::<PRE>(vm, v, (out, b)));
                 r?;
             }
             b'%' => {
@@ -61,13 +61,13 @@ pub(super) fn add_s(
 }
 
 /// Capture value `v`, rooted by the caller, added as a string.
-fn add_capture(
+fn add_capture<const PRE: bool>(
     vm: &mut Vm,
     v: Value,
     (out, b): (&mut LVec<u8>, &mut PucBuffer),
 ) -> Result<(), LuaError> {
     let x = match v {
-        _ if vm.version() == LuaVersion::Lua53 => vm.tolstring(v, 0)?,
+        _ if vm.version() == LuaVersion::Lua53 => vm.tolstring::<PRE>(v, 0)?,
         Value::Str(x) => x,
         // `luaL_addvalue`'s `lua_tolstring`
         n => vm.number_string(n)?,

@@ -13,7 +13,10 @@ pub(crate) const PUC_FNS: Natives = &[
     ("luaB_cocreate", F(co_create, Builtin::None)),
     ("luaB_coresume", C(co_resume_fn)),
     ("luaB_corunning", F(co_running, Builtin::None)),
-    ("luaB_costatus", F(co_status, Builtin::None)),
+    (
+        "luaB_costatus",
+        Ctor::R(by_rules!(co_status), Builtin::None),
+    ),
     ("luaB_cowrap", C(co_wrap_fn)),
     ("luaB_yield", F(co_yield, Builtin::None)),
     ("luaB_yieldable", F(co_isyieldable, Builtin::None)),
@@ -39,5 +42,6 @@ fn co_resume_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<Value
 
 fn co_wrap_fn(vm: &mut Vm, op: &mut Opener, id: u32, nup: u32) -> Result<Value, LuaError> {
     let w = op.own(vm, "in_wrap", in_wrap)?;
-    op.func(vm, id, co_wrap, Builtin::None, &[w], nup)
+    let f = with_rules!(vm, P => co_wrap::<P> as crate::runtime::value::NativeFn);
+    op.func(vm, id, f, Builtin::None, &[w], nup)
 }

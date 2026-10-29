@@ -7,7 +7,11 @@ use crate::runtime::puc::api::PucCount;
 /// metatable, a fresh one, or the metatable of another proxy. Only a
 /// userdata whose metatable `newproxy(true)` created — recorded in the weak
 /// set held as upvalue 0 — is a proxy; anything else is an argument error.
-pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(super) fn nat_newproxy<const PRE: bool>(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+) -> Result<u32, LuaError> {
     use crate::runtime::userdata::UserdataPayload;
     let Value::Table(proxies) = vm.nat_upval(fs, 0) else {
         unreachable!("newproxy is registered with its metatable set")
@@ -16,7 +20,7 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     vm.native_settop(1);
     // `lua_newuserdata(L, 0)` comes first, kept on the stack; it and
     // `lua_newtable` check for a collection before they allocate
-    vm.api_check_before()?;
+    vm.api_check_before::<PRE>()?;
     let size = vm.heap.puc_size(crate::runtime::puc::PucObj::udata(1, 0));
     let u = vm.lib_userdata(UserdataPayload::Empty, false, size)?;
     vm.native_push(1);
@@ -24,7 +28,7 @@ pub(super) fn nat_newproxy(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     let mt = match arg {
         v if !v.truthy() => Ok(None),
         Value::Bool(true) => (|| {
-            vm.api_check_before()?;
+            vm.api_check_before::<PRE>()?;
             let m = vm.alloc_table()?;
             // `proxies` is the weak set newproxy carries as its upvalue, so
             // the running native keeps it alive

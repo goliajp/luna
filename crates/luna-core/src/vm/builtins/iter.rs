@@ -24,7 +24,11 @@ pub(super) fn nat_next(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
 /// `pairs` without a `__pairs` metamethod (the dispatcher in exec.rs calls a
 /// present `__pairs` yieldably through `Vm::begin_pairs`, which also covers
 /// a `pairs` reached through `call_value` here).
-pub(crate) fn nat_pairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(crate) fn nat_pairs<const PRE: bool>(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+) -> Result<u32, LuaError> {
     use crate::vm::exec::Mm;
     let a = Args::new(fs, nargs);
     let ver = vm.version();
@@ -35,7 +39,7 @@ pub(crate) fn nat_pairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let t = a.get(vm, 0);
     if ver >= LuaVersion::Lua52 {
         // `luaL_getmetafield(L, 1, "__pairs")`
-        vm.metafield_check(t, b"__pairs")?;
+        vm.metafield_check::<PRE>(t, b"__pairs")?;
         let mm = vm.get_mm(t, Mm::Pairs);
         if !mm.is_nil() {
             let n = pairs_mm_results(vm);
@@ -121,7 +125,11 @@ fn ipairs_iter_raw(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
 }
 
-pub(super) fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(super) fn nat_ipairs<const PRE: bool>(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let ver = vm.version();
     if ver >= LuaVersion::Lua53 {
@@ -136,7 +144,9 @@ pub(super) fn nat_ipairs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         && let Some(mt) = vm.metatable_of(t)
     {
         // `luaL_getmetafield(L, 1, "__ipairs")`
-        let key = vm.metafield_name(t, b"__ipairs")?.expect("a metatable");
+        let key = vm
+            .metafield_name::<PRE>(t, b"__ipairs")?
+            .expect("a metatable");
         let mm = mt.get(Value::Str(key));
         if !mm.is_nil() {
             // `lua_call`: not yieldable.

@@ -272,7 +272,7 @@ fn test_eof(vm: &mut Vm, u: Gc<Userdata>) -> Rd {
         unget(u, &[c]);
     }
     // the empty string is pushed whether a byte is left or not
-    let s = vm.api_push_string(b"")?;
+    let s = vm.api_push_string_dyn(b"")?;
     Ok(if c.is_some() { s } else { Value::Nil })
 }
 

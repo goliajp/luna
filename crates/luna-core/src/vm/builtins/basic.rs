@@ -2,9 +2,9 @@
 
 use super::*;
 
-pub(super) fn nat_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(super) fn nat_type<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = argcheck::check_any(vm, Args::new(fs, nargs), 0)?;
-    let s = vm.api_push_string(v.type_name().as_bytes())?;
+    let s = vm.api_push_string::<PRE>(v.type_name().as_bytes())?;
     vm.nat_ret(fs, &[s])
 }
 
@@ -137,7 +137,11 @@ pub(super) fn nat_rawlen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     vm.nat_ret(fs, &[Value::Int(n)])
 }
 
-pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(super) fn nat_setmetatable<const PRE: bool>(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+) -> Result<u32, LuaError> {
     use crate::vm::exec::Mm;
     let a = Args::new(fs, nargs);
     let t = argcheck::check_table(vm, a, 0)?;
@@ -147,7 +151,7 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
         Value::Table(m) => Some(m),
         _ => return Err(argcheck::arg_expected(vm, a, 1, "nil or table")),
     };
-    vm.metafield_check(Value::Table(t), b"__metatable")?;
+    vm.metafield_check::<PRE>(Value::Table(t), b"__metatable")?;
     if !vm.get_mm(Value::Table(t), Mm::Metatable).is_nil() {
         // over the `__metatable` field `luaL_getmetafield` pushed
         vm.native_push(1);
@@ -164,11 +168,15 @@ pub(super) fn nat_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     vm.nat_ret(fs, &[Value::Table(t)])
 }
 
-pub(super) fn nat_getmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(super) fn nat_getmetatable<const PRE: bool>(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+) -> Result<u32, LuaError> {
     use crate::vm::exec::Mm;
     let v = argcheck::check_any(vm, Args::new(fs, nargs), 0)?;
     // __metatable protection: return that field instead
-    vm.metafield_check(v, b"__metatable")?;
+    vm.metafield_check::<PRE>(v, b"__metatable")?;
     let protected = vm.get_mm(v, Mm::Metatable);
     if !protected.is_nil() {
         return vm.nat_ret(fs, &[protected]);

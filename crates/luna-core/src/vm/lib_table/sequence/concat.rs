@@ -31,16 +31,16 @@ fn concat_sep(vm: &mut Vm, a: Args) -> Result<Sep, LuaError> {
     })
 }
 
-pub(in crate::vm::lib_table) fn t_concat(
+pub(in crate::vm::lib_table) fn t_concat<const PRE: bool>(
     vm: &mut Vm,
     fs: u32,
     nargs: u32,
 ) -> Result<u32, LuaError> {
     // 5.1's buffer keeps its strings on the stack: an error lets them go
-    vm.lib_scope(|vm| concat(vm, fs, nargs))
+    vm.lib_scope(|vm| concat::<PRE>(vm, fs, nargs))
 }
 
-fn concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn concat<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let (tv, sep, i, last) = if vm.version() <= V::Lua52 {
         // ≤5.2 reads the separator before checking the table, and takes
@@ -78,7 +78,7 @@ fn concat(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if out.len() > crate::runtime::string::MAX_LEN {
         return Err(vm.rt_err("string length overflow"));
     }
-    let s = b.finish(vm, &out)?;
+    let s = b.finish::<PRE>(vm, &out)?;
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[Value::Str(s)])
 }

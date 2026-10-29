@@ -191,7 +191,7 @@ impl Vm {
         let (saved_top, saved_len) = (self.top, self.stack.len());
         // `hookf` pushes the event's name; a call hook's function is past its first op
         let call = matches!(event, b"call" | b"tail call");
-        let name = self.traced_as(false, call, |vm| vm.api_push_string(event))?;
+        let name = self.traced_as(false, call, |vm| vm.api_push_string_dyn(event))?;
         let lv = line.map_or(Value::Nil, Value::Int);
         self.in_hook = true;
         // PUC's trampoline `hookf` sits between the engine and the Lua hook,

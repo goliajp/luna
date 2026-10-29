@@ -167,7 +167,7 @@ impl PucBuffer {
         vm.refuse_box(&mut self.ubox, self.slot, self.d, (old, newsize))?;
         match self.d {
             Dialect::L52 => {
-                vm.api_check_before()?;
+                vm.api_check_before::<true>()?;
                 vm.ghost(PucObj::udata(0, newsize))?;
             }
             _ if self.boxed => vm.heap.trace_raw(self.size, newsize),
@@ -219,7 +219,7 @@ impl Vm {
     /// adds it a character at a time (`luaL_addchar`, `luaL_addlstring`),
     /// later dialects ask for its whole size first (`luaL_buffinitsize`,
     /// `luaL_pushresultsize`).
-    pub(crate) fn buffer_result(&mut self, out: &[u8]) -> Result<Value, LuaError> {
+    pub(crate) fn buffer_result<const PRE: bool>(&mut self, out: &[u8]) -> Result<Value, LuaError> {
         self.lib_scope(|vm| {
             let mut b = match vm.heap.dialect() {
                 Dialect::L51 => PucBuffer::new(vm),
@@ -229,7 +229,7 @@ impl Vm {
                 Dialect::L51 => b.add(vm, out, out.len())?,
                 _ => b.n = out.len(),
             }
-            Ok(Value::Str(b.finish(vm, out)?))
+            Ok(Value::Str(b.finish::<PRE>(vm, out)?))
         })
     }
 }

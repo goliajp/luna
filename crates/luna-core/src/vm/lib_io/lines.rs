@@ -34,7 +34,7 @@ fn make_lines(
         up.extend_from_slice(fmts)?;
         nup = 3 + fmts.len();
     }
-    vm.lib_native_puc(io_readline, &up, nup)
+    with_rules!(vm, P => vm.lib_native_puc::<P>(io_readline, &up, nup))
 }
 
 pub(super) fn f_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

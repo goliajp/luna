@@ -23,22 +23,28 @@ impl Vm {
         v: Value,
         extra: u32,
     ) -> Result<Vec<u8>, LuaError> {
-        Ok(self.tolstring(v, extra)?.as_bytes().to_vec())
+        Ok(with_rules!(self, P => self.tolstring::<P>(v, extra))?
+            .as_bytes()
+            .to_vec())
     }
 
     /// PUC `luaL_tolstring` (5.2+), the string made as PUC makes it, with
     /// the running native's `extra` slots past its top live while it runs:
     /// a collection it checks for keeps what they hold.
-    pub(crate) fn tolstring(&mut self, v: Value, extra: u32) -> Result<Gc<LuaStr>, LuaError> {
+    pub(crate) fn tolstring<const PRE: bool>(
+        &mut self,
+        v: Value,
+        extra: u32,
+    ) -> Result<Gc<LuaStr>, LuaError> {
         self.native_push(extra);
-        let r = self.tolstring_above(v);
+        let r = self.tolstring_above::<PRE>(v);
         self.native_pop(extra);
         r
     }
 
-    fn tolstring_above(&mut self, v: Value) -> Result<Gc<LuaStr>, LuaError> {
+    fn tolstring_above<const PRE: bool>(&mut self, v: Value) -> Result<Gc<LuaStr>, LuaError> {
         // `luaL_callmeta(L, idx, "__tostring")`
-        self.metafield_check(v, b"__tostring")?;
+        self.metafield_check::<PRE>(v, b"__tostring")?;
         let mm = self.get_mm(v, Mm::ToString);
         if !mm.is_nil() {
             // `luaL_callmeta` is a plain `lua_call`: `__tostring` cannot yield.
@@ -81,17 +87,18 @@ impl Vm {
                     }
                     _ => return self.number_string(v),
                 };
-                self.api_check_pushed(Value::Str(s))?;
+                // 5.3 on
+                self.api_check_pushed::<false>(Value::Str(s))?;
                 Ok(s)
             }
-            _ => self.pushed_text(v),
+            _ => self.pushed_text::<PRE>(v),
         }
     }
 
     /// `lua_pushstring` / `lua_pushfstring` of the text `tostring` gives a
     /// value that is no number or string, checked for as PUC checks.
-    fn pushed_text(&mut self, v: Value) -> Result<Gc<LuaStr>, LuaError> {
-        self.api_check_before()?;
+    fn pushed_text<const PRE: bool>(&mut self, v: Value) -> Result<Gc<LuaStr>, LuaError> {
+        self.api_check_before::<PRE>()?;
         let r = match v {
             Value::Nil => self.alloc_str(b"nil"),
             Value::Bool(b) => self.alloc_str(if b { b"true" } else { b"false" }),
@@ -101,7 +108,7 @@ impl Vm {
                 } else {
                     // 5.3 on: `luaL_getmetafield(L, idx, "__name")`
                     if self.version >= LuaVersion::Lua53 {
-                        self.metafield_check(v, b"__name")?;
+                        self.metafield_check::<false>(v, b"__name")?;
                     }
                     self.obj_typename(v)
                 };
@@ -109,7 +116,7 @@ impl Vm {
                 self.pushfstring(b"%s: %p", &[FmtArg::S(kind.as_bytes()), FmtArg::P(p)])
             }
         }?;
-        self.api_check_after(Value::Str(r))?;
+        self.api_check_after::<PRE>(Value::Str(r))?;
         Ok(r)
     }
 
@@ -129,10 +136,10 @@ impl Vm {
                 self.nat_set_arg(fs, arg, Value::Str(s));
                 // `lua_pushstring` of the converted text, which checks
                 // before it finds the string made already
-                self.api_check_before()?;
+                self.api_check_before::<true>()?;
                 Ok(s)
             }
-            _ => self.pushed_text(v),
+            _ => self.pushed_text::<true>(v),
         }
     }
 

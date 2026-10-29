@@ -93,7 +93,7 @@ fn missing_arg(vm: &mut Vm, opt: KOption, arg: u32) -> LuaError {
         KOption::Char | KOption::Str | KOption::Zstr => "string",
         _ => "number",
     };
-    if let Err(e) = vm.metafield_check(Value::Nil, b"__name") {
+    if let Err(e) = vm.metafield_check_dyn(Value::Nil, b"__name") {
         return e;
     }
     let fmt = b"%s expected, got %s";

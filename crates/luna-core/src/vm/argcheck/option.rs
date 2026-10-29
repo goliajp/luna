@@ -45,8 +45,8 @@ pub(crate) fn pushed_extra(
         return Err(e);
     }
     vm.native_push(1);
-    vm.api_check_before()?;
+    with_rules!(vm, P => vm.api_check_before::<P>())?;
     let m = vm.pushfstring(fmt, args)?;
-    vm.api_check_after(Value::Str(m))?;
+    with_rules!(vm, P => vm.api_check_after::<P>(Value::Str(m)))?;
     Ok(String::from_utf8_lossy(m.as_bytes()).into_owned())
 }

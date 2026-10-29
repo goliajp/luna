@@ -1,5 +1,7 @@
 //! Bytecode VM: instruction set, errors, interpreter, builtins.
 
+#[macro_use]
+mod rules;
 pub(crate) mod argcheck;
 pub mod builtins;
 pub(crate) mod c_abi;

@@ -107,7 +107,7 @@ fn value_type_msg(vm: &mut Vm, v: Option<Value>, expected: &str) -> Result<Strin
     let got = v.map_or_else(|| "no value".to_string(), |v| typename_of(vm, v));
     let v = v.filter(|_| vm.version() >= LuaVersion::Lua53);
     if let Some(v) = v {
-        vm.metafield_check(v, b"__name")?;
+        vm.metafield_check_dyn(v, b"__name")?;
     }
     let named = v.is_some_and(|v| !vm.get_mm(v, crate::vm::exec::Mm::Name).is_nil());
     vm.native_push(u32::from(named));

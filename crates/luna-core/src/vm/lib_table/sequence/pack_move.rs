@@ -2,11 +2,11 @@
 
 use super::*;
 
-pub(crate) fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(crate) fn t_pack<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // `lua_createtable(L, n, 1)`: the arguments, nil ones included, fill an
     // array part of exactly their count; the table is young until it is
     // returned, so an emergency collection keeps it
-    vm.api_check_before()?;
+    vm.api_check_before::<PRE>()?;
     let t = vm.alloc_table()?;
     let r = vm.table_op(|vm| {
         // SAFETY: `t` was allocated above and is held only by this local;
@@ -16,7 +16,7 @@ pub(crate) fn t_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     if let Err(e) = r {
         return Err(vm.table_error(e));
     }
-    vm.api_check_after(Value::Table(t))?;
+    vm.api_check_after::<PRE>(Value::Table(t))?;
     for i in 0..nargs {
         let v = vm.nat_arg(fs, nargs, i);
         // SAFETY: as above, for this one store
@@ -60,7 +60,7 @@ pub(crate) fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     vm.nat_ret(fs, &[a2])
 }
 
-pub(crate) fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(crate) fn t_create<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let n = argcheck::check_integer(vm, a, 0)? as u64;
     let m = argcheck::opt_integer(vm, a, 1, 0)? as u64;
@@ -88,6 +88,6 @@ pub(crate) fn t_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     // off again: 5.5 sort.lua:22 checks `memdiff > N * 4` after
     // `table.create(N)`
     let t = vm.alloc_table_sized(n as usize, m as usize)?;
-    vm.api_check_after(Value::Table(t))?;
+    vm.api_check_after::<PRE>(Value::Table(t))?;
     vm.nat_ret(fs, &[Value::Table(t)])
 }

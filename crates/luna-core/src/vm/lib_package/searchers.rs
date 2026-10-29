@@ -39,11 +39,11 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
             b"\n\tno field package.preload['%s']"
         };
         let args = [crate::runtime::puc::fmt::FmtArg::S(c_str(name.as_bytes()))];
-        let m = vm.api_pushfstring(1, fmt, &args)?;
+        let m = with_rules!(vm, P => vm.api_pushfstring::<P>(1, fmt, &args))?;
         return vm.nat_ret(fs, &[Value::Str(m)]);
     }
     if v >= LuaVersion::Lua54 {
-        let data = vm.api_push_string(b":preload:")?;
+        let data = vm.api_push_string_dyn(b":preload:")?;
         return vm.nat_ret(fs, &[loader, data]);
     }
     vm.nat_ret(fs, &[loader])
@@ -79,7 +79,7 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             };
             vm.lib_roots.extend([f, fname]);
             let at = crate::runtime::puc::records::strcache::CStr::In(fstr.as_ptr() as *const _, 0);
-            let pushed = vm.api_push_string_at(at, &file);
+            let pushed = with_rules!(vm, P => vm.api_push_string_at::<P>(at, &file));
             vm.lib_roots.pop_n(2);
             let pushed = pushed?;
             found.returned(vm, &[f, pushed])?;
@@ -116,7 +116,7 @@ pub(super) fn searcher_croot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lu
     };
     let pkg = upval_table(vm, fs, 0);
     // the root is pushed, and searched for from there
-    let root = vm.api_push_string(&name[..dot])?;
+    let root = vm.api_push_string_dyn(&name[..dot])?;
     let found = vm.rooted(&[root], |vm| find_file(vm, pkg, &name[..dot], "cpath"));
     match found? {
         Ok(f) => Err(load_error(vm, &name, &f.file, DLMSG)),

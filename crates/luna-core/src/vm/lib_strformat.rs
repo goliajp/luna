@@ -47,12 +47,12 @@ fn max_item(v: LuaVersion) -> usize {
     }
 }
 
-pub(crate) fn s_format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(crate) fn s_format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // 5.1's buffer keeps its strings on the stack: an error lets them go
-    vm.lib_scope(|vm| format(vm, fs, nargs))
+    vm.lib_scope(|vm| format::<PRE>(vm, fs, nargs))
 }
 
-fn format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let f = argcheck::check_string(vm, a, 0)?;
     let fmt = f.as_bytes();
@@ -101,9 +101,9 @@ fn format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
         let before = out.len();
         let item = if v >= LuaVersion::Lua54 {
-            item54(vm, a, arg, fmt, i, &mut out)
+            item54::<PRE>(vm, a, arg, fmt, i, &mut out)
         } else {
-            item51(vm, a, arg, fmt, i, &mut out)
+            item51::<PRE>(vm, a, arg, fmt, i, &mut out)
         };
         i = match item {
             Ok((i, Added::Value(s))) => {
@@ -132,7 +132,7 @@ fn format(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     if out.len() > crate::runtime::string::MAX_LEN {
         return Err(vm.rt_err("string length overflow"));
     }
-    let s = b.finish(vm, &out)?;
+    let s = b.finish::<PRE>(vm, &out)?;
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[Value::Str(s)])
 }
@@ -186,7 +186,7 @@ fn scanformat(vm: &mut Vm, fmt: &[u8], start: usize) -> Result<usize, LuaError> 
 
 /// Argument `arg` when it is a string `luaL_tolstring` gives back as it
 /// is (no `__tostring` in the way).
-fn plain_str(
+fn plain_str<const PRE: bool>(
     vm: &mut Vm,
     a: Args,
     arg: u32,
@@ -195,7 +195,7 @@ fn plain_str(
     Ok(match v {
         Value::Str(s) if vm.get_mm(v, crate::vm::exec::Mm::ToString).is_nil() => {
             // `luaL_tolstring`'s `luaL_callmeta`
-            vm.metafield_check(v, b"__tostring")?;
+            vm.metafield_check::<PRE>(v, b"__tostring")?;
             Some(s)
         }
         _ => None,

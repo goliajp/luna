@@ -114,10 +114,10 @@ fn wrap_where(vm: &mut Vm, err: Value) -> Value {
     r.unwrap_or_else(|e| e.0)
 }
 
-pub(super) fn co_wrap(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+pub(super) fn co_wrap<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let co = new_body_coro(vm, Args::new(fs, nargs))?;
     let in_wrap = vm.nat_upval(fs, 0);
     // PUC's function has the coroutine alone
-    let f = vm.lib_native_puc(co_wrapped, &[Value::Coro(co), in_wrap], 1)?;
+    let f = vm.lib_native_puc::<PRE>(co_wrapped, &[Value::Coro(co), in_wrap], 1)?;
     vm.nat_ret(fs, &[f])
 }

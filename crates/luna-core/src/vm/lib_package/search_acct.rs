@@ -83,7 +83,7 @@ fn search_54(
         }
         off += file.len() + 1;
     }
-    let pushed = b.finish(vm, &out)?;
+    let pushed = with_rules!(vm, P => b.finish::<P>(vm, &out))?;
     vm.lib_roots.push(Value::Str(pushed));
     // `pusherrornotfound(L, lua_tostring(L, -1))`
     let mut b = PucBuffer::new(vm);
@@ -92,7 +92,7 @@ fn search_54(
     addgsub(vm, &mut b, &mut msg, expanded, b";", b"'\n\tno file '")?;
     msg.push(b'\'');
     b.add(vm, &msg, 1)?;
-    Ok(Err(b.finish(vm, &msg)?))
+    Ok(Err(with_rules!(vm, P => b.finish::<P>(vm, &msg))?))
 }
 
 /// 5.1 to 5.3: each template pushed, its file name made with `luaL_gsub`,
@@ -120,7 +120,7 @@ fn search_51(
     };
     // 5.1's accumulator, `lua_pushliteral(L, "")`
     let mut acc = if v51 {
-        Some(vm.api_push_string(b"")?)
+        Some(vm.api_push_string_dyn(b"")?)
     } else {
         None
     };
@@ -138,7 +138,7 @@ fn search_51(
         let end = rest.iter().position(|&c| c == b';').unwrap_or(rest.len());
         let (tpl, next) = rest.split_at(end);
         rest = next;
-        vm.api_pushing(|vm| vm.alloc_str(tpl))?;
+        with_rules!(vm, P => vm.api_pushing::<P>(|vm| vm.alloc_str(tpl)))?;
         let (file, made) = gsub(vm, tpl, b"?", &name)?;
         // `lua_remove(L, -2)`: the template goes, the file name stays
         remove_below_top(vm);
@@ -150,7 +150,7 @@ fn search_51(
                 buf: None,
             }));
         }
-        let entry = vm.api_pushfstring(1, b"\n\tno file '%s'", &[FmtArg::S(&file)])?;
+        let entry = with_rules!(vm, P => vm.api_pushfstring::<P>(1, b"\n\tno file '%s'", &[FmtArg::S(&file)]))?;
         vm.lib_roots.push(Value::Str(entry));
         // and the file name, the entry above it
         remove_below_top(vm);
@@ -163,7 +163,7 @@ fn search_51(
             (None, Some(a)) => {
                 // `lua_concat(L, 2)` of the accumulator and the entry: both
                 // replaced by the result
-                vm.api_check_before()?;
+                with_rules!(vm, P => vm.api_check_before::<P>())?;
                 let joined = crate::vm::builtins::concat2(vm, *a, Value::Str(entry))?;
                 vm.lib_roots.pop_n(2);
                 vm.lib_roots.push(joined);
@@ -173,7 +173,7 @@ fn search_51(
         }
     }
     match (msg, acc) {
-        (Some((b, out)), _) => Ok(Err(b.finish(vm, &out)?)),
+        (Some((b, out)), _) => Ok(Err(with_rules!(vm, P => b.finish::<P>(vm, &out))?)),
         (None, Some(Value::Str(s))) => Ok(Err(s)),
         _ => unreachable!("the message is a string"),
     }
@@ -190,7 +190,7 @@ fn gsub(vm: &mut Vm, s: &[u8], p: &[u8], r: &[u8]) -> Result<(Vec<u8>, Gc<LuaStr
     let mut b = PucBuffer::new(vm);
     let mut out = Vec::new();
     addgsub(vm, &mut b, &mut out, s, p, r)?;
-    let made = b.finish(vm, &out)?;
+    let made = with_rules!(vm, P => b.finish::<P>(vm, &out))?;
     vm.lib_roots.push(Value::Str(made));
     Ok((out, made))
 }

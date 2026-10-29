@@ -89,7 +89,7 @@ fn bounds(v: LuaVersion, old: &'static str, new: &'static str) -> &'static str {
     if v == LuaVersion::Lua53 { old } else { new }
 }
 
-fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn u_char<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     // with several arguments the buffer's slot counts for an error
@@ -115,7 +115,7 @@ fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
         // `pushutfchar`: `lua_pushfstring(L, "%U", code)`
         let s = vm.pushfstring(b"%U", &[FmtArg::U(code as u32)])?;
-        vm.api_check_after(Value::Str(s))?;
+        vm.api_check_after::<PRE>(Value::Str(s))?;
         let Some(b) = b.as_mut() else {
             return vm.nat_ret(fs, &[Value::Str(s)]);
         };
@@ -123,7 +123,7 @@ fn u_char(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         b.add_value(vm, &out, s)?;
     }
     let b = b.expect("several arguments, or none");
-    let s = b.finish(vm, &out)?;
+    let s = b.finish::<PRE>(vm, &out)?;
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[Value::Str(s)])
 }

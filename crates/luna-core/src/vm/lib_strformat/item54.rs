@@ -36,7 +36,7 @@ fn checkformat(vm: &mut Vm, form: &[u8], flags: &[u8], precision: bool) -> Resul
 
 /// One conversion under 5.4 or 5.5. Returns where scanning resumes.
 #[inline]
-pub(super) fn item54(
+pub(super) fn item54<const PRE: bool>(
     vm: &mut Vm,
     a: Args,
     arg: u32,
@@ -107,16 +107,16 @@ pub(super) fn item54(
             if form.len() > 2 {
                 return Err(raise_str(vm, "specifier '%q' cannot have modifiers"));
             }
-            added = addliteral(vm, a, arg, out)?;
+            added = addliteral::<PRE>(vm, a, arg, out)?;
         }
         b's' => {
             if form.len() == 2
-                && let Some(s) = plain_str(vm, a, arg)?
+                && let Some(s) = plain_str::<PRE>(vm, a, arg)?
             {
                 vm.buf_push(out, s.as_bytes())?;
                 return Ok((p + 1, Added::Value(s)));
             }
-            added = string_item(vm, a, arg, out, form, &sp)?;
+            added = string_item::<PRE>(vm, a, arg, out, form, &sp)?;
         }
         _ => return Err(invalid_conversion(vm, form)),
     }
@@ -127,7 +127,7 @@ pub(super) fn item54(
 /// `__tostring` runs above the buffer's slot, its result left pushed over
 /// the errors that follow), then the bytes formatted by `form`.
 #[cfg_attr(luna_hot, inline(always))]
-fn string_item(
+fn string_item<const PRE: bool>(
     vm: &mut Vm,
     a: Args,
     arg: u32,
@@ -140,7 +140,7 @@ fn string_item(
     let buf = vm.buffer_slot(out.len());
     vm.native_hold_top(&[Vm::buffer_box()][..buf as usize])?;
     let v = a.get(vm, arg);
-    let gs = vm.tolstring(v, buf)?;
+    let gs = vm.tolstring::<PRE>(v, buf)?;
     let s = gs.as_bytes().to_vec();
     if form.len() == 2 {
         vm.buf_push(out, &s)?;

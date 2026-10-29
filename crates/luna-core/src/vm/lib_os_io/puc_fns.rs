@@ -9,7 +9,7 @@ use Ctor::F;
 pub(crate) const PUC_FNS: Natives = &[
     ("luaopen_os", Ctor::Open(luaopen_os)),
     ("os_clock", F(os_clock, Builtin::None)),
-    ("os_date", F(os_date, Builtin::None)),
+    ("os_date", Ctor::R(by_rules!(os_date), Builtin::None)),
     ("os_difftime", F(os_difftime, Builtin::None)),
     ("os_execute", F(os_execute, Builtin::None)),
     ("os_exit", F(os_exit, Builtin::None)),

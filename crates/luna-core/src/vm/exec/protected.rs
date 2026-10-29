@@ -260,7 +260,7 @@ impl Vm {
         self.g.nccalls += 1;
         let arg = self.stack[(func_slot + 1) as usize];
         // `luaL_getmetafield(L, 1, "__pairs")`, inside `luaB_pairs`
-        self.traced_as(true, false, |vm| vm.metafield_check(arg, b"__pairs"))?;
+        self.traced_as(true, false, |vm| vm.metafield_check_dyn(arg, b"__pairs"))?;
         let mm = self.get_mm(arg, Mm::Pairs);
         self.stack[(func_slot + at + 1) as usize] = arg;
         self.stack[(func_slot + at) as usize] = mm;

@@ -51,7 +51,7 @@ pub(crate) fn addquoted(vm: &mut Vm, s: &[u8], out: &mut LVec<u8>) -> Result<(),
 }
 
 /// 5.3+ `addliteral`: any value that has a literal form.
-pub(crate) fn addliteral(
+pub(crate) fn addliteral<const PRE: bool>(
     vm: &mut Vm,
     a: Args,
     arg: u32,
@@ -71,7 +71,7 @@ pub(crate) fn addliteral(
         Value::Float(x) => quotefloat(vm.version(), x, &mut item),
         v @ (Value::Nil | Value::Bool(_)) => {
             // `luaL_tolstring` and `luaL_addvalue`
-            let s = vm.tolstring(v, 0)?;
+            let s = vm.tolstring::<PRE>(v, 0)?;
             vm.buf_push(out, s.as_bytes())?;
             return Ok(Added::Value(s));
         }

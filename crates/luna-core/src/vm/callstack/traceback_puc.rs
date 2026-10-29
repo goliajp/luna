@@ -111,10 +111,10 @@ impl Vm {
         &mut self,
         f: impl FnOnce(&mut crate::runtime::Heap) -> Result<Gc<LuaStr>, crate::runtime::mem::Oom>,
     ) -> Result<(), LuaError> {
-        self.api_check_before()?;
+        with_rules!(self, P => self.api_check_before::<P>())?;
         let s = f(&mut self.heap)?;
         self.lib_roots.push(Value::Str(s));
-        self.api_check_after_rooted()?;
+        with_rules!(self, P => self.api_check_after_rooted::<P>())?;
         Ok(())
     }
 
@@ -248,7 +248,7 @@ impl Vm {
                 _ => {}
             }
         }
-        b.finish(self, &out)
+        with_rules!(self, P => b.finish::<P>(self, &out))
     }
 
     /// `luaL_addvalue` of the string on top of `lib_roots`, popped after.

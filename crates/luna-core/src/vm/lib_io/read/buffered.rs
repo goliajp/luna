@@ -28,7 +28,9 @@ pub(crate) fn buffered(
         at += 1;
         b.add_chars(vm, &bytes[..at], 1)?;
     }
-    Ok(Value::Str(b.finish(vm, &bytes[..at])?))
+    Ok(Value::Str(
+        with_rules!(vm, P => b.finish::<P>(vm, &bytes[..at]))?,
+    ))
 }
 
 /// `LUAL_BUFFERSIZE`.

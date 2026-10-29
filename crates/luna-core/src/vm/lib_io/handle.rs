@@ -16,7 +16,7 @@ pub(super) fn new_file(
     // PUC's handle: 5.1 a `FILE *`, later a `luaL_Stream` (the file and
     // its close function), from 5.4 with no user value
     let size = vm.heap.puc_size(crate::runtime::puc::PucObj::Stream);
-    vm.api_check_before()?;
+    with_rules!(vm, P => vm.api_check_before::<P>())?;
     let u = vm.lib_userdata(UserdataPayload::File(fh), writable, size)?;
     // a stream the collector frees writes out what it buffered
     vm.heap.on_userdata_freed(write_out_freed);
@@ -40,9 +40,12 @@ pub(super) fn failed_handle<R>(
     vm: &mut Vm,
     then: impl FnOnce(&mut Vm) -> Result<R, LuaError>,
 ) -> Result<R, LuaError> {
-    let u = new_file(vm, FileHandle::Closed, false, |vm, u| {
-        vm.api_check_after(Value::Userdata(u))
-    })?;
+    let u = new_file(
+        vm,
+        FileHandle::Closed,
+        false,
+        |vm, u| with_rules!(vm, P => vm.api_check_after::<P>(Value::Userdata(u))),
+    )?;
     vm.rooted(&[Value::Userdata(u)], |vm| then(vm))
 }
 
@@ -220,7 +223,7 @@ pub(super) fn f_gc(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         // PUC's f_gc drops aux_close's results; `io_noclose` makes its
         // message all the same
         if let Closed::Std = close_stream(u) {
-            vm.api_push_string(b"cannot close standard file")?;
+            vm.api_push_string_dyn(b"cannot close standard file")?;
         }
     }
     vm.nat_ret(fs, &[])
@@ -233,7 +236,7 @@ pub(super) fn f_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     } else {
         format!("file ({})", crate::numeric::c_pointer(u.as_ptr() as usize))
     };
-    let v = vm.api_push_string(s.as_bytes())?;
+    let v = vm.api_push_string_dyn(s.as_bytes())?;
     vm.nat_ret(fs, &[v])
 }
 
@@ -241,8 +244,8 @@ pub(super) fn io_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     let v = argcheck::check_any(vm, Args::new(fs, nargs), 0)?;
     let r = match test_file(vm, v) {
         None => Value::Nil,
-        Some(u) if u.file().is_closed() => vm.api_push_string(b"closed file")?,
-        Some(_) => vm.api_push_string(b"file")?,
+        Some(u) if u.file().is_closed() => vm.api_push_string_dyn(b"closed file")?,
+        Some(_) => vm.api_push_string_dyn(b"file")?,
     };
     vm.nat_ret(fs, &[r])
 }

@@ -3,7 +3,7 @@
 use super::*;
 
 /// One conversion under 5.1, 5.2 or 5.3. Returns where scanning resumes.
-pub(super) fn item51(
+pub(super) fn item51<const PRE: bool>(
     vm: &mut Vm,
     a: Args,
     arg: u32,
@@ -93,12 +93,12 @@ pub(super) fn item51(
                 addquoted(vm, s.as_bytes(), out)?;
                 added = Added::Chars;
             }
-            _ => added = addliteral(vm, a, arg, out)?,
+            _ => added = addliteral::<PRE>(vm, a, arg, out)?,
         },
         b's' => {
             if v >= LuaVersion::Lua53
                 && body.is_empty()
-                && let Some(s) = plain_str(vm, a, arg)?
+                && let Some(s) = plain_str::<PRE>(vm, a, arg)?
             {
                 vm.buf_push(out, s.as_bytes())?;
                 return Ok((p + 1, Added::Value(s)));
@@ -110,10 +110,10 @@ pub(super) fn item51(
                 let buf = vm.buffer_slot(out.len());
                 vm.native_hold_top(&[Vm::buffer_box()][..buf as usize])?;
                 if v == LuaVersion::Lua52 {
-                    tolstring_52(vm, a.get(vm, arg), buf)?
+                    tolstring_52::<PRE>(vm, a.get(vm, arg), buf)?
                 } else {
                     let v = a.get(vm, arg);
-                    Some(vm.tolstring(v, buf)?)
+                    Some(vm.tolstring::<PRE>(v, buf)?)
                 }
             };
             let s = gs.map_or(b"(null)".to_vec(), |g| g.as_bytes().to_vec());
@@ -172,18 +172,18 @@ pub(super) fn item51(
 /// value that is not a string or a number formats as C's `%s` of a null
 /// pointer.
 /// The string it leaves pushed; none for such a value.
-fn tolstring_52(
+fn tolstring_52<const PRE: bool>(
     vm: &mut Vm,
     v: Value,
     extra: u32,
 ) -> Result<Option<crate::runtime::Gc<crate::runtime::LuaStr>>, LuaError> {
     let mm = vm.get_mm(v, crate::vm::exec::Mm::ToString);
     if mm.is_nil() {
-        return vm.tolstring(v, extra).map(Some);
+        return vm.tolstring::<PRE>(v, extra).map(Some);
     }
     // the slots past the top stay live through the collection it checks for
     vm.native_push(extra);
-    let r = vm.metafield_check(v, b"__tostring");
+    let r = vm.metafield_check::<PRE>(v, b"__tostring");
     vm.native_pop(extra);
     r?;
     match vm
