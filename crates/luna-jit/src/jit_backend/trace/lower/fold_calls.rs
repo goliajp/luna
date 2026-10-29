@@ -63,10 +63,14 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     }
     // 5.3 on check after `lua_pushlstring` pushed it, where the helper set
     // the low bit
+    // (clear on the way that goes on, cleared on the way that checks)
     let reached = lw.bcx.ins().band_imm_s(r, 1);
-    let r = lw.bcx.ins().bxor(r, reached);
     lw.bcx.def_var(regs[a as usize], r);
-    gc_due_exit_if(lw, pl, reached, oc.i, oc.rop.pc + 1);
+    let var = regs[a as usize];
+    gc_due_exit_if(lw, pl, reached, oc.i, oc.rop.pc + 1, |lw| {
+        let clear = lw.bcx.ins().bxor_imm_u(r, 1);
+        lw.bcx.def_var(var, clear);
+    });
     Some(())
 }
 
