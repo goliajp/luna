@@ -185,7 +185,7 @@ impl Vm {
 
     /// The C function yielding, on top of the running natives.
     pub(crate) fn note_yield_ci_top(&mut self) {
-        self.yield_ci_top = self.running_natives.last().map_or(0, |a| a.ci_top);
+        self.yield_ci_top = self.running_natives.last().map_or(0, |a| a.ci_top());
         self.note_yield_top(u32::MAX);
     }
 
