@@ -4,7 +4,9 @@
 use super::*;
 
 mod allow;
+mod hookf;
 mod protected;
+pub(crate) use hookf::hook_table_key;
 
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
 /// hookcount). `func` is the Lua hook; the booleans are the PUC mask bits.
@@ -206,6 +208,7 @@ impl Vm {
         // whole window, or the open results of a call above it) and pushes
         // its registry table before the hook
         let at = top + 1;
+        self.hookf_push(top)?;
         // `hookf` calls the hook with `lua_call`: it cannot yield
         self.nny += 1;
         let frames = self.frames.len();

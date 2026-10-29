@@ -212,12 +212,10 @@ impl Vm {
         // copying back for `finish_results`. db.lua :541 reads
         // `getinfo("r").ftransfer` + `getlocal` to inspect a
         // returning native's results this way.
-        if self.hook.ret
-            && !self.in_hook
-            && (self.hook.func.is_some() || self.hook.rust_func.is_some())
-            && !std::mem::take(&mut self.native_ret_hooked)
-        {
-            let res_dst = func_slot + nargs + 1;
+        if self.ret_hook_armed() && !std::mem::take(&mut self.native_ret_hooked) {
+            // past what the native left pushed on its arguments
+            let left = self.running_natives.last().map_or(0, |act| act.top_off);
+            let res_dst = (func_slot + nargs + 1).saturating_add_signed(left);
             let need = (res_dst + nret) as usize;
             self.grow_stack(need)?;
             for i in (0..nret).rev() {
@@ -225,16 +223,15 @@ impl Vm {
             }
             // widen the C-frame's argument window for getlocal, and its top
             // past the results: the hook runs above them (PUC `rethook`)
-            let saved_off = self.running_natives.last().map_or(0, |act| act.top_off);
             if let Some(act) = self.running_natives.last_mut() {
                 act.raise_ci_top(0);
-                act.nargs = nargs + nret;
+                act.nargs = res_dst - func_slot - 1 + nret;
                 act.top_off = 0;
             }
-            let hr = self.hook_return(true, nargs + 1, nret);
+            let hr = self.hook_return(true, res_dst - func_slot, nret);
             if let Some(act) = self.running_natives.last_mut() {
                 act.nargs = nargs;
-                act.top_off = saved_off;
+                act.top_off = left;
             }
             // restore results into the slot finish_results expects
             for i in 0..nret {

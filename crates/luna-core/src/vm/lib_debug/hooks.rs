@@ -5,7 +5,7 @@ use crate::runtime::{Gc, Table, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{Args, check_function, check_string, opt_integer};
 use crate::vm::error::LuaError;
-use crate::vm::exec::{HOOK_KEY, HookState, Vm, light_key};
+use crate::vm::exec::{HookState, Vm, hook_table_key};
 
 pub(super) fn d_sethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
@@ -28,28 +28,49 @@ pub(super) fn d_sethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         }
     };
     // the registry's hook table records the function for the thread
-    let t = hook_table(vm, true)?;
+    let (t, made) = hook_table(vm, true)?;
     let key = thread_key(vm, co);
     let f = a.get(vm, arg);
     vm.raw_set(t, key, f)?;
+    left_pushed(vm, a, arg, Value::Table(t), made)?;
     vm.set_hook(co, state);
     Ok(0)
+}
+
+/// What PUC's `sethook` leaves on its stack, where a return hook sees it:
+/// with no hook the arguments cut to `arg + 1` (`lua_settop`); then from
+/// 5.2 the hook table `t`, in 5.3 above the nil `lua_rawgetp` read when it
+/// `made` it.
+fn left_pushed(vm: &mut Vm, a: Args, arg: u32, t: Value, made: bool) -> Result<(), LuaError> {
+    if a.is_none_or_nil(vm, arg) {
+        let keep = arg + 1;
+        let gap = keep.saturating_sub(a.n) as usize;
+        vm.native_hold(0, &[Value::Nil; 2][..gap.min(2)])?;
+        vm.native_set_pushed(keep as i32 - a.n as i32);
+    }
+    let left: &[Value] = match vm.version() {
+        LuaVersion::Lua51 => &[],
+        LuaVersion::Lua53 if made => &[Value::Nil, t],
+        _ => &[t],
+    };
+    vm.native_hold_top(left)?;
+    vm.native_push(left.len() as u32);
+    Ok(())
 }
 
 /// The hook table in the registry, made when it is not there: 5.1
 /// `gethooktable`, later `luaL_getsubtable` (5.3 `lua_rawgetp`). `init`:
 /// `sethook` gives a table it makes from 5.2 on weak keys, with itself as
 /// its metatable.
-fn hook_table(vm: &mut Vm, init: bool) -> Result<Gc<Table>, LuaError> {
+fn hook_table(vm: &mut Vm, init: bool) -> Result<(Gc<Table>, bool), LuaError> {
     let v = vm.version();
     let reg = vm.host_registry();
-    let key = match v {
-        LuaVersion::Lua51 | LuaVersion::Lua53 => light_key(HOOK_KEY),
-        LuaVersion::Lua52 => vm.str_value(b"_HKEY")?,
-        _ => vm.str_value(b"_HOOKKEY")?,
+    let key = match hook_table_key(v) {
+        Ok(k) => k,
+        Err(name) => vm.str_value(name)?,
     };
     if let Value::Table(t) = reg.get(key) {
-        return Ok(t);
+        return Ok((t, false));
     }
     let t = match v {
         LuaVersion::Lua51 => with_rules!(vm, P => vm.api_new_table::<P>(0, 1))?,
@@ -58,13 +79,9 @@ fn hook_table(vm: &mut Vm, init: bool) -> Result<Gc<Table>, LuaError> {
     };
     // `lua_setfield` makes the key's string again: the one read with
     // `lua_getfield` may have been collected by the table's allocation
-    let key = match key {
-        Value::Str(_) => vm.str_value(if v == LuaVersion::Lua52 {
-            b"_HKEY"
-        } else {
-            b"_HOOKKEY"
-        })?,
-        k => k,
+    let key = match hook_table_key(v) {
+        Ok(k) => k,
+        Err(name) => vm.str_value(name)?,
     };
     vm.raw_set(reg, key, Value::Table(t))?;
     if init && v >= LuaVersion::Lua52 {
@@ -73,7 +90,7 @@ fn hook_table(vm: &mut Vm, init: bool) -> Result<Gc<Table>, LuaError> {
         vm.raw_set(t, mode, k)?;
         vm.host_set_metatable(Value::Table(t), Some(t))?;
     }
-    Ok(t)
+    Ok((t, true))
 }
 
 /// The key of a thread in the hook table: 5.1 its address, later the

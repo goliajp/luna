@@ -107,11 +107,11 @@ mod trace_wire;
 mod unwind;
 use coro_ctx::*;
 pub(crate) use errors::SpecialErrors;
-pub(crate) use hooks::HOOK_YIELD_SLOT;
 pub use hooks::{
     HOOK_MASK_CALL, HOOK_MASK_COUNT, HOOK_MASK_LINE, HOOK_MASK_RETURN, HookState, RustDebugHook,
     RustHookEvent,
 };
+pub(crate) use hooks::{HOOK_YIELD_SLOT, hook_table_key};
 use jit_tforcall::keep_tfor_vars;
 pub(crate) use lifecycle::{CLIBS_KEY, HOOK_KEY, light_key};
 pub(crate) use load::{ParsedText, TextLoad};
