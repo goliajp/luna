@@ -2,7 +2,9 @@
 
 use super::*;
 
-/// One conversion under 5.1, 5.2 or 5.3. Returns where scanning resumes.
+/// One conversion under 5.1, 5.2 or 5.3. Returns where scanning resumes;
+/// `added` is left as it is ([`Added::Sized`]) unless the item says
+/// otherwise.
 pub(super) fn item51<const PRE: bool>(
     vm: &mut Vm,
     a: Args,
@@ -10,10 +12,10 @@ pub(super) fn item51<const PRE: bool>(
     fmt: &[u8],
     start: usize,
     out: &mut LVec<u8>,
-) -> Result<(usize, Added), LuaError> {
+    added: &mut Added,
+) -> Result<usize, LuaError> {
     let v = vm.version();
     let p = scanformat(vm, fmt, start)?;
-    let mut added = Added::Sized;
     // every conversion but a long `%s` and `%q` fits in this
     vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     let conv = byte_at(fmt, p);
@@ -91,9 +93,9 @@ pub(super) fn item51<const PRE: bool>(
             LuaVersion::Lua51 | LuaVersion::Lua52 => {
                 let s = argcheck::check_string(vm, a, arg)?;
                 addquoted(vm, s.as_bytes(), out)?;
-                added = Added::Chars;
+                *added = Added::Chars;
             }
-            _ => added = addliteral::<PRE>(vm, a, arg, out)?,
+            _ => *added = addliteral::<PRE>(vm, a, arg, out)?,
         },
         b's' => {
             if v >= LuaVersion::Lua53
@@ -101,7 +103,8 @@ pub(super) fn item51<const PRE: bool>(
                 && let Some(s) = plain_str::<PRE>(vm, a, arg)?
             {
                 vm.buf_push(out, s.as_bytes())?;
-                return Ok((p + 1, Added::Value(s)));
+                *added = Added::Value(s);
+                return Ok(p + 1);
             }
             let gs = if v == LuaVersion::Lua51 {
                 Some(argcheck::check_string(vm, a, arg)?)
@@ -123,7 +126,7 @@ pub(super) fn item51<const PRE: bool>(
                 && let Some(gs) = gs
             {
                 vm.buf_push(out, &s)?;
-                added = Added::Value(gs);
+                *added = Added::Value(gs);
             } else {
                 if v >= LuaVersion::Lua53 && s.contains(&0) {
                     // over the `luaL_tolstring` result
@@ -135,7 +138,7 @@ pub(super) fn item51<const PRE: bool>(
                     && let Some(gs) = gs
                 {
                     vm.buf_push(out, &s)?;
-                    added = Added::Value(gs);
+                    *added = Added::Value(gs);
                 } else {
                     cfmt::cstr(out, &sp, &s);
                 }
@@ -163,7 +166,7 @@ pub(super) fn item51<const PRE: bool>(
             });
         }
     }
-    Ok((p + 1, added))
+    Ok(p + 1)
 }
 
 /// C's `(int)` conversion of a double on the reference platform: a

@@ -34,7 +34,8 @@ fn checkformat(vm: &mut Vm, form: &[u8], flags: &[u8], precision: bool) -> Resul
     Ok(())
 }
 
-/// One conversion under 5.4 or 5.5. Returns where scanning resumes.
+/// One conversion under 5.4 or 5.5. Returns where scanning resumes;
+/// `added` as for [`item51`].
 #[inline]
 pub(super) fn item54<const PRE: bool>(
     vm: &mut Vm,
@@ -43,8 +44,8 @@ pub(super) fn item54<const PRE: bool>(
     fmt: &[u8],
     start: usize,
     out: &mut LVec<u8>,
-) -> Result<(usize, Added), LuaError> {
-    let mut added = Added::Sized;
+    added: &mut Added,
+) -> Result<usize, LuaError> {
     // every conversion but a long `%s` and `%q` fits in this
     vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     // getformat: flags, width and precision bytes ('0' counted as a flag),
@@ -107,20 +108,21 @@ pub(super) fn item54<const PRE: bool>(
             if form.len() > 2 {
                 return Err(raise_str(vm, "specifier '%q' cannot have modifiers"));
             }
-            added = addliteral::<PRE>(vm, a, arg, out)?;
+            *added = addliteral::<PRE>(vm, a, arg, out)?;
         }
         b's' => {
             if form.len() == 2
                 && let Some(s) = plain_str::<PRE>(vm, a, arg)?
             {
                 vm.buf_push(out, s.as_bytes())?;
-                return Ok((p + 1, Added::Value(s)));
+                *added = Added::Value(s);
+                return Ok(p + 1);
             }
-            added = string_item::<PRE>(vm, a, arg, out, form, &sp)?;
+            *added = string_item::<PRE>(vm, a, arg, out, form, &sp)?;
         }
         _ => return Err(invalid_conversion(vm, form)),
     }
-    Ok((p + 1, added))
+    Ok(p + 1)
 }
 
 /// `%s` of a value not taken as it is: `luaL_tolstring` (whose

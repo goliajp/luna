@@ -29,6 +29,27 @@ impl PucBuffer {
         }
     }
 
+    /// [`PucBuffer::finish`] of a buffer never made (see
+    /// [`PucBuffer::begun`]): all of `out` in its first block.
+    #[inline(always)]
+    pub(crate) fn finish_first<const PRE: bool>(
+        vm: &mut Vm,
+        out: &[u8],
+    ) -> Result<Gc<LuaStr>, LuaError> {
+        if PRE && vm.heap.dialect() == Dialect::L51 {
+            // an empty 5.1 buffer pushes nothing (`emptybuffer`), and
+            // `luaL_pushresult` its own empty string
+            if !out.is_empty() {
+                vm.api_check_before::<true>()?;
+            }
+            return vm.alloc_str(out);
+        }
+        vm.api_check_before::<PRE>()?;
+        let r = vm.alloc_str(out)?;
+        vm.api_check_after::<PRE>(Value::Str(r))?;
+        Ok(r)
+    }
+
     #[cold]
     #[inline(never)]
     fn finish_slow<const PRE: bool>(
