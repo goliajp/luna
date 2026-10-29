@@ -5,11 +5,16 @@
 //! the fill in the output, or as a crash. Each fixture's output on such
 //! a Vm must be free of the fill when its output on an ordinary Vm is.
 //!
+//! A panic in the run (a collector check's, inside a native whose caller's
+//! `pcall` would take it as an error) fails the fixture too.
+//!
 //! `LUNA_STRESS_CORPUS=<dialect>[:<name part>]` runs one dialect, or the
-//! fixtures of it whose names hold the part.
+//! fixtures of it whose names hold the part; a part `!<name part>` runs the
+//! others.
 
 use std::path::PathBuf;
 
+use luna_core::__private::{panics_seen, watch_panics};
 use luna_core::version::LuaVersion;
 
 use super::refusing_alloc::run;
@@ -71,7 +76,10 @@ fn fixtures(dialect: &str, part: &str) -> Vec<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "lua"))
-        .filter(|p| p.to_string_lossy().contains(part))
+        .filter(|p| match part.strip_prefix('!') {
+            Some(not) => !p.to_string_lossy().contains(not),
+            None => p.to_string_lossy().contains(part),
+        })
         .collect();
     out.sort();
     out
@@ -82,6 +90,7 @@ fn fixtures(dialect: &str, part: &str) -> Vec<PathBuf> {
 fn the_corpus_reads_and_writes_nothing_freed() {
     let only = std::env::var("LUNA_STRESS_CORPUS").unwrap_or_default();
     let (want_d, part) = only.split_once(':').unwrap_or((&only, ""));
+    watch_panics();
     let mut bad = Vec::new();
     let mut ran = 0;
     for &(d, v) in DIALECTS {
@@ -100,13 +109,17 @@ fn the_corpus_reads_and_writes_nothing_freed() {
                 continue;
             };
             let t = std::time::Instant::now();
+            let panics = panics_seen();
             let got = run(v, 1, usize::MAX, &source);
             eprintln!("{d} {} {:.1}s", f.display(), t.elapsed().as_secs_f64());
             ran += 1;
             // bytes no UTF-8 reads (the fill among them), as many as the
             // fixture prints on an ordinary Vm
             let odd = |s: &str| s.matches('\u{FFFD}').count();
-            if got.starts_with("a freed block written") || odd(&got) > odd(&plain(v, &source)) {
+            if got.starts_with("a freed block written")
+                || odd(&got) > odd(&plain(v, &source))
+                || panics_seen() > panics
+            {
                 let head: String = got.chars().take(200).collect();
                 bad.push(format!("{d} {}: {head}", f.display()));
             }

@@ -48,6 +48,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use super::panic_free::panic_free;
 use luna_core::__private::VmHostInternals;
 use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaError, Standalone, StandaloneOptions, Vm};
@@ -147,9 +148,11 @@ fn run_on_puc(path: &Path, bin: &str, source: &str) -> Option<String> {
 
 /// Run `source` as `bin -` runs it, then close it as lua.c does; output caught.
 fn run_on_luna(version: LuaVersion, bin: &str, source: &str) -> String {
-    let (r, out) = super::stdout_capture::caught(|| {
-        let mut s = lua_c_standalone(version, bin);
-        run_as_script(&mut s, source).map_err(|e| e.to_string())
+    let (r, out) = panic_free("a fixture", || {
+        super::stdout_capture::caught(|| {
+            let mut s = lua_c_standalone(version, bin);
+            run_as_script(&mut s, source).map_err(|e| e.to_string())
+        })
     }); // the Vm drops inside: what the close's finalizers print is caught
     r.expect("luna eval must not error on diff fixtures");
     String::from_utf8_lossy(&out).into_owned()
@@ -341,15 +344,17 @@ fn diff_one_file(path: &Path, bin: &str, version: LuaVersion) {
         );
     }
     let name = rel.as_os_str().as_encoded_bytes();
-    let (r, luna) = super::stdout_capture::caught(|| {
-        let mut s = Vm::new_minimal(version)
-            .into_standalone(
-                &[b"lua".as_slice(), name],
-                Some(1),
-                StandaloneOptions::default(),
-            )
-            .expect("lua.c's state");
-        run_file(&mut s, name).map_err(|e| e.to_string())
+    let (r, luna) = panic_free("a fixture", || {
+        super::stdout_capture::caught(|| {
+            let mut s = Vm::new_minimal(version)
+                .into_standalone(
+                    &[b"lua".as_slice(), name],
+                    Some(1),
+                    StandaloneOptions::default(),
+                )
+                .expect("lua.c's state");
+            run_file(&mut s, name).map_err(|e| e.to_string())
+        })
     });
     r.expect("luna must run the fixture without an error");
     if out.stdout != luna {
