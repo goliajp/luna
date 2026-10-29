@@ -70,12 +70,17 @@ pub fn math_inlinable_builtin(name: &[u8]) -> Option<Builtin> {
 }
 
 /// `string.sub(s, i, j)` past its argument checks, for compiled code of
-/// 5.3 on, whose check after it is the compiled code's: `None`, with a
-/// deopt parked, when the string cannot be made (compiled code may not
-/// collect in an emergency; the interpreter runs the call again).
+/// 5.3 on, whose check after it is the compiled code's: the string's
+/// address, its low bit (clear in any string's) set when the count has
+/// reached the point a collection step falls due at; 0, with a deopt
+/// parked, when the string cannot be made (compiled code may not collect
+/// in an emergency; the interpreter runs the call again).
 #[inline]
-pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
-    crate::vm::lib_string::str_sub(vm, s, i, j)
+pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> i64 {
+    match crate::vm::lib_string::str_sub(vm, s, i, j) {
+        Some(r) => r.as_ptr() as i64 | i64::from(vm.heap.due_reached()),
+        None => 0,
+    }
 }
 
 /// [`str_sub`] for compiled code of 5.1 and 5.2: also `None`, without a

@@ -21,6 +21,13 @@ impl Heap {
         self.puc.count.bytes + more >= self.puc.count.gc_limit
     }
 
+    /// Whether the count has reached the point a step falls due at: the
+    /// comparison compiled code makes with the words of [`Heap::due_words`].
+    #[inline]
+    pub(crate) fn due_reached(&self) -> bool {
+        self.puc_due_after(0)
+    }
+
     /// The two words a safe point compares, `bytes` and `gc_limit`
     /// [`GC_LIMIT_OFFSET`] bytes after it, for compiled code to compare
     /// itself: no step is due while `bytes < gc_limit`.

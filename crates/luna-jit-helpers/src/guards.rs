@@ -273,14 +273,7 @@ pub unsafe extern "C" fn luna_jit_str_sub(s: i64, i: i64, j: i64) -> i64 {
     let (vm, s) = unsafe { (current_jit_vm(), str_arg(s)) };
     // 0 with a deopt parked when the string cannot be made, as the
     // allocating helpers do
-    let Some(r) = luna_core::__private::str_sub(vm, s, i, j) else {
-        return 0;
-    };
-    let w = vm.jit_due_words();
-    // SAFETY: `jit_due_words` gives the count and, `JIT_GC_LIMIT_OFFSET`
-    // bytes after it, the due point, both words of the live Vm
-    let reached = unsafe { *w >= *w.byte_add(luna_core::jit::JIT_GC_LIMIT_OFFSET as usize) };
-    r.as_ptr() as i64 | i64::from(reached)
+    luna_core::__private::str_sub(vm, s, i, j)
 }
 
 /// [`luna_jit_str_sub`] for 5.1 and 5.2, which check for a collection
