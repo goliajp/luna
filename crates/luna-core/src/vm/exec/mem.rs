@@ -114,9 +114,8 @@ impl Vm {
         &mut self,
         act: crate::vm::callstack::NativeAct,
     ) -> Result<(), LuaError> {
-        // 5.1's C function takes a `CallInfo` of its array too
-        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
-            self.grow_frames()?;
+        if self.frames.len() as u32 >= self.g.ci_hint {
+            return self.push_native_counted(act);
         }
         if self.running_natives.len() == self.running_natives.capacity() {
             self.native_room()?;
@@ -133,9 +132,8 @@ impl Vm {
         &mut self,
         act: crate::vm::callstack::NativeAct,
     ) -> Result<(), LuaError> {
-        // 5.1's C function takes a `CallInfo` of its array too
-        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
-            self.grow_frames()?;
+        if self.frames.len() as u32 >= self.g.ci_hint {
+            return self.push_native_counted(act);
         }
         if self.running_natives.len() == self.running_natives.capacity() {
             self.native_room()?;
@@ -143,6 +141,27 @@ impl Vm {
         // SAFETY: there is room: there was, or `native_room` made it
         unsafe { self.running_natives.push_in_room(act) };
         self.note_native_level();
+        Ok(())
+    }
+
+    /// [`Vm::push_native`] at or past the frame count bound: 5.1's array
+    /// grown when full, as PUC 5.1 grows it for a C function's `CallInfo`
+    /// too, the level counted and the bound worked out again.
+    #[cold]
+    #[inline(never)]
+    fn push_native_counted(
+        &mut self,
+        act: crate::vm::callstack::NativeAct,
+    ) -> Result<(), LuaError> {
+        if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
+            self.grow_frames()?;
+        }
+        if self.running_natives.len() == self.running_natives.capacity() {
+            self.native_room()?;
+        }
+        self.running_natives.push_or_abort(act);
+        self.note_level();
+        self.assert_levels_counted();
         Ok(())
     }
 
