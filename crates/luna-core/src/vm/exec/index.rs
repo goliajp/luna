@@ -4,7 +4,7 @@
 use super::*;
 
 pub(super) mod fast;
-mod miss;
+pub(super) mod miss;
 mod pushed;
 mod raw;
 mod set;

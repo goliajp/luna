@@ -179,7 +179,7 @@ macro_rules! fast_load_arms {
         }
         macro_rules! op_get_field {
             () => {{
-                get_arm!($kptr.wrapping_add($inst.c() as usize), index_raw_kstr_at)
+                get_arm!($kptr.wrapping_add($inst.c() as usize), index_raw_kstr_at, index::miss::MISS_RK)
             }};
         }
         macro_rules! op_get_i {
@@ -232,7 +232,7 @@ macro_rules! fast_load_arms {
         // constant
         macro_rules! op_get_table {
             () => {
-                get_arm!($regs.wrapping_add($inst.c() as usize), index_raw_at)
+                get_arm!($regs.wrapping_add($inst.c() as usize), index_raw_at, index::miss::MISS_RR)
             };
         }
         macro_rules! op_set_table {
@@ -242,7 +242,7 @@ macro_rules! fast_load_arms {
         }
         macro_rules! op_get_table_k {
             () => {
-                get_arm!($kptr.wrapping_add($inst.c() as usize), index_raw_at)
+                get_arm!($kptr.wrapping_add($inst.c() as usize), index_raw_at, index::miss::MISS_RK)
             };
         }
         macro_rules! op_set_table_k {
@@ -274,12 +274,8 @@ macro_rules! fast_load_arms {
                     next!()
                 }
                 save!();
-                let dst = base!() + $inst.a();
-                // SAFETY: as above, worked out again (see `get_arm!`)
-                unsafe {
-                    let pk = self_key($regs, $kptr, $inst);
-                    $vm.index_miss_at($regs.wrapping_add($inst.a() as usize + 1), pk, dst)
-                }?;
+                // SAFETY: `fr`, `regs` and `kptr` are the running frame's
+                unsafe { $vm.index_op_miss::<{ index::miss::MISS_SELF }>($inst, $regs, $kptr, $fr) }?;
                 resume_same!()
             }};
         }
