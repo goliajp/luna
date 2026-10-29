@@ -172,8 +172,7 @@ impl Vm {
         cut: Option<Cut>,
     ) -> Result<(), SyntaxError> {
         let scanned = r.scanned;
-        let mut strs = scanned.strings.iter().peekable();
-        let mut peaks = scanned.peaks.iter().peekable();
+        let mut next = Scanning::default();
         let mut due = i64::MIN;
         for &Rec { tok, at, ev } in log {
             if let Some(c) = cut
@@ -186,16 +185,14 @@ impl Vm {
                 self.heap.trace_line(format_args!("E {tok} {ev:?}"));
             }
             if tok >= due {
-                self.scan_until(r, &mut strs, &mut peaks, tok)?;
-                let peak = peaks.peek().map_or(i64::MAX, |&&(t, _)| i64::from(t));
-                let str = strs.peek().map_or(i64::MAX, |(t, ..)| i64::from(*t));
+                self.scan_until(r, scanned, &mut next, tok)?;
                 let splice = r.splices.front().map_or(i64::MAX, |&(t, _)| t);
-                due = peak.min(str).min(splice);
+                due = next.peak(scanned).min(next.str(scanned)).min(splice);
             }
             self.replay_event(r, tok, ev)?;
         }
         if let Some(c) = cut {
-            self.scan_until(r, &mut strs, &mut peaks, c.scans)?;
+            self.scan_until(r, scanned, &mut next, c.scans)?;
         }
         // the reader's last calls, past the last token
         while let Some((_, d)) = r.splices.pop_front() {
@@ -205,37 +202,36 @@ impl Vm {
     }
 
     /// What the scanner does up to token `tok`.
-    fn scan_until<'a>(
+    fn scan_until(
         &mut self,
         r: &mut Replay,
-        strs: &mut std::iter::Peekable<impl Iterator<Item = &'a (u32, ScanText, ScanKind)>>,
-        peaks: &mut std::iter::Peekable<impl Iterator<Item = &'a (u32, u32)>>,
+        scanned: &Scanned,
+        next: &mut Scanning,
         tok: i64,
     ) -> Result<(), SyntaxError> {
         loop {
-            let p = peaks.peek().map(|&&(t, _)| i64::from(t));
-            let st = strs.peek().map(|(t, ..)| i64::from(*t));
+            let (p, st) = (next.peak(scanned), next.str(scanned));
             // a reader call while the token is read: before what the scan
             // of the token makes
             if let Some(&(s, _)) = r.splices.front()
                 && s <= tok
-                && p.is_none_or(|p| s <= p)
-                && st.is_none_or(|st| s <= st)
+                && s <= p
+                && s <= st
             {
                 let (_, d) = r.splices.pop_front().expect("peeked");
                 self.heap.replay_reader_call(d);
                 continue;
             }
-            match (p, st) {
-                (Some(p), _) if p <= tok && st.is_none_or(|st| p <= st) => {
-                    let &(_, peak) = peaks.next().expect("peeked");
-                    self.grow_buff(r, peak as usize);
-                }
-                (_, Some(st)) if st <= tok => {
-                    let &(_, text, kind) = strs.next().expect("peeked");
-                    self.replay_scan_text(r, text, kind)?;
-                }
-                _ => return Ok(()),
+            if p <= tok && p <= st {
+                let (_, peak) = scanned.peaks[next.peaks];
+                next.peaks += 1;
+                self.grow_buff(r, peak as usize);
+            } else if st <= tok {
+                let (_, text, kind) = scanned.strings[next.strings];
+                next.strings += 1;
+                self.replay_scan_text(r, text, kind)?;
+            } else {
+                return Ok(());
             }
         }
     }
@@ -248,5 +244,29 @@ impl Vm {
             self.heap.acct_block(r.buff, size);
             r.buff = size;
         }
+    }
+}
+
+/// How far the replay has gone through the scanner's record: the next
+/// string and the next buffer peak.
+#[derive(Default)]
+struct Scanning {
+    strings: usize,
+    peaks: usize,
+}
+
+impl Scanning {
+    /// The token of the next peak, past every token when none is left.
+    fn peak(&self, s: &Scanned) -> i64 {
+        s.peaks
+            .get(self.peaks)
+            .map_or(i64::MAX, |&(t, _)| i64::from(t))
+    }
+
+    /// The token of the next string, past every token when none is left.
+    fn str(&self, s: &Scanned) -> i64 {
+        s.strings
+            .get(self.strings)
+            .map_or(i64::MAX, |&(t, ..)| i64::from(t))
     }
 }
