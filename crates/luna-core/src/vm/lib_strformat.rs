@@ -70,20 +70,19 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     // room for the format and an item before the buffer regrows
     let mut out = vm.new_buf();
     vm.buf_reserve(&mut out, fmt.len() + cfmt::ITEM_MAX)?;
-    let mut b = PucBuffer::new_by::<PRE>(vm);
     // While the content, and the room asked for before an item, fit the
     // buffer's first block, nothing the buffer does allocates and its count
-    // is the content's length: it is told only once that stops holding
-    // (`quick` cleared), from the length it had before that step.
-    let first = b.first_size();
-    let mut quick = true;
+    // is the content's length: it is made only once that stops holding,
+    // with the length the content had before that step.
+    let first = PucBuffer::first_size::<PRE>(vm);
+    let mut b: Option<PucBuffer> = None;
     macro_rules! tell {
-        ($fits:expr, $before:expr, $step:expr) => {
-            if !(quick && $fits) {
-                if quick {
-                    quick = false;
-                    b.set_count($before);
-                }
+        ($fits:expr, $before:expr, |$b:ident| $step:expr) => {
+            if !(b.is_none() && $fits) {
+                let $b = match &mut b {
+                    Some(b) => b,
+                    None => b.insert(PucBuffer::begun::<PRE>(vm, $before)),
+                };
                 $step;
             }
         };
@@ -103,24 +102,28 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
                 .map_or(fmt.len(), |k| i + k);
             vm.buf_push(&mut out, &fmt[i - 1..end])?;
             let k = end - (i - 1);
-            tell!(out.len() <= first, out.len() - k, b.add_chars(vm, &out, k)?);
+            tell!(out.len() <= first, out.len() - k, |b| b
+                .add_chars(vm, &out, k)?);
             i = end;
             continue;
         }
         // a '%' at the very end pairs with the string's terminating zero
         if fmt.get(i) == Some(&b'%') {
             vm.buf_push(&mut out, b"%")?;
-            tell!(out.len() <= first, out.len() - 1, b.add_chars(vm, &out, 1)?);
+            tell!(out.len() <= first, out.len() - 1, |b| b
+                .add_chars(vm, &out, 1)?);
             i += 1;
             continue;
         }
         if v >= LuaVersion::Lua52 {
             let m = max_item(v);
-            tell!(out.len() + m <= first, out.len(), b.prep(vm, &out, m)?);
+            tell!(out.len() + m <= first, out.len(), |b| b
+                .prep(vm, &out, m)?);
             // 5.4 on ask for more for a `%f`
             if v >= LuaVersion::Lua54 && item_conv(fmt, i) == b'f' {
                 let m = 110 + 308;
-                tell!(out.len() + m <= first, out.len(), b.prep(vm, &out, m)?);
+                tell!(out.len() + m <= first, out.len(), |b| b
+                    .prep(vm, &out, m)?);
             }
         }
         arg += 1;
@@ -130,45 +133,37 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             return Err(arg_error(vm, arg + 1, "no value"));
         }
         let before = out.len();
+        let mut added = Added::Sized;
         let item = if v >= LuaVersion::Lua54 {
-            item54::<PRE>(vm, a, arg, fmt, i, &mut out)
+            item54::<PRE>(vm, a, arg, fmt, i, &mut out, &mut added)
         } else {
-            item51::<PRE>(vm, a, arg, fmt, i, &mut out)
+            item51::<PRE>(vm, a, arg, fmt, i, &mut out, &mut added)
         };
         i = match item {
-            Ok((i, Added::Value(s))) => {
-                tell!(out.len() <= first, before, b.add_value(vm, &out, s)?);
-                i
-            }
-            Ok((i, Added::Chars)) => {
-                let k = out.len() - before;
-                tell!(out.len() <= first, before, b.add_chars(vm, &out, k)?);
-                i
-            }
-            Ok((i, Added::Sized)) if v == LuaVersion::Lua51 => {
-                let k = out.len() - before;
-                tell!(out.len() <= first, before, b.add_chars(vm, &out, k)?);
-                i
-            }
-            Ok((i, Added::Sized)) => {
-                let k = out.len() - before;
-                tell!(out.len() <= first, before, b.add_size(k));
-                i
-            }
+            Ok(i) => i,
             Err(e) => {
                 let buf = vm.buffer_slot(out.len());
                 vm.native_push(buf);
                 return Err(e);
             }
         };
+        let k = out.len() - before;
+        match added {
+            Added::Value(s) => tell!(out.len() <= first, before, |b| b.add_value(vm, &out, s)?),
+            Added::Sized if v != LuaVersion::Lua51 => {
+                tell!(out.len() <= first, before, |b| b.add_size(k))
+            }
+            // 5.1 copies a sized item with `luaL_addlstring`
+            _ => tell!(out.len() <= first, before, |b| b.add_chars(vm, &out, k)?),
+        }
     }
     if out.len() > crate::runtime::string::MAX_LEN {
         return Err(vm.rt_err("string length overflow"));
     }
-    if quick {
-        b.set_count(out.len());
-    }
-    let s = b.finish::<PRE>(vm, &out)?;
+    let s = match b {
+        Some(b) => b.finish::<PRE>(vm, &out)?,
+        None => PucBuffer::finish_first::<PRE>(vm, &out)?,
+    };
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[Value::Str(s)])
 }
