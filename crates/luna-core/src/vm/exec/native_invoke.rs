@@ -239,7 +239,9 @@ impl Vm {
         } else {
             self.running_natives.pop();
         }
-        self.g.ci_hint += 1;
+        // the native's level given back; a bound dropped to 0 while it ran
+        // stays 0, for the next push to work out again
+        self.g.ci_hint += u32::from(self.g.ci_hint != 0);
         // no check for a collection: PUC's `luaD_poscall` makes none, the
         // native checked where its API calls do
         self.finish_results(func_slot, nret, nresults);
