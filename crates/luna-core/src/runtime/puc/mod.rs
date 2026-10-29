@@ -44,7 +44,7 @@ pub(crate) mod step;
 pub(crate) mod trace;
 #[cfg(feature = "gc-verify")]
 pub(crate) mod verify;
-pub(crate) use state::PucModel;
+pub(crate) use state::{GC_LIMIT_OFFSET, PucModel};
 mod thread;
 pub(crate) use thread::{BASIC_CI_51, Thread};
 #[cfg(test)]

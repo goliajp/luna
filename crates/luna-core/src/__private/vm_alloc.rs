@@ -14,6 +14,10 @@ pub trait VmJitAlloc {
     /// (`op_pc`, as `Vm::checkpoint_after_jit` takes it) for the exit it
     /// then takes to have the interpreter check.
     fn jit_gc_due(&mut self, op_pc: u32) -> bool;
+    /// The count and, [`crate::jit::JIT_GC_LIMIT_OFFSET`] bytes after it,
+    /// the point a collection step falls due at: compiled code calls
+    /// [`VmJitAlloc::jit_gc_due`] only once the count has reached it.
+    fn jit_due_words(&self) -> *const usize;
     /// OP_CLOSURE for compiled code, in a frame of `cl` whose registers
     /// start at `base`: `None` when an allocation fails (compiled code may
     /// hold new objects only in registers, so no emergency collection
@@ -96,6 +100,10 @@ impl VmJitAlloc for crate::vm::Vm {
     #[inline]
     fn jit_gc_due(&mut self, op_pc: u32) -> bool {
         crate::vm::Vm::jit_gc_due(self, op_pc)
+    }
+    #[inline]
+    fn jit_due_words(&self) -> *const usize {
+        crate::vm::Vm::jit_due_words(self)
     }
     #[inline]
     unsafe fn jit_closure(

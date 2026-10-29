@@ -100,6 +100,7 @@ pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
         luna_jit_upval_of_checked,
         luna_jit_op_self_checked,
         luna_jit_gc_due,
+        luna_jit_due_words,
         luna_jit_sunk_table,
         luna_jit_sunk_grow,
         luna_jit_str_buf_concat,

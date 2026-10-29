@@ -21,6 +21,15 @@ impl Heap {
         self.puc.count.bytes + more >= self.puc.count.gc_limit
     }
 
+    /// The two words a safe point compares, `bytes` and `gc_limit`
+    /// [`GC_LIMIT_OFFSET`] bytes after it, for compiled code to compare
+    /// itself: no step is due while `bytes < gc_limit`.
+    ///
+    /// [`GC_LIMIT_OFFSET`]: crate::runtime::puc::GC_LIMIT_OFFSET
+    pub(crate) fn due_words(&self) -> *const usize {
+        std::ptr::from_ref(&self.puc.count).cast()
+    }
+
     /// The collector restarts (`collectgarbage("restart")`): a step falls
     /// due at once (5.1 `GCthreshold = totalbytes`, later
     /// `luaE_setdebt(g, 0)`).
