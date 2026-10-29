@@ -38,7 +38,10 @@ fn a_step_as_a_chunk_returns_keeps_pmain() {
         &mut s,
         "collectgarbage('setpause', 0) collectgarbage('setstepmul', 1000000)",
     );
-    let count = "return collectgarbage('count') * 1024";
+    // a full collection first: what the chunks before left is gone by
+    // then (whether a step had freed it already depends on the pointer
+    // width), so only a value lost as a chunk returns tells the two apart
+    let count = "collectgarbage() return collectgarbage('count') * 1024";
     let a = docall(&mut s, count);
     let b = docall(&mut s, count);
     assert!(a.is_some());
