@@ -160,6 +160,10 @@ impl Vm {
         };
         let r = self.call_at(func_slot, args.len() as u32, from_c);
         self.g.nccalls -= 1;
+        // an error leaving a host's call ends a hook's failure below it
+        if r.is_err() {
+            self.hooks_caught(self.frames.len());
+        }
         // 5.1's `luaD_call` checks for a collection when the call returns
         if let Ok(vals) = &r
             && self.version == crate::version::LuaVersion::Lua51

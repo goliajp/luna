@@ -359,20 +359,20 @@ pub struct Vm {
     /// limits). When `false`, the loader rejects any source whose first
     /// byte is the bytecode signature `\27` ("`\27Lua`").
     pub(crate) bytecode_loading: bool,
-    /// PUC bytecode-loading gate. Default `false` — PUC `.luac` files are
-    /// a strictly larger trust surface than luna's own dump format
-    /// (third-party toolchain bugs, malformed chunks, unknown opcode
-    /// shapes). When `true`, the loader routes `\x1bLua\x{51..55}` inputs
-    /// through the per-dialect PUC translators in `crate::vm::dump::puc`.
-    /// Embedder toggles via `set_puc_bytecode_loading`.
+    /// PUC bytecode loading (default off, a larger trust surface than
+    /// luna's own format): `\x1bLua\x{51..55}` inputs go through the
+    /// per-dialect translators in `crate::vm::dump::puc`
+    /// (`set_puc_bytecode_loading`).
     pub(crate) puc_bytecode_loading: bool,
     /// lua.c's `-E`: libraries opened from now on ignore the environment
     pub(crate) ignore_env: bool,
     /// files opened without `b` behave as in the MSVC C library's text mode
     pub(crate) crt_text: bool,
-    /// true while the hook itself runs, so its own execution fires no events
-    /// (PUC clears the mask for the duration)
+    /// PUC `!allowhook`: a hook runs (it fires no events), or one failed
+    /// and no protected call below it has caught the error yet
     pub(crate) in_hook: bool,
+    /// the frame count the hook that failed was called at
+    pub(crate) hook_failed_at: usize,
     /// `Vm::open_base` runs: the base library without its file loaders
     pub(crate) opening_sandbox: bool,
     /// PUC `trap`: the dispatch loop head has work beyond fetching the next
@@ -400,14 +400,10 @@ pub struct Vm {
     /// `CIST_HOOKYIELD`): the next hook check does not call the hook again.
     pub(crate) hook_resumed: bool,
 
-    /// When `true`, `instr_budget` exhaustion in
-    /// the dispatcher hot loop yields cooperatively (sets
-    /// `Vm::host_yield_pending` + returns a sentinel `Err` walked up
-    /// to `EvalFuture::poll`) instead of returning a real
-    /// "instruction budget exceeded" error. Set by [`Vm::eval_async`]
-    /// for the duration of the future; restored to `false` on
-    /// `Poll::Ready`. The sync `Vm::eval` / `Vm::call_value` paths
-    /// leave it `false` so budget exhaustion stays a real error there.
+    /// `instr_budget` exhaustion yields cooperatively (sets
+    /// `Vm::host_yield_pending`, a sentinel `Err` walked up to
+    /// `EvalFuture::poll`) instead of raising "instruction budget
+    /// exceeded": set by [`Vm::eval_async`] while its future runs.
     pub(crate) async_mode: bool,
 
     /// Set by the dispatcher when an async-mode budget exhaustion fires;

@@ -142,10 +142,15 @@ macro_rules! native_call {
         ) {
             $vm.precall_checkpoint(func_slot + 1 + nargs)?;
         }
-        if nc.kind != NativeKind::Plain
-            && let Some(r) = $vm.begin_special_native(nc, func_slot, nargs, nresults)
-        {
-            return r;
+        if nc.kind != NativeKind::Plain {
+            // `pcall` and `xpcall` are C functions of PUC's: the call hook
+            // runs for them before they call
+            if matches!(nc.kind, NativeKind::Pcall | NativeKind::Xpcall) && $vm.call_hook_armed() {
+                $vm.protected_call_hook(nc, func_slot, nargs, tail_ccmt + chain as u8)?;
+            }
+            if let Some(r) = $vm.begin_special_native(nc, func_slot, nargs, nresults) {
+                return r;
+            }
         }
         // a native that collects (e.g. `collectgarbage`) roots up to
         // its own arguments — the caller's live registers all sit
