@@ -26,7 +26,6 @@ impl Vm {
             || p.is_vararg
             || p.has_compat_vararg_arg
             || base + nargs + p.max_stack as u32 >= self.g.stack_last
-            || self.g.frame_size != u32::MAX
             || self.stack.len() < need
         {
             return None;
@@ -51,8 +50,9 @@ impl Vm {
                 .get_unchecked_mut((base + kept) as usize..end)
                 .fill(Value::Nil);
         }
-        // a frame stack with no room left, or a level with no `CallInfo`
-        // counted yet (`CallGuards::ci_hint`, at most the room)
+        // a frame stack with no room left, a level with no `CallInfo`
+        // counted yet or 5.1's array full (`CallGuards::ci_hint`, at most
+        // the room)
         if self.frames.len() as u32 >= self.g.ci_hint {
             return None;
         }
@@ -63,6 +63,7 @@ impl Vm {
             &mut self.trap,
             frame,
         );
+        self.assert_levels_counted();
         // SAFETY: a Lua frame was just pushed
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(f) => Some(f),
