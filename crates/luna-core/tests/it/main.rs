@@ -24,6 +24,7 @@ mod crt_ccs;
 mod crt_text_mode;
 mod deep_gsub_small_stack;
 mod diff_puc;
+mod docall_level_kept;
 mod double_dialect_int_arith;
 mod e2e_programs;
 mod emergency_open_upvals;
