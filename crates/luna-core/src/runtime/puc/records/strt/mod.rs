@@ -63,14 +63,18 @@ impl StrtSweep {
         for c in counts.iter_mut() {
             (*c, at) = (at, at + *c);
         }
-        self.sorted.clear();
-        self.sorted.resize(n, (0, std::ptr::null_mut()));
-        let sorted = &mut self.sorted[..n];
+        // every place below `n` is written: what the buffer held is not
+        // cleared, and its length a power of two, so that a place masked
+        // with it is seen to be within it
+        let pm = n.next_power_of_two() - 1;
+        self.sorted.resize(pm + 1, (0, std::ptr::null_mut()));
+        let sorted = &mut self.sorted[..=pm];
         for &e in &self.dead {
             let at = &mut counts[e.0 as usize & m];
-            sorted[*at as usize] = e;
+            sorted[*at as usize & pm] = e;
             *at += 1;
         }
+        self.sorted.truncate(n);
         std::mem::swap(&mut self.dead, &mut self.sorted);
     }
 }
