@@ -59,7 +59,7 @@ impl TokRef {
 
     /// The token's number (-1: before the first) and the node it is named
     /// by.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn numbered(self, m: &Marks) -> (i64, At) {
         let off = |base: u32, n: i32| i64::from(base.wrapping_add_signed(n));
         match self {
