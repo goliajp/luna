@@ -288,6 +288,13 @@ impl Heap {
         }
         self.all = h;
         self.live += 1;
+        // the allocator may hand out a freed object's address again: the
+        // object there now is live, not the dangling one the probes look for
+        #[cfg(feature = "gc-verify")]
+        {
+            self.recently_freed.remove(&(h as usize));
+            crate::runtime::gc_verify_probe::FREED.with(|f| f.borrow_mut().remove(&(h as usize)));
+        }
     }
 }
 
