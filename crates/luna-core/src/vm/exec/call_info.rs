@@ -67,7 +67,12 @@ impl Vm {
         if n > self.g.ci_alloc {
             self.extend_ci_to(n);
         }
-        let (room, len) = (self.frames.capacity() as u32, self.frames.len() as u32);
+        let len = self.frames.len() as u32;
+        // each native running gives a level back when it returns
+        // (`finish_native_call`), which must not take the bound past the
+        // frame stack's room
+        let natives = (self.running_natives.len() - self.natives_base) as u32;
+        let room = (self.frames.capacity() as u32).saturating_sub(natives);
         // 5.1 counts no `CallInfo` here (`ci_alloc` stays at its maximum):
         // its array bounds the frames, a level more than it holds growing it
         let free = if self.g.frame_size != u32::MAX {
