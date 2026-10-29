@@ -12,7 +12,14 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     oc: &OpCx<'_>,
     fold: &TraceMathFold,
 ) -> Option<()> {
-    let RuntimeHelpers { str_sub_id, .. } = lw.h.rt;
+    let RuntimeHelpers {
+        str_sub_id,
+        str_sub_checked_id,
+        ..
+    } = lw.h.rt;
+    // 5.1 and 5.2 check for a collection before the string is made; code
+    // for no dialect in particular does not fold the call
+    let checks_before = pl.opts.dialect? <= LuaVersion::Lua52;
     let Plan { record, .. } = *pl;
     let off = oc.off;
     let regs: &[Variable] = oc.regs;
@@ -36,7 +43,12 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     } else {
         lw.bcx.ins().iconst(types::I64, -1)
     };
-    let sub_ref = lw.bcx.import_func(str_sub_id);
+    let sub_id = if checks_before {
+        str_sub_checked_id
+    } else {
+        str_sub_id
+    };
+    let sub_ref = lw.bcx.import_func(sub_id);
     let call = lw.bcx.ins().call(sub_ref, &[s, from, to]);
     let r = lw.bcx.inst_results(call)[0];
     // a string the helper could not make (0, a deopt parked), or one 5.1
@@ -47,7 +59,7 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     lw.bcx.def_var(regs[a as usize], r);
     lw.current_kinds[off + a as usize] = RegKind::Str;
     // 5.3 on check after `lua_pushlstring` pushed it
-    if !pl.opts.dialect.is_some_and(|d| d <= LuaVersion::Lua52) {
+    if !checks_before {
         gc_due_exit(lw, pl, oc.i, oc.rop.pc + 1);
     }
     Some(())

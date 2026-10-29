@@ -92,6 +92,7 @@ pub(super) fn trace_helper(name: &str) -> Option<*const u8> {
         luna_jit_table_len_checked,
         luna_jit_math_fn_is_library,
         luna_jit_str_sub,
+        luna_jit_str_sub_checked,
         luna_jit_fmod,
         luna_jit_math1,
         luna_jit_pow,

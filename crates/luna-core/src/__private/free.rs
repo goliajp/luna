@@ -69,15 +69,21 @@ pub fn math_inlinable_builtin(name: &[u8]) -> Option<Builtin> {
     crate::vm::lib_math::inlinable_builtin(name)
 }
 
-/// `string.sub(s, i, j)` past its argument checks, for compiled code:
-/// `None`, with a deopt parked, when the string cannot be made (compiled
-/// code may not collect in an emergency; the interpreter runs the call
-/// again); `None` without one when 5.1 or 5.2 would collect before
-/// `lua_pushlstring` makes it, for the interpreter to make the call. From
-/// 5.3 the check after it is the compiled code's.
+/// `string.sub(s, i, j)` past its argument checks, for compiled code of
+/// 5.3 on, whose check after it is the compiled code's: `None`, with a
+/// deopt parked, when the string cannot be made (compiled code may not
+/// collect in an emergency; the interpreter runs the call again).
 #[inline]
 pub fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
     crate::vm::lib_string::str_sub(vm, s, i, j)
+}
+
+/// [`str_sub`] for compiled code of 5.1 and 5.2: also `None`, without a
+/// deopt, when they would collect before `lua_pushlstring` makes the
+/// string, for the interpreter to make the call.
+#[inline]
+pub fn str_sub_checked(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
+    crate::vm::lib_string::str_sub_checked(vm, s, i, j)
 }
 
 /// The library function `string.<name>` is, if it is one the trace JIT

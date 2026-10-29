@@ -40,6 +40,7 @@ pub(super) struct RuntimeHelpers {
     pub(super) str_buf_concat_id: FuncId,
     pub(super) math_fn_check_id: FuncId,
     pub(super) str_sub_id: FuncId,
+    pub(super) str_sub_checked_id: FuncId,
     pub(super) len_checked_id: FuncId,
     pub(super) upval_get_id: FuncId,
     pub(super) upval_get_checked_id: FuncId,
@@ -321,6 +322,7 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     let math_fn_check_id = declare_i64_import(bcx, "luna_jit_math_fn_is_library", 2)?;
 
     let str_sub_id = declare_i64_import(bcx, "luna_jit_str_sub", 3)?;
+    let str_sub_checked_id = declare_i64_import(bcx, "luna_jit_str_sub_checked", 3)?;
 
     let len_checked_id = declare_i64_import(bcx, "luna_jit_table_len_checked", 1)?;
 
@@ -370,6 +372,7 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
         str_buf_concat_id,
         math_fn_check_id,
         str_sub_id,
+        str_sub_checked_id,
         len_checked_id,
         upval_get_id,
         upval_get_checked_id,
