@@ -5,7 +5,29 @@ use super::*;
 
 impl PucBuffer {
     /// `luaL_pushresult`: the string of `out`.
-    pub(crate) fn finish(mut self, vm: &mut Vm, out: &[u8]) -> Result<Gc<LuaStr>, LuaError> {
+    #[inline(always)]
+    pub(crate) fn finish(self, vm: &mut Vm, out: &[u8]) -> Result<Gc<LuaStr>, LuaError> {
+        match self.d {
+            // every byte still in the C buffer: `emptybuffer` pushes them as
+            // the one string, which `lua_concat(L, 1)` leaves as it is
+            Dialect::L51 if self.n > 0 && vm.lib_roots.len() == self.base.at() => {
+                vm.api_check_before()?;
+                vm.alloc_str(&out[self.start..self.start + self.n])
+            }
+            Dialect::L51 => self.finish_slow(vm, out),
+            _ if !self.boxed => {
+                vm.api_check_before()?;
+                let r = vm.alloc_str(out)?;
+                vm.api_check_after(Value::Str(r))?;
+                Ok(r)
+            }
+            _ => self.finish_slow(vm, out),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn finish_slow(mut self, vm: &mut Vm, out: &[u8]) -> Result<Gc<LuaStr>, LuaError> {
         match self.d {
             Dialect::L51 => {
                 self.empty_51(vm, out)?;
