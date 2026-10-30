@@ -264,6 +264,11 @@ pub(super) fn keep_inlined(
     }
 }
 
+/// Gives up recording at `head_pc` of `proto`.
+pub(super) fn give_up_head(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) {
+    note_head_failure(proto, head_pc, BUDGET, None);
+}
+
 pub(super) fn trace_head_abandoned(
     proto: Gc<crate::runtime::function::Proto>,
     head_pc: u32,

@@ -100,6 +100,7 @@ mod trace_dispatch;
 mod trace_exit;
 mod trace_exit_decode;
 mod trace_exit_inner;
+mod trace_fail_memory;
 mod trace_record;
 mod trace_record_slots;
 mod trace_start;
@@ -124,6 +125,8 @@ pub use state::Vm;
 pub(crate) use state_guards::AsyncNativeCallCtx;
 use trace_cache::*;
 use trace_exit_decode::ExitSource;
+pub(crate) use trace_fail_memory::FailMemory;
+use trace_fail_memory::trace_head_forgone;
 use trace_wire::hold_side_trace;
 use unwind::*;
 

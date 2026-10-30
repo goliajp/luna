@@ -21,30 +21,18 @@ impl Vm {
         // `active_trace` (setlist_b_zero_with_call_c_zero_sunk_emits).
         let proto_code_len = rec.head_proto.code.len();
         let is_partial_coverage = rec.ops.len() * 2 < proto_code_len;
-        // Per-Proto discard cap. The relaxed
-        // trigger condition (`c >= THRESHOLD &&
-        // !already_cached`) means a Proto whose every
-        // recording is partial-coverage will re-fire the
-        // trigger every call indefinitely (1500+ in
-        // `binary_trees`-pattern test). The cap stops
-        // discarding after `MAX_DISCARDS_PER_PROTO` —
-        // the next close falls through to compile (even
-        // if partial), caches the trace, and the
-        // `already_cached` short-circuit kills the
-        // storm. Dispatch may still be refused
-        // post-compile (length gate), but the recorder
-        // stops churning.
+        // Per-Proto discard cap. The trigger (`c >= THRESHOLD &&
+        // !already_cached`) re-fires every call for a Proto whose every
+        // recording is partial-coverage (1500+ in the `binary_trees`
+        // pattern). After `MAX_DISCARDS_PER_PROTO` the next close compiles
+        // (even if partial) and caches the trace, which ends the storm;
+        // dispatch may still be refused (length gate).
         const MAX_DISCARDS_PER_PROTO: u32 = 5;
         let prior_discards = rec.head_proto.trace_discard_count.get();
         let cap_reached = prior_discards >= MAX_DISCARDS_PER_PROTO;
-        // Flip the `gave_up` flag the
-        // moment cap is reached (BEFORE the close-
-        // dispatching branch below). The trigger gates
-        // short-circuit on this flag, skipping the
-        // RefCell + linear `already_cached` scan on
-        // every subsequent call to this Proto. Useful
-        // for `binary_trees_pattern`-class loads where
-        // a single Proto sees ~20k calls post-cap.
+        // Flip `gave_up` the moment the cap is reached: the trigger gates
+        // short-circuit on it, skipping the RefCell and `already_cached`
+        // scan on every later call (~20k per Proto in `binary_trees`).
         if cap_reached
             && rec.is_call_triggered
             && is_partial_coverage
@@ -168,6 +156,7 @@ impl Vm {
             let (result, cut) = self.compile_or_cut(&closed_record, opts, version);
             match result {
                 Some(mut ct) => {
+                    self.jit.fail_memory.compiled(&head_proto, head_pc_val);
                     self.tally_compiled_trace(&ct);
                     let wired = self.wire_side_trace(&mut ct, closed_record.side_trace_parent);
                     let ct = cache_compiled_trace(
@@ -202,6 +191,9 @@ impl Vm {
                         );
                     } else {
                         note_trace_compile_failure(head_proto, closed_record.head_pc);
+                        self.jit
+                            .fail_memory
+                            .failed(&head_proto, closed_record.head_pc);
                     }
                     self.jit
                         .counters

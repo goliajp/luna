@@ -27,6 +27,7 @@ impl Vm {
                 target,
                 &self.stack[base as usize..(base + proto.max_stack as u32) as usize],
             )
+            || trace_head_forgone(&mut self.jit.fail_memory, proto, target)
         {
             return false;
         }
