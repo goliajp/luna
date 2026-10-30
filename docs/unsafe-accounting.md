@@ -21,10 +21,10 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1803** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1799** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 250 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; nine more in `luna_core::__private`, which is not public API, see §5 |
-| **`pub unsafe extern "C" fn`** | 210 | the C API (143), the `luna_jit_*` helpers compiled code calls (61, re-exported by `luna-jit`), the AOT entries (6); see §5 |
+| **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
 | **`unsafe impl Send` / `Sync`** | 10 | see §5 |
 
 A "site" is a line matching `unsafe (\{|fn |impl |trait |extern )`,
@@ -38,7 +38,7 @@ quotes the pattern counts too.
 |---|---|---:|---|
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `fast_arith.rs`, `num_words.rs`) | 84 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch; a numeric `for`'s control values read a word pair at a time (aarch64) |
 | | `vm/exec/index_*` | 40 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
-| | `vm/exec` (other) | 102 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
+| | `vm/exec` (other) | 104 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `gc_ptr.rs`, `gc_hooks` | 175 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation (the lists of objects with finalizers and of those due), the `Gc<T>` handle, the debug check of the slow-store bit; the collector checks of the test-only builds (`gc-verify`: the freed-address probes, the tricolour and string-count checks) |
 | | `runtime/puc` | 138 | the model of PUC's allocations: the records it keeps over raw object headers (the parser's tables and frames a collection step marks, 5.1's environment records, the objects PUC makes and luna does not yet, the strings a load sets aside), its marking and sweeping of them, the 5.5 sizer |
 | | `private` (`luna_core::__private`) | 22 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, and the four JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
@@ -57,14 +57,14 @@ quotes the pattern counts too.
 | | other | 1 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 66 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 54 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
-| `luna-jit-helpers` | | 189 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
+| `luna-jit-helpers` | | 183 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 8 | LLVM execution engines (one per compiled method or trace), `Send` for an engine compiled on the background compile thread, and the register-file GEPs |
 | | `tests/` | 34 | calling LLVM-compiled chunks |
 | `luna-runtime-helpers` | | 46 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1803** | |
+| **Total** | | **1799** | |
 
 ## 3. Pattern catalog
 
@@ -222,7 +222,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **1803**, with no headroom;
+  The ceiling is the exact count, **1799**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -513,6 +513,16 @@ tree's count stays at the ceiling, 1802, other sites having gone since.
 the vector's first elements into the room it reserved, one block, so that
 `string.rep` doubles the copies it made without filling the room with
 zeros first. 1803.
+
+A trace's concat passes its operands to one helper,
+`luna_jit_op_concat_regs`, which stores them and runs the concat
+(`Vm::jit_concat_regs` packs each operand and reads the results back, 2
+sites), in place of a `luna_jit_spill_to_stack` call per operand and
+`luna_jit_stack_load` calls after. `luna_jit_stack_update_raw` and
+`luna_jit_stack_load` are gone (6 fewer in `luna-jit-helpers`, 1 fewer in
+`vm/exec`). The root lists the helpers take are linked in place instead
+of copied, and the collector reads them where they are (1 in
+`gc/roots.rs`). 1799.
 
 ## 5. Public `unsafe` surface
 
