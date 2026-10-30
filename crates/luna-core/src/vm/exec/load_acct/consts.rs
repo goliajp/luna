@@ -63,11 +63,13 @@ impl Vm {
                     Value::Float(f)
                 }
             }
-            (Dialect::L53, Value::Int(i)) => Value::LightUserdata(i as usize as *const ()),
-            // 5.5 keys every zero of a function by the function
-            (_, _) if key == K::Zero => {
-                Value::LightUserdata((usize::MAX - r.fs.last().map_or(0, |f| f.shape)) as *const ())
+            (Dialect::L53, Value::Int(i)) => {
+                Value::LightUserdata(core::ptr::without_provenance(i as usize))
             }
+            // 5.5 keys every zero of a function by the function
+            (_, _) if key == K::Zero => Value::LightUserdata(core::ptr::without_provenance(
+                usize::MAX - r.fs.last().map_or(0, |f| f.shape),
+            )),
             (_, _) => match key {
                 K::Int(i) => Value::Int(i),
                 K::Float(b) => Value::Float(f64::from_bits(b)),
@@ -87,7 +89,7 @@ impl Vm {
             Some(t) => Value::Table(t),
             None => {
                 r.anchors += 1;
-                Value::LightUserdata(r.anchors as *const ())
+                Value::LightUserdata(core::ptr::without_provenance(r.anchors))
             }
         };
         match r.h {

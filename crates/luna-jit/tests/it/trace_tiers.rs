@@ -3,8 +3,7 @@
 //! Cranelift (at once, or partway through a run). The tier is a per-Vm
 //! setting, so the settings run side by side in one process.
 
-use std::path::{Path, PathBuf};
-
+use super::forced_jit_corpus::{fixtures, huge_turn};
 use luna_jit::jit::trace::TraceTier;
 use luna_jit::jit_backend::trace::{baseline_codegen_count, baseline_fallback};
 use luna_jit::runtime::Value;
@@ -18,19 +17,6 @@ const DIALECTS: &[(&str, LuaVersion)] = &[
     ("5.4", LuaVersion::Lua54),
     ("5.5", LuaVersion::Lua55),
 ];
-
-fn fixtures(dialect: &str) -> Vec<PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../luna-core/tests/diff_puc")
-        .join(dialect);
-    let mut out: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-        .map(|e| e.expect("dir entry").path())
-        .filter(|p| p.extension().is_some_and(|x| x == "lua"))
-        .collect();
-    out.sort();
-    out
-}
 
 /// `source`'s output with `print` / `io.write` captured, or its error;
 /// table and function addresses masked.
@@ -137,6 +123,7 @@ fn corpus(tier: TraceTier, tier_up_at: u32) -> Seen {
     for &(dialect, version) in DIALECTS {
         for f in &fixtures(dialect) {
             let source = std::fs::read(f).expect("read fixture");
+            let _turn = huge_turn(f);
             let want = run(&mut interp(version), &source);
             for hot in [1, 3] {
                 let mut vm = tiered(version, hot, tier, tier_up_at);
