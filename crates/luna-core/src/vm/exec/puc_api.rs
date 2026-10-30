@@ -80,6 +80,12 @@ impl Vm {
         let Some(mt) = self.metatable_of(v) else {
             return Ok(None);
         };
+        // with no collection due, the pushes and checks change nothing seen
+        if let (_, Some(s)) = self.name_cached(event)
+            && self.checkpoint_idle()
+        {
+            return Ok(Some(s));
+        }
         // the metatable on the running C function's stack, where a
         // collection the checks run finds it (a table that just lost it as
         // its metatable holds it no more)
@@ -103,15 +109,11 @@ impl Vm {
         event: &[u8],
     ) -> Result<Gc<LuaStr>, LuaError> {
         self.api_check_before::<PRE>()?;
-        // by the name's address, as PUC's string cache is; emptied when a
-        // collection step begins, so a string found here is not dead
-        let key = event.as_ptr() as usize;
-        let slot = (key >> 3) % self.name_cache.len();
-        let s = match self.name_cache[slot] {
-            (k, Some(s)) if k == key => s,
-            _ => {
+        let s = match self.name_cached(event) {
+            (_, Some(s)) => s,
+            (slot, None) => {
                 let s = self.alloc_str(event)?;
-                self.name_cache[slot] = (key, Some(s));
+                self.name_cache[slot] = (event.as_ptr() as usize, Some(s));
                 s
             }
         };
@@ -119,6 +121,17 @@ impl Vm {
         // check runs finds it (5.3 counts it with the thread)
         self.api_check_pushed::<PRE>(Value::Str(s))?;
         Ok(s)
+    }
+
+    /// `event`'s slot in the name cache (by address, as PUC's string cache;
+    /// emptied when a collection step begins) and the live string there.
+    fn name_cached(&self, event: &[u8]) -> (usize, Option<Gc<LuaStr>>) {
+        let key = event.as_ptr() as usize;
+        let slot = (key >> 3) % self.name_cache.len();
+        match self.name_cache[slot] {
+            (k, Some(s)) if k == key => (slot, Some(s)),
+            _ => (slot, None),
+        }
     }
 
     /// [`Vm::metafield_name`] where only the push matters.
@@ -227,9 +240,8 @@ impl Vm {
         at: crate::runtime::puc::records::strcache::CStr,
         bytes: &[u8],
     ) -> Result<Value, LuaError> {
-        Ok(Value::Str(
-            self.retry_oom(|vm| vm.heap.intern_at(at, bytes))?,
-        ))
+        let s = self.retry_oom(|vm| vm.heap.intern_at(at, bytes))?;
+        Ok(Value::Str(s))
     }
 
     /// lua.c's `arg` table (`createargtable`; 5.1 and 5.2 `getargs`, which
@@ -246,8 +258,7 @@ impl Vm {
     }
 
     /// `luaL_checkstack(L, n, msg)` in lua.c's `pmain` with `values` values
-    /// on its stack (above its function at slot 0): `pmain`'s level
-    /// reserves that room from then on.
+    /// on its stack (above its function at slot 0), reserved from then on.
     pub(crate) fn host_check_stack(
         &mut self,
         values: u32,
