@@ -90,8 +90,6 @@ jobs:
       SHARD: ${{ toJSON(matrix.shard) }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
 
       - name: Install nightly + miri
         run: |
