@@ -202,9 +202,9 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         .declare_function("luna_jit_stack_tag", Linkage::Import, &stack_tag_sig)
         .ok()?;
 
-    // `fn luna_jit_op_concat_regs(a, n, ops, roots) -> i64`: the result's
-    // payload, 0 when the interpreter redoes the op
-    let op_concat_id = declare_i64_import(bcx, "luna_jit_op_concat_regs", 4)?;
+    // `fn luna_jit_op_concat_regs(a, n, ops, reload, roots) -> i64`: the
+    // result's payload, 0 when the interpreter redoes the op
+    let op_concat_id = declare_i64_import(bcx, "luna_jit_op_concat_regs", 5)?;
 
     let op_closure_in_id = declare_i64_import(bcx, "luna_jit_op_closure_in", 3)?;
     let mut set_top_sig = bcx.make_signature();

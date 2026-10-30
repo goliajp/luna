@@ -129,11 +129,27 @@ pub(super) fn emit_sequence_op<E: Emit>(
             // an emergency collection may run: the operands are on the
             // stack then and the registers below them go as roots
             let roots = emit_ssa_roots(lw, i, off + a_us);
+            // the other operands as the concat leaves them: a number among
+            // them is a string then (`tostring` converts it in place), which
+            // the stack holds alive as PUC's does. Bit j asks the helper for
+            // operand j's payload, bit 63 for those from 63 on
+            let reload: Vec<usize> = (1..n_operands)
+                .filter(|&j| {
+                    let k = lw.current_kinds[off + a_us + j];
+                    matches!(k, RegKind::Int | RegKind::Float | RegKind::Unknown)
+                        && a_us + j != out as usize
+                })
+                .collect();
+            let mask = reload.iter().fold(0u64, |m, &j| m | 1 << j.min(63));
             let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
             let n_arg = lw.bcx.ins().iconst(types::I64, n_operands as i64);
             let ops = lw.bcx.ins().stack_addr(types::I64, ss, 0);
+            let mask_arg = lw.bcx.ins().iconst(types::I64, mask as i64);
             let func_ref = lw.bcx.import_func(op_concat_id);
-            let call_inst = lw.bcx.ins().call(func_ref, &[a_arg, n_arg, ops, roots]);
+            let call_inst = lw
+                .bcx
+                .ins()
+                .call(func_ref, &[a_arg, n_arg, ops, mask_arg, roots]);
             let result_raw = lw.bcx.inst_results(call_inst)[0];
             // 0: an error or `__concat`; the interpreter redoes the op
             let ok = lw.bcx.ins().icmp_imm_s(IntCC::NotEqual, result_raw, 0);
@@ -142,23 +158,14 @@ pub(super) fn emit_sequence_op<E: Emit>(
                 lw.bcx.def_var(regs[r], result_raw);
                 lw.current_kinds[off + r] = RegKind::Str;
             }
-            // the other operands as the concat left them: a number among
-            // them is a string now (`tostring` converts it in place), which
-            // the stack holds alive as PUC's does
-            for j in 1..n_operands {
+            for j in reload {
                 let slot = a_us + j;
-                let k = lw.current_kinds[off + slot];
-                if !matches!(k, RegKind::Int | RegKind::Float | RegKind::Unknown)
-                    || slot == out as usize
-                {
-                    continue;
-                }
                 let raw = lw
                     .bcx
                     .ins()
                     .stack_load(types::I64, types::I64, ss, (16 * j + 8) as i32);
                 lw.bcx.def_var(regs[slot], raw);
-                if k != RegKind::Unknown {
+                if lw.current_kinds[off + slot] != RegKind::Unknown {
                     lw.current_kinds[off + slot] = RegKind::Str;
                 }
             }

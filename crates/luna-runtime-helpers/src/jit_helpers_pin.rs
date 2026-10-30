@@ -163,7 +163,7 @@ pub fn force_link_jit_helpers() -> usize {
             let _ = jb::luna_jit_table_get_float(0, 0);
             let _ = jb::luna_jit_upval_get(0);
             let _ = jb::luna_jit_op_close(0);
-            let _ = jb::luna_jit_op_concat_regs(0, 0, 0, 0);
+            let _ = jb::luna_jit_op_concat_regs(0, 0, 0, 0, 0);
             let _ = jb::luna_jit_str_buf_acquire();
             jb::luna_jit_str_buf_release(0);
             let _ = jb::luna_jit_str_buf_extend(0, 0);

@@ -82,10 +82,11 @@ pub trait VmJitFrames {
     /// below 0 keeps the tag the stack slot has), stored from register
     /// `a` of the head frame on before the concat runs as the
     /// interpreter's does. Returns the result's payload, then `ops`
-    /// holds each operand's payload as the concat left it (a number
-    /// converted in place); `0` when the interpreter must redo the op
-    /// (an error, `__concat`, or a deopt already parked).
-    fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]]) -> i64;
+    /// holds the payload as the concat left it (a number converted in
+    /// place) of operand j for bit j of `reload` (bit 63 standing for
+    /// every operand from 63 on); `0` when the interpreter must redo the
+    /// op (an error, `__concat`, or a deopt already parked).
+    fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]], reload: u64) -> i64;
     /// Read the tag byte of
     /// `vm.stack[base + slot_offset]`. Used by `Op::TForLoop` emit
     /// to dispatch on the iterator's return-key tag at runtime
@@ -204,8 +205,8 @@ impl VmJitFrames for crate::vm::Vm {
         crate::vm::Vm::jit_spill_stack(self, slot_offset, v)
     }
     #[inline]
-    fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]]) -> i64 {
-        crate::vm::Vm::jit_concat_regs(self, a, ops)
+    fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]], reload: u64) -> i64 {
+        crate::vm::Vm::jit_concat_regs(self, a, ops, reload)
     }
     #[inline]
     fn jit_stack_tag(&mut self, slot_offset: u32) -> u8 {

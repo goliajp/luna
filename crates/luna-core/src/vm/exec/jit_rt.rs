@@ -117,7 +117,7 @@ impl Vm {
     /// concat at register `a` of the trace's head frame, its operands
     /// stored from `ops` first. A metamethod frame `concat_run` pushed is
     /// unwound, and the interpreter redoes the op.
-    pub(crate) fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]]) -> i64 {
+    pub(crate) fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]], reload: u64) -> i64 {
         if self.jit.pending_err.is_some() {
             return 0;
         }
@@ -153,8 +153,17 @@ impl Vm {
             // SAFETY: every `RawVal` `unpack` returns has all 8 bytes initialised
             unsafe { v.unpack().1.zero as i64 }
         };
-        for (op, &v) in ops[1..].iter_mut().zip(&self.stack[lo + 1..lo + n]) {
-            op[1] = payload(v);
+        let mut want = reload;
+        while want != 0 {
+            let j = want.trailing_zeros() as usize;
+            want &= want - 1;
+            if j == 63 {
+                for k in 63..n {
+                    ops[k][1] = payload(self.stack[lo + k]);
+                }
+            } else if j < n {
+                ops[j][1] = payload(self.stack[lo + j]);
+            }
         }
         payload(self.stack[lo])
     }

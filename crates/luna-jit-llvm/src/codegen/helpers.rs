@@ -60,7 +60,7 @@ fn helper_registry() -> Vec<Helper> {
         h!(luna_jit_self_level, 4, true),
         h!(luna_jit_self_upval_check, 1, true),
         h!(luna_jit_op_close, 1, true),
-        h!(luna_jit_op_concat_regs, 4, true),
+        h!(luna_jit_op_concat_regs, 5, true),
         h!(luna_jit_str_buf_acquire, 0, true),
         h!(luna_jit_str_buf_release, 1, false),
         h!(luna_jit_str_buf_extend, 2, true),
