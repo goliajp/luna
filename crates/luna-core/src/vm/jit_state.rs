@@ -165,8 +165,9 @@ pub struct JitState {
     /// the frames of the compiled levels handed to the interpreter,
     /// deepest first
     pub(crate) handoff: Vec<crate::vm::exec::HandoffFrame>,
-    /// heads that failed to compile, by their function's content
-    pub(crate) fail_memory: crate::vm::exec::FailMemory,
+    /// heads that failed to compile, by their function's content; boxed
+    /// on the first failure, since most Vms never have one
+    pub(crate) fail_memory: Option<Box<crate::vm::exec::FailMemory>>,
 }
 
 impl JitState {
@@ -409,7 +410,7 @@ impl JitState {
             levels_base: 0,
             levels_slot: 0,
             handoff: Vec::new(),
-            fail_memory: Default::default(),
+            fail_memory: None,
             reg_state_buf: Vec::new(),
             ssa_roots: Vec::new(),
             str_buf_pool: Vec::new(),

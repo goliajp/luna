@@ -59,9 +59,6 @@ impl FailMemory {
 
     /// A recording of `proto` at `pc` compiled: the head is forgotten.
     pub(super) fn compiled(&mut self, proto: &crate::runtime::function::Proto, pc: u32) {
-        if self.heads.is_empty() {
-            return;
-        }
         if let Some(i) = self.find(&proto.stable_hash(), pc) {
             self.heads.remove(i);
         }
@@ -70,9 +67,6 @@ impl FailMemory {
     /// Whether `proto`, which has not failed at `pc` itself, should skip
     /// recording there because prototypes of the same content gave it up.
     fn skip(&mut self, proto: &crate::runtime::function::Proto, pc: u32) -> bool {
-        if self.heads.is_empty() {
-            return false;
-        }
         let Some(i) = self.find(&proto.stable_hash(), pc) else {
             return false;
         };
@@ -95,10 +89,13 @@ impl FailMemory {
 /// prototypes of the same content keep failing there. A skipped head is
 /// given up on `proto` too, so its later back-edges do not ask again.
 pub(super) fn trace_head_forgone(
-    memory: &mut FailMemory,
+    memory: &mut Option<Box<FailMemory>>,
     proto: Gc<crate::runtime::function::Proto>,
     pc: u32,
 ) -> bool {
+    let Some(memory) = memory else {
+        return false;
+    };
     if proto
         .trace_compile_failures
         .borrow()

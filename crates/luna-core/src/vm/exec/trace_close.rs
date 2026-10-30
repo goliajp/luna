@@ -156,7 +156,9 @@ impl Vm {
             let (result, cut) = self.compile_or_cut(&closed_record, opts, version);
             match result {
                 Some(mut ct) => {
-                    self.jit.fail_memory.compiled(&head_proto, head_pc_val);
+                    if let Some(m) = &mut self.jit.fail_memory {
+                        m.compiled(&head_proto, head_pc_val);
+                    }
                     self.tally_compiled_trace(&ct);
                     let wired = self.wire_side_trace(&mut ct, closed_record.side_trace_parent);
                     let ct = cache_compiled_trace(
@@ -191,9 +193,8 @@ impl Vm {
                         );
                     } else {
                         note_trace_compile_failure(head_proto, closed_record.head_pc);
-                        self.jit
-                            .fail_memory
-                            .failed(&head_proto, closed_record.head_pc);
+                        let m = self.jit.fail_memory.get_or_insert_default();
+                        m.failed(&head_proto, closed_record.head_pc);
                     }
                     self.jit
                         .counters
