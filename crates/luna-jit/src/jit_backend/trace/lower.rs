@@ -131,6 +131,9 @@ struct Lower<E: Emit> {
     tier_count: Option<(Box<TCellU32>, u32)>,
     /// The count's address, read on entry by a trace that may check (`gc_due`).
     due_words: Option<Value>,
+    /// Every way to the op being lowered passed a check for a collection
+    /// with nothing that may allocate since (see `gc_due`).
+    gc_quiet: bool,
 }
 
 /// `always_codegen = false` leaves the function undefined in `module`
@@ -255,12 +258,8 @@ fn emit_trace<E: Emit>(
     count_at: u32,
     at_exits: bool,
 ) -> Option<(E, Emitted)> {
-    // track which AOT data slots
-    // we've already `define_data`'d this lower call. `declare_data`
-    // returns the same `DataId` for the same name (Cranelift name
-    // interning), but `define_data` rejects redefinition with
-    // `ModuleError::DuplicateDefinition` — so the dedupe guard sits
-    // around `define_data`, not `declare_data`.
+    // the AOT data this call has defined: `declare_data` gives one name
+    // the same `DataId` again, but `define_data` refuses a second definition
     let defined_aot_data: std::collections::HashSet<DataId> = std::collections::HashSet::new();
     let head = emit_entry(&mut bcx, pl);
     let due_words = emit_due_words(&mut bcx, pl)?;

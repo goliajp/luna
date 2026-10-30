@@ -128,3 +128,75 @@ pub(super) fn note_gc_due<E: Emit>(lw: &mut Lower<E>, check: u32) {
         call_gc_due(lw, check);
     });
 }
+
+/// Whether lowering `rop` leaves a check made before it as true as it
+/// was: the op allocates nothing, and the only helpers it calls read
+/// tables, upvalues or the stack, or compute (no metamethod, no
+/// collection). A store into a table may grow it, so it is not one.
+fn keeps_gc_quiet(rop: &RecordedOp) -> bool {
+    let ins = rop.inst;
+    match ins.op() {
+        Op::Move
+        | Op::LoadI
+        | Op::LoadF
+        | Op::LoadK
+        | Op::LoadNil
+        | Op::LoadFalse
+        | Op::LoadTrue
+        | Op::LFalseSkip
+        | Op::LTrueSkip
+        | Op::Not
+        | Op::Jmp
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Pow
+        | Op::IDiv
+        | Op::Mod
+        | Op::BAnd
+        | Op::BOr
+        | Op::BXor
+        | Op::Shl
+        | Op::Shr
+        | Op::Unm
+        | Op::BNot
+        | Op::EqK
+        | Op::Test
+        | Op::TestSet
+        | Op::Lt
+        | Op::Le
+        | Op::Eq
+        | Op::GetI
+        | Op::GetTable
+        | Op::GetField
+        | Op::SelfOp
+        | Op::GetTabUp
+        | Op::GetUpval
+        | Op::Call
+        | Op::Vararg => true,
+        // closing the frame's upvalues is not
+        Op::Return0 | Op::Return1 | Op::Return => !ins.k(),
+        _ => false,
+    }
+}
+
+/// Before op `i` is lowered: forgets the last check unless every way to
+/// the op passed it with nothing since that may allocate. A skip joining
+/// here comes from before it, and a folded call runs a library function.
+pub(super) fn gc_quiet_before<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize) {
+    if lw.alt_joins.contains_key(&i) || pl.folded_ops[i] || !keeps_gc_quiet(&pl.record.ops[i]) {
+        lw.gc_quiet = false;
+    }
+}
+
+/// 5.2's check at inlined call `i`: none when the count and the due point
+/// are what the last check found them (only it could have found a step
+/// due, and then the trace left; `luna_jit_gc_due` changes nothing when
+/// it finds none).
+pub(super) fn call_gc_check<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize) {
+    if !lw.gc_quiet {
+        gc_due_exit_as(lw, pl, i, 0, luna_core::jit::JIT_GC_CALL);
+        lw.gc_quiet = true;
+    }
+}

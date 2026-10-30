@@ -24,6 +24,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
     let rewritten = rewritten_before_sync(n_regs, record, pl, effective_end);
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         commit_before(lw, pl, i, &rewritten[i * n_regs..(i + 1) * n_regs]);
+        gc_quiet_before(lw, pl, i);
         alt_join(lw, i);
         let vregs: VRegs = pl.vconsts.get(i).copied().unwrap_or([None; NVIRT]);
         // R[C] of a register-operand op, read before this op's own write

@@ -208,6 +208,7 @@ pub(super) fn begin_body<E: Emit>(
         alt_joins: std::collections::HashMap::new(),
         tier_count: None,
         due_words: None,
+        gc_quiet: false,
         ro_invariant,
         ro_checked: Vec::new(),
     }

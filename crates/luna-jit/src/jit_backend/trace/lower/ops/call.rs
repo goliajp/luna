@@ -116,7 +116,7 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
             // 5.2 checks for a collection on every call of a Lua function,
             // with the new frame's top: leave in the callee when one is due
             if pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua52) {
-                gc_due_exit_as(lw, pl, i, 0, luna_core::jit::JIT_GC_CALL);
+                call_gc_check(lw, pl, i);
             }
         }
         // a return of an inlined function: its values go to the caller's
