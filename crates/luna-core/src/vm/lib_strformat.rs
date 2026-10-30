@@ -107,6 +107,10 @@ fn format<const PRE: bool>(
             }
         };
     }
+    // the room asked for before each item (5.2 on), and whether a `%f`
+    // asks for more
+    let room = max_item(v);
+    let room_f = v >= LuaVersion::Lua54;
     let mut arg = 0u32;
     let mut i = 0;
     // the buffer's slot counts only when a callback runs or an error is
@@ -134,10 +138,9 @@ fn format<const PRE: bool>(
             continue;
         }
         if v >= LuaVersion::Lua52 {
-            let m = max_item(v);
-            tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
+            tell!(out.len() + room, out.len(), |b| b.prep(vm, &out, room)?);
             // 5.4 on ask for more for a `%f`
-            if v >= LuaVersion::Lua54 && item_conv(fmt, i) == b'f' {
+            if room_f && item_conv(fmt, i) == b'f' {
                 let m = 110 + 308;
                 tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
             }
