@@ -38,7 +38,7 @@ jobs:
           rows = []
           for l in open("crates/luna-core/tests/diff_puc/gc_stress_slow.txt"):
               if l.strip() and not l.startswith("#"):
-                  d, f, n, test = l.split()
+                  d, f, n, test, _every = l.split()
                   rows.append((d, f, int(n), test))
           if not rows:
               raise SystemExit("no slow fixtures listed")

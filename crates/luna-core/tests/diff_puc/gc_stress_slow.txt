@@ -4,9 +4,12 @@
 # workflow runs each as `shards` jobs (for the JIT, `shards` per hot
 # threshold), shard `i` collecting at checkpoints i, i + shards, ...:
 # together the shards collect at every checkpoint once. luna-core runs a
-# fixture through its puc_dump test named in the last column.
+# fixture through its puc_dump test named in the fourth column
+# (puc_dump::dump_round_trips_through_luna::slow::<dump-test>), which the
+# merge check runs collecting at every `every`th checkpoint only: the least
+# interval that keeps it within ten minutes on one of firefly's big cores.
 #
-# dialect fixture shards dump-test
-5.2 870_c_stack_overflow_paths.lua 2 v52_870
-5.2 1047_msgh_at_full_stack.lua 3 v52_1047
-5.2 999_handler_after_varinfo_52.lua 16 v52_999_handler
+# dialect fixture shards dump-test every
+5.2 870_c_stack_overflow_paths.lua 2 v52_870 34
+5.2 1047_msgh_at_full_stack.lua 3 v52_1047 62
+5.2 999_handler_after_varinfo_52.lua 16 v52_999_handler 250
