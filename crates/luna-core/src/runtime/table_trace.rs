@@ -64,30 +64,35 @@ impl Table {
             }
             None => (false, false),
         };
+        if wk || wv {
+            return self.trace_weak(this, wk, wv, m);
+        }
+        if self.dialect() == Dialect::L51 {
+            self.mark_array_rev(m);
+            self.mark_nodes_rev::<true, true>(m);
+        } else {
+            self.mark_array(m);
+            self.mark_nodes::<true, true>(m);
+        }
+    }
+
+    /// [`Table::trace`] of a weak table, out of line so the strong
+    /// table's loops stay together.
+    #[inline(never)]
+    fn trace_weak(&self, this: *mut Table, wk: bool, wv: bool, m: &mut Marker) {
+        m.note_weak(this);
         if self.dialect() == Dialect::L51 {
             // 5.1 has no ephemerons: a weak table is cleared after marking
-            if wk || wv {
-                m.note_weak(this);
-            }
             if !wv {
                 self.mark_array_rev(m);
             }
             match (!wk, !wv) {
-                (true, true) => self.mark_nodes_rev::<true, true>(m),
                 (true, false) => self.mark_nodes_rev::<true, false>(m),
                 (false, true) => self.mark_nodes_rev::<false, true>(m),
-                (false, false) => {}
+                _ => {}
             }
-        } else if !wk && !wv {
-            self.mark_array(m);
-            self.mark_nodes::<true, true>(m);
-        } else {
-            self.trace_weak(this, wk, wv, m);
+            return;
         }
-    }
-
-    fn trace_weak(&self, this: *mut Table, wk: bool, wv: bool, m: &mut Marker) {
-        m.note_weak(this);
         // weak keys + strong values = an ephemeron table: its hash values are
         // marked only if the key proves reachable (deferred to the convergence
         // pass), not here. PUC 5.1 predates ephemerons — under `no_ephemeron`
@@ -123,6 +128,7 @@ impl Table {
         }
     }
 
+    #[inline(always)]
     fn mark_array_rev(&self, m: &mut Marker) {
         for (&t, v) in self.atags().iter().zip(self.avals()).rev() {
             if raw::is_gc(t) {
