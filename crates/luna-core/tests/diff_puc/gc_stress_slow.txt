@@ -1,0 +1,12 @@
+# The diff_puc fixtures too slow for a collection at every checkpoint in
+# one test job. Under gc-stress, luna-core's gc_stress_corpus and
+# luna-jit's forced_jit_corpus leave them out, and the stress-slow
+# workflow runs each as `shards` jobs (for the JIT, `shards` per hot
+# threshold), shard `i` collecting at checkpoints i, i + shards, ...:
+# together the shards collect at every checkpoint once. luna-core runs a
+# fixture through its puc_dump test named in the last column.
+#
+# dialect fixture shards dump-test
+5.2 870_c_stack_overflow_paths.lua 2 v52_870
+5.2 1047_msgh_at_full_stack.lua 3 v52_1047
+5.2 999_handler_after_varinfo_52.lua 16 v52_999_handler
