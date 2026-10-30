@@ -4,9 +4,11 @@ use super::*;
 
 /// One conversion under 5.1, 5.2 or 5.3. Returns where scanning resumes;
 /// `added` is left as it is ([`Added::Sized`]) unless the item says
-/// otherwise.
+/// otherwise. `v` is the running dialect.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn item51<const PRE: bool>(
     vm: &mut Vm,
+    v: LuaVersion,
     a: Args,
     arg: u32,
     fmt: &[u8],
@@ -14,7 +16,6 @@ pub(super) fn item51<const PRE: bool>(
     out: &mut LVec<u8>,
     added: &mut Added,
 ) -> Result<usize, LuaError> {
-    let v = vm.version();
     let p = scanformat(vm, fmt, start)?;
     // every conversion but a long `%s` and `%q` fits in this
     vm.buf_reserve(out, cfmt::ITEM_MAX)?;
