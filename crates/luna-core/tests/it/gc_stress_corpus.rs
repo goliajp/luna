@@ -19,13 +19,23 @@ use luna_core::version::LuaVersion;
 
 use super::refusing_alloc::run;
 
-/// Fixtures too slow for a collection at every checkpoint in one job:
-/// the stress-slow workflow runs them in shards.
-const SLOW: &[(&str, &str)] = &[
-    ("5.2", "870_c_stack_overflow_paths"),
-    ("5.2", "1047_msgh_at_full_stack"),
-    ("5.2", "999_handler_after_varinfo_52"),
-];
+/// Fixtures too slow for a collection at every checkpoint in one job,
+/// `(dialect, file name)`: the list luna-jit's forced_jit_corpus also
+/// reads, whose shards the stress-slow workflow runs.
+fn slow() -> Vec<(String, String)> {
+    let f = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/diff_puc/gc_stress_slow.txt");
+    let text = std::fs::read_to_string(f).expect("the slow fixture list");
+    let out: Vec<(String, String)> = text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .map(|l| {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            (w[0].to_string(), w[1].to_string())
+        })
+        .collect();
+    assert!(!out.is_empty(), "no slow fixtures listed");
+    out
+}
 
 const DIALECTS: &[(&str, LuaVersion)] = &[
     ("5.1", LuaVersion::Lua51),
@@ -92,15 +102,13 @@ fn the_corpus_reads_and_writes_nothing_freed() {
     let (want_d, part) = only.split_once(':').unwrap_or((&only, ""));
     let mut bad = Vec::new();
     let mut ran = 0;
+    let slow = slow();
     for &(d, v) in DIALECTS {
         if !want_d.is_empty() && want_d != d {
             continue;
         }
         for f in fixtures(d, part) {
-            if SLOW
-                .iter()
-                .any(|&(sd, n)| sd == d && f.to_string_lossy().contains(n))
-            {
+            if slow.iter().any(|(sd, n)| sd == d && f.ends_with(n)) {
                 continue;
             }
             let src = std::fs::read_to_string(&f).expect("a fixture");

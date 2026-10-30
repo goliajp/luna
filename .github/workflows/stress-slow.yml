@@ -1,9 +1,14 @@
 # The dump fixtures too slow for a collection at every checkpoint in the
 # merge check (which collects at every nth one there), at full strength,
-# nightly and on demand. A fixture runs as `every` shards, shard `offset`
-# collecting at checkpoints offset, offset + every, ...: together they
-# collect at every checkpoint once. One job per fixture and shard, each
-# estimated within four hours.
+# nightly and on demand, and the same fixtures under the JIT engaged
+# early (luna-jit's forced_jit_corpus, which leaves them out under
+# gc-stress). A fixture runs as `shards` jobs (for the JIT, `shards` per
+# hot threshold), shard `offset` collecting at checkpoints offset,
+# offset + shards, ...: together they collect at every checkpoint once.
+# The fixtures and their shard counts come from one list,
+# crates/luna-core/tests/diff_puc/gc_stress_slow.txt, which the corpus
+# tests also read; the partition job makes the matrices from it. One job
+# per fixture and shard, each estimated within four hours.
 
 name: stress-slow
 
@@ -14,37 +19,51 @@ on:
   workflow_dispatch:
 
 jobs:
+  partition:
+    name: the slow fixtures' shards
+    runs-on: ubuntu-latest
+    outputs:
+      core: ${{ steps.list.outputs.core }}
+      jit: ${{ steps.list.outputs.jit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
+
+      - name: Make the matrices from the slow fixture list
+        id: list
+        run: |
+          python3 - <<'PY'
+          import json, os
+          rows = []
+          for l in open("crates/luna-core/tests/diff_puc/gc_stress_slow.txt"):
+              if l.strip() and not l.startswith("#"):
+                  d, f, n, test = l.split()
+                  rows.append((d, f, int(n), test))
+          if not rows:
+              raise SystemExit("no slow fixtures listed")
+          core = [{"test": t, "every": n, "offset": i} for d, f, n, t in rows for i in range(n)]
+          jit = [{"fixture": f"{d}/{f}", "hot": h, "every": n, "offset": i}
+                 for d, f, n, t in rows for h in (1, 2, 5) for i in range(n)]
+          # the hot thresholds forced_jit_corpus runs the corpus at
+          src = open("crates/luna-jit/tests/it/forced_jit_corpus.rs").read()
+          if "const HOT: &[u32] = &[1, 2, 5];" not in src:
+              raise SystemExit("forced_jit_corpus's HOT changed: update the jit matrix")
+          for d, f, n, t in rows:
+              print(f"{d}/{f}: {n} shards, luna-core test {t}, {3 * n} JIT jobs")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("core=" + json.dumps(core) + "\n")
+              out.write("jit=" + json.dumps(jit) + "\n")
+          PY
+
   slow:
     name: gc-stress at every checkpoint (${{ matrix.test }} ${{ matrix.offset }}/${{ matrix.every }})
+    needs: partition
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { test: v52_870, every: 2, offset: 0 }
-          - { test: v52_870, every: 2, offset: 1 }
-          - { test: v52_1047, every: 3, offset: 0 }
-          - { test: v52_1047, every: 3, offset: 1 }
-          - { test: v52_1047, every: 3, offset: 2 }
-          # about 38 hours at full strength on the project's x86_64 runner:
-          # 5.2 checks for a collection at every call, and the fixture
-          # recurses a million calls deep inside a message handler
-          - { test: v52_999_handler, every: 16, offset: 0 }
-          - { test: v52_999_handler, every: 16, offset: 1 }
-          - { test: v52_999_handler, every: 16, offset: 2 }
-          - { test: v52_999_handler, every: 16, offset: 3 }
-          - { test: v52_999_handler, every: 16, offset: 4 }
-          - { test: v52_999_handler, every: 16, offset: 5 }
-          - { test: v52_999_handler, every: 16, offset: 6 }
-          - { test: v52_999_handler, every: 16, offset: 7 }
-          - { test: v52_999_handler, every: 16, offset: 8 }
-          - { test: v52_999_handler, every: 16, offset: 9 }
-          - { test: v52_999_handler, every: 16, offset: 10 }
-          - { test: v52_999_handler, every: 16, offset: 11 }
-          - { test: v52_999_handler, every: 16, offset: 12 }
-          - { test: v52_999_handler, every: 16, offset: 13 }
-          - { test: v52_999_handler, every: 16, offset: 14 }
-          - { test: v52_999_handler, every: 16, offset: 15 }
+        include: ${{ fromJSON(needs.partition.outputs.core) }}
     # the longest a hosted job may run
     timeout-minutes: 360
     env:
@@ -106,6 +125,42 @@ jobs:
           # glibc fills what is freed, so a freed object read is not
           # mistaken for a live one
           MALLOC_PERTURB_: "219"
-        run: >-
-          cargo test --release -p luna-core --features gc-stress --test it --
-          --exact puc_dump::dump_round_trips_through_luna::slow::${{ matrix.test }} --nocapture
+        # a test name the list gets wrong would run nothing and pass
+        run: |
+          set -o pipefail
+          cargo test --release -p luna-core --features gc-stress --test it -- \
+            --exact puc_dump::dump_round_trips_through_luna::slow::${{ matrix.test }} --nocapture 2>&1 | tee test.log
+          grep -q '^running 1 test$' test.log
+
+  slow-jit:
+    name: gc-stress under the JIT (${{ matrix.fixture }} hot ${{ matrix.hot }} ${{ matrix.offset }}/${{ matrix.every }})
+    needs: partition
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.partition.outputs.jit) }}
+    timeout-minutes: 360
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run the fixture's shard
+        env:
+          LUNA_STRESS_SLOW: ${{ matrix.fixture }}
+          LUNA_JIT_HOT: ${{ matrix.hot }}
+          LUNA_GC_STRESS_EVERY: ${{ matrix.every }}
+          LUNA_GC_STRESS_OFFSET: ${{ matrix.offset }}
+          MALLOC_PERTURB_: "219"
+        run: |
+          set -o pipefail
+          cargo test --release -p luna-jit --features gc-stress --test it -- \
+            --ignored --exact forced_jit_corpus::slow_fixture_shard --nocapture 2>&1 | tee test.log
+          grep -q '^running 1 test$' test.log

@@ -34,6 +34,26 @@ const DIALECTS: &[(&str, LuaVersion)] = &[
 /// it.
 const HOT: &[u32] = &[1, 2, 5];
 
+/// luna-core's fixtures too slow for a collection at every checkpoint in
+/// one job, `(dialect, file name, shards)`: under `gc-stress` the corpus
+/// run leaves them out and [`slow_fixture_shard`] runs them.
+fn slow() -> Vec<(String, String, u64)> {
+    let f = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../luna-core/tests/diff_puc/gc_stress_slow.txt");
+    let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("read {}: {e}", f.display()));
+    text.lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .map(|l| {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            (
+                w[0].to_string(),
+                w[1].to_string(),
+                w[2].parse().expect("a shard count"),
+            )
+        })
+        .collect()
+}
+
 fn fixtures(dialect: &str) -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../luna-core/tests/diff_puc")
@@ -125,10 +145,17 @@ fn masked(r: Result<String, String>) -> Result<String, String> {
 #[test]
 fn corpus_runs_the_same_with_the_jit_engaged_early() {
     let mut failed = Vec::new();
+    let slow = slow();
+    assert!(!slow.is_empty(), "no slow fixtures listed");
     for &(dialect, version) in DIALECTS {
         let mut dispatched = 0u64;
         let mut compiled_chunks = 0usize;
         for f in &fixtures(dialect) {
+            if cfg!(feature = "gc-stress")
+                && slow.iter().any(|(d, n, _)| d == dialect && f.ends_with(n))
+            {
+                continue;
+            }
             let source = std::fs::read(f).expect("read fixture");
             let _turn = super::trace_corpus::huge_turn(f);
             // one string hash seed for the runs compared (see `seeded`)
@@ -167,4 +194,68 @@ fn corpus_runs_the_same_with_the_jit_engaged_early() {
         );
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// One shard of one slow fixture at one hot threshold, collecting at every
+/// `LUNA_GC_STRESS_EVERY`th checkpoint from the `LUNA_GC_STRESS_OFFSET`th
+/// (the offsets `0..every` together collect at every one once):
+/// `LUNA_STRESS_SLOW=<dialect>/<file>` names a fixture the slow list
+/// holds, `LUNA_JIT_HOT` the threshold. The output it is held to is the
+/// interpreter's with no collections forced: the slow fixtures print
+/// nothing the collector's timing changes.
+#[cfg(feature = "gc-stress")]
+#[test]
+#[ignore = "slow: the stress-slow workflow runs it in shards"]
+fn slow_fixture_shard() {
+    use luna_core::__private::VmGcStress;
+    let var = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} must be set"));
+    let num = |k: &str| var(k).parse::<u64>().expect("a number");
+    let which = var("LUNA_STRESS_SLOW");
+    let (dialect, file) = which.split_once('/').expect("<dialect>/<file>");
+    assert!(
+        slow().iter().any(|(d, n, _)| d == dialect && n == file),
+        "{which} is not on the slow list"
+    );
+    let &(_, version) = DIALECTS
+        .iter()
+        .find(|&&(d, _)| d == dialect)
+        .expect("a dialect");
+    let (every, offset, hot) = (
+        num("LUNA_GC_STRESS_EVERY"),
+        num("LUNA_GC_STRESS_OFFSET"),
+        num("LUNA_JIT_HOT"),
+    );
+    assert!(
+        HOT.contains(&(hot as u32)),
+        "a hot threshold the corpus runs at"
+    );
+    let f = fixtures(dialect)
+        .into_iter()
+        .find(|p| p.ends_with(file))
+        .expect("the fixture");
+    let source = std::fs::read(&f).expect("read fixture");
+    let mut interp_vm = super::trace_corpus::seeded(version, 1);
+    interp_vm.set_jit_enabled(false);
+    interp_vm.set_trace_jit_enabled(false);
+    interp_vm.gc_stress_interval(u64::MAX, 0);
+    let interp = masked(run(&mut interp_vm, &source));
+    drop(interp_vm);
+    let mut vm = super::trace_corpus::seeded(version, 1);
+    vm.jit_mut().trace_hot_threshold = hot as u32;
+    vm.jit_mut().call_hot_threshold = hot as u32;
+    vm.gc_stress_interval(every, offset);
+    vm.gc_stress_log();
+    let t = std::time::Instant::now();
+    let jit = masked(run(&mut vm, &source));
+    eprintln!(
+        "[forced_jit_corpus] {which} hot {hot}, every {every}th checkpoint from the {offset}th: \
+         {} collections, {:.1}s",
+        vm.gc_stress_collected().len(),
+        t.elapsed().as_secs_f64()
+    );
+    assert!(
+        !vm.gc_stress_collected().is_empty(),
+        "no checkpoint collected"
+    );
+    assert_eq!(jit, interp, "{which} (hot = {hot}) under the JIT");
 }
