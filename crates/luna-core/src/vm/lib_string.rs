@@ -124,14 +124,22 @@ fn s_rep<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
         }
         return Err(vm.buf_error());
     }
-    vm.buf_reserve(&mut out, total as usize)?;
-    for k in 0..n {
-        vm.buf_push(&mut out, s.as_bytes())?;
-        if let Some(sep) = sep
-            && k + 1 < n
-        {
-            vm.buf_push(&mut out, sep.as_bytes())?;
-        }
+    let total = total as usize;
+    vm.buf_reserve(&mut out, total)?;
+    // one copy of the string and its separator, then the copies made so
+    // far doubled until the size is reached (the last separator cut off)
+    vm.buf_push(&mut out, s.as_bytes())?;
+    if let Some(sep) = sep
+        && n > 1
+    {
+        vm.buf_push(&mut out, sep.as_bytes())?;
+    }
+    let mut filled = out.len();
+    out.resize(total, 0)?;
+    while filled < total {
+        let k = filled.min(total - filled);
+        out.copy_within(0..k, filled);
+        filled += k;
     }
     let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
@@ -142,14 +150,18 @@ fn s_rep<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
 /// each dialect's "too large" test (5.1 has none) and luna's limit.
 fn rep_size(vm: &mut Vm, n: u128, l: u128, lsep: u128) -> Result<u128, LuaError> {
     let v = vm.version();
+    // PUC's `x > max / n` (integer division) is `x * n > max`, and its
+    // `x >= max / n` is `(x + 1) * n > max`: products below 2^128 (`n` and
+    // the lengths are under 2^64), without a 128-bit division
+    let x = l + lsep;
     let too_large = if v == LuaVersion::Lua51 {
         false
     } else if v == LuaVersion::Lua52 {
-        l + lsep >= (usize::MAX >> 1) as u128 / n
+        (x + 1) * n > (usize::MAX >> 1) as u128
     } else if v < LuaVersion::Lua55 {
-        l + lsep > i32::MAX as u128 / n
+        x * n > i32::MAX as u128
     } else {
-        l + lsep > u128::from(crate::vm::c_abi::MAX_SIZE_55) / n
+        x * n > u128::from(crate::vm::c_abi::MAX_SIZE_55)
     };
     if too_large {
         return Err(raise_str(vm, "resulting string too large"));
