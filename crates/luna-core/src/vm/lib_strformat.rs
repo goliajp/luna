@@ -153,7 +153,7 @@ fn format<const PRE: bool>(
         let item = if v >= LuaVersion::Lua54 {
             item54::<PRE>(vm, a, arg, fmt, i, &mut out, &mut added)
         } else {
-            item51::<PRE>(vm, a, arg, fmt, i, &mut out, &mut added)
+            item51::<PRE>(vm, v, a, arg, fmt, i, &mut out, &mut added)
         };
         i = match item {
             Ok(i) => i,
