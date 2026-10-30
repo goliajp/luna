@@ -20,6 +20,7 @@ pub(crate) fn alloc_long_pair(
 
 /// A long string of `parts` one after another, hashed when first used as
 /// a key (not 5.1's, whose long strings are interned).
+#[inline(always)]
 pub(crate) fn alloc_long_parts(
     mem: MemRef,
     parts: &[&[u8]],

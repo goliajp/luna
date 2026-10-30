@@ -89,7 +89,7 @@ impl Heap {
 impl Heap {
     /// A string just made: counted, or, while luna builds its own objects,
     /// marked as one PUC has not made.
-    #[inline]
+    #[inline(always)]
     pub(in crate::runtime::puc) fn acct_new_string(&mut self, s: Gc<LuaStr>, len: usize) {
         let h = s.header();
         // 5.1's string table holds every string, 5.2's the short ones

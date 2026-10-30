@@ -128,7 +128,7 @@ impl Heap {
 
 impl Heap {
     /// A new string of `len` bytes (PUC `createstrobj`).
-    #[inline]
+    #[inline(always)]
     pub(in crate::runtime::puc) fn acct_string(&mut self, len: usize) {
         // a short string with no trace to write: only the sum is seen
         // (the table grows on the same condition either side of the
@@ -146,6 +146,13 @@ impl Heap {
             self.puc.records.strt_nuse += 1;
             return;
         }
+        self.acct_string_traced(len);
+    }
+
+    /// [`Heap::acct_string`] with a trace to write or while luna builds
+    /// its own objects.
+    #[inline(never)]
+    fn acct_string_traced(&mut self, len: usize) {
         let d = self.puc.dialect;
         let long = len > crate::runtime::string::MAX_SHORT_LEN && d != Dialect::L51;
         let kind = if long {
