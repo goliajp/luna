@@ -129,7 +129,7 @@ pub(crate) fn nan_spelling(f: f64) -> (bool, &'static str) {
     }
 }
 
-fn float_to_string(f: f64, fmt: FloatFmt) -> String {
+pub(super) fn float_to_string(f: f64, fmt: FloatFmt) -> String {
     if f.is_nan() {
         let (negative, body) = nan_spelling(f);
         return if negative {
@@ -141,7 +141,35 @@ fn float_to_string(f: f64, fmt: FloatFmt) -> String {
     if f.is_infinite() {
         return if f < 0.0 { "-inf" } else { "inf" }.to_string();
     }
-    let mut s = match fmt {
+    let mut s = match integral_digits(f, fmt) {
+        Some(s) => s,
+        None => float_digits(f, fmt),
+    };
+    if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') && fmt != FloatFmt::Legacy14 {
+        s.push_str(".0");
+    }
+    s
+}
+
+/// The `%.14g` (`%.15g` in 5.5) text of an integral `f` whose digits all
+/// fit the precision, which is the integer's: written without the float
+/// formatter. None for any other `f`, and for `-0.0` (printed `-0`).
+#[inline]
+fn integral_digits(f: f64, fmt: FloatFmt) -> Option<String> {
+    let limit = match fmt {
+        FloatFmt::TwoStage55 => 1e15,
+        FloatFmt::Legacy14 | FloatFmt::G14 => 1e14,
+    };
+    if f.trunc() != f || f.abs() >= limit || (f == 0.0 && f.is_sign_negative()) {
+        return None;
+    }
+    let mut buf = [0u8; 20];
+    let d = write_i64_dec(f as i64, &mut buf);
+    Some(d.iter().map(|&c| char::from(c)).collect())
+}
+
+pub(super) fn float_digits(f: f64, fmt: FloatFmt) -> String {
+    match fmt {
         // ≤5.4: plain LUA_NUMBER_FMT="%.14g" (lua 5.1.5-5.4.9).
         FloatFmt::Legacy14 | FloatFmt::G14 => format_g(f, 14),
         // 5.5 `tostringbuffFloat` (lobject.c): %.15g, read back, and
@@ -154,11 +182,7 @@ fn float_to_string(f: f64, fmt: FloatFmt) -> String {
                 format_g(f, 17)
             }
         }
-    };
-    if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') && fmt != FloatFmt::Legacy14 {
-        s.push_str(".0");
     }
-    s
 }
 
 /// A number's text, held on the stack where a caller needs it as bytes
