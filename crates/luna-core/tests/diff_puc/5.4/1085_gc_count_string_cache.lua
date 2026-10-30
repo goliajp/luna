@@ -30,7 +30,11 @@ twice("getinfo S in pcall", function() pcall(debug.getinfo, 1, "S") end)
 local function a_function_with_a_name_longer_than_forty_chars()
   return debug.getinfo(1, "n")
 end
-twice("getinfo n", function() a_function_with_a_name_longer_than_forty_chars() end)
+-- only the first call: the name goes into the cache ahead of three more
+-- C strings ("name", the kind of name, "namewhat"), and the cache keeps
+-- two strings at each address hash. Whether the next call still finds the
+-- name there depends on where the heap put it, and so changes from run to run
+print("getinfo n", bytes(function() a_function_with_a_name_longer_than_forty_chars() end))
 local function f(a_parameter_with_a_name_longer_than_forty_chars) end
 if _VERSION ~= "Lua 5.1" then
   twice("getlocal", function() debug.getlocal(f, 1) end)

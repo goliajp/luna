@@ -20,17 +20,19 @@ end
 out[#out + 1] = f%d(%d)]], i, i, i)
 end
 local src = "local out = {}\n" .. table.concat(parts, "\n") .. "\nreturn table.concat(out, ',')"
+-- an explicit chunk name, so the counts leave out a copy of the source
+-- made to name each load
 collectgarbage()
 collectgarbage("stop")
 for round = 1, 3 do
   local before = collectgarbage("count")
-  local f = assert(load(src))
+  local f = assert(load(src, "=labels"))
   print(round, f(), collectgarbage("count") - before)
 end
 collectgarbage("restart")
 for round = 1, 20 do
   local junk = {}
   for j = 1, 40 do junk[j] = "j" .. round .. "_" .. j end
-  local f = assert(load(src))
+  local f = assert(load(src, "=labels"))
   if round % 5 == 0 then print(round, f()) end
 end
