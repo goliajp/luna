@@ -197,6 +197,14 @@ fn tolstring_52<const PRE: bool>(
 ) -> Result<Option<crate::runtime::Gc<crate::runtime::LuaStr>>, LuaError> {
     let mm = vm.get_mm(v, crate::vm::exec::Mm::ToString);
     if mm.is_nil() {
+        // a string with nothing pushed above the arguments: what
+        // `luaL_tolstring` does to it is its `luaL_callmeta`
+        if extra == 0
+            && let Value::Str(s) = v
+        {
+            vm.metafield_check::<PRE>(v, b"__tostring")?;
+            return Ok(Some(s));
+        }
         return vm.tolstring::<PRE>(v, extra).map(Some);
     }
     // the slots past the top stay live through the collection it checks for
