@@ -137,7 +137,7 @@ fn format<const PRE: bool>(
             i += 1;
             continue;
         }
-        if v >= LuaVersion::Lua52 {
+        if !PRE || v >= LuaVersion::Lua52 {
             tell!(out.len() + room, out.len(), |b| b.prep(vm, &out, room)?);
         }
         arg += 1;
@@ -154,7 +154,8 @@ fn format<const PRE: bool>(
         }
         let before = out.len();
         let mut added = Added::Sized;
-        let item = if v >= LuaVersion::Lua54 {
+        // `PRE` is 5.1 and 5.2: their build has no 5.4 item to carry
+        let item = if !PRE && v >= LuaVersion::Lua54 {
             item54::<PRE>(vm, a, arg, fmt, i, &mut out, &mut added)
         } else {
             item51::<PRE>(vm, v, a, arg, fmt, i, &mut out, &mut added)
@@ -171,7 +172,7 @@ fn format<const PRE: bool>(
             let k = out.len() - before;
             match added {
                 Added::Value(s) => b.add_value(vm, &out, s)?,
-                Added::Sized if v != LuaVersion::Lua51 => b.add_size(k),
+                Added::Sized if !PRE || v != LuaVersion::Lua51 => b.add_size(k),
                 // 5.1 copies a sized item with `luaL_addlstring`
                 _ => b.add_chars(vm, &out, k)?,
             }
