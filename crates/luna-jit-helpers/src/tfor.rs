@@ -48,6 +48,6 @@ pub unsafe extern "C" fn luna_jit_op_tforcall(
         (vm, &mut *ctrl_out, &mut *key_out, &mut *val_out, mark)
     };
     let r = vm.jit_op_tforcall(abs_offset as u32, nvars as i32, ctrl, key, val);
-    vm.jit_mut().ssa_roots.truncate(mark);
+    vm.jit_mut().ssa_roots = mark;
     r
 }

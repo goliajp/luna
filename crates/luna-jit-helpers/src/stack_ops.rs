@@ -20,88 +20,35 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
     vm.jit_op_close(start_offset as u32)
 }
 
-/// Update only the raw payload of
-/// `vm.stack[base + slot_offset]`, preserving its existing tag.
-/// Used by `Op::Concat` body emit to spill trace-IR Variables
-/// back to vm.stack for operands whose `current_kinds` is
-/// `Unset` (e.g. Str slots that round-trip as pointer raw bits
-/// but have no `RegKind::Str` variant). The interp's previous
-/// execution of the same op already wrote the right `tag` to
-/// that slot — the trace just needs to refresh the raw bits.
+/// Trace JIT helper for `Op::Concat`: `ops` holds the `n` operands as
+/// (tag, payload) words, a tag below 0 keeping the stack slot's own, and
+/// [`luna_core::__private::VmJitFrames::jit_concat_regs`] stores them from
+/// register `a` on and runs the concat. Returns the result's payload, the
+/// operands' payloads as the concat left them back in `ops`; `0` when the
+/// interpreter must redo the op.
+///
+/// The concat may collect in an emergency, so `roots` carries the
+/// collectable values the trace holds only in registers (see
+/// `push_ssa_roots`).
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `raw_bits` is the
-/// payload of a value of the type the slot holds now.
-// SAFETY: no other item in the link is named `luna_jit_stack_update_raw`: only this crate defines
+/// Called from compiled code inside an `enter_jit` window on this thread; `ops` points at `2 * n`
+/// writable words; `roots` is 0 or the address of a root list as `push_ssa_roots` takes it.
+// SAFETY: no other item in the link is named `luna_jit_op_concat_regs`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_stack_update_raw(slot_offset: i64, raw_bits: i64) {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
-        return;
-    }
-    if let Some(slot) = vm.jit_stack_slot_mut(slot_offset as u32) {
-        let (tag, _) = slot.unpack();
-        let raw = luna_core::__private::RawVal {
-            zero: raw_bits as u64,
-        };
-        // SAFETY: `tag` is the slot's own tag and `raw_bits` a payload of that type (# Safety)
-        *slot = unsafe { luna_core::runtime::Value::pack(tag, raw) };
-    }
-}
-
-/// Trace JIT helper for `Op::Concat A B`.
-///
-/// Wraps `Vm::jit_op_concat` which mirrors the interp arm: sets
-/// `self.top = base + a + n`, then runs `concat_run(base + a)`.
-/// Detects metamethod-path (which would push a Lua frame mid-trace)
-/// via pre/post `frames.len()` comparison and deopts cleanly via
-/// `pending_err` + frame unwind.
-///
-/// Returns `0` on success (result lives at `vm.stack[base + a]`),
-/// `-1` on deopt (pending_err set; metamethod path, type error,
-/// length overflow, or pre-existing pending_err).
-///
-/// The concat steps the collector, so `roots` carries the collectable
-/// values the trace holds only in registers (see `push_ssa_roots`).
-///
-/// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `roots` is 0 or the
-/// address of a root list as `push_ssa_roots` takes it.
-// SAFETY: no other item in the link is named `luna_jit_op_concat`: only this crate defines
-// `luna_jit_` symbols, each once
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_op_concat(slot_offset: i64, n: i64, roots: i64) -> i64 {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and
-    // `roots` is 0 or a root list (# Safety)
-    let (vm, mark) = unsafe {
+pub unsafe extern "C" fn luna_jit_op_concat_regs(a: i64, n: i64, ops: i64, roots: i64) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, `ops`
+    // is `n` pairs of words and `roots` 0 or a root list (# Safety)
+    let (vm, mark, ops) = unsafe {
         let vm = current_jit_vm();
         let mark = push_ssa_roots(vm, roots);
-        (vm, mark)
+        let ops = std::slice::from_raw_parts_mut(ops as *mut [i64; 2], n as usize);
+        (vm, mark, ops)
     };
-    let r = vm.jit_op_concat(slot_offset as u32, n as i32);
-    vm.jit_mut().ssa_roots.truncate(mark);
+    let r = vm.jit_concat_regs(a as u32, ops);
+    vm.jit_mut().ssa_roots = mark;
     r
-}
-
-/// Load the raw `i64` payload of `vm.stack[base + slot_offset]`
-/// for the active trace's head frame. Used to reload trace IR
-/// `Variable`s after a helper (e.g. `luna_jit_op_tforcall`) has
-/// mutated `vm.stack` directly.
-///
-/// Returns `0` if the slot is out of stack range (defensive —
-/// emit-time bounds check should make this unreachable).
-///
-/// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread.
-// SAFETY: no other item in the link is named `luna_jit_stack_load`: only this crate defines
-// `luna_jit_` symbols, each once
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_stack_load(slot_offset: i64) -> i64 {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_stack_load(slot_offset as u32)
 }
 
 /// Read the tag byte of `vm.stack[base + slot_offset]`

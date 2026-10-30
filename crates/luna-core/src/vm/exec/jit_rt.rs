@@ -113,73 +113,50 @@ impl Vm {
         self.stack[idx] = v;
     }
 
-    /// `vm.stack[base + slot_offset]` of the trace's head frame, or
-    /// `None` when there is no Lua frame or the slot is past the
-    /// stack. The trace JIT's Op::Concat body emit refreshes the
-    /// payload of a slot whose `RegKind` is `Unset` (no compile-time
-    /// tag info; commonly `Str` slots which the trace doesn't model)
-    /// through it, keeping the tag the interpreter left there.
-    pub(crate) fn jit_stack_slot_mut(&mut self, slot_offset: u32) -> Option<&mut Value> {
-        let f = self.jit_last_lua_frame()?;
-        let idx = (f.base as usize) + (slot_offset as usize);
-        self.stack.get_mut(idx)
-    }
-
-    /// Trace JIT path for `Op::Concat A B`.
-    ///
-    /// Mirrors the interp arm (`run_frame_op`): `self.top =
-    /// base + a + n; concat_run(base + a)`. Result lands at
-    /// `vm.stack[base + a]`. Returns `0` on success, `-1` when the
-    /// interpreter must do it (any error from `concat_run` OR
-    /// detection that the metamethod path was taken — `concat_run`
-    /// returns `Ok(())` after `begin_meta_call` which has pushed a Lua
-    /// frame the trace can't safely continue past); the trace then
-    /// side-exits at the op and the interpreter redoes it, raising the
-    /// error or calling `__concat` itself.
-    ///
-    /// The frame-push detection uses `pre/post frames.len()` and
-    /// unwinds any pushed frames first, so the exit sees a clean stack.
-    pub(crate) fn jit_op_concat(&mut self, slot_offset: u32, n: i32) -> i64 {
-        let Some(f) = self.jit_last_lua_frame() else {
-            return -1;
+    /// [`crate::__private::VmJitFrames::jit_concat_regs`]: the interpreter's
+    /// concat at register `a` of the trace's head frame, its operands
+    /// stored from `ops` first. A metamethod frame `concat_run` pushed is
+    /// unwound, and the interpreter redoes the op.
+    pub(crate) fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]]) -> i64 {
+        if self.jit.pending_err.is_some() {
+            return 0;
+        }
+        let Some(CallFrame::Lua(f)) = self.frames.last() else {
+            return 0;
         };
-        let abs_a = f.base + slot_offset;
-        self.top = abs_a + n as u32;
-        let pre_frames = self.frames.len();
+        let at = f.base + a;
+        let (lo, n) = (at as usize, ops.len());
+        // the frame's registers lie on the stack
+        let Some(regs) = self.stack.get_mut(lo..lo + n) else {
+            return 0;
+        };
+        for (slot, op) in regs.iter_mut().zip(ops.iter()) {
+            let tag = u8::try_from(op[0]).unwrap_or_else(|_| slot.unpack().0);
+            let raw = crate::runtime::value::RawVal { zero: op[1] as u64 };
+            // SAFETY: the trace passes each register's own tag and payload, or
+            // a payload of the type the slot holds now with no tag
+            *slot = unsafe { Value::pack(tag, raw) };
+        }
+        self.top = at + n as u32;
+        let frames = self.frames.len();
         // the check for a collection is the interpreter's, at the exit the
         // trace takes after the op when a step is due
-        let result = self.concat_run(abs_a, abs_a);
-        let post_frames = self.frames.len();
-        // Frame-push = metamethod path taken (begin_meta_call pushed
-        // a Lua frame). The trace can't continue past it; unwind +
-        // deopt so interp redoes Op::Concat in the slow path.
-        while self.frames.len() > pre_frames {
-            self.pop_frame();
-        }
-        if result.is_err() || post_frames > pre_frames {
+        let result = self.concat_run(at, at);
+        if result.is_err() || self.frames.len() > frames {
+            while self.frames.len() > frames {
+                self.pop_frame();
+            }
             self.jit.counters.deopt += 1;
-            return -1;
-        }
-        0
-    }
-
-    /// Load the raw `i64` payload of
-    /// `vm.stack[base + slot_offset]` for the active trace's head
-    /// Lua frame. Used to reload trace IR `Variable`s after a
-    /// helper has written to `vm.stack` directly (e.g. TForCall's
-    /// iter results land at `R[A+4..A+4+nvars]`).
-    pub(crate) fn jit_stack_load(&mut self, slot_offset: u32) -> i64 {
-        let Some(f) = self.jit_last_lua_frame() else {
             return 0;
+        }
+        let payload = |v: Value| {
+            // SAFETY: every `RawVal` `unpack` returns has all 8 bytes initialised
+            unsafe { v.unpack().1.zero as i64 }
         };
-        let idx = (f.base as usize) + (slot_offset as usize);
-        if idx >= self.stack.len() {
-            return 0;
+        for (op, &v) in ops[1..].iter_mut().zip(&self.stack[lo + 1..lo + n]) {
+            op[1] = payload(v);
         }
-        let v = self.stack[idx];
-        let (_, raw) = v.unpack();
-        // SAFETY: `raw` came from `unpack`, whose payload has all 8 bytes initialised
-        unsafe { raw.zero as i64 }
+        payload(self.stack[lo])
     }
 
     /// Read the tag byte of

@@ -18,7 +18,6 @@ pub(super) struct OpHelpers {
     pub(super) spill_id: FuncId,
     pub(super) op_close_id: FuncId,
     pub(super) op_tforcall_id: FuncId,
-    pub(super) stack_load_id: FuncId,
     pub(super) stack_tag_id: FuncId,
     pub(super) op_concat_id: FuncId,
     pub(super) reserve_list_id: FuncId,
@@ -31,7 +30,6 @@ pub(super) struct RuntimeHelpers {
     pub(super) str_buf_release_id: FuncId,
     pub(super) str_buf_extend_id: FuncId,
     pub(super) str_buf_intern_id: FuncId,
-    pub(super) update_raw_id: FuncId,
     pub(super) get_int_id: FuncId,
     pub(super) suppress_admit_id: FuncId,
     pub(super) gc_due_id: FuncId,
@@ -193,16 +191,6 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         .declare_function("luna_jit_op_tforcall", Linkage::Import, &op_tforcall_sig)
         .ok()?;
 
-    // `fn luna_jit_stack_load(slot) -> i64` returns
-    // raw bits of vm.stack[trace_head_frame.base + slot]. Used to
-    // reload trace IR Variables after TForCall mutates vm.stack.
-    let mut stack_load_sig = bcx.make_signature();
-    stack_load_sig.params.push(AbiParam::new(types::I64));
-    stack_load_sig.returns.push(AbiParam::new(types::I64));
-    let stack_load_id = bcx
-        .declare_function("luna_jit_stack_load", Linkage::Import, &stack_load_sig)
-        .ok()?;
-
     // `fn luna_jit_stack_tag(slot) -> i64` returns
     // the raw::* tag byte of vm.stack[trace_head_frame.base + slot].
     // TForLoop tail emit dispatches on this to pick exit-on-Nil /
@@ -214,18 +202,9 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         .declare_function("luna_jit_stack_tag", Linkage::Import, &stack_tag_sig)
         .ok()?;
 
-    // `fn luna_jit_op_concat(a, n, roots) -> i64`. Returns
-    // 0 on success (result at vm.stack[base+a]) or -1 on deopt
-    // (metamethod path, type error, length overflow,
-    // pre-existing pending_err).
-    let mut op_concat_sig = bcx.make_signature();
-    op_concat_sig.params.push(AbiParam::new(types::I64));
-    op_concat_sig.params.push(AbiParam::new(types::I64));
-    op_concat_sig.params.push(AbiParam::new(types::I64));
-    op_concat_sig.returns.push(AbiParam::new(types::I64));
-    let op_concat_id = bcx
-        .declare_function("luna_jit_op_concat", Linkage::Import, &op_concat_sig)
-        .ok()?;
+    // `fn luna_jit_op_concat_regs(a, n, ops, roots) -> i64`: the result's
+    // payload, 0 when the interpreter redoes the op
+    let op_concat_id = declare_i64_import(bcx, "luna_jit_op_concat_regs", 4)?;
 
     let op_closure_in_id = declare_i64_import(bcx, "luna_jit_op_closure_in", 3)?;
     let mut set_top_sig = bcx.make_signature();
@@ -255,7 +234,6 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
         spill_id,
         op_close_id,
         op_tforcall_id,
-        stack_load_id,
         stack_tag_id,
         op_concat_id,
     })
@@ -301,10 +279,6 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
         str_buf_extend_id,
         str_buf_intern_id,
     );
-
-    // `fn luna_jit_stack_update_raw(slot, raw)`.
-    // Used in Op::Concat operand spill for Unset-kind slots.
-    let update_raw_id = declare_void_import(bcx, "luna_jit_stack_update_raw", 2)?;
 
     let get_int_id = declare_i64_import(bcx, "luna_jit_table_get_int", 2)?;
 
@@ -363,7 +337,6 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
         str_buf_release_id,
         str_buf_extend_id,
         str_buf_intern_id,
-        update_raw_id,
         get_int_id,
         suppress_admit_id,
         gc_due_id,

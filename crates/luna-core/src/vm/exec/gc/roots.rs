@@ -142,8 +142,21 @@ impl Vm {
         // a load's parser objects, above its C function's slots on PUC's
         // stack
         self.heap.mark_load_slots(m);
-        for &v in self.jit.ssa_roots.iter() {
-            m.value(v);
+        let mut list = self.jit.ssa_roots;
+        while list != 0 {
+            let w = list as *const i64;
+            // SAFETY: a linked root list stays in its trace's frame until the
+            // helper call that linked it returns (`JitState::ssa_roots`): `n`,
+            // the link, then `n` pairs of one live value's tag and payload
+            unsafe {
+                for j in 0..*w as usize {
+                    let raw = crate::runtime::value::RawVal {
+                        zero: *w.add(3 + 2 * j) as u64,
+                    };
+                    m.value(Value::pack(*w.add(2 + 2 * j) as u8, raw));
+                }
+                list = *w.add(1) as usize;
+            }
         }
         for cf in &self.frames {
             match cf {

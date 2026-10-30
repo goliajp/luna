@@ -36,9 +36,8 @@ pub(super) enum RegKind {
     /// `Gc<LuaStr>` ptr). Produced by an entry slot tagged STR
     /// (via `from_entry_tag`), `LoadK` of a Str constant, or
     /// `Op::Move` propagation from a Str slot. Lets `Op::Concat`
-    /// emit's operand spill pick `raw::STR` instead of going
-    /// through the tag-preserving `update_raw` helper which can't
-    /// handle a stale vm.stack tag.
+    /// emit pass `raw::STR` for the operand instead of keeping the
+    /// stack slot's tag, which can be stale.
     Str,
     /// a boolean: payload 0 (false) or 1 (true); its value tag is
     /// `raw::FALSE` plus the payload, known only at run time

@@ -177,32 +177,23 @@ fn raw_bits(raw: luna_core::__private::RawVal) -> i64 {
     unsafe { raw.zero as i64 }
 }
 
-/// Push onto `vm.jit.ssa_roots` the values compiled code passed at
-/// `roots` and return the length to truncate back to once the call that
+/// Link the root list compiled code passed at `roots` in as the innermost
+/// of `vm.jit.ssa_roots` and return the head to restore once the call that
 /// may collect has returned. `roots` is 0 (nothing to root) or the address
-/// of `n` followed by `n` pairs of tag and payload words.
+/// of `n`, a word for the link, and `n` pairs of tag and payload words.
 ///
 /// # Safety
-/// `roots` is 0, or points at `1 + 2 * n` readable `i64` words where the
-/// first is `n` and each pair after it is the tag and payload of one live
-/// value.
+/// `roots` is 0, or points at `2 + 2 * n` `i64` words, writable, where the
+/// first is `n` and each pair after the second is the tag and payload of one
+/// live value, and stays there until the head is restored.
 unsafe fn push_ssa_roots(vm: &mut luna_core::vm::Vm, roots: i64) -> usize {
-    let mark = vm.jit().ssa_roots.len();
+    let prev = vm.jit().ssa_roots;
     if roots != 0 {
-        let p = roots as *const i64;
-        // SAFETY: `roots` points at the count word followed by `2 * n`
-        // readable words (# Safety)
-        let words = unsafe { std::slice::from_raw_parts(p.add(1), 2 * (*p as usize)) };
-        for pair in words.as_chunks::<2>().0 {
-            let raw = luna_core::__private::RawVal {
-                zero: pair[1] as u64,
-            };
-            // SAFETY: each pair is one live value's tag and payload (# Safety)
-            let v = unsafe { luna_core::runtime::Value::pack(pair[0] as u8, raw) };
-            vm.jit_mut().ssa_roots.push(v);
-        }
+        // SAFETY: the link word of the list (# Safety)
+        unsafe { *(roots as *mut i64).add(1) = prev as i64 };
+        vm.jit_mut().ssa_roots = roots as usize;
     }
-    mark
+    prev
 }
 
 // `raw_bits` reads a pointer payload as `u64`; the JIT backends only
