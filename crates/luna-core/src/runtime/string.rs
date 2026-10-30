@@ -61,6 +61,9 @@ pub mod jit_layout {
     /// Byte offset of the `u32` hash (a short string's is set when it is
     /// interned): its main position in a hash part is `hash & node_mask`.
     pub const STR_HASH_OFFSET: usize = std::mem::offset_of!(LuaStr, hash);
+    /// Byte offset of the `u32` byte length.
+    pub const STR_LEN_OFFSET: usize = std::mem::offset_of!(LuaStr, hdr)
+        + std::mem::offset_of!(crate::runtime::heap::GcHeader, aux);
 }
 
 /// Inline-bytes access MUST go through a pointer carrying the provenance of
