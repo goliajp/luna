@@ -188,6 +188,21 @@ fn emit_len<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) -> Option<
     // for a value the recording indexed, so it stays
     match k_op(&lw.current_kinds, off as u32 + ins.b()) {
         RegKind::Table | RegKind::Nil => {}
+        // a string's length is its header's, with no metamethod in any
+        // dialect
+        RegKind::Str => {
+            let s = lw.bcx.use_var(regs[ins.b() as usize]);
+            let n = lw.bcx.ins().load(
+                types::I32,
+                MemFlagsData::trusted(),
+                s,
+                crate::jit_backend::STR_LEN_OFFSET as i32,
+            );
+            let n = lw.bcx.ins().uextend(types::I64, n);
+            lw.bcx.def_var(regs[ins.a() as usize], n);
+            lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
+            return Some(());
+        }
         RegKind::Unset | RegKind::Unknown => {
             lw.dispatchable = false;
             lw.dispatch_off_reason = lw.dispatch_off_reason.or(Some("table-op:unknown-kind"));

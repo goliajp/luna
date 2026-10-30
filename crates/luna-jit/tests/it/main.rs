@@ -158,6 +158,7 @@ mod trace_side_trace_compile_link;
 mod trace_side_trace_exit_owner;
 mod trace_side_trace_gate;
 mod trace_side_trace_trigger;
+mod trace_str_len;
 mod trace_sunk_emit_in_loops;
 mod trace_sunk_materialize_on_deopt;
 mod trace_sunk_table_emit;
