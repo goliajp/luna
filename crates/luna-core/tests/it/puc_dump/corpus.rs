@@ -28,31 +28,26 @@ fn require_all() -> bool {
     std::env::var_os("LUNA_DIFF_PUC_REQUIRE_ALL").is_some()
 }
 
-/// Fixtures a collection at every checkpoint makes too slow for the merge
-/// check (5.2 checks at every call, and these fill the stack): each runs
-/// as its own test, collecting at every `n`th checkpoint, `n` the least
-/// that keeps it within ten minutes on one of firefly's big cores (see
-/// [`slow_fixture`] for full strength). (test, dialect, fixture, n)
-const SLOW: &[(&str, &str, &str, u64)] = &[
-    (
-        "dump_round_trips_through_luna",
-        "5.2",
-        "1047_msgh_at_full_stack.lua",
-        62,
-    ),
-    (
-        "dump_round_trips_through_luna",
-        "5.2",
-        "870_c_stack_overflow_paths.lua",
-        34,
-    ),
-    (
-        "dump_round_trips_through_luna",
-        "5.2",
-        "999_handler_after_varinfo_52.lua",
-        250,
-    ),
-];
+/// The check whose slow fixtures `tests/diff_puc/gc_stress_slow.txt` lists:
+/// collecting at every checkpoint makes them too slow for the merge check
+/// (5.2 checks at every call, and these fill the stack), so each runs as its
+/// own test, at the interval the list gives it (see [`slow_fixture`] for
+/// full strength).
+const SLOW_CHECK: &str = "dump_round_trips_through_luna";
+
+/// The listed slow fixtures, `(dialect, file, every)`.
+fn slow() -> Vec<(String, String, u64)> {
+    let f = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/diff_puc/gc_stress_slow.txt");
+    let text = std::fs::read_to_string(f).expect("the slow fixture list");
+    text.lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .map(|l| {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            let every = w[4].parse().expect("an interval");
+            (w[0].to_string(), w[1].to_string(), every)
+        })
+        .collect()
+}
 
 thread_local! {
     /// The interval and offset the running fixture's Vms collect at.
@@ -66,11 +61,6 @@ pub(super) fn stressed(vm: &mut luna_core::vm::Vm) {
         luna_core::__private::VmGcStress::gc_stress_interval(vm, every, offset);
     }
     let _ = vm;
-}
-
-fn is_slow(name: &str, dialect: &str, f: &Path) -> bool {
-    SLOW.iter()
-        .any(|&(t, d, file, _)| t == name && d == dialect && f.ends_with(file))
 }
 
 fn fixtures(dialect: &str) -> Vec<PathBuf> {
@@ -96,9 +86,18 @@ fn fixtures(dialect: &str) -> Vec<PathBuf> {
 /// the slow ones left to their own tests.
 pub(super) fn each_fixture(name: &str, dialect: usize, shard: usize, check: Check) {
     let d = DIALECTS[dialect].0;
+    let slow = if name == SLOW_CHECK {
+        slow()
+    } else {
+        Vec::new()
+    };
+    let is_slow = |f: &Path| {
+        slow.iter()
+            .any(|(sd, file, _)| sd == d && f.ends_with(file))
+    };
     let all: Vec<PathBuf> = fixtures(d)
         .into_iter()
-        .filter(|f| !is_slow(name, d, f))
+        .filter(|f| !is_slow(f))
         .enumerate()
         .filter(|(i, _)| i % SHARDS == shard)
         .map(|(_, f)| f)
@@ -108,17 +107,18 @@ pub(super) fn each_fixture(name: &str, dialect: usize, shard: usize, check: Chec
 }
 
 /// Run `check` on the slow fixture `file` of `DIALECTS[dialect]` at the
-/// interval [`SLOW`] gives it, from an offset a seed picks: the seed is
+/// interval the slow fixture list gives it, from an offset a seed picks: the seed is
 /// printed, and `LUNA_GC_STRESS_SEED` runs it again. With
 /// `LUNA_GC_STRESS_EVERY=k` and `LUNA_GC_STRESS_OFFSET=i` it collects at
 /// the checkpoints `i`, `i + k`, …: the offsets `0..k` together collect at
 /// every one once (`k` 1 is full strength).
 pub(super) fn slow_fixture(name: &str, dialect: usize, file: &str, check: Check) {
     let d = DIALECTS[dialect].0;
-    let &(_, _, _, every) = SLOW
-        .iter()
-        .find(|&&(t, sd, f, _)| t == name && sd == d && f == file)
-        .expect("a fixture SLOW lists");
+    assert_eq!(name, SLOW_CHECK, "slow fixtures belong to one check");
+    let (_, _, every) = slow()
+        .into_iter()
+        .find(|(sd, f, _)| sd == d && f == file)
+        .expect("a fixture the slow list lists");
     let num = |var: &str| {
         std::env::var(var)
             .ok()
