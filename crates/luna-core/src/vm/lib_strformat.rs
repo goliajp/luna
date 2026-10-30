@@ -50,19 +50,35 @@ fn max_item(v: LuaVersion) -> usize {
 pub(crate) fn s_format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // 5.1's buffer keeps its strings on the stack: an error lets them go.
     // Every other way out leaves the stack as it found it (a 5.1 result
-    // takes the strings off as it joins them).
-    let m = vm.lib_roots.mark();
-    let at = m.at();
-    let r = format::<PRE>(vm, fs, nargs);
+    // takes the strings off as it joins them). Only a begun buffer pushes
+    // any.
+    #[cfg(debug_assertions)]
+    let at = vm.lib_roots.len();
+    let mut b: Option<PucBuffer> = None;
+    let r = format::<PRE>(vm, fs, nargs, &mut b);
     if PRE && r.is_err() {
-        vm.lib_roots.release(m);
+        abandon(vm, &mut b);
     }
-    debug_assert!(r.is_err() || vm.lib_roots.len() == at);
+    #[cfg(debug_assertions)]
+    debug_assert!((r.is_err() && !PRE) || vm.lib_roots.len() == at);
     r
 }
 
+#[cold]
+#[inline(never)]
+fn abandon(vm: &mut Vm, b: &mut Option<PucBuffer>) {
+    if let Some(b) = b.take() {
+        b.abandon(vm);
+    }
+}
+
 #[inline(always)]
-fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn format<const PRE: bool>(
+    vm: &mut Vm,
+    fs: u32,
+    nargs: u32,
+    b: &mut Option<PucBuffer>,
+) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let f = argcheck::check_string(vm, a, 0)?;
     let fmt = f.as_bytes();
@@ -73,15 +89,19 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     // While the content, and the room asked for before an item, fit the
     // buffer's first block, nothing the buffer does allocates and its count
     // is the content's length: it is made only once that stops holding,
-    // with the length the content had before that step.
-    let first = PucBuffer::first_size::<PRE>(vm);
-    let mut b: Option<PucBuffer> = None;
+    // with the length the content had before that step. `lim` is one past
+    // the first block until then and zero after, so a step's one compare
+    // also tells whether the buffer exists.
+    let mut lim = PucBuffer::first_size::<PRE>(vm) + 1;
     macro_rules! tell {
-        ($fits:expr, $before:expr, |$b:ident| $step:expr) => {
-            if !(b.is_none() && $fits) {
-                let $b = match &mut b {
+        ($need:expr, $before:expr, |$b:ident| $step:expr) => {
+            if $need >= lim {
+                let $b = match b {
                     Some(b) => b,
-                    None => b.insert(PucBuffer::begun::<PRE>(vm, $before)),
+                    None => {
+                        lim = 0;
+                        b.insert(PucBuffer::begun::<PRE>(vm, $before))
+                    }
                 };
                 $step;
             }
@@ -102,28 +122,24 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
                 .map_or(fmt.len(), |k| i + k);
             vm.buf_push(&mut out, &fmt[i - 1..end])?;
             let k = end - (i - 1);
-            tell!(out.len() <= first, out.len() - k, |b| b
-                .add_chars(vm, &out, k)?);
+            tell!(out.len(), out.len() - k, |b| b.add_chars(vm, &out, k)?);
             i = end;
             continue;
         }
         // a '%' at the very end pairs with the string's terminating zero
         if fmt.get(i) == Some(&b'%') {
             vm.buf_push(&mut out, b"%")?;
-            tell!(out.len() <= first, out.len() - 1, |b| b
-                .add_chars(vm, &out, 1)?);
+            tell!(out.len(), out.len() - 1, |b| b.add_chars(vm, &out, 1)?);
             i += 1;
             continue;
         }
         if v >= LuaVersion::Lua52 {
             let m = max_item(v);
-            tell!(out.len() + m <= first, out.len(), |b| b
-                .prep(vm, &out, m)?);
+            tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
             // 5.4 on ask for more for a `%f`
             if v >= LuaVersion::Lua54 && item_conv(fmt, i) == b'f' {
                 let m = 110 + 308;
-                tell!(out.len() + m <= first, out.len(), |b| b
-                    .prep(vm, &out, m)?);
+                tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
             }
         }
         arg += 1;
@@ -147,22 +163,23 @@ fn format<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
                 return Err(e);
             }
         };
-        let k = out.len() - before;
-        match added {
-            Added::Value(s) => tell!(out.len() <= first, before, |b| b.add_value(vm, &out, s)?),
-            Added::Sized if v != LuaVersion::Lua51 => {
-                tell!(out.len() <= first, before, |b| b.add_size(k))
+        tell!(out.len(), before, |b| {
+            let k = out.len() - before;
+            match added {
+                Added::Value(s) => b.add_value(vm, &out, s)?,
+                Added::Sized if v != LuaVersion::Lua51 => b.add_size(k),
+                // 5.1 copies a sized item with `luaL_addlstring`
+                _ => b.add_chars(vm, &out, k)?,
             }
-            // 5.1 copies a sized item with `luaL_addlstring`
-            _ => tell!(out.len() <= first, before, |b| b.add_chars(vm, &out, k)?),
-        }
+        });
     }
     if out.len() > crate::runtime::string::MAX_LEN {
         return Err(vm.rt_err("string length overflow"));
     }
-    let s = match b {
-        Some(b) => b.finish::<PRE>(vm, &out)?,
-        None => PucBuffer::finish_first::<PRE>(vm, &out)?,
+    let s = if lim != 0 {
+        PucBuffer::finish_first::<PRE>(vm, &out)?
+    } else {
+        b.take().expect("a begun buffer").finish::<PRE>(vm, &out)?
     };
     vm.recycle_buf(out);
     vm.nat_ret(fs, &[Value::Str(s)])
