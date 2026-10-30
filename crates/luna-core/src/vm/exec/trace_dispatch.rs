@@ -23,10 +23,7 @@ impl Vm {
         }) else {
             return false;
         };
-        // Borrow Rc<[T]> fields as &Rc<[T]> instead
-        // of cloning. The outer `ct: Rc<CompiledTrace>` is held
-        // across the entire dispatch block so the fields outlive
-        // all consumers.
+        // `ct` is held across the dispatch, so its fields are borrowed
         let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
         let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
@@ -34,41 +31,16 @@ impl Vm {
         let max_stack = cl.proto.max_stack as usize;
         let window_size_us = window_size as usize;
         let base_us = base as usize;
-        // `reg_state` sized to the trace's `window_size`, which
-        // may exceed max_stack.
-        // Marshal-in still only writes [0..max_stack); slots
-        // [max_stack..window_size) are zero-initialised and
-        // filled by the trace's own GetUpval / arith.
-        // Reuse the Vm's amortised buffers
-        // instead of allocating fresh Vecs each dispatch.
-        // mem::take leaves an empty placeholder we restore
-        // at the end of the dispatch block (success +
-        // deopt paths both fall through to the restore).
+        // the Vm's buffers, taken for the dispatch and put back on every
+        // way out; `reg_state` covers the trace's window, which may exceed
+        // the frame
         let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
         entry_tags.resize(max_stack, 0);
-        // This trace was admitted via the
-        // `downrec_link.is_some()` arm rather than the normal
-        // `dispatchable=true` arm. The pre-invoke path
-        // populates a reserved saved-PC slot just past the
-        // normal register window so the lowerer's guard load
-        // (`reg_state[window_size]`) compares the runtime
-        // saved caller PC against the recorded `dr_return_pc`.
-        //
-        // No `!ct.dispatchable` gate: when the lowerer lifts
-        // `dispatchable = true` for multi-way guards, the
-        // trace's body still emits the downrec sentinel shape
-        // on return — the saved-PC slot
-        // and post-invoke classifier must keep firing.
-        // `downrec_link.is_some()` is the unique structural
-        // signal that the trace closes via DownRec.
+        // a trace that closes by down-recursion (whether or not it is also
+        // dispatchable) guards on the caller's saved pc, in a slot just past
+        // the window
         let is_downrec_entry = ct.downrec_link.is_some();
         let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
-        // When admitting a downrec trace,
-        // size the buffer to `window_size + 1` so the lowerer
-        // can `load(I64, ..., reg_state, window_size * 8)`
-        // for the saved caller PC guard input. The extra slot
-        // is the LAST element so cranelift's existing
-        // `0..window_size` accesses are unaffected.
         let reg_state_len = if is_downrec_entry {
             window_size_us + 1
         } else {
@@ -103,12 +75,8 @@ impl Vm {
                 note_trace_compile_failure(rec.head_proto, rec.head_pc);
             }
             self.jit.pending_err = None;
-            // Snapshot the pre-entry frame
-            // count. A cmp@d>0 side-exit calls the materialize
-            // helper which pushes inlined frames onto
-            // `vm.frames`; on deopt those frames must be popped
-            // before falling through to the interpreter, else
-            // the stack grows unboundedly per deopted dispatch.
+            // an inline side exit pushes the inlined frames, which a deopt
+            // pops
             let pre_frames = self.frames.len();
             if is_downrec_entry {
                 reg_state[window_size_us] = self.downrec_saved_pc(pre_frames);
@@ -119,15 +87,14 @@ impl Vm {
                 eprintln!("luna-runtime-helpers: aot_trace_fired pc={head_pc_val}");
             }
             self.jit_ghosts_enter();
+            let running = self.trace_step_enter(&ct);
             let continuation_pc = {
-                // chunk_compiler.enter
-                // (CraneliftBackend delegates to enter_jit;
-                // NullJitBackend returns an inert guard).
                 let vm_ptr: *mut Vm = self;
                 let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
                 // SAFETY: `entry_fn` is the entry of `ct`, a compiled trace `cl.proto.traces` keeps alive; `reg_state` was sized above to the trace's window (plus the saved-pc slot for a down-recursion entry) and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
                 unsafe { entry_fn(reg_state.as_mut_ptr()) }
             };
+            self.trace_step_leave(running);
             self.jit.ghost_depth -= 1;
             self.jit.counters.dispatched += 1;
             if ct.inline_kinds != 0 {
@@ -136,6 +103,7 @@ impl Vm {
 
             if self.jit.pending_err.is_some() {
                 self.jit.pending_err = None;
+                self.jit.step.synced_exit = false;
                 self.jit.gc_exit = None;
                 self.jit.counters.deopt += 1;
                 // unwind the inlined frames helpers pushed; the trace's
@@ -144,13 +112,8 @@ impl Vm {
                     self.pop_frame();
                 }
                 if is_downrec_entry {
-                    // pending_err observed
-                    // mid-trace inside a downrec admit. Treat
-                    // it as a guard miss: bump `downrec_deopt`
-                    // and suppress the next downrec admit so
-                    // interp can advance past `head_pc` and
-                    // the same trace doesn't immediately re-
-                    // fire on the next loop iteration.
+                    // as a guard miss: the next admit is suppressed so the
+                    // interpreter gets past `head_pc`
                     self.jit.counters.downrec_deopt += 1;
                     self.jit.suppress_downrec_admit_once = true;
                 }
@@ -174,9 +137,6 @@ impl Vm {
                 return true;
             }
         }
-        // !dispatch_ok / deopt path / non-cont
-        // exit also restore the buffers before falling
-        // through to the interp.
         self.jit.reg_state_buf = reg_state;
         self.jit.entry_tags_buf = entry_tags;
         false
@@ -228,26 +188,26 @@ impl Vm {
         entry_tags: &mut [u8],
         reg_state: &mut [i64],
     ) -> bool {
-        use crate::jit::trace::ENTRY_TAG_ANY;
+        use crate::jit::trace::{ENTRY_TAG_ANY, PLAIN_ENTRY_TAGS};
         let frame = &self.stack[base_us..base_us + max_stack];
-        let regs = &mut reg_state[..max_stack];
-        let tags = &mut entry_tags[..max_stack];
-        for i in 0..max_stack {
-            if CHECKED_ONLY && compile_entry_tags.get(i) == Some(&ENTRY_TAG_ANY) {
-                continue;
-            }
-            let (tag, payload) = frame[i].unpack();
-            // SAFETY: every field of `RawVal` is one plain 8-byte word, and
-            // `unpack` returned it fully initialised
-            regs[i] = unsafe { payload.zero as i64 };
-            // a slot past the compile-time tags is checked like one read
-            let want = compile_entry_tags.get(i).copied().unwrap_or(tag);
+        // the slots the trace was compiled with tags for, then the ones past
+        // them: zipped, so no slot pays for a bounds check
+        let n = compile_entry_tags.len().min(max_stack);
+        let (regs, regs_past) = reg_state[..max_stack].split_at_mut(n);
+        let (tags, tags_past) = entry_tags[..max_stack].split_at_mut(n);
+        let slots = frame[..n].iter().zip(&compile_entry_tags[..n]);
+        for ((v, &want), (r, t)) in slots.zip(regs.iter_mut().zip(tags.iter_mut())) {
             if want == ENTRY_TAG_ANY {
                 // not read before the trace writes it: any value enters,
                 // and an exit that has not written it leaves it as it is
-                tags[i] = ENTRY_TAG_ANY;
+                if !CHECKED_ONLY {
+                    *r = unpack_word(*v).1;
+                    *t = ENTRY_TAG_ANY;
+                }
                 continue;
             }
+            let (tag, payload) = unpack_word(*v);
+            *r = payload;
             // The trace's IR is specialised to the compile-time entry
             // tags: on another, body ops would misread the raw bits (a Str
             // pointer as an Int payload). The interpreter runs this entry;
@@ -255,13 +215,28 @@ impl Vm {
             // cannot stand for the value. A boolean, the one entry type
             // two tags enter, is left to the out-of-line test, so that the
             // common case costs one comparison and one bit test
-            if tag != want || crate::jit::trace::PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
+            if tag != want || PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
                 match bool_entry(want, tag) {
-                    Some(p) => regs[i] = p,
+                    Some(p) => *r = p,
                     None => return false,
                 }
             }
-            tags[i] = tag;
+            *t = tag;
+        }
+        // a slot past the compile-time tags is checked like one read
+        let past = frame[n..]
+            .iter()
+            .zip(regs_past.iter_mut().zip(tags_past.iter_mut()));
+        for (v, (r, t)) in past {
+            let (tag, payload) = unpack_word(*v);
+            *r = payload;
+            if PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
+                match bool_entry(tag, tag) {
+                    Some(p) => *r = p,
+                    None => return false,
+                }
+            }
+            *t = tag;
         }
         true
     }
@@ -458,6 +433,15 @@ impl Vm {
         }
         self.jit.counters.tiered_up += 1;
     }
+}
+
+/// `v`'s tag and its payload word as a register holds it.
+#[inline(always)]
+fn unpack_word(v: Value) -> (u8, i64) {
+    let (tag, payload) = v.unpack();
+    // SAFETY: every field of `RawVal` is one plain 8-byte word, and
+    // `unpack` returns it fully initialised
+    (tag, unsafe { payload.zero as i64 })
 }
 
 /// The payload a register of tag `tag` enters a trace with whose entry tag

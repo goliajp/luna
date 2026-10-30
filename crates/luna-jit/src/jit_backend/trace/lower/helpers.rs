@@ -289,7 +289,7 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
             &bcx.make_signature(),
         )
         .ok()?;
-    let gc_due_id = declare_i64_import(bcx, "luna_jit_gc_due", 1)?;
+    let gc_due_id = declare_i64_import(bcx, "luna_jit_gc_due", 3)?;
     let sunk_table_id = declare_i64_import(bcx, "luna_jit_sunk_table", 1)?;
     let sunk_grow_id = declare_i64_import(bcx, "luna_jit_sunk_grow", 2)?;
     let str_buf_concat_id = declare_i64_import(bcx, "luna_jit_str_buf_concat", 3)?;

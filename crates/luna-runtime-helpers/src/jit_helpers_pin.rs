@@ -201,7 +201,7 @@ pub fn force_link_jit_helpers() -> usize {
             let _ = jb::luna_jit_op_self_checked(0, 0, 0, std::ptr::null_mut());
             jb::luna_jit_park_deopt();
             jb::luna_jit_suppress_trace_admit();
-            let _ = jb::luna_jit_gc_due(0);
+            let _ = jb::luna_jit_gc_due(0, 0, std::ptr::null());
             let _ = jb::luna_jit_due_words();
             let _ = jb::luna_jit_sunk_table(0);
             let _ = jb::luna_jit_sunk_grow(0, 0);

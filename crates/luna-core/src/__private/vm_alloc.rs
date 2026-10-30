@@ -14,6 +14,14 @@ pub trait VmJitAlloc {
     /// (`op_pc`, as `Vm::checkpoint_after_jit` takes it) for the exit it
     /// then takes to have the interpreter check.
     fn jit_gc_due(&mut self, op_pc: u32) -> bool;
+    /// The registers a step run in place in the running trace writes back
+    /// at its exit `exit_ret` (0: the step cannot run there).
+    fn jit_step_window(&self, exit_ret: u64) -> usize;
+    /// Compiled code reached the due point after the op whose check
+    /// `op_pc` names; `regs` the trace frame's registers as of its exit
+    /// `exit_ret` when [`VmJitAlloc::jit_step_window`] allowed them: 0 to
+    /// go on, otherwise leave through that exit.
+    fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64;
     /// The count and, [`crate::jit::JIT_GC_LIMIT_OFFSET`] bytes after it,
     /// the point a collection step falls due at: compiled code calls
     /// [`VmJitAlloc::jit_gc_due`] only once the count has reached it.
@@ -100,6 +108,14 @@ impl VmJitAlloc for crate::vm::Vm {
     #[inline]
     fn jit_gc_due(&mut self, op_pc: u32) -> bool {
         crate::vm::Vm::jit_gc_due(self, op_pc)
+    }
+    #[inline]
+    fn jit_step_window(&self, exit_ret: u64) -> usize {
+        crate::vm::Vm::jit_step_window(self, exit_ret)
+    }
+    #[inline]
+    fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64 {
+        crate::vm::Vm::jit_gc_step(self, op_pc, exit_ret, regs)
     }
     #[inline]
     fn jit_due_words(&self) -> *const usize {

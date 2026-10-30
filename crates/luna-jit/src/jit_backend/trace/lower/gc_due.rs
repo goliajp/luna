@@ -69,12 +69,84 @@ fn when_reached<E: Emit>(lw: &mut Lower<E>, slow: impl FnOnce(&mut Lower<E>)) {
     lw.bcx.seal_block(cont);
 }
 
-/// `luna_jit_gc_due(check)`: whether a step is due, noted for the exit.
+/// `luna_jit_gc_due(check, 0, _)`: whether a step is due, noted for the
+/// exit.
 fn call_gc_due<E: Emit>(lw: &mut Lower<E>, check: u32) -> Value {
+    let zero = lw.bcx.ins().iconst(types::I64, 0);
+    call_gc_step(lw, check, zero)
+}
+
+/// `luna_jit_gc_due(check, exit, reg_state)`.
+fn call_gc_step<E: Emit>(lw: &mut Lower<E>, check: u32, exit: Value) -> Value {
     let fref = lw.bcx.import_func(lw.h.rt.gc_due_id);
     let check = lw.bcx.ins().iconst(types::I64, i64::from(check));
-    let call = lw.bcx.ins().call(fref, &[check]);
+    let call = lw.bcx.ins().call(fref, &[check, exit, lw.reg_state]);
     lw.bcx.inst_results(call)[0]
+}
+
+/// Whether a step due after op `i`, checked as `check` names, may run in
+/// place: after an op of a root trace (5.2's check at a call is left to
+/// the exit, which `call_gc_check` relies on), outside inlined calls and
+/// split folds, with no table sunk and no accumulated concatenation (their
+/// exits make objects the step would have to see), and not ahead of time.
+fn steps_in_place<E: Emit>(lw: &Lower<E>, pl: &Plan<'_>, i: usize, check: u32) -> bool {
+    let after = i + 1;
+    check != luna_core::jit::JIT_GC_CALL
+        && !pl.opts.aot
+        && pl.record.side_trace_parent.is_none()
+        && pl.downrec_idx_opt.is_none()
+        && lw.call_chain.is_empty()
+        && lw.flush_ctx.is_none()
+        && lw
+            .escape
+            .sites
+            .iter()
+            .all(|s| s.state != EscapeState::Sinkable)
+        && !pl
+            .math_folds
+            .iter()
+            .any(|f| f.kind.split() && f.start_idx + 1 < after && after < f.call_idx)
+}
+
+/// The step due after op `i` run in place: the registers stored as the
+/// exit to `next_pc` leaves them, for the helper to write back before it
+/// steps; the trace leaves through that exit only when the helper says.
+fn step_in_place<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, next_pc: u32, check: u32) {
+    let n = pl.max_stack;
+    let tags = lw
+        .per_exit_kinds
+        .push(next_pc, &lw.current_kinds[..n], Box::new(TCellPtr::null()));
+    for (idx, v) in lw.regs_full[..n].iter().copied().enumerate() {
+        let val = use_var_resolved(&mut lw.bcx, v);
+        if lw.stored[idx] != Some(val) {
+            lw.bcx
+                .ins()
+                .store(MemFlagsData::new(), val, lw.reg_state, (idx as i32) * 8);
+        }
+    }
+    let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
+        | (u64::from(tags) << 32)
+        | u64::from(next_pc);
+    let exit = lw.bcx.ins().iconst(types::I64, ret as i64);
+    let r = call_gc_step(lw, check, exit);
+    let (cont, leave) = (lw.bcx.create_block(), lw.bcx.create_block());
+    lw.bcx.ins().brif(r, leave, &[], cont, &[]);
+    lw.bcx.switch_to_block(leave);
+    lw.bcx.seal_block(leave);
+    emit_tagged_exit(
+        &mut lw.bcx,
+        lw.h.rt.suppress_admit_id,
+        &lw.regs_full[..n],
+        &lw.stored,
+        lw.reg_state,
+        next_pc,
+        pl.record.head_pc,
+        tags,
+        None,
+        lw.trace_fn_sig_ref,
+    );
+    lw.bcx.switch_to_block(cont);
+    lw.bcx.seal_block(cont);
 }
 
 /// After op `i`, which allocated through a helper, its result defined:
@@ -94,8 +166,12 @@ pub(super) fn gc_due_exit_as<E: Emit>(
     check: u32,
 ) {
     when_reached(lw, |lw| {
-        let due = call_gc_due(lw, check);
-        due_exit(lw, pl, due, i, next_pc);
+        if steps_in_place(lw, pl, i, check) {
+            step_in_place(lw, pl, next_pc, check);
+        } else {
+            let due = call_gc_due(lw, check);
+            due_exit(lw, pl, due, i, next_pc);
+        }
     });
 }
 
