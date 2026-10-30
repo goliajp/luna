@@ -1,6 +1,8 @@
 //! Concatenation and `tostring` conversion.
 
 use super::*;
+use crate::runtime::LuaStr;
+use crate::runtime::mem::Oom;
 use crate::runtime::puc::api::PucText;
 
 impl Vm {
@@ -124,30 +126,37 @@ impl Vm {
             // made in the buffer kept for every concatenation
             self.retry_oom(|vm| vm.heap.open_gbuff(tl))?;
         }
-        let r = self.retry_oom(|vm| {
-            let from = (top - n) as usize;
-            if n == 2
-                && let (Value::Str(a), Value::Str(b)) = (vm.stack[from], vm.stack[from + 1])
-            {
-                return vm.heap.try_intern_parts(&[a.as_bytes(), b.as_bytes()]);
+        let from = (top - n) as usize;
+        // `retry_oom` by hand: its closure, called from two places, would
+        // be left out of line on the path every concatenation takes
+        let r = match self.join_slots(from, top as usize) {
+            Ok(s) => {
+                self.refused_growth()?;
+                s
             }
-            let mut parts: [&[u8]; 16] = [&[]; 16];
-            let strs = vm.stack[from..top as usize].iter().map(|v| match v {
-                Value::Str(s) => s.as_bytes(),
-                _ => unreachable!("converted above"),
-            });
-            if n as usize <= parts.len() {
-                for (p, b) in parts.iter_mut().zip(strs) {
-                    *p = b;
-                }
-                vm.heap.try_intern_parts(&parts[..n as usize])
-            } else {
-                let parts: Vec<&[u8]> = strs.collect();
-                vm.heap.try_intern_parts(&parts)
-            }
-        })?;
+            Err(o) => self.retry_oom_slow(o, |vm| vm.join_slots(from, top as usize))?,
+        };
         self.stack[(top - n) as usize] = Value::Str(r);
         Ok(n)
+    }
+
+    /// The string of the strings in slots `from..top`, one after another.
+    #[inline(always)]
+    fn join_slots(&mut self, from: usize, top: usize) -> Result<Gc<LuaStr>, Oom> {
+        let strs = self.stack[from..top].iter().map(|v| match v {
+            Value::Str(s) => s.as_bytes(),
+            _ => unreachable!("converted above"),
+        });
+        let mut parts: [&[u8]; 16] = [&[]; 16];
+        if top - from <= parts.len() {
+            for (p, b) in parts.iter_mut().zip(strs) {
+                *p = b;
+            }
+            self.heap.try_intern_parts(&parts[..top - from])
+        } else {
+            let parts: Vec<&[u8]> = strs.collect();
+            self.heap.try_intern_parts(&parts)
+        }
     }
 
     /// The checkpoint after `CONCAT` finished in the running Lua function,
@@ -156,6 +165,7 @@ impl Vm {
     /// is copied, which changes nothing a collection sees); 5.2 and 5.3
     /// past the result or up to the operands, whichever is higher; later,
     /// past the result.
+    #[inline(always)]
     pub(super) fn concat_checkpoint(&mut self, base_a: u32, out: u32) -> Result<(), LuaError> {
         let top = match self.version {
             LuaVersion::Lua51 => self.frame_top(),
