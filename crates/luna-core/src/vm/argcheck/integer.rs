@@ -22,9 +22,13 @@ pub(crate) fn check_integer(vm: &mut Vm, a: Args, i: u32) -> Result<i64, LuaErro
 /// of line, so the common case pays nothing for the conversions.
 #[inline(never)]
 fn check_integer_conv(vm: &mut Vm, a: Args, i: u32) -> Result<i64, LuaError> {
-    let n = match to_num(vm, a.get(vm, i)) {
-        Some(n) if !a.is_none(i) => n,
-        _ => return Err(type_error(vm, a, i, "number")),
+    // a float, the common case up to 5.2, goes straight to its conversion
+    let n = match a.get(vm, i) {
+        Value::Float(f) if !a.is_none(i) => Num::Float(f),
+        v => match to_num(vm, v) {
+            Some(n) if !a.is_none(i) => n,
+            _ => return Err(type_error(vm, a, i, "number")),
+        },
     };
     match n {
         #[cfg(target_pointer_width = "32")]
