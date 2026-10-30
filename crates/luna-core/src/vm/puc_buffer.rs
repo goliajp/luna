@@ -261,6 +261,11 @@ impl Vm {
     /// later dialects ask for its whole size first (`luaL_buffinitsize`,
     /// `luaL_pushresultsize`).
     pub(crate) fn buffer_result<const PRE: bool>(&mut self, out: &[u8]) -> Result<Value, LuaError> {
+        // within the first block no dialect's buffer allocates before its
+        // result: the string is made as a never-begun buffer makes it
+        if out.len() <= Vm::lual_buffersize(self.version()) {
+            return PucBuffer::finish_first::<PRE>(self, out).map(Value::Str);
+        }
         self.lib_scope(|vm| {
             let mut b = match vm.heap.dialect() {
                 Dialect::L51 => PucBuffer::new(vm),
