@@ -97,3 +97,36 @@ fn hex_float_rounding() {
     };
     assert_eq!(h, 0.5);
 }
+
+#[test]
+fn integral_floats_print_as_the_float_formatter_prints_them() {
+    use super::format::{float_digits, float_to_string};
+    let mut vals = vec![
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        7.0,
+        1e13,
+        99_999_999_999_999.0,
+        1e14,
+        -1e14,
+    ];
+    vals.extend([
+        999_999_999_999_999.0,
+        1e15,
+        -1e15,
+        123_456_789_012_345.0,
+        2f64.powi(53),
+    ]);
+    vals.extend((0..200).map(|i| f64::from(i) * 12_345.0 - 1e6));
+    for f in vals {
+        for fmt in [FloatFmt::Legacy14, FloatFmt::G14, FloatFmt::TwoStage55] {
+            let mut want = float_digits(f, fmt);
+            if want.bytes().all(|c| c.is_ascii_digit() || c == b'-') && fmt != FloatFmt::Legacy14 {
+                want.push_str(".0");
+            }
+            assert_eq!(float_to_string(f, fmt), want, "{f} {fmt:?}");
+        }
+    }
+}
