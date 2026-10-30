@@ -112,7 +112,9 @@ pub(super) fn item51<const PRE: bool>(
             } else {
                 // a `__tostring` runs above the buffer's slot
                 let buf = vm.buffer_slot(out.len());
-                vm.native_hold_top(&[Vm::buffer_box()][..buf as usize])?;
+                if buf > 0 {
+                    vm.native_hold_top(&[Vm::buffer_box()])?;
+                }
                 if v == LuaVersion::Lua52 {
                     tolstring_52::<PRE>(vm, a.get(vm, arg), buf)?
                 } else {
@@ -120,13 +122,25 @@ pub(super) fn item51<const PRE: bool>(
                     Some(vm.tolstring::<PRE>(v, buf)?)
                 }
             };
-            let s = gs.map_or(b"(null)".to_vec(), |g| g.as_bytes().to_vec());
+            // the argument itself stays where it is, rooted; a string made
+            // from it is copied before the buffer may grow
+            let held;
+            let s: &[u8] = match &gs {
+                None => b"(null)",
+                Some(g) if matches!(a.get(vm, arg), Value::Str(x) if x.as_ptr() == g.as_ptr()) => {
+                    g.as_bytes()
+                }
+                Some(g) => {
+                    held = g.as_bytes().to_vec();
+                    &held
+                }
+            };
             let has_prec = body.contains(&b'.');
             if v >= LuaVersion::Lua53
                 && body.is_empty()
                 && let Some(gs) = gs
             {
-                vm.buf_push(out, &s)?;
+                vm.buf_push(out, s)?;
                 *added = Added::Value(gs);
             } else {
                 if v >= LuaVersion::Lua53 && s.contains(&0) {
@@ -138,10 +152,10 @@ pub(super) fn item51<const PRE: bool>(
                     && s.len() >= 100
                     && let Some(gs) = gs
                 {
-                    vm.buf_push(out, &s)?;
+                    vm.buf_push(out, s)?;
                     *added = Added::Value(gs);
                 } else {
-                    cfmt::cstr(out, &sp, &s);
+                    cfmt::cstr(out, &sp, s);
                 }
             }
         }
