@@ -12,7 +12,6 @@
 //! `pending_err` from `extern "C"` functions) reach it through
 //! `luna_core::__private`, outside the public API.
 
-use crate::runtime::Value;
 use crate::vm::error::LuaError;
 
 /// JIT-specific Vm state. See module docs.
@@ -94,10 +93,13 @@ pub struct JitState {
     pub reg_state_buf: Vec<i64>,
 
     /// Values compiled code holds only in machine registers while it calls
-    /// a helper that can collect (a trace's concat or generic-for call). The
-    /// helper pushes them before the call and truncates back after it, so
-    /// nested entries stack; the collector treats them as roots.
-    pub ssa_roots: Vec<Value>,
+    /// a helper that can collect (a trace's concat or generic-for call): the
+    /// address of the innermost root list, 0 for none. A list lies in the
+    /// trace's native frame as `n`, the address of the list it was pushed
+    /// over, then `n` pairs of tag and payload words; the helper links it
+    /// in for the call and unlinks it after, so nested entries chain. The
+    /// collector treats the values as roots.
+    pub ssa_roots: usize,
 
     /// Reusable string accumulator buffers, in the allocation context.
     pub str_buf_pool: Vec<crate::runtime::mem::LVec<u8>>,
@@ -412,7 +414,7 @@ impl JitState {
             handoff: Vec::new(),
             fail_memory: None,
             reg_state_buf: Vec::new(),
-            ssa_roots: Vec::new(),
+            ssa_roots: 0,
             str_buf_pool: Vec::new(),
             str_buf_pool_cap: 4,
             entry_tags_buf: Vec::new(),

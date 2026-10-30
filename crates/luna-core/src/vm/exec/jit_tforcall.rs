@@ -12,11 +12,9 @@ impl Vm {
     /// ipairs `inext` fast path at the top — skip begin_call
     ///     when R[A]=Native(ipairs_iter), R[A+1]=Table no-mt,
     ///     R[A+2]=Int.
-    /// Batched out-ptr writeback — fill ctrl/key/val raws into
-    ///     caller-provided buffers + return R[A+4]'s tag byte. Lets
-    ///     emit skip 3 separate `luna_jit_stack_load` calls and 1
-    ///     `luna_jit_stack_tag` call by reading the buffer via
-    ///     cranelift `stack_load` IR instead. Returns -1 on deopt,
+    /// The control, key and value payloads go to the caller's
+    ///     buffers, which the trace reads back without another call;
+    ///     the return is R[A+4]'s tag byte. Returns -1 on deopt,
     ///     else R[A+4]'s tag byte | R[A+5]'s tag byte << 8 (the value's
     ///     tag only when `nvars >= 2`, 0 otherwise).
     pub(crate) fn jit_op_tforcall(
@@ -86,9 +84,8 @@ impl Vm {
             }
         }
         // Batched writeback — fill the caller's buffers with the
-        // raw bits of R[A+2] / R[A+4] / R[A+5] so the trace IR can
-        // reload via cranelift `stack_load` instead of separate
-        // `luna_jit_stack_load` helper calls.
+        // raw bits of R[A+2] / R[A+4] / R[A+5], which the trace reads
+        // back from them.
         // SAFETY: every `RawVal` `unpack` returns has all 8 bytes initialised (`RawVal::NIL` for nil and booleans), so reading them as `zero` is defined
         let ctrl_raw = unsafe { self.stack[control as usize].unpack().1.zero };
         let (key_tag, key_rv) = self.stack[first as usize].unpack();

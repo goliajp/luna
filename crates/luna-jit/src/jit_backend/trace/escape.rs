@@ -134,7 +134,7 @@ pub enum BufferState {
     Bufferable,
     /// A use forced materialisation — accumulator passed to a Call,
     /// Move'd elsewhere, observed at a side-exit with Str exit_tag,
-    /// etc. Emit falls back to the existing `luna_jit_op_concat`
+    /// etc. Emit falls back to the `luna_jit_op_concat_regs`
     /// helper path.
     NonBuffered,
 }

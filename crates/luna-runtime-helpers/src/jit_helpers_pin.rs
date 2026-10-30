@@ -18,7 +18,7 @@ unsafe impl Sync for PinnedFn {}
 /// static alive in the final object — which transitively pins each
 /// `luna_jit_*` symbol the static references.
 ///
-/// The number of entries (58) must match the number of
+/// The number of entries (56) must match the number of
 /// `pub unsafe extern "C" fn luna_jit_*` in
 /// `crates/luna-jit/src/jit_backend/mod.rs`. If luna-jit ever
 /// adds a 47th helper, this array must grow in lock-step
@@ -26,7 +26,7 @@ unsafe impl Sync for PinnedFn {}
 /// link with `undefined reference to luna_jit_<new>`.
 #[used]
 #[unsafe(no_mangle)]
-static LUNA_AOT_HELPER_PIN: [PinnedFn; 58] = [
+static LUNA_AOT_HELPER_PIN: [PinnedFn; 56] = [
     PinnedFn(jb::luna_jit_new_table as AnyFn),
     PinnedFn(jb::luna_jit_new_table_sized as AnyFn),
     PinnedFn(jb::luna_jit_materialize_sunk_table as AnyFn),
@@ -42,14 +42,12 @@ static LUNA_AOT_HELPER_PIN: [PinnedFn; 58] = [
     PinnedFn(jb::luna_jit_table_get_float as AnyFn),
     PinnedFn(jb::luna_jit_upval_get as AnyFn),
     PinnedFn(jb::luna_jit_op_close as AnyFn),
-    PinnedFn(jb::luna_jit_stack_update_raw as AnyFn),
-    PinnedFn(jb::luna_jit_op_concat as AnyFn),
+    PinnedFn(jb::luna_jit_op_concat_regs as AnyFn),
     PinnedFn(jb::luna_jit_str_buf_acquire as AnyFn),
     PinnedFn(jb::luna_jit_str_buf_release as AnyFn),
     PinnedFn(jb::luna_jit_str_buf_extend as AnyFn),
     PinnedFn(jb::luna_jit_str_buf_intern as AnyFn),
     PinnedFn(jb::luna_jit_op_tforcall as AnyFn),
-    PinnedFn(jb::luna_jit_stack_load as AnyFn),
     PinnedFn(jb::luna_jit_stack_tag as AnyFn),
     PinnedFn(jb::luna_jit_spill_to_stack as AnyFn),
     PinnedFn(jb::luna_jit_op_closure as AnyFn),
@@ -165,8 +163,7 @@ pub fn force_link_jit_helpers() -> usize {
             let _ = jb::luna_jit_table_get_float(0, 0);
             let _ = jb::luna_jit_upval_get(0);
             let _ = jb::luna_jit_op_close(0);
-            jb::luna_jit_stack_update_raw(0, 0);
-            let _ = jb::luna_jit_op_concat(0, 0, 0);
+            let _ = jb::luna_jit_op_concat_regs(0, 0, 0, 0);
             let _ = jb::luna_jit_str_buf_acquire();
             jb::luna_jit_str_buf_release(0);
             let _ = jb::luna_jit_str_buf_extend(0, 0);
@@ -179,7 +176,6 @@ pub fn force_link_jit_helpers() -> usize {
                 std::ptr::null_mut(),
                 0,
             );
-            let _ = jb::luna_jit_stack_load(0);
             let _ = jb::luna_jit_stack_tag(0);
             jb::luna_jit_spill_to_stack(0, 0, 0);
             let _ = jb::luna_jit_op_closure(0);

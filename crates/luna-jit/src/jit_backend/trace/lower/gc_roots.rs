@@ -2,8 +2,9 @@ use super::*;
 
 /// The root list for a helper that can run the collector, called at op `i`
 /// with everything from absolute register `live_end` up dead or already on
-/// the Lua stack: the address of a stack slot holding `n` and then a tag
-/// and payload word per collectable value the trace holds only in a
+/// the Lua stack: the address of a stack slot holding `n`, a word the
+/// helper links the list through, and then a tag and payload word per
+/// collectable value the trace holds only in a
 /// register, or 0 when there is none.
 ///
 /// The trace writes registers back to the stack only when it exits, so
@@ -45,7 +46,7 @@ pub(super) fn emit_ssa_roots<E: Emit>(lw: &mut Lower<E>, i: usize, live_end: usi
     if vals.is_empty() {
         return lw.bcx.ins().iconst(types::I64, 0);
     }
-    let words = 1 + 2 * vals.len();
+    let words = 2 + 2 * vals.len();
     let ss = lw
         .bcx
         .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
@@ -56,7 +57,7 @@ pub(super) fn emit_ssa_roots<E: Emit>(lw: &mut Lower<E>, i: usize, live_end: usi
     let n = lw.bcx.ins().iconst(types::I64, vals.len() as i64);
     lw.bcx.ins().stack_store(types::I64, n, ss, 0);
     for (j, (var, tag)) in vals.into_iter().enumerate() {
-        let off = (8 + 16 * j) as i32;
+        let off = (16 + 16 * j) as i32;
         let t = lw.bcx.ins().iconst(types::I64, i64::from(tag));
         lw.bcx.ins().stack_store(types::I64, t, ss, off);
         let v = lw.bcx.use_var(var);

@@ -1,5 +1,5 @@
-//! TForCall batched helper + cranelift `ld` replace the per-iter
-//! `luna_jit_stack_load` and `luna_jit_stack_tag` calls.
+//! TForCall batched helper + cranelift `ld` replace per-iter helper calls
+//! that loaded each slot and its tag.
 //!
 //! Instead of 4 helper calls per iter (op_tforcall + stack_tag +
 //! 2×stack_load), the trace passes 3 out-pointers to

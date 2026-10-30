@@ -8,7 +8,7 @@
 //! compares to the recorded direction; mismatch → store_back + return
 //! the op's PC so interp redoes the test.
 //!
-//! Common Unset producers: `luna_jit_stack_load` reload after
+//! Common Unset producers: a reload after
 //! a helper call (TForCall slow path, Concat result), GetUpval
 //! whose target isn't an Op::Call, dispatcher slots without an
 //! entry-tag → RegKind mapping.

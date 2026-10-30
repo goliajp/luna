@@ -2,7 +2,7 @@
 //!
 //! A hot loop body with `s = s .. v` (string concat) compiles:
 //! `Op::Concat` is in `is_whitelisted_op`, and a thin helper
-//! (`luna_jit_op_concat`) runs `concat_run` on the same vm.stack the
+//! (`luna_jit_op_concat_regs`) runs `concat_run` on the same vm.stack the
 //! interp would touch + detects/deopts on the `__concat` metamethod
 //! path (frame-push detection).
 //!
@@ -14,8 +14,8 @@
 use luna_jit::version::LuaVersion;
 
 /// Concat with two Int operands derived from arith — both
-/// `current_kinds` slots are `Int` so spill uses the proper
-/// `spill_to_stack` (tag=INT) path, not `update_raw`.
+/// `current_kinds` slots are `Int` so the operands go to the stack
+/// tagged INT, not with the slot's old tag.
 #[test]
 fn concat_int_operands_compiles_and_dispatches() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);

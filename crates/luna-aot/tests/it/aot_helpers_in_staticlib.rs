@@ -3,7 +3,7 @@
 //! Builds `libluna_runtime_helpers.a` via the same pipeline the AOT
 //! `compile_and_link` flow uses (`cargo build -p luna-runtime-helpers
 //! --profile=release-aot-helpers`), then shells out to `nm` and
-//! asserts all 58 `luna_jit_*` Cranelift trace-mcode helpers are
+//! asserts all 56 `luna_jit_*` Cranelift trace-mcode helpers are
 //! present as defined-text (`T`) symbols.
 //!
 //! # Why this exists
@@ -148,7 +148,7 @@ fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
     // `crates/luna-jit/src/jit_backend/mod.rs`. If another helper lands
     // upstream, grow this list AND the pin array AND the
     // `force_link_jit_helpers_reports_every_helper` test in luna-runtime-helpers.
-    let expected: [&str; 58] = [
+    let expected: [&str; 56] = [
         "luna_jit_new_table",
         "luna_jit_new_table_sized",
         "luna_jit_materialize_sunk_table",
@@ -164,14 +164,12 @@ fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
         "luna_jit_table_get_float",
         "luna_jit_upval_get",
         "luna_jit_op_close",
-        "luna_jit_stack_update_raw",
-        "luna_jit_op_concat",
+        "luna_jit_op_concat_regs",
         "luna_jit_str_buf_acquire",
         "luna_jit_str_buf_release",
         "luna_jit_str_buf_extend",
         "luna_jit_str_buf_intern",
         "luna_jit_op_tforcall",
-        "luna_jit_stack_load",
         "luna_jit_stack_tag",
         "luna_jit_spill_to_stack",
         "luna_jit_op_closure",
@@ -213,8 +211,8 @@ fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
     for sym in expected.iter() {
         // Match either ` T <sym>` (Linux ELF) or ` T _<sym>` (Mach-O)
         // with a trailing word boundary (newline or whitespace) so
-        // `luna_jit_op_concat` doesn't false-match
-        // `luna_jit_op_concat_thing`.
+        // `luna_jit_op_concat` does not false-match
+        // `luna_jit_op_concat_regs`.
         let elf = format!(" T {sym}\n");
         let macho = format!(" T _{sym}\n");
         if !stdout.contains(&elf) && !stdout.contains(&macho) {
@@ -224,7 +222,7 @@ fn all_30_luna_jit_helpers_are_defined_in_staticlib() {
 
     assert!(
         missing.is_empty(),
-        "staticlib `{}` is missing {} of 58 helper text symbols: {:?}\n\
+        "staticlib `{}` is missing {} of 56 helper text symbols: {:?}\n\
          nm output (filtered for luna_jit_*):\n{}",
         staticlib.display(),
         missing.len(),

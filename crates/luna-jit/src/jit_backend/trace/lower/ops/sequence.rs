@@ -10,12 +10,9 @@ pub(super) fn emit_sequence_op<E: Emit>(
     let OpHelpers {
         set_ids,
         reserve_list_id,
-        spill_id,
-        stack_load_id,
         op_concat_id,
         ..
     } = lw.h.op;
-    let update_raw_id = lw.h.rt.update_raw_id;
     let OpCx {
         i, rop, off, ins, ..
     } = *oc;
@@ -104,46 +101,43 @@ pub(super) fn emit_sequence_op<E: Emit>(
             let (first, out) = ins.concat_operands();
             let a_us = first as usize;
             let n_operands = ins.b() as usize;
-            // Spill every operand slot to vm.stack so the
-            // helper's concat_run can read them. For Unset
-            // kinds (e.g. Str — RegKind doesn't carry Str)
-            // call stack_update_raw which preserves the
-            // existing tag and only refreshes the raw bits.
-            let spill_ref = lw.bcx.import_func(spill_id);
-            let update_raw_ref = lw.bcx.import_func(update_raw_id);
-            for slot in a_us..(a_us + n_operands) {
-                let k = lw.current_kinds[off + slot];
-                let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
-                let raw_arg = lw.bcx.use_var(regs[slot]);
-                let tag_opt = match k {
+            // the operands as (tag, payload) words for the helper to store;
+            // a tag of -1 keeps the one the stack slot has
+            let ss = lw
+                .bcx
+                .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                    cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                    (16 * n_operands) as u32,
+                    3,
+                ));
+            for j in 0..n_operands {
+                let k = lw.current_kinds[off + a_us + j];
+                let raw = lw.bcx.use_var(regs[a_us + j]);
+                let tag = match k {
                     // an operand is read, so never held on the stack
                     RegKind::StackHeld => return None,
-                    k => emit_kind_tag(&mut lw.bcx, k, raw_arg),
+                    k => emit_kind_tag(&mut lw.bcx, k, raw),
                 };
-                if let Some(tag_arg) = tag_opt {
-                    lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);
-                } else {
-                    lw.bcx.ins().call(update_raw_ref, &[slot_arg, raw_arg]);
-                }
+                let tag = tag.unwrap_or_else(|| lw.bcx.ins().iconst(types::I64, -1));
+                lw.bcx
+                    .ins()
+                    .stack_store(types::I64, tag, ss, (16 * j) as i32);
+                lw.bcx
+                    .ins()
+                    .stack_store(types::I64, raw, ss, (16 * j + 8) as i32);
             }
             // an emergency collection may run: the operands are on the
-            // stack now and the registers below them go as roots
+            // stack then and the registers below them go as roots
             let roots = emit_ssa_roots(lw, i, off + a_us);
             let a_arg = lw.bcx.ins().iconst(types::I64, a_us as i64);
             let n_arg = lw.bcx.ins().iconst(types::I64, n_operands as i64);
+            let ops = lw.bcx.ins().stack_addr(types::I64, ss, 0);
             let func_ref = lw.bcx.import_func(op_concat_id);
-            let call_inst = lw.bcx.ins().call(func_ref, &[a_arg, n_arg, roots]);
-            let status = lw.bcx.inst_results(call_inst)[0];
-            // -1: an error or `__concat`; the interpreter redoes the op
-            let ok = lw.bcx.ins().icmp_imm_s(IntCC::Equal, status, 0);
+            let call_inst = lw.bcx.ins().call(func_ref, &[a_arg, n_arg, ops, roots]);
+            let result_raw = lw.bcx.inst_results(call_inst)[0];
+            // 0: an error or `__concat`; the interpreter redoes the op
+            let ok = lw.bcx.ins().icmp_imm_s(IntCC::NotEqual, result_raw, 0);
             guard!(lw, pl, ok, i, rop.pc);
-            // Reload regs[A] (= result Str) from vm.stack via
-            // luna_jit_stack_load helper. The helper deopts on the
-            // `__concat` path, so a result here is always a string.
-            let stack_load_ref = lw.bcx.import_func(stack_load_id);
-            let a_arg_reload = lw.bcx.ins().iconst(types::I64, a_us as i64);
-            let reload_inst = lw.bcx.ins().call(stack_load_ref, &[a_arg_reload]);
-            let result_raw = lw.bcx.inst_results(reload_inst)[0];
             for r in [a_us, out as usize] {
                 lw.bcx.def_var(regs[r], result_raw);
                 lw.current_kinds[off + r] = RegKind::Str;
@@ -151,16 +145,18 @@ pub(super) fn emit_sequence_op<E: Emit>(
             // the other operands as the concat left them: a number among
             // them is a string now (`tostring` converts it in place), which
             // the stack holds alive as PUC's does
-            for slot in a_us + 1..a_us + n_operands {
+            for j in 1..n_operands {
+                let slot = a_us + j;
                 let k = lw.current_kinds[off + slot];
                 if !matches!(k, RegKind::Int | RegKind::Float | RegKind::Unknown)
                     || slot == out as usize
                 {
                     continue;
                 }
-                let slot_arg = lw.bcx.ins().iconst(types::I64, slot as i64);
-                let inst = lw.bcx.ins().call(stack_load_ref, &[slot_arg]);
-                let raw = lw.bcx.inst_results(inst)[0];
+                let raw = lw
+                    .bcx
+                    .ins()
+                    .stack_load(types::I64, types::I64, ss, (16 * j + 8) as i32);
                 lw.bcx.def_var(regs[slot], raw);
                 if k != RegKind::Unknown {
                     lw.current_kinds[off + slot] = RegKind::Str;

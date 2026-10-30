@@ -77,34 +77,15 @@ pub trait VmJitFrames {
     /// register's value, which the helper packs from its tag and
     /// payload.
     fn jit_spill_stack(&mut self, slot_offset: u32, v: Value);
-    /// `vm.stack[base + slot_offset]` of the trace's head frame, or
-    /// `None` when there is no Lua frame or the slot is past the
-    /// stack. The trace JIT's Op::Concat body emit refreshes the
-    /// payload of a slot whose `RegKind` is `Unset` (no compile-time
-    /// tag info; commonly `Str` slots which the trace doesn't model)
-    /// through it, keeping the tag the interpreter left there.
-    fn jit_stack_slot_mut(&mut self, slot_offset: u32) -> Option<&mut Value>;
-    /// Trace JIT path for `Op::Concat A B`.
-    ///
-    /// Mirrors the interp arm (`run_frame_op`): `self.top =
-    /// base + a + n; concat_run(base + a)`. Result lands at
-    /// `vm.stack[base + a]`. Returns `0` on success, `-1` when the
-    /// interpreter must do it (any error from `concat_run` OR
-    /// detection that the metamethod path was taken — `concat_run`
-    /// returns `Ok(())` after `begin_meta_call` which has pushed a Lua
-    /// frame the trace can't safely continue past); the trace then
-    /// side-exits at the op and the interpreter redoes it, raising the
-    /// error or calling `__concat` itself.
-    ///
-    /// The frame-push detection uses `pre/post frames.len()` and
-    /// unwinds any pushed frames first, so the exit sees a clean stack.
-    fn jit_op_concat(&mut self, slot_offset: u32, n: i32) -> i64;
-    /// Load the raw `i64` payload of
-    /// `vm.stack[base + slot_offset]` for the active trace's head
-    /// Lua frame. Used to reload trace IR `Variable`s after a
-    /// helper has written to `vm.stack` directly (e.g. TForCall's
-    /// iter results land at `R[A+4..A+4+nvars]`).
-    fn jit_stack_load(&mut self, slot_offset: u32) -> i64;
+    /// Trace JIT path for `Op::Concat`, its operands in the trace's
+    /// registers: `ops` holds each operand's tag and payload (a tag
+    /// below 0 keeps the tag the stack slot has), stored from register
+    /// `a` of the head frame on before the concat runs as the
+    /// interpreter's does. Returns the result's payload, then `ops`
+    /// holds each operand's payload as the concat left it (a number
+    /// converted in place); `0` when the interpreter must redo the op
+    /// (an error, `__concat`, or a deopt already parked).
+    fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]]) -> i64;
     /// Read the tag byte of
     /// `vm.stack[base + slot_offset]`. Used by `Op::TForLoop` emit
     /// to dispatch on the iterator's return-key tag at runtime
@@ -168,11 +149,9 @@ pub trait VmJitFrames {
     /// `begin_call`. ipairs `inext` fast path at the top: skip begin_call
     /// when `R[A]` is `Native(ipairs_iter)`, `R[A+1]` a table without a
     /// metatable, `R[A+2]` an integer.
-    /// Batched out-ptr writeback — fill ctrl/key/val raws into
-    ///     caller-provided buffers + return `R[A+4]`'s tag byte. Lets
-    ///     emit skip 3 separate `luna_jit_stack_load` calls and 1
-    ///     `luna_jit_stack_tag` call by reading the buffer via
-    ///     cranelift `stack_load` IR instead. Returns -1 on deopt,
+    /// The control, key and value payloads go to the caller's
+    ///     buffers, which the trace reads back without another call;
+    ///     the return is `R[A+4]`'s tag byte. Returns -1 on deopt,
     ///     else `R[A+4]`'s tag byte | `R[A+5]`'s tag byte << 8 (the value's
     ///     tag only when `nvars >= 2`, 0 otherwise).
     fn jit_op_tforcall(
@@ -225,16 +204,8 @@ impl VmJitFrames for crate::vm::Vm {
         crate::vm::Vm::jit_spill_stack(self, slot_offset, v)
     }
     #[inline]
-    fn jit_stack_slot_mut(&mut self, slot_offset: u32) -> Option<&mut Value> {
-        crate::vm::Vm::jit_stack_slot_mut(self, slot_offset)
-    }
-    #[inline]
-    fn jit_op_concat(&mut self, slot_offset: u32, n: i32) -> i64 {
-        crate::vm::Vm::jit_op_concat(self, slot_offset, n)
-    }
-    #[inline]
-    fn jit_stack_load(&mut self, slot_offset: u32) -> i64 {
-        crate::vm::Vm::jit_stack_load(self, slot_offset)
+    fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]]) -> i64 {
+        crate::vm::Vm::jit_concat_regs(self, a, ops)
     }
     #[inline]
     fn jit_stack_tag(&mut self, slot_offset: u32) -> u8 {

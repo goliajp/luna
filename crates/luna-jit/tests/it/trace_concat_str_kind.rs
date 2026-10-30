@@ -2,8 +2,7 @@
 //! pass.
 //!
 //! Without a Str kind, Str operands fall into the `Unset` kind and
-//! route through `luna_jit_stack_update_raw` (preserves vm.stack's
-//! existing tag) — which breaks for fresh frames where
+//! keep vm.stack's existing tag — which breaks for fresh frames where
 //! vm.stack[temp]'s tag is Nil (from push_frame init). The `Str`
 //! variant of `RegKind` and `ExitTag` is threaded through:
 //! - `from_entry_tag(STR) → Some(Str)`
@@ -11,8 +10,8 @@
 //! - dispatcher restore: `ExitTag::Str → raw::STR`
 //! - every `tag_byte` match in emit (spill / Op::Closure in_stack
 //!   upval / set_int / set_raw paths)
-//! - `Op::Concat` emit's operand spill picks `raw::STR` (not
-//!   `update_raw`) for `RegKind::Str` slots
+//! - `Op::Concat` emit passes `raw::STR` (not the slot's tag) for
+//!   `RegKind::Str` slots
 //!
 //! This covers `s = s .. v` over ipairs (Str-valued arrays) and any
 //! Concat where operands flow through Move from Str entry slots.
