@@ -87,7 +87,7 @@ impl FailMemory {
 }
 
 fn content_key(proto: &crate::runtime::function::Proto) -> u64 {
-    crate::jit::trace_types::content::ProtoContent::of(proto).hash
+    crate::jit::trace_types::content::ProtoContent::of_ref(proto).hash
 }
 
 /// Whether recording at `pc` of `proto` is left out because fresh

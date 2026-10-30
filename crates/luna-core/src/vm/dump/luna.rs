@@ -228,6 +228,7 @@ fn r_proto(
         env_upval_idx,
         trace_hot_count: std::cell::Cell::new(0),
         call_hot_count: std::cell::Cell::new(0),
+        content: Default::default(),
         trace_discard_count: std::cell::Cell::new(0),
         trace_gave_up: std::cell::Cell::new(false),
         puc_arrays: std::cell::Cell::new([0; 7]),

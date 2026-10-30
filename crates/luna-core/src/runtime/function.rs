@@ -102,12 +102,9 @@ pub struct Proto {
     /// negative `Op::Jmp` (`fib`, recursive `make`/`check` in
     /// `binary_trees`), where the back-edge counter never triggers.
     pub call_hot_count: std::cell::Cell<u32>,
-    /// Count of "partial-coverage" discards on
-    /// this Proto's call-triggered recordings. Each discard is a
-    /// new opportunity for the recorder to record a different
-    /// (hopefully longer) trace at a deeper recursion point; the
-    /// trigger condition re-uses `c >= THRESHOLD &&
-    /// !already_cached` so the next call retries. Without
+    /// Count of "partial-coverage" discards on this Proto's call-triggered
+    /// recordings, each a chance to record a longer trace at a deeper
+    /// recursion point (the trigger lets the next call retry). Without
     /// a cap, pathologically-branchy workloads like binary_trees
     /// (`make` body contains 2 nested self-recursive calls)
     /// produce a 1500+ discard storm — the recorder never
@@ -172,6 +169,8 @@ pub struct Proto {
     /// variables, upvalue descriptors), counted when it was made and
     /// uncounted when it is freed (they differ from this prototype's).
     pub(crate) puc_arrays: std::cell::Cell<[u32; 7]>,
+    /// What compiled code depends on, made the first time it is asked for.
+    pub(crate) content: std::cell::OnceCell<crate::jit::trace_types::content::ProtoContent>,
 }
 
 impl Proto {

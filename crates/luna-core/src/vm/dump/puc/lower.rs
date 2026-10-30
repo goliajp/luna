@@ -2,9 +2,8 @@
 //!
 //! Every dialect module decodes its own chunk format into a [`RawProto`]
 //! tree and walks its PUC code once, driving a [`Lowering`]. This module
-//! owns what the five dialects have in common: register mapping, scratch
-//! registers, jump resolution, and the debug tables (line and local-variable
-//! info) that must follow the code through the translation.
+//! owns what the five dialects share: register mapping, scratch registers,
+//! jump resolution, and the line and local-variable tables.
 //!
 //! ## What luna's interpreter trusts
 //!
@@ -18,9 +17,8 @@
 //! - an `ExtraArg` only ever follows `LoadKx` or `SetList` with `k` set.
 //!
 //! A translator must uphold all three for every chunk PUC's own compiler can
-//! produce. A chunk PUC's compiler could not have produced is caught after
-//! lowering by the loader's verifier (`super::super::verify`), which checks
-//! these invariants on every loaded function whatever its format.
+//! produce. Any other chunk is caught after lowering by the loader's
+//! verifier (`super::super::verify`), which checks every loaded function.
 //!
 //! luna's instruction set holds every operand form PUC's compilers emit:
 //! the `RK` operands of 5.1–5.3 (a constant on either side, or on both,
@@ -137,6 +135,7 @@ pub(super) fn build(
         env_upval_idx,
         trace_hot_count: std::cell::Cell::new(0),
         call_hot_count: std::cell::Cell::new(0),
+        content: Default::default(),
         trace_discard_count: std::cell::Cell::new(0),
         trace_gave_up: std::cell::Cell::new(false),
         puc_arrays: std::cell::Cell::new([0; 7]),

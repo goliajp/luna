@@ -93,7 +93,7 @@ pub(crate) fn adopt(
         }
         None => None,
     };
-    let head = Content::of(&req.proto);
+    let head = Content::of_ref(&req.proto);
     let settings = Settings::new(req.version, req.opts, req.call_triggered, req.settings);
     let key = HeadKey {
         settings,
@@ -105,7 +105,7 @@ pub(crate) fn adopt(
         let cache = engine.cache();
         let Some(img) = cache.by_head.get(&key).and_then(|list| {
             list.iter().find(|img| {
-                img.protos[0] == head
+                img.protos[0] == *head
                     && entry_tags_admit(&img.meta.entry_tags, req.entry_tags)
                     && img.side_parent.map(|(pc, exit, id)| (pc, exit, Some(id)))
                         == req.side_parent.map(|(_, pc, exit)| (pc, exit, parent_id))
@@ -120,7 +120,7 @@ pub(crate) fn adopt(
                 // a side trace of an exit inside a function the parent
                 // inlined starts in that function: it is taken over when
                 // that exit becomes hot here
-                todo.extend(kids.iter().filter(|k| k.protos[0] == head).cloned());
+                todo.extend(kids.iter().filter(|k| k.protos[0] == *head).cloned());
             }
             i += 1;
         }
