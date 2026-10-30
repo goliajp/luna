@@ -504,7 +504,9 @@ jobs:
   # closure; one swap for every closure's upvalue change, the workaround
   # for a thread cycle's finalizer and the list reordering removed) to
   # 1806, and a white cached closure let go of as its prototype is
-  # traversed (the pass after the marking that did it removed) to 1805.
+  # traversed (the pass after the marking that did it removed) to 1805,
+  # and string.rep doubling its copies without zero-filling them first
+  # (the vector's copy from its own front) to 1803.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -519,7 +521,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=1802
+          ceiling=1803
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then
