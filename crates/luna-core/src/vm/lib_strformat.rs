@@ -108,9 +108,9 @@ fn format<const PRE: bool>(
         };
     }
     // the room asked for before each item (5.2 on), and whether a `%f`
-    // asks for more
+    // asks for more (5.4 on)
     let room = max_item(v);
-    let room_f = v >= LuaVersion::Lua54;
+    let room_f = !PRE && v >= LuaVersion::Lua54;
     let mut arg = 0u32;
     let mut i = 0;
     // the buffer's slot counts only when a callback runs or an error is
@@ -139,17 +139,18 @@ fn format<const PRE: bool>(
         }
         if v >= LuaVersion::Lua52 {
             tell!(out.len() + room, out.len(), |b| b.prep(vm, &out, room)?);
-            // 5.4 on ask for more for a `%f`
-            if room_f && item_conv(fmt, i) == b'f' {
-                let m = 110 + 308;
-                tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
-            }
         }
         arg += 1;
         if arg >= nargs {
             let buf = vm.buffer_slot(out.len());
             vm.native_push(buf);
             return Err(arg_error(vm, arg + 1, "no value"));
+        }
+        // 5.4 on ask for more for a `%f` once its specification is read
+        // (an over-long one is refused first, by the item)
+        if room_f && f_conv(fmt, i) {
+            let m = 110 + 308;
+            tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
         }
         let before = out.len();
         let mut added = Added::Sized;
@@ -188,13 +189,15 @@ fn format<const PRE: bool>(
     vm.nat_ret(fs, &[Value::Str(s)])
 }
 
-/// The conversion byte of the item whose specification starts at `i`.
-fn item_conv(fmt: &[u8], i: usize) -> u8 {
+/// Whether the item whose specification starts at `i` is a `%f` that
+/// 5.4's `getformat` takes (not too long).
+#[inline]
+fn f_conv(fmt: &[u8], i: usize) -> bool {
     let mut p = i;
     while fmt.get(p).is_some_and(|c| b"-+#0 123456789.".contains(c)) {
         p += 1;
     }
-    byte_at(fmt, p)
+    byte_at(fmt, p) == b'f' && p - i + 1 < MAX_FORMAT - 10
 }
 
 fn byte_at(fmt: &[u8], i: usize) -> u8 {
