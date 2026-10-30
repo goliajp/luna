@@ -176,11 +176,18 @@ impl Vm {
     /// PUC's `tostring` of a concatenation's operand in slot `slot`: a
     /// number becomes the string of it there (`luaO_tostring`, made as any
     /// string is); false for a value that is neither.
+    #[inline(always)]
     fn tostring_in_place(&mut self, slot: u32) -> Result<bool, LuaError> {
-        let v = self.stack[slot as usize];
-        if matches!(v, Value::Str(_)) {
+        if matches!(self.stack[slot as usize], Value::Str(_)) {
             return Ok(true);
         }
+        self.number_to_string_in_place(slot)
+    }
+
+    /// [`Vm::tostring_in_place`] of a value that is not a string.
+    #[inline(never)]
+    fn number_to_string_in_place(&mut self, slot: u32) -> Result<bool, LuaError> {
+        let v = self.stack[slot as usize];
         let mut text = numeric::NumText::default();
         let Some(b) = concat_piece_into(v, self.float_fmt(), &mut text) else {
             return Ok(false);
