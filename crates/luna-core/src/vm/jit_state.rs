@@ -1,19 +1,12 @@
-//! `JitState` sidecar: JIT-specific Vm state factored out
-//! of the [`crate::vm::Vm`] struct.
+//! `JitState` sidecar: JIT-specific Vm state factored out of the
+//! [`crate::vm::Vm`] struct, one field hop away from the interpreter's
+//! (`self.jit.active_trace`), so the two are kept apart at the field level.
 //!
-//! The interpreter dispatch loop reads `self.heap`,
-//! `self.stack`, `self.frames`, ... as inherent fields; JIT state
-//! lives one field hop away (`self.jit.active_trace` instead of
-//! `self.active_trace`). The goal is physical separation between
-//! interp and JIT bookkeeping at the field level.
-//!
-//! `JitState` is always present on a Vm — even an embedder that
-//! never runs JIT'd code holds an inert `JitState` whose
-//! `chunk_compiler` / `trace_compiler` are
-//! [`crate::jit::NullJitBackend`]. The dispatcher reads
-//! `self.jit.chunk_compiler` on every JIT entry, so the indirection
-//! is fixed; `Option<JitState>` would impose an `unwrap()` on the
-//! hot path for no benefit.
+//! `JitState` is always present on a Vm — even an embedder that never runs
+//! JIT'd code holds an inert one whose `chunk_compiler` / `trace_compiler`
+//! are [`crate::jit::NullJitBackend`]. The dispatcher reads
+//! `self.jit.chunk_compiler` on every JIT entry; `Option<JitState>` would
+//! put an `unwrap()` on that path for no benefit.
 //!
 //! luna's other crates (the compiled code's helpers write
 //! `pending_err` from `extern "C"` functions) reach it through
@@ -172,6 +165,8 @@ pub struct JitState {
     /// the frames of the compiled levels handed to the interpreter,
     /// deepest first
     pub(crate) handoff: Vec<crate::vm::exec::HandoffFrame>,
+    /// heads that failed to compile, by their function's content
+    pub(crate) fail_memory: crate::vm::exec::FailMemory,
 }
 
 impl JitState {
@@ -414,6 +409,7 @@ impl JitState {
             levels_base: 0,
             levels_slot: 0,
             handoff: Vec::new(),
+            fail_memory: Default::default(),
             reg_state_buf: Vec::new(),
             ssa_roots: Vec::new(),
             str_buf_pool: Vec::new(),

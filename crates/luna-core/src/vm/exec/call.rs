@@ -103,6 +103,7 @@ macro_rules! lua_call {
                 let base_us = f.base as usize;
                 let regs = &$vm.stack[base_us..base_us + max_stack];
                 if !trace_head_stuck(proto, 0, regs)
+                    && !trace_head_forgone(&mut $vm.jit.fail_memory, proto, 0)
                     && !$vm.trace_try_adopt(proto, 0, base_us, None, true)
                 {
                     let regs = &$vm.stack[base_us..base_us + max_stack];

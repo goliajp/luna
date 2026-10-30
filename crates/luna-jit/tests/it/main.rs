@@ -107,6 +107,7 @@ mod trace_error_traceback;
 mod trace_error_unwind;
 mod trace_escape_analysis_sweep;
 mod trace_exit_side_effects;
+mod trace_fail_memory;
 mod trace_field_access_helpers;
 mod trace_float_mod_nan;
 mod trace_gc_barrier;
