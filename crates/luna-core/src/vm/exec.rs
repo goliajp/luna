@@ -48,6 +48,7 @@ mod gc;
 mod hooks;
 mod hooks_exec;
 mod host_api;
+mod host_arg;
 pub mod host_c;
 mod host_ops;
 pub(crate) mod host_pcall;
