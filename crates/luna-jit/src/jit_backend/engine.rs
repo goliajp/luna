@@ -38,6 +38,8 @@ pub struct Engine(pub(crate) Arc<Shared>);
 
 pub(crate) struct Shared {
     seed: u32,
+    /// The engine one Vm keeps for itself (see [`Engine::private`]).
+    private: bool,
     next_id: AtomicU64,
     pub(crate) traces: Mutex<TraceCache>,
 }
@@ -75,6 +77,10 @@ enum Held {
 
 /// [`Engine::set_capacity_bytes`] until set.
 const DEFAULT_CAPACITY: usize = 64 << 20;
+
+/// What a Vm's own engine holds at most: the traces of the code it loads
+/// again, beside the copies it runs.
+const PRIVATE_CAPACITY: usize = 8 << 20;
 
 impl TraceCache {
     pub(crate) fn insert(&mut self, key: HeadKey, img: Arc<TraceImage>) {
@@ -181,9 +187,21 @@ impl std::fmt::Debug for Engine {
 impl Engine {
     /// An engine holding no code yet, with a random hash seed.
     pub fn new() -> Engine {
-        let seed = luna_core::runtime::Heap::new().seed();
+        Engine::with(luna_core::runtime::Heap::new().seed(), false)
+    }
+
+    /// The engine a Vm built without one keeps for itself: code of the same
+    /// content loaded again into that Vm installs the traces an earlier load
+    /// compiled. Its Vm hashes strings with its own seed, so the seed here
+    /// is not used.
+    pub(crate) fn private() -> Engine {
+        Engine::with(0, true)
+    }
+
+    fn with(seed: u32, private: bool) -> Engine {
         Engine(Arc::new(Shared {
             seed,
+            private,
             next_id: AtomicU64::new(1),
             traces: Mutex::new(TraceCache {
                 by_head: HashMap::new(),
@@ -192,7 +210,11 @@ impl Engine {
                 failures: HashMap::new(),
                 order: VecDeque::new(),
                 bytes: 0,
-                capacity: DEFAULT_CAPACITY,
+                capacity: if private {
+                    PRIVATE_CAPACITY
+                } else {
+                    DEFAULT_CAPACITY
+                },
             }),
         }))
     }
@@ -258,6 +280,11 @@ impl Engine {
             .traces
             .lock()
             .expect("no thread panics holding the cache")
+    }
+
+    /// Whether this is a Vm's own engine: no other Vm reads what it keeps.
+    pub(crate) fn is_private(&self) -> bool {
+        self.0.private
     }
 
     pub(crate) fn next_id(&self) -> u64 {
