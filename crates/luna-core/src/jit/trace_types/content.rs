@@ -20,6 +20,15 @@ pub struct ProtoContent {
 impl ProtoContent {
     /// The content of `p`.
     pub fn of(p: &Proto) -> ProtoContent {
+        Self::of_ref(p).clone()
+    }
+
+    /// The content of `p`, made once and kept with it.
+    pub fn of_ref(p: &Proto) -> &ProtoContent {
+        p.content.get_or_init(|| Self::make(p))
+    }
+
+    fn make(p: &Proto) -> ProtoContent {
         let mut out = Vec::with_capacity(p.code.len() * 4 + 64);
         write_content(p, &mut out);
         let hash = hash64(&out);

@@ -39,7 +39,7 @@ fn path_of(record: &TraceRecord) -> u64 {
         let h = match seen.iter().find(|(q, _)| *q == p) {
             Some(&(_, h)) => h,
             None => {
-                let h = Content::of(&op.proto).hash;
+                let h = Content::of_ref(&op.proto).hash;
                 seen.push((p, h));
                 h
             }
