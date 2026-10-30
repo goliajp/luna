@@ -164,8 +164,14 @@ fn install_cranelift_jit(vm: &mut vm::Vm) {
     vm.install_jit_backend(jit_backend::CraneliftBackend, jit_backend::CraneliftBackend);
     // pair the CraneliftBackend trait impls with a fresh
     // CraneliftJitStorage so the trait impls' `_storage` param
-    // downcasts to the right concrete type.
-    vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::default());
+    // downcasts to the right concrete type. Its own engine lets code
+    // loaded again take over the traces an earlier load compiled.
+    let version = vm.version();
+    vm.install_jit_storage(jit_backend::storage::CraneliftJitStorage::with_engine(
+        jit_backend::engine::Engine::private(),
+        version,
+    ));
+    luna_core::__private::VmHostInternals::enable_trace_sharing(vm);
 }
 
 /// No JIT on a 32-bit target: the interpreter runs everything.

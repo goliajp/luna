@@ -71,6 +71,10 @@ fn record_key(
 ) -> Option<(crate::Engine, u64, HeadKey, Content)> {
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     let (engine, vm) = (cs.engine.clone()?, cs.engine_vm);
+    // a Vm's own failures are its fail memory's
+    if engine.is_private() {
+        return None;
+    }
     let head = Content::of(&record.head_proto);
     let settings = Settings::new(version, opts, record.is_call_triggered, record.settings);
     let key = key_of(settings, &head, record.head_pc);

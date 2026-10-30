@@ -14,6 +14,7 @@ use crate::vm::isa::Inst;
 pub(crate) mod adopt;
 pub(crate) mod compiled;
 mod compiled_aot;
+pub(crate) mod content;
 mod exit;
 pub(crate) mod options;
 pub(crate) mod record;

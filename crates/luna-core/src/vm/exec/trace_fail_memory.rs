@@ -1,5 +1,6 @@
 //! Trace heads whose recordings failed to compile, remembered by the
-//! content of their function: a chunk loaded again gets new prototypes,
+//! content of their function (the key a Vm also finds the traces of earlier
+//! loads by, `ProtoContent`): a chunk loaded again gets new prototypes,
 //! whose own failure counts start at zero, and would otherwise record and
 //! fail at the same heads as every earlier load did.
 
@@ -14,7 +15,7 @@ const HEADS: usize = 64;
 pub(super) const RETRY_AFTER: u16 = 32;
 
 struct Head {
-    content: [u8; 16],
+    content: u64,
     pc: u32,
     /// recordings that failed, up to the per-prototype limit
     failed: u8,
@@ -29,16 +30,16 @@ pub(crate) struct FailMemory {
 }
 
 impl FailMemory {
-    fn find(&mut self, content: &[u8; 16], pc: u32) -> Option<usize> {
+    fn find(&mut self, content: u64, pc: u32) -> Option<usize> {
         self.heads
             .iter()
-            .position(|h| h.pc == pc && h.content == *content)
+            .position(|h| h.pc == pc && h.content == content)
     }
 
     /// A recording of `proto` at `pc` failed to compile.
     pub(super) fn failed(&mut self, proto: &crate::runtime::function::Proto, pc: u32) {
-        let content = proto.stable_hash();
-        let i = match self.find(&content, pc) {
+        let content = content_key(proto);
+        let i = match self.find(content, pc) {
             Some(i) => i,
             None => {
                 if self.heads.len() == HEADS {
@@ -59,7 +60,7 @@ impl FailMemory {
 
     /// A recording of `proto` at `pc` compiled: the head is forgotten.
     pub(super) fn compiled(&mut self, proto: &crate::runtime::function::Proto, pc: u32) {
-        if let Some(i) = self.find(&proto.stable_hash(), pc) {
+        if let Some(i) = self.find(content_key(proto), pc) {
             self.heads.remove(i);
         }
     }
@@ -67,7 +68,7 @@ impl FailMemory {
     /// Whether `proto`, which has not failed at `pc` itself, should skip
     /// recording there because prototypes of the same content gave it up.
     fn skip(&mut self, proto: &crate::runtime::function::Proto, pc: u32) -> bool {
-        let Some(i) = self.find(&proto.stable_hash(), pc) else {
+        let Some(i) = self.find(content_key(proto), pc) else {
             return false;
         };
         let h = &mut self.heads[i];
@@ -83,6 +84,10 @@ impl FailMemory {
         h.failed = 0;
         false
     }
+}
+
+fn content_key(proto: &crate::runtime::function::Proto) -> u64 {
+    crate::jit::trace_types::content::ProtoContent::of(proto).hash
 }
 
 /// Whether recording at `pc` of `proto` is left out because fresh

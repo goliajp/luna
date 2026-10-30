@@ -8,6 +8,7 @@ pub use crate::jit::rebind::JitVmRebindRestore;
 pub use crate::jit::storage::JitStorage;
 pub use crate::jit::trace_types::adopt::{AdoptRequest, AdoptedTrace};
 pub use crate::jit::trace_types::compiled::{CompiledTrace, TierUp};
+pub use crate::jit::trace_types::content::{ProtoContent, hash64};
 pub use crate::jit::trace_types::options::CompileOptions;
 pub use crate::jit::trace_types::record::{FieldIcSnapshot, RecordedOp, TraceRecord};
 pub use crate::jit::trace_types::self_link::{DownRecClose, RetfRecord};
