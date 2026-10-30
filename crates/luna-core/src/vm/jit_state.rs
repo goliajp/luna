@@ -92,13 +92,10 @@ pub struct JitState {
     /// per-entry `reg_state`.
     pub reg_state_buf: Vec<i64>,
 
-    /// Values compiled code holds only in machine registers while it calls
-    /// a helper that can collect (a trace's concat or generic-for call): the
-    /// address of the innermost root list, 0 for none. A list lies in the
-    /// trace's native frame as `n`, the address of the list it was pushed
-    /// over, then `n` pairs of tag and payload words; the helper links it
-    /// in for the call and unlinks it after, so nested entries chain. The
-    /// collector treats the values as roots.
+    /// Roots: values compiled code holds only in registers while it calls a
+    /// helper that can collect. The address of the innermost list (0 none):
+    /// in the trace's frame, `n`, the list it was linked over, `n` pairs of
+    /// tag and payload words. Linked for the call, unlinked after.
     pub ssa_roots: usize,
 
     /// Reusable string accumulator buffers, in the allocation context.
