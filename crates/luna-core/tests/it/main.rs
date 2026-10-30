@@ -106,6 +106,7 @@ mod stack_window_gc;
 mod stdout_capture;
 mod string_count_after_load;
 mod string_pattern_matching;
+mod string_rep_copies;
 mod suspended_main_stack;
 mod syntax;
 mod table_border;
