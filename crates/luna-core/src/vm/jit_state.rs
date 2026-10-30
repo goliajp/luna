@@ -88,8 +88,7 @@ pub struct JitState {
     /// interpreter instead. `None` outside compiled code.
     pub pending_err: Option<LuaError>,
 
-    /// Reusable buffer for the trace JIT dispatcher's
-    /// per-entry `reg_state`.
+    /// The trace dispatcher's `reg_state`, kept between entries.
     pub reg_state_buf: Vec<i64>,
 
     /// Roots: values compiled code holds only in registers while it calls a
@@ -110,21 +109,20 @@ pub struct JitState {
     /// Companion buffer for `entry_tags` (one u8 per register at entry).
     pub entry_tags_buf: Vec<u8>,
 
-    /// Closure-compile backend the dispatcher
-    /// routes through. Default is [`crate::jit::NullJitBackend`];
-    /// `Vm::install_jit_backend` swaps in caller-supplied
-    /// backends (the `luna` crate installs `CraneliftBackend`).
+    /// The trace running now, for a collection step it runs in place.
+    pub(crate) step: crate::vm::exec::TraceStep,
+    /// Closure-compile backend the dispatcher routes through
+    /// (`Vm::install_jit_backend`; default [`crate::jit::NullJitBackend`]).
     pub chunk_compiler: Box<dyn crate::jit::IntChunkCompiler>,
 
     /// Trace-JIT backend.
     pub trace_compiler: Box<dyn crate::jit::TraceCompiler>,
 
     /// Downrec admits left before the dispatcher refuses one (a trace that
-    /// stitches back to itself could return the DOWNREC sentinel forever):
-    /// each admit takes one; at none the dispatcher force-deopts through
-    /// [`Self::suppress_downrec_admit_once`]. Reset to
-    /// [`JitState::STITCH_DEPTH_DEFAULT`] at each natural deopt and when
-    /// that flag fires.
+    /// stitches back to itself could return the DOWNREC sentinel forever)
+    /// and force-deopts through [`Self::suppress_downrec_admit_once`];
+    /// reset to [`JitState::STITCH_DEPTH_DEFAULT`] at each natural deopt
+    /// and when that flag fires.
     pub stitch_depth_remaining: u32,
 
     /// One-shot suppression flag for the dispatcher's trace admit. Set
@@ -417,6 +415,7 @@ impl JitState {
             entry_tags_buf: Vec::new(),
             ghosts: Vec::new(),
             ghost_depth: 0,
+            step: Default::default(),
             chunk_compiler: Box::new(crate::jit::NullJitBackend),
             trace_compiler: Box::new(crate::jit::NullJitBackend),
             stitch_depth_remaining: JitState::STITCH_DEPTH_DEFAULT,

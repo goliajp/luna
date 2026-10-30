@@ -77,6 +77,7 @@ impl Vm {
         let Some(obj) = self.heap.take_one_tobefnz() else {
             return Ok(());
         };
+        self.jit.step.disturbed = true;
         self.heap.trace_line(format_args!("f"));
         let in_hook = std::mem::replace(&mut self.in_hook, true);
         let finalizing = std::mem::replace(&mut self.gc_finalizing, true);

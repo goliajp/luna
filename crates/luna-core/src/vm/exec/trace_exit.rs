@@ -47,6 +47,7 @@ impl Vm {
         mut reg_state: Vec<i64>,
         entry_tags: Vec<u8>,
     ) {
+        let synced = std::mem::take(&mut self.jit.step.synced_exit);
         let head_pc_val = ct.head_pc;
         let per_exit_inline = &ct.per_exit_inline;
         let global_tag_res_kind = ct.global_tag_res_kind;
@@ -98,7 +99,8 @@ impl Vm {
         let mut side_trace_should_start = false;
         // an exit to check for a collection is no guard failing either: it
         // starts no side trace, which would run past the check
-        let tier_exit = !child_ran && is_tier_exit(ct, cont_pc) || self.jit.gc_exit.is_some();
+        let tier_exit =
+            !child_ran && is_tier_exit(ct, cont_pc) || self.jit.gc_exit.is_some() || synced;
         if let Some(c) = decode_hit_counts.get(exit_hit_idx).filter(|_| !tier_exit) {
             let v = c.get();
             if v < u32::MAX {
@@ -125,17 +127,21 @@ impl Vm {
                 side_trace_should_start = true;
             }
         }
-        self.trace_restore_slots(
-            base_us,
-            max_stack,
-            keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0),
-            using_global_exit_tags,
-            global_tag_res_kind,
-            exit_tags_for_pc,
-            &reg_state,
-            &entry_tags,
-            child_ran,
-        );
+        // after a step the trace made in place, the stack is the
+        // interpreter's already: a finalizer may have changed it since
+        if !synced {
+            self.trace_restore_slots(
+                base_us,
+                max_stack,
+                keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0),
+                using_global_exit_tags,
+                global_tag_res_kind,
+                exit_tags_for_pc,
+                &reg_state,
+                &entry_tags,
+                child_ran,
+            );
+        }
         // For non-inline exits the
         // helper was never called (no metas chain for
         // this cont_pc), so `frames.last()` is the

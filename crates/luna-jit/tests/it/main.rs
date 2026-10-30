@@ -112,6 +112,7 @@ mod trace_field_access_helpers;
 mod trace_float_mod_nan;
 mod trace_gc_barrier;
 mod trace_gc_ssa_roots;
+mod trace_gc_step_in_place;
 mod trace_generic_for_emit;
 mod trace_getupval_dispatch;
 mod trace_getupval_whitelist;

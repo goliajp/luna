@@ -78,6 +78,7 @@ impl Vm {
     /// top it had when the coroutine started; other threads' stacks are
     /// marked whole.
     pub(super) fn clear_dead_stack(&mut self) {
+        self.jit.step.disturbed = true;
         let lo = (self.gc_top as usize).min(self.stack.len());
         self.stack[lo..].fill(Value::Nil);
         self.clear_saved_main();

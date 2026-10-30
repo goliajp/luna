@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1799** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1800** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 250 | unit-test files under `src/` and the `tests/`, `benches/`, `examples/` trees |
 | **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; nine more in `luna_core::__private`, which is not public API, see §5 |
 | **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
@@ -57,14 +57,14 @@ quotes the pattern counts too.
 | | other | 1 | the CLI's `arg` table and the `lua_facade` table handle |
 | | unit-test files under `src/` | 66 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 54 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
-| `luna-jit-helpers` | | 183 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
+| `luna-jit-helpers` | | 184 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 8 | LLVM execution engines (one per compiled method or trace), `Send` for an engine compiled on the background compile thread, and the register-file GEPs |
 | | `tests/` | 34 | calling LLVM-compiled chunks |
 | `luna-runtime-helpers` | | 46 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor |
 | `luna-aot` | | 3 | the embedded bytecode section of an AOT binary |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1799** | |
+| **Total** | | **1800** | |
 
 ## 3. Pattern catalog
 
@@ -222,7 +222,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **1799**, with no headroom;
+  The ceiling is the exact count, **1800**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -523,6 +523,13 @@ sites), in place of a `luna_jit_spill_to_stack` call per operand and
 `vm/exec`). The root lists the helpers take are linked in place instead
 of copied, and the collector reads them where they are (1 in
 `gc/roots.rs`). 1799.
+
+A collection step that falls due in a trace runs where the trace is:
+`luna_jit_gc_due` takes the trace's register buffer as its exit there
+leaves it and reads the frame's registers from it to write them back
+before the step (1 in `luna-jit-helpers`). The trace's entry and exit
+copies read and write each register through one function each, so they
+stay at one site apiece. 1800.
 
 ## 5. Public `unsafe` surface
 
