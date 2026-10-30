@@ -23,8 +23,8 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
 /// Trace JIT helper for `Op::Concat`: `ops` holds the `n` operands as
 /// (tag, payload) words, a tag below 0 keeping the stack slot's own, and
 /// [`luna_core::__private::VmJitFrames::jit_concat_regs`] stores them from
-/// register `a` on and runs the concat. Returns the result's payload, the
-/// operands' payloads as the concat left them back in `ops`; `0` when the
+/// register `a` on and runs the concat. Returns the result's payload, and
+/// the payloads of the operands `reload` names back in `ops`; `0` when the
 /// interpreter must redo the op.
 ///
 /// The concat may collect in an emergency, so `roots` carries the
@@ -37,7 +37,13 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
 // SAFETY: no other item in the link is named `luna_jit_op_concat_regs`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_op_concat_regs(a: i64, n: i64, ops: i64, roots: i64) -> i64 {
+pub unsafe extern "C" fn luna_jit_op_concat_regs(
+    a: i64,
+    n: i64,
+    ops: i64,
+    reload: i64,
+    roots: i64,
+) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, `ops`
     // is `n` pairs of words and `roots` 0 or a root list (# Safety)
     let (vm, mark, ops) = unsafe {
@@ -46,7 +52,7 @@ pub unsafe extern "C" fn luna_jit_op_concat_regs(a: i64, n: i64, ops: i64, roots
         let ops = std::slice::from_raw_parts_mut(ops as *mut [i64; 2], n as usize);
         (vm, mark, ops)
     };
-    let r = vm.jit_concat_regs(a as u32, ops);
+    let r = vm.jit_concat_regs(a as u32, ops, reload as u64);
     vm.jit_mut().ssa_roots = mark;
     r
 }
