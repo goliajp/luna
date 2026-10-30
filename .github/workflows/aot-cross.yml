@@ -17,9 +17,8 @@ name: aot-cross
 #
 # Run conditions:
 # - Push to develop / master
-# - Manual workflow_dispatch
-# - Weekly cron (Mondays 06:00 UTC) — picks up cranelift / target
-#   spec drift without a code commit
+# - Manual workflow_dispatch (the pre-merge branch check dispatches it
+#   on the branch head)
 #
 # Non-blocking — failure here does not gate PR merge (the matrix
 # expands the cross-compile reach, but tier-1 targets in ci.yml are
@@ -32,8 +31,6 @@ on:
   pull_request:
     branches: [develop, master]
     paths-ignore: ['**/*.md', 'docs/**', 'web/**']
-  schedule:
-    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 # a newer push supersedes a running check; master and tag runs are release runs and always finish
@@ -224,7 +221,8 @@ jobs:
         run: |
           set -eu
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends wine lld-18 llvm-18 > /dev/null
+          # clang-cl is in clang-tools-18; the runner image is not relied on for any of them
+          sudo apt-get install -y --no-install-recommends wine clang-18 clang-tools-18 lld-18 llvm-18 > /dev/null
           # clang-cl, lld-link and llvm-lib carry no version suffix here
           echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
       - uses: actions/cache@v6

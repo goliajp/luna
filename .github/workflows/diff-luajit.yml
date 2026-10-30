@@ -1,20 +1,17 @@
-# Differential vs LuaJIT fuzz target nightly.
+# Differential vs LuaJIT fuzz target.
 #
 # Why mirror diff-puc.yml: LuaJIT is the de-facto Lua engine
 # in Redis-replica / kevy embedder ecosystems. luna currently
 # tunes for PUC 5.4/5.5 byte-parity; LuaJIT compat is best-
 # effort but undocumented. This job surfaces unintentional
-# divergences as nightly issues (NOT ship-blocking).
+# divergences as issues (NOT ship-blocking).
 #
-# 100 fuzz iterations green per nightly. Divergences open issues; flaky ones (single-
+# 100 fuzz iterations green per run. Divergences open issues; flaky ones (single-
 # fixture re-deflakes) tune grammar in fuzz_diff_luajit.
 
 name: diff-luajit
 
 on:
-  schedule:
-    # Nightly at 06:30 UTC — staggered after diff-puc's 06:00.
-    - cron: '30 6 * * *'
   workflow_dispatch:
 
 jobs:
@@ -27,10 +24,6 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v7
-        with:
-          # scheduled runs start on the default branch (master, the last
-          # release); test the code that is about to ship instead
-          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
 
       - uses: dtolnay/rust-toolchain@nightly
 
@@ -75,7 +68,7 @@ jobs:
         run: cargo install cargo-fuzz
 
       - name: cargo +nightly fuzz run fuzz_diff_luajit (100 iter)
-        # 100 fuzz iterations per nightly.
+        # 100 fuzz iterations per run.
         # `-runs=100` caps iteration count; `-max_total_time=300`
         # 5min wall-clock cap matches diff-puc.yml's timeout shape.
         # Failures panic with full source + both outputs for

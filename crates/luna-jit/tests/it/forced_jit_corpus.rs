@@ -33,7 +33,24 @@ const DIALECTS: &[(&str, LuaVersion)] = &[
 /// it.
 const HOT: &[u32] = &[1, 2, 5];
 
-fn fixtures(dialect: &str) -> Vec<PathBuf> {
+/// Fixtures whose loads take gigabytes (chunks of millions of
+/// statements, at the compiler's limits).
+const HUGE: &[&str] = &["1011_jump_limit_forward.lua"];
+
+static HUGE_LOADS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// For a fixture of [`HUGE`], the turn of the corpus run that goes through
+/// it: the corpus tests run side by side, and one at a time holds such a
+/// load.
+pub(super) fn huge_turn(f: &Path) -> Option<std::sync::MutexGuard<'static, ()>> {
+    HUGE.iter().any(|h| f.ends_with(h)).then(|| {
+        HUGE_LOADS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    })
+}
+
+pub(super) fn fixtures(dialect: &str) -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../luna-core/tests/diff_puc")
         .join(dialect);
@@ -129,10 +146,13 @@ fn corpus_runs_the_same_with_the_jit_engaged_early() {
         let mut compiled_chunks = 0usize;
         for f in &fixtures(dialect) {
             let source = std::fs::read(f).expect("read fixture");
+            let _turn = huge_turn(f);
             let mut interp_vm = luna_jit::new_with_jit(version);
             interp_vm.set_jit_enabled(false);
             interp_vm.set_trace_jit_enabled(false);
             let interp = masked(run(&mut interp_vm, &source));
+            // one Vm at a time holds what a fixture loaded
+            drop(interp_vm);
             for &hot in HOT {
                 let mut vm = luna_jit::new_with_jit(version);
                 vm.jit.trace_hot_threshold = hot;
