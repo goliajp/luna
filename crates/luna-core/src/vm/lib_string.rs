@@ -134,12 +134,9 @@ fn s_rep<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     {
         vm.buf_push(&mut out, sep.as_bytes())?;
     }
-    let mut filled = out.len();
-    out.resize(total, 0)?;
-    while filled < total {
-        let k = filled.min(total - filled);
-        out.copy_within(0..k, filled);
-        filled += k;
+    while out.len() < total {
+        let k = out.len().min(total - out.len());
+        out.extend_from_front(k)?;
     }
     let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);

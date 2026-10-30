@@ -21,6 +21,7 @@ mod resize;
 mod small;
 mod vec;
 mod vec_abort;
+mod vec_clone;
 
 pub use any::LAny;
 pub use boxed::{LBox, LSlice};
