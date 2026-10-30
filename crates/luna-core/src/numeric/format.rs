@@ -129,6 +129,8 @@ pub(crate) fn nan_spelling(f: f64) -> (bool, &'static str) {
     }
 }
 
+// out of line: an integer's text, the common case, stays short
+#[inline(never)]
 pub(super) fn float_to_string(f: f64, fmt: FloatFmt) -> String {
     if f.is_nan() {
         let (negative, body) = nan_spelling(f);

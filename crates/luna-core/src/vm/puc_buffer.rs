@@ -266,6 +266,12 @@ impl Vm {
         if out.len() <= Vm::lual_buffersize(self.version()) {
             return PucBuffer::finish_first::<PRE>(self, out).map(Value::Str);
         }
+        self.buffer_result_long::<PRE>(out)
+    }
+
+    /// [`Vm::buffer_result`] past the first block.
+    #[inline(never)]
+    fn buffer_result_long<const PRE: bool>(&mut self, out: &[u8]) -> Result<Value, LuaError> {
         self.lib_scope(|vm| {
             let mut b = match vm.heap.dialect() {
                 Dialect::L51 => PucBuffer::new(vm),
