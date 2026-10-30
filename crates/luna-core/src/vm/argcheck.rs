@@ -134,8 +134,21 @@ pub(crate) fn to_num(vm: &Vm, v: Value) -> Option<Num> {
     }
 }
 
-/// `luaL_checknumber`.
+/// `luaL_checknumber`. A number is read in the caller, so a hot library
+/// function's cost does not hang on whether the conversion and error path
+/// below gets inlined into it.
+#[inline(always)]
 pub(crate) fn check_number(vm: &mut Vm, a: Args, i: u32) -> Result<f64, LuaError> {
+    // an argument past the top reads as nil, never as a number
+    match a.get(vm, i) {
+        Value::Float(f) => Ok(f),
+        Value::Int(x) => Ok(x as f64),
+        _ => check_number_other(vm, a, i),
+    }
+}
+
+#[inline(never)]
+fn check_number_other(vm: &mut Vm, a: Args, i: u32) -> Result<f64, LuaError> {
     match to_num(vm, a.get(vm, i)) {
         Some(n) if !a.is_none(i) => Ok(n.as_f64()),
         _ => Err(type_error(vm, a, i, "number")),
