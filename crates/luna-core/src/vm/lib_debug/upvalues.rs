@@ -104,7 +104,7 @@ pub(super) fn d_setupvalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     match name {
         Some(name) => {
             let nm = super::push_name(vm, src, name.as_bytes())?;
-            vm.nat_ret(fs, &[nm])
+            vm.nat_ret1(fs, nm)
         }
         None => vm.nat_ret(fs, &[]),
     }
@@ -145,7 +145,7 @@ fn check_upval(
 pub(super) fn d_upvalueid(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let (_, _, id) = check_upval(vm, Args::new(fs, nargs), 0, 1, false)?;
     let r = id.map_or(Value::Nil, Value::LightUserdata);
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 pub(super) fn d_upvaluejoin(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

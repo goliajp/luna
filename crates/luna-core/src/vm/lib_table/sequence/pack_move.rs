@@ -24,7 +24,7 @@ pub(crate) fn t_pack<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Resul
     }
     let nk = vm.str_value(b"n")?;
     vm.lib_set_value(t, nk, Value::Int(nargs as i64))?;
-    vm.nat_ret(fs, &[Value::Table(t)])
+    vm.nat_ret1(fs, Value::Table(t))
 }
 
 pub(crate) fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -57,7 +57,7 @@ pub(crate) fn t_move(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
             }
         }
     }
-    vm.nat_ret(fs, &[a2])
+    vm.nat_ret1(fs, a2)
 }
 
 pub(crate) fn t_create<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -89,5 +89,5 @@ pub(crate) fn t_create<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Res
     // `table.create(N)`
     let t = vm.alloc_table_sized(n as usize, m as usize)?;
     vm.api_check_after::<PRE>(Value::Table(t))?;
-    vm.nat_ret(fs, &[Value::Table(t)])
+    vm.nat_ret1(fs, Value::Table(t))
 }

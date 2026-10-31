@@ -29,7 +29,7 @@ fn date<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let fmt = fmt.strip_prefix(b"!").unwrap_or(fmt);
     let Some(tm) = gmtime(t) else {
         return match v {
-            LuaVersion::Lua51 | LuaVersion::Lua52 => vm.nat_ret(fs, &[Value::Nil]),
+            LuaVersion::Lua51 | LuaVersion::Lua52 => vm.nat_ret1(fs, Value::Nil),
             LuaVersion::Lua53 => Err(raise_str(
                 vm,
                 "time result cannot be represented in this installation",
@@ -46,7 +46,7 @@ fn date<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         let table = vm.alloc_table_sized(0, 9)?;
         vm.api_check_after::<PRE>(Value::Table(table))?;
         setallfields(vm, table, &tm)?;
-        return vm.nat_ret(fs, &[Value::Table(table)]);
+        return vm.nat_ret1(fs, Value::Table(table));
     }
     let mut out = vm.new_buf();
     let mut b = crate::vm::puc_buffer::PucBuffer::new(vm);
@@ -99,7 +99,7 @@ fn date<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     }
     let r = b.finish::<PRE>(vm, &out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[Value::Str(r)])
+    vm.nat_ret1(fs, Value::Str(r))
 }
 
 /// How many bytes of `rest` (what follows a '%') form a conversion, or

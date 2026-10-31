@@ -48,7 +48,7 @@ pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32
         } else {
             Value::Nil
         };
-        return vm.nat_ret(fs, &[r]);
+        return vm.nat_ret1(fs, r);
     }
     let out: Vec<Value> = match opt {
         "collect" => {

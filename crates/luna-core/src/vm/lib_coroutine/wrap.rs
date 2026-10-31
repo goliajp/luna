@@ -119,5 +119,5 @@ pub(super) fn co_wrap<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Resu
     let in_wrap = vm.nat_upval(fs, 0);
     // PUC's function has the coroutine alone
     let f = vm.lib_native_puc::<PRE>(co_wrapped, &[Value::Coro(co), in_wrap], 1)?;
-    vm.nat_ret(fs, &[f])
+    vm.nat_ret1(fs, f)
 }

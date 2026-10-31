@@ -33,7 +33,7 @@ macro_rules! impl_into_lua_return_single {
                 #[inline]
                 fn into_lua_return(self, vm: &mut Vm, fs: u32) -> Result<u32, LuaError> {
                     let v = <$t as IntoValue>::into_value(self, vm);
-                    vm.nat_ret(fs, &[v])
+                    vm.nat_ret1(fs, v)
                 }
             }
         )+
@@ -59,7 +59,7 @@ impl IntoLuaReturn for &'static str {
     #[inline]
     fn into_lua_return(self, vm: &mut Vm, fs: u32) -> Result<u32, LuaError> {
         let v = self.into_value(vm);
-        vm.nat_ret(fs, &[v])
+        vm.nat_ret1(fs, v)
     }
 }
 

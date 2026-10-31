@@ -237,7 +237,7 @@ pub(super) fn f_tostring(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         format!("file ({})", crate::numeric::c_pointer(u.as_ptr() as usize))
     };
     let v = vm.api_push_string_dyn(s.as_bytes())?;
-    vm.nat_ret(fs, &[v])
+    vm.nat_ret1(fs, v)
 }
 
 pub(super) fn io_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -247,5 +247,5 @@ pub(super) fn io_type(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
         Some(u) if u.file().is_closed() => vm.api_push_string_dyn(b"closed file")?,
         Some(_) => vm.api_push_string_dyn(b"file")?,
     };
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }

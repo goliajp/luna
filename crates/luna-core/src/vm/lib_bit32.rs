@@ -80,7 +80,7 @@ fn int_arg(vm: &mut Vm, a: Args, i: u32) -> Result<i64, LuaError> {
 }
 
 fn push(vm: &mut Vm, fs: u32, r: u64) -> Result<u32, LuaError> {
-    vm.nat_ret(fs, &[Value::Int(r as i64)])
+    vm.nat_ret1(fs, Value::Int(r as i64))
 }
 
 fn andaux(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u64, LuaError> {
@@ -99,7 +99,7 @@ fn b_and(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 
 fn b_test(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let r = andaux(vm, fs, nargs)?;
-    vm.nat_ret(fs, &[Value::Bool(r != 0)])
+    vm.nat_ret1(fs, Value::Bool(r != 0))
 }
 
 fn fold(vm: &mut Vm, fs: u32, nargs: u32, op: fn(u64, u64) -> u64) -> Result<u32, LuaError> {

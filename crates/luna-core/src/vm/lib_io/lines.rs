@@ -42,7 +42,7 @@ pub(super) fn f_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     check_line_formats(vm, nargs.saturating_sub(1))?;
     let fmts: Vec<Value> = (1..nargs).map(|i| vm.nat_arg(fs, nargs, i)).collect();
     let it = make_lines(vm, u, false, &fmts)?;
-    vm.nat_ret(fs, &[it])
+    vm.nat_ret1(fs, it)
 }
 
 pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -77,7 +77,7 @@ pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     if toclose && vm.version() >= LuaVersion::Lua54 {
         return vm.nat_ret(fs, &[it, Value::Nil, Value::Nil, Value::Userdata(u)]);
     }
-    vm.nat_ret(fs, &[it])
+    vm.nat_ret1(fs, it)
 }
 
 /// `io_readline`: one step of a line iterator.

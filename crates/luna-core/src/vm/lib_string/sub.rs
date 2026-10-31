@@ -11,7 +11,7 @@ pub(super) fn s_sub<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result
     vm.api_check_before::<PRE>()?;
     let r = Value::Str(try_str_sub(vm, s, i, j)?);
     vm.api_check_after::<PRE>(r)?;
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 /// `string.sub(s, i, j)` past its argument checks, for compiled code of

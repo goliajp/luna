@@ -52,7 +52,7 @@ pub(crate) fn io_popen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
     // SAFETY: `u` was created by `opened` just above and is held only by this local; the borrow covers one field store
     unsafe { u.as_mut() }.popen_child = Some(child);
-    vm.nat_ret(fs, &[Value::Userdata(u)])
+    vm.nat_ret1(fs, Value::Userdata(u))
 }
 
 /// `prog` run by the shell, its stdout (`read`) or stdin piped: the child

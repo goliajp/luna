@@ -66,7 +66,7 @@ pub(super) fn ll_module(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     if v == LuaVersion::Lua51 {
         return vm.nat_ret(fs, &[]);
     }
-    vm.nat_ret(fs, &[mv])
+    vm.nat_ret1(fs, mv)
 }
 
 /// Make `env` (the module table) the environment of the Lua function that

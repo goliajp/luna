@@ -43,7 +43,7 @@ fn random_51(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
         _ => return Err(raise_str(vm, "wrong number of arguments")),
     };
-    vm.nat_ret(fs, &[Value::Float(v)])
+    vm.nat_ret1(fs, Value::Float(v))
 }
 
 /// 5.2: the bounds are plain numbers, so `random(3.5)` is valid.
@@ -70,7 +70,7 @@ fn random_52(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
         _ => return Err(raise_str(vm, "wrong number of arguments")),
     };
-    vm.nat_ret(fs, &[Value::Float(v)])
+    vm.nat_ret1(fs, Value::Float(v))
 }
 
 /// 5.3+: integer bounds; both emptiness checks blame argument 1.
@@ -80,14 +80,14 @@ fn random_53(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let (low, up) = match nargs {
         0 => {
             let r = rand_float(vm);
-            return vm.nat_ret(fs, &[Value::Float(r)]);
+            return vm.nat_ret1(fs, Value::Float(r));
         }
         1 => {
             let up = argcheck::check_integer(vm, a, 0)?;
             // 5.4: a single 0 asks for all 64 random bits.
             if up == 0 && !v53 {
                 let v = Value::Int(vm.rng_next() as i64);
-                return vm.nat_ret(fs, &[v]);
+                return vm.nat_ret1(fs, v);
             }
             (1, up)
         }
@@ -106,11 +106,11 @@ fn random_53(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             return Err(arg_error(vm, 1, "interval too large"));
         }
         let r = rand_float(vm) * ((up - low) as f64 + 1.0);
-        return vm.nat_ret(fs, &[Value::Int((r as i64).wrapping_add(low))]);
+        return vm.nat_ret1(fs, Value::Int((r as i64).wrapping_add(low)));
     }
     let n = (up as u64).wrapping_sub(low as u64);
     let p = project(vm, n);
-    vm.nat_ret(fs, &[Value::Int(p.wrapping_add(low as u64) as i64)])
+    vm.nat_ret1(fs, Value::Int(p.wrapping_add(low as u64) as i64))
 }
 
 /// PUC 5.4 `project`: mask the random value down to the smallest Mersenne

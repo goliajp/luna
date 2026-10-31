@@ -16,7 +16,7 @@ pub(super) fn os_getenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         }
         None => Value::Nil,
     };
-    vm.nat_ret(fs, &[v])
+    vm.nat_ret1(fs, v)
 }
 
 use lib_io::os_bytes;
@@ -56,7 +56,7 @@ pub(super) fn os_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         .to_vec();
     lib_io::reset_errno(vm);
     match remove_path(&name) {
-        Ok(()) => vm.nat_ret(fs, &[Value::Bool(true)]),
+        Ok(()) => vm.nat_ret1(fs, Value::Bool(true)),
         Err(e) => lib_io::file_fail(vm, fs, Some(&name), &e),
     }
 }
@@ -67,7 +67,7 @@ pub(super) fn os_rename(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let to = argcheck::check_string(vm, a, 1)?.as_bytes().to_vec();
     lib_io::reset_errno(vm);
     match rename_path(&from, &to) {
-        Ok(()) => vm.nat_ret(fs, &[Value::Bool(true)]),
+        Ok(()) => vm.nat_ret1(fs, Value::Bool(true)),
         // 5.1 names the source file in the message; 5.2+ name nothing
         Err(e) => {
             let fname = (vm.version() == LuaVersion::Lua51).then_some(from.as_slice());
@@ -114,7 +114,7 @@ pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
     };
     crate::cerrno::set(2);
     let s = vm.api_push_string_dyn(name.as_bytes())?;
-    vm.nat_ret(fs, &[s])
+    vm.nat_ret1(fs, s)
 }
 
 /// `os.tmpname`: POSIX builds use `mkstemp("/tmp/lua_XXXXXX")`, which
@@ -153,7 +153,7 @@ pub(super) fn os_tmpname(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
         {
             Ok(_) => {
                 let s = vm.str_value(os_bytes(path.as_os_str()).as_slice())?;
-                return vm.nat_ret(fs, &[s]);
+                return vm.nat_ret1(fs, s);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) => break,
@@ -171,9 +171,9 @@ pub(super) fn os_execute(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let Some(cmd) = cmd else {
         // system(NULL): whether a shell exists
         return if v == LuaVersion::Lua51 {
-            vm.nat_ret(fs, &[Value::Int(1)])
+            vm.nat_ret1(fs, Value::Int(1))
         } else {
-            vm.nat_ret(fs, &[Value::Bool(true)])
+            vm.nat_ret1(fs, Value::Bool(true))
         };
     };
     let status = lib_io::shell_command(&cmd).status();
@@ -183,7 +183,7 @@ pub(super) fn os_execute(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             Ok(s) => raw_wait_status(&s),
             Err(_) => -1,
         };
-        return vm.nat_ret(fs, &[Value::Int(raw as i64)]);
+        return vm.nat_ret1(fs, Value::Int(raw as i64));
     }
     lib_io::exec_result(vm, fs, status)
 }
@@ -207,13 +207,13 @@ pub(super) fn os_execute(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let v = vm.version();
     if cmd.is_none() {
         return if v == LuaVersion::Lua51 {
-            vm.nat_ret(fs, &[Value::Int(0)])
+            vm.nat_ret1(fs, Value::Int(0))
         } else {
-            vm.nat_ret(fs, &[Value::Bool(false)])
+            vm.nat_ret1(fs, Value::Bool(false))
         };
     }
     if v == LuaVersion::Lua51 {
-        return vm.nat_ret(fs, &[Value::Int(-1)]);
+        return vm.nat_ret1(fs, Value::Int(-1));
     }
     let kind = vm.str_value(b"exit")?;
     vm.nat_ret(fs, &[Value::Nil, kind, Value::Int(-1)])
@@ -268,7 +268,7 @@ pub(super) fn os_setlocale(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         match &resolved[..] {
             b"C" => vm.posix_locales &= !mask,
             b"POSIX" => vm.posix_locales |= mask,
-            _ => return vm.nat_ret(fs, &[Value::Nil]),
+            _ => return vm.nat_ret1(fs, Value::Nil),
         }
     }
     let posix = vm.posix_locales & mask;
@@ -282,7 +282,7 @@ pub(super) fn os_setlocale(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             .join("/"),
     };
     let r = vm.api_push_string_dyn(text.as_bytes())?;
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 /// The locale `setlocale(cat, "")` picks: LC_ALL, then the category's own

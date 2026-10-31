@@ -13,7 +13,7 @@ pub(super) fn nat_tostring<const PRE: bool>(
         && vm.metatable_of(v).is_none()
     {
         let s = int_text(vm, fs, i)?;
-        return vm.nat_ret(fs, &[s]);
+        return vm.nat_ret1(fs, s);
     }
     // PUC ≤5.2: `tostring(x)` returns whatever `__tostring` returns — even
     // non-string values like nil. 5.1 hands it back untouched; 5.2 goes
@@ -22,14 +22,14 @@ pub(super) fn nat_tostring<const PRE: bool>(
     if vm.version() <= LuaVersion::Lua52
         && let Some(out) = meta_text_52(vm, v)?
     {
-        return vm.nat_ret(fs, &[out]);
+        return vm.nat_ret1(fs, out);
     }
     let s = if vm.version() == LuaVersion::Lua51 {
         vm.tostring_51(v, fs, 0)?
     } else {
         vm.tolstring::<PRE>(v, 0)?
     };
-    vm.nat_ret(fs, &[Value::Str(s)])
+    vm.nat_ret1(fs, Value::Str(s))
 }
 
 /// `tostring` of the integer `i` (the argument at `fs`), with no

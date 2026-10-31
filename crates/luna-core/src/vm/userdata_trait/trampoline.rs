@@ -113,7 +113,7 @@ pub(super) fn index_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
     if let Value::Table(m) = methods_upval {
         let v = m.get(key);
         if !v.is_nil() {
-            return vm.nat_ret(fs, &[v]);
+            return vm.nat_ret1(fs, v);
         }
     }
     // 2. field getters — call getter(self,) and surface its result.
@@ -126,11 +126,11 @@ pub(super) fn index_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
             } else {
                 results.swap_remove(0)
             };
-            return vm.nat_ret(fs, &[r]);
+            return vm.nat_ret1(fs, r);
         }
     }
     // 3. nothing matched — return nil (matches PUC `__index` semantics).
-    vm.nat_ret(fs, &[Value::Nil])
+    vm.nat_ret1(fs, Value::Nil)
 }
 
 /// `__newindex` trampoline. Installed by

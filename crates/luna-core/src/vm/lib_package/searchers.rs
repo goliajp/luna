@@ -40,13 +40,13 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
         };
         let args = [crate::runtime::puc::fmt::FmtArg::S(c_str(name.as_bytes()))];
         let m = with_rules!(vm, P => vm.api_pushfstring::<P>(1, fmt, &args))?;
-        return vm.nat_ret(fs, &[Value::Str(m)]);
+        return vm.nat_ret1(fs, Value::Str(m));
     }
     if v >= LuaVersion::Lua54 {
         let data = vm.api_push_string_dyn(b":preload:")?;
         return vm.nat_ret(fs, &[loader, data]);
     }
-    vm.nat_ret(fs, &[loader])
+    vm.nat_ret1(fs, loader)
 }
 
 pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -56,7 +56,7 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     let pkg = upval_table(vm, fs, 0);
     let found = match find_file(vm, pkg, &name, "path")? {
         Ok(f) => f,
-        Err(msg) => return vm.nat_ret(fs, &[Value::Str(msg)]),
+        Err(msg) => return vm.nat_ret1(fs, Value::Str(msg)),
     };
     let file = found.file.clone();
     let fname = super::path::found_string(vm, &found)?;
@@ -72,7 +72,7 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             // which `checkload` pushes again from the found name's bytes
             if vm.version() == LuaVersion::Lua51 {
                 found.returned(vm, &[f])?;
-                return vm.nat_ret(fs, &[f]);
+                return vm.nat_ret1(fs, f);
             }
             let Value::Str(fstr) = fname else {
                 unreachable!("a string")
@@ -101,7 +101,7 @@ pub(super) fn searcher_c(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let pkg = upval_table(vm, fs, 0);
     match find_file(vm, pkg, &name, "cpath")? {
         Ok(f) => Err(load_error(vm, &name, &f.file, DLMSG)),
-        Err(msg) => vm.nat_ret(fs, &[Value::Str(msg)]),
+        Err(msg) => vm.nat_ret1(fs, Value::Str(msg)),
     }
 }
 
@@ -120,7 +120,7 @@ pub(super) fn searcher_croot(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lu
     let found = vm.rooted(&[root], |vm| find_file(vm, pkg, &name[..dot], "cpath"));
     match found? {
         Ok(f) => Err(load_error(vm, &name, &f.file, DLMSG)),
-        Err(msg) => vm.nat_ret(fs, &[Value::Str(msg)]),
+        Err(msg) => vm.nat_ret1(fs, Value::Str(msg)),
     }
 }
 

@@ -127,7 +127,7 @@ fn find_aux<const PRE: bool>(
         // 5.1 clamps a start past the end instead of failing
         (init - 1).clamp(0, ls as i64) as usize
     } else if init > ls as i64 + 1 {
-        return vm.nat_ret(fs, &[Value::Nil]);
+        return vm.nat_ret1(fs, Value::Nil);
     } else {
         (init.max(1) - 1) as usize
     };
@@ -140,7 +140,7 @@ fn find_aux<const PRE: bool>(
                 ];
                 vm.nat_ret(fs, &r)
             }
-            None => vm.nat_ret(fs, &[Value::Nil]),
+            None => vm.nat_ret1(fs, Value::Nil),
         };
     }
     let pat = pattern_bytes(v, pat);
@@ -158,7 +158,7 @@ fn find_aux<const PRE: bool>(
             return vm.nat_ret(fs, &out);
         }
         if anchor || s1 >= ls {
-            return vm.nat_ret(fs, &[Value::Nil]);
+            return vm.nat_ret1(fs, Value::Nil);
         }
         s1 += 1;
     }
@@ -241,5 +241,5 @@ pub(super) fn s_gmatch<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Res
     } else {
         vm.lib_native_puc::<PRE>(gmatch_iter::<PRE>, &ups, 3)?
     };
-    vm.nat_ret(fs, &[it])
+    vm.nat_ret1(fs, it)
 }

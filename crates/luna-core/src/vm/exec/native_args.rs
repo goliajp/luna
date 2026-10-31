@@ -91,6 +91,27 @@ impl Vm {
         Ok(vals.len() as u32)
     }
 
+    /// [`Vm::nat_ret`] of the one value `v`. Its growing path takes `v` by
+    /// value: one that takes the slice needs `v` in memory, and the store
+    /// into the result slot then reloads `v` whole from the two smaller
+    /// stores that just made it, which stalls on every call.
+    #[inline(always)]
+    pub(crate) fn nat_ret1(&mut self, func_slot: u32, v: Value) -> Result<u32, LuaError> {
+        match self.stack.get_mut(func_slot as usize) {
+            Some(slot) => {
+                *slot = v;
+                Ok(1)
+            }
+            None => self.nat_ret1_grow(func_slot, v),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn nat_ret1_grow(&mut self, func_slot: u32, v: Value) -> Result<u32, LuaError> {
+        self.nat_ret1(func_slot, v)
+    }
+
     /// The stack grown to `need` slots with `vals`, which the caller holds
     /// to put there, rooted meanwhile: growing may collect in an emergency.
     #[inline]

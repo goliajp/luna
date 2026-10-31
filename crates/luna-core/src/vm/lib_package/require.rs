@@ -194,7 +194,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             let fmt = b"loop or previous error loading module '%s'";
             return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
         }
-        return vm.nat_ret(fs, &[cur]);
+        return vm.nat_ret1(fs, cur);
     }
     if v >= LuaVersion::Lua52 {
         vm.native_pop(1);
@@ -230,7 +230,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     if v >= LuaVersion::Lua54 {
         return vm.nat_ret(fs, &[value, data]);
     }
-    vm.nat_ret(fs, &[value])
+    vm.nat_ret1(fs, value)
 }
 
 /// The loader returned `r`: its first value, when not nil, goes in

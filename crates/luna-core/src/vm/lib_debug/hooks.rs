@@ -122,7 +122,7 @@ pub(super) fn d_gethook(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
     let hook = match state.func {
         _ if armed && external => vm.api_push_string_dyn(b"external hook")?,
         Some(h) if armed => h,
-        _ if v >= LuaVersion::Lua54 => return vm.nat_ret(fs, &[Value::Nil]),
+        _ if v >= LuaVersion::Lua54 => return vm.nat_ret1(fs, Value::Nil),
         Some(h) if v <= LuaVersion::Lua52 => h,
         _ => Value::Nil,
     };
