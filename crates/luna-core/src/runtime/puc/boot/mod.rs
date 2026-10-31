@@ -3,7 +3,7 @@
 
 use super::*;
 
-pub(in crate::runtime) mod counts;
+mod counts;
 use crate::runtime::dialect::Dialect;
 
 impl Heap {
