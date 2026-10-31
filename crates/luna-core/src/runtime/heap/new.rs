@@ -186,11 +186,8 @@ impl Heap {
         globals: Gc<crate::runtime::Table>,
     ) -> Result<Gc<crate::runtime::Coro>, Oom> {
         let mem = self.mem();
-        let stack_size = self.puc_rules().basic_stack;
-        let (frame_size, ci_alloc) = (
-            self.puc_rules().new_frame_size,
-            self.puc_rules().new_ci_alloc,
-        );
+        let r = self.puc_rules();
+        let (stack_size, frame_size, ci_alloc) = (r.basic_stack, r.new_frame_size, r.new_ci_alloc);
         let coro = crate::runtime::Coro {
             hdr: GcHeader {
                 aux: self.take_id(),
