@@ -91,15 +91,15 @@ impl Vm {
         Ok(vals.len() as u32)
     }
 
-    /// [`Vm::nat_ret`] of the one value `v`. Its growing path takes `v` by
-    /// value: one that takes the slice needs `v` in memory, and the store
-    /// into the result slot then reloads `v` whole from the two smaller
-    /// stores that just made it, which stalls on every call.
+    /// [`Vm::nat_ret`] of the one value `v`. The growing path roots `v`,
+    /// so `v` sits in memory, written as a tag byte and a payload word; it
+    /// goes to the result slot in the same two pieces (`Value::copy_raw`),
+    /// since a whole-value copy would wait for those stores on every call.
     #[inline(always)]
     pub(crate) fn nat_ret1(&mut self, func_slot: u32, v: Value) -> Result<u32, LuaError> {
         match self.stack.get_mut(func_slot as usize) {
             Some(slot) => {
-                *slot = v;
+                Value::set_split(slot, &v);
                 Ok(1)
             }
             None => self.nat_ret1_grow(func_slot, v),
