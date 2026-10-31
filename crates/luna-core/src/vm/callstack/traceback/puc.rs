@@ -4,9 +4,9 @@
 //! to a `luaL_Buffer`. Naming a function by where the loaded modules hold
 //! it (`pushglobalfuncname`) joins the module's and the field's names.
 
-use super::Ar;
-use super::levels::tail_ar;
-use super::traceback::{TbLine, traceback_plan};
+use super::super::Ar;
+use super::super::levels::tail_ar;
+use super::{TbLine, traceback_plan};
 use crate::runtime::puc::api::FmtArg;
 use crate::runtime::{Coro, Gc, LuaStr, Value};
 use crate::version::LuaVersion;

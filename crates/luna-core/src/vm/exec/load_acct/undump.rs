@@ -4,6 +4,8 @@
 //! PUC's, or a record of one luna does not have.
 
 use super::*;
+
+mod probe;
 use crate::runtime::puc::api::FmtArg;
 use crate::vm::dump::{Arr, UEv};
 

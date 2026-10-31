@@ -6,6 +6,9 @@ use crate::runtime::heap::UNLISTED;
 use crate::runtime::mem::Oom;
 use crate::runtime::puc::records::GhostRef;
 
+#[cfg(feature = "gc-trace")]
+mod trace;
+
 /// Counting stopped once (luna builds objects PUC made elsewhere, or not
 /// at all), until [`Heap::counting_on`] takes the token back. Only
 /// [`Heap::counting_off`] makes one. A token dropped any other way is

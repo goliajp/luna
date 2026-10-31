@@ -4,8 +4,8 @@
 
 use std::alloc::Layout;
 
-use super::ctx::MemRef;
-use super::vec::LVec;
+use super::super::ctx::MemRef;
+use super::LVec;
 
 /// Growth that ends the process when the allocation fails, as the
 /// standard library's `Vec` does. For the places that cannot report a
@@ -115,5 +115,5 @@ impl<T: Clone> LVec<T> {
 #[cold]
 #[inline(never)]
 fn vec_oom<T>(n: usize) -> ! {
-    super::oom_abort(Layout::array::<T>(n).unwrap_or(Layout::new::<T>()))
+    super::super::oom_abort(Layout::array::<T>(n).unwrap_or(Layout::new::<T>()))
 }

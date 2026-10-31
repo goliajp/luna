@@ -7,6 +7,11 @@ use std::ptr::NonNull;
 
 use super::ctx::{BlockKind, MemRef, Oom};
 
+mod abort;
+mod clone;
+mod drain;
+pub use drain::Drain;
+
 /// A `Vec<T>` whose memory comes from a Vm's allocation context. Growing
 /// can fail ([`Oom`]); a failed growth leaves the vector as it was.
 pub struct LVec<T> {
@@ -316,40 +321,6 @@ impl<T> LVec<T> {
             self.ptr = p.cast();
             self.cap = self.len;
         }
-    }
-}
-
-/// The elements of an [`LVec`] being moved out ([`LVec::drain_all`]).
-pub struct Drain<'v, T> {
-    ptr: NonNull<T>,
-    next: usize,
-    end: usize,
-    _vec: PhantomData<&'v mut LVec<T>>,
-}
-
-impl<T> Iterator for Drain<'_, T> {
-    type Item = T;
-    fn next(&mut self) -> Option<T> {
-        if self.next == self.end {
-            return None;
-        }
-        // SAFETY: slots `next..end` hold elements the vector gave up (its
-        // length is 0) and this iterator reads each once
-        let v = unsafe { self.ptr.as_ptr().add(self.next).read() };
-        self.next += 1;
-        Some(v)
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.end - self.next;
-        (n, Some(n))
-    }
-}
-
-impl<T> ExactSizeIterator for Drain<'_, T> {}
-
-impl<T> Drop for Drain<'_, T> {
-    fn drop(&mut self) {
-        for _ in self.by_ref() {}
     }
 }
 
