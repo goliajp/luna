@@ -142,7 +142,8 @@ impl Heap {
     pub(in crate::runtime::puc) fn forget_born_unborn(&mut self) {
         let from = self.puc.loads.names_aside;
         for h in self.puc.loads.unborn.iter_mut().skip(from) {
-            if !still_aside(*h) {
+            // SAFETY: as in `unborn_objs`
+            if !h.is_null() && !unsafe { Heap::is_detached(*h) } {
                 *h = std::ptr::null_mut();
             }
         }
@@ -150,21 +151,11 @@ impl Heap {
 
     /// The objects still set aside: allocated, off the lists.
     pub(in crate::runtime::puc) fn unborn_objs(&self) -> impl Iterator<Item = *mut GcHeader> + '_ {
-        self.puc
-            .loads
-            .unborn
-            .iter()
-            .copied()
-            .filter(|&h| still_aside(h))
+        // SAFETY: an entry not forgotten (made null) is allocated: an object
+        // set aside is off the lists, which only a sweep frees from, and one
+        // that went on the list since is forgotten as the next sweep
+        // begins; only its link is read
+        let aside = |h: &*mut GcHeader| !h.is_null() && unsafe { Heap::is_detached(*h) };
+        self.puc.loads.unborn.iter().copied().filter(aside)
     }
-}
-
-/// Whether the entry `h` of the objects set aside is one still off the
-/// lists.
-fn still_aside(h: *mut GcHeader) -> bool {
-    // SAFETY: an entry not forgotten is allocated: an object set aside is
-    // off the lists, which only a sweep frees from, and one that went on
-    // the list since is forgotten as the next sweep begins; only its link
-    // is read
-    !h.is_null() && unsafe { Heap::is_detached(h) }
 }

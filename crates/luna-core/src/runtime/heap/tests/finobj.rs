@@ -14,11 +14,14 @@ fn at<T>(t: Gc<T>) -> usize {
     t.as_ptr() as usize
 }
 
-fn chain(mut cur: *mut GcHeader) -> Vec<usize> {
+/// The objects on `heap`'s `tobefnz` list, or else its `finobj` list.
+fn chain(heap: &Heap, tobefnz: bool) -> Vec<usize> {
     let mut out = Vec::new();
+    let mut cur = if tobefnz { heap.tobefnz } else { heap.finobj };
     while !cur.is_null() {
         out.push(cur as usize);
-        // SAFETY: the heap's lists link objects it allocated and has not freed
+        // SAFETY: the heap's lists link objects it allocated and has not
+        // freed, and the heap is borrowed for the walk
         cur = unsafe { (*cur).next };
     }
     out
@@ -59,7 +62,7 @@ fn an_object_given_a_finalizer_leaves_the_list_for_finobj() {
         "the rest in order"
     );
     let newer = finalizable(&mut heap);
-    assert_eq!(chain(heap.finobj), [at(newer), at(old)], "newest first");
+    assert_eq!(chain(&heap, false), [at(newer), at(old)], "newest first");
     assert_eq!(heap.finobj_count(), 2);
 }
 
@@ -106,8 +109,8 @@ fn the_unreachable_ones_go_to_tobefnz_in_the_order_of_finobj() {
     // a sweep to the first object kept has one to stop at
     let plain = heap.new_table();
     atomic_done(&mut heap, &[Value::Table(kept), Value::Table(plain)]);
-    assert_eq!(chain(heap.tobefnz), [at(b), at(a)]);
-    assert_eq!(chain(heap.finobj), [at(kept)]);
+    assert_eq!(chain(&heap, true), [at(b), at(a)]);
+    assert_eq!(chain(&heap, false), [at(kept)]);
     assert_eq!(heap.tobefnz_count(), 2);
 }
 
@@ -166,7 +169,7 @@ fn a_finalized_5_1_userdata_goes_back_after_the_main_thread() {
     let u = heap.new_userdata(UserdataPayload::Empty, false);
     heap.register_finalizable_userdata(u);
     atomic_done(&mut heap, &[Value::Table(g), Value::Coro(main)]);
-    assert_eq!(chain(heap.tobefnz), [at(u)], "off the list");
+    assert_eq!(chain(&heap, true), [at(u)], "off the list");
     while !heap.gc_sweep_step(usize::MAX) {}
     // a userdata made since goes after the main thread, in front of `u`
     let u2 = heap.new_userdata(UserdataPayload::Empty, false);
