@@ -58,17 +58,7 @@ impl Sorter {
             if up - lo == 1 {
                 return Ok(());
             }
-            let mut p = if up - lo < 100 || rnd == 0 {
-                (lo + up) / 2
-            } else {
-                let r4 = (up - lo) / 4;
-                let r = if vm.version() == V::Lua53 {
-                    rnd
-                } else {
-                    rnd ^ lo ^ up
-                };
-                r % (r4 * 2) + (lo + r4)
-            };
+            let mut p = choose_pivot(vm.version(), lo, up, rnd);
             self.geti(vm, p.into())?;
             self.geti(vm, lo.into())?;
             if self.lt(vm, 2, 1)? {
@@ -115,4 +105,15 @@ fn randomize_pivot() -> u32 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.subsec_nanos() ^ d.as_secs() as u32)
+}
+
+/// PUC `choosePivot`: the middle of `lo..=up`, or for a long range one
+/// picked by `rnd` from its middle half (5.4 on mixing in the bounds).
+fn choose_pivot(v: V, lo: u32, up: u32, rnd: u32) -> u32 {
+    if up - lo < 100 || rnd == 0 {
+        return (lo + up) / 2;
+    }
+    let r4 = (up - lo) / 4;
+    let r = if v == V::Lua53 { rnd } else { rnd ^ lo ^ up };
+    r % (r4 * 2) + (lo + r4)
 }
