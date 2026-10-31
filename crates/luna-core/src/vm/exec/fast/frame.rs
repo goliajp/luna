@@ -33,7 +33,7 @@ pub(super) enum Flow {
     /// the frame `fr` now names, from its pc
     Frames,
     /// after a return (`returned!`)
-    Returned(super::call_fast::Returned),
+    Returned(super::call::fast::Returned),
     /// back to the loop head
     Exit(FastExit),
 }

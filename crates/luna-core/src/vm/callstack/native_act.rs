@@ -62,7 +62,7 @@ impl NativeAct {
     /// `lua_checkstack` grants it. A protected call's catch and the
     /// collector shrink the stack to what the frames reserve.
     pub(crate) fn ci_top(&self) -> u32 {
-        let min = self.func_slot + 1 + self.nargs + crate::vm::exec::stack_size::MIN_STACK;
+        let min = self.func_slot + 1 + self.nargs + crate::vm::exec::stack::size::MIN_STACK;
         min.max(self.ci_top_raised)
     }
 

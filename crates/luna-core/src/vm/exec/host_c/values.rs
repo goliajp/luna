@@ -159,7 +159,9 @@ impl Vm {
 
     fn host_unm(&mut self, v: Value) -> Result<Value, LuaError> {
         match self.unary_operand(v) {
-            Some(Num::Int(i)) if self.version <= LuaVersion::Lua52 => Ok(super::num_double::neg(i)),
+            Some(Num::Int(i)) if self.version <= LuaVersion::Lua52 => {
+                Ok(super::num::double::neg(i))
+            }
             Some(Num::Int(i)) => Ok(Value::Int(i.wrapping_neg())),
             Some(Num::Float(f)) => Ok(Value::Float(-f)),
             None => {

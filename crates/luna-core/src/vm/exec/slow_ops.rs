@@ -121,7 +121,7 @@ impl Vm {
         if matches!(inst.op(), Op::Return0 | Op::Return1)
             && !matches!(
                 self.return_fast::<true>(base, abs_a, nret, entry_depth, inst.k()),
-                call_fast::Returned::No
+                call::fast::Returned::No
             )
         {
             // done: the caller's frame is on top

@@ -1,6 +1,6 @@
 //! Queuing and running `__gc` finalizers, and the incremental step.
 
-use super::stack_size::{self, Grown};
+use super::stack::size::{self as stack_size, Grown};
 use super::*;
 use crate::runtime::puc::api::PucCollector;
 

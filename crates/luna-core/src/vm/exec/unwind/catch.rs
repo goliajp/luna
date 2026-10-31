@@ -113,7 +113,7 @@ impl Vm {
         // use reserve, the protected call's own among them; that closes the
         // room an overflow opened once they fit under the limit again
         let inuse = self.stack_in_use().max(nc.kind.ci_top() + 2);
-        self.shrink_running(super::stack_inuse::Shrink::Caught, inuse);
+        self.shrink_running(crate::vm::exec::stack::inuse::Shrink::Caught, inuse);
         // Clear slots vacated by the popped
         // frames the unwind walked over. finish_results
         // above clears `[nc.func_slot + nresults ..

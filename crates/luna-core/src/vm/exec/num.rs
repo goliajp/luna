@@ -150,7 +150,7 @@ pub(crate) fn arith_num(
     if version <= LuaVersion::Lua52
         && let (Num::Int(a), Num::Int(b)) = (ln, rn)
     {
-        use super::num_double as d;
+        use super::num::double as d;
         match op {
             Add => return Ok(d::add(a, b)),
             Sub => return Ok(d::sub(a, b)),
@@ -226,7 +226,7 @@ pub(super) fn int_mod(a: i64, b: i64) -> i64 {
 #[cfg_attr(luna_hot, inline(always))]
 pub(super) fn int_mod_or_zero_div(a: i64, b: i64) -> Option<i64> {
     if (b as u64).wrapping_add(1) <= 1 {
-        super::fast_arith::cold_path();
+        crate::vm::exec::fast::arith_ops::cold_path();
         return (b != 0).then_some(0);
     }
     let m = a % b;
@@ -291,3 +291,5 @@ pub(super) fn shift_left(a: i64, b: i64) -> i64 {
         ((a as u64) << (b as u32)) as i64
     }
 }
+pub(in crate::vm::exec) mod double;
+pub(in crate::vm::exec) mod words;

@@ -274,3 +274,4 @@ impl Vm {
         self.heap.gc_due()
     }
 }
+pub(in crate::vm::exec) mod consts;

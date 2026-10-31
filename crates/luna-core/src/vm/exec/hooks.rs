@@ -192,7 +192,7 @@ impl Vm {
         let top = self
             .native_top()
             .unwrap_or_else(|| self.lua_window_end().max(self.top));
-        self.check_lua_stack(top, super::stack_size::MIN_STACK, false)?;
+        self.check_lua_stack(top, super::stack::size::MIN_STACK, false)?;
         let (saved_top, saved_len) = (self.top, self.stack.len());
         // `hookf` pushes the event's name; a call hook's function is past its first op
         let call = matches!(event, b"call" | b"tail call");
@@ -352,3 +352,4 @@ impl Vm {
 /// The resume point of a coroutine a hook suspended: no call waits for the
 /// resume's values.
 pub(crate) const HOOK_YIELD_SLOT: u32 = u32::MAX;
+pub(in crate::vm::exec) mod run;

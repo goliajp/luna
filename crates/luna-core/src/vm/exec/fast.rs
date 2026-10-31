@@ -3,23 +3,23 @@
 //! that its register allocation does not depend on the rest of the loop.
 
 use super::*;
-use super::{for_loop::int_for_count, num_double as dbl};
+use super::{for_loop::int_for_count, num::double as dbl};
 use crate::runtime::value::tag;
-use call_fast::Returned;
 #[cfg(all(any(target_arch = "x86_64", target_arch = "x86"), not(miri)))]
-use fast_arith::raw_tag_again;
-use fast_arith::{
+use arith_ops::raw_tag_again;
+use arith_ops::{
     arith_arm, arith_imm_arm, cold_path, is_num_tag, put_flt, put_int, raw_flt, raw_gc, raw_int,
     raw_num, raw_tag, raw_truthy, reg_a,
 };
-use num_words::put_words;
+use call::fast::Returned;
+use num::words::put_words;
 #[cfg(all(target_arch = "aarch64", not(miri)))]
-use num_words::{first, raw_tag_words3, raw_words3};
+use num::words::{first, raw_tag_words3, raw_words3};
 #[cfg(all(
     any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"),
     not(miri)
 ))]
-use num_words::{raw_word, tag_word};
+use num::words::{raw_word, tag_word};
 
 #[cfg(not(luna_hot))]
 mod arm_fns;
@@ -77,7 +77,7 @@ impl Vm {
     /// tests nothing per instruction. Without `WATCH`, `TRACE` is
     /// `fx.trace_on`, fixed for the loop so that it costs nothing. `DBL`
     /// is true for 5.1/5.2, whose integers stand for doubles (see
-    /// [`super::num_double`]); `PRE53` for 5.1-5.3, whose numeric `for`
+    /// [`super::num::double`]); `PRE53` for 5.1-5.3, whose numeric `for`
     /// steps before it tests and compares with the limit.
     #[inline(never)]
     // the step and flow macros serve the arms' functions too
@@ -167,3 +167,4 @@ impl Vm {
         }
     }
 }
+pub(in crate::vm::exec) mod arith_ops;

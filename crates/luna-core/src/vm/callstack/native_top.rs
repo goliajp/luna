@@ -257,7 +257,7 @@ impl Vm {
         parts: &[Option<u32>],
         positioned: u32,
     ) -> Option<LuaError> {
-        use crate::vm::exec::stack_size::{self, Grown};
+        use crate::vm::exec::stack::size::{self as stack_size, Grown};
         for part in parts {
             for (off, n) in part.map_or_else(Vec::new, |c| pushvfstring_checks(self.version(), c)) {
                 let grew = top + off + 1 + n >= stack_size::last(self.version(), self.stack_size);

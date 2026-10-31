@@ -17,7 +17,7 @@ pub(crate) fn check_stack(vm: &mut Vm, a: Args, n: i64, msg: &str) -> Result<(),
 pub(crate) fn check_stack_at(vm: &mut Vm, top: u32, n: i64, msg: &str) -> Result<(), LuaError> {
     // 5.2 asks for `LUA_MINSTACK` more, room to run error routines in
     let n = if vm.version() == LuaVersion::Lua52 {
-        n + i64::from(crate::vm::exec::stack_size::MIN_STACK)
+        n + i64::from(crate::vm::exec::stack::size::MIN_STACK)
     } else {
         n
     };
