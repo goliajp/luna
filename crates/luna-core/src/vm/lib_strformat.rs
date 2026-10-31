@@ -142,9 +142,7 @@ fn format<const PRE: bool>(
         }
         arg += 1;
         if arg >= nargs {
-            let buf = vm.buffer_slot(out.len());
-            vm.native_push(buf);
-            return Err(arg_error(vm, arg + 1, "no value"));
+            return Err(no_value(vm, out.len(), arg));
         }
         // 5.4 on ask for more for a `%f` once its specification is read
         // (an over-long one is refused first, by the item)
@@ -162,11 +160,7 @@ fn format<const PRE: bool>(
         };
         i = match item {
             Ok(i) => i,
-            Err(e) => {
-                let buf = vm.buffer_slot(out.len());
-                vm.native_push(buf);
-                return Err(e);
-            }
+            Err(e) => return Err(item_failed(vm, out.len(), e)),
         };
         tell!(out.len(), before, |b| {
             let k = out.len() - before;
@@ -188,6 +182,26 @@ fn format<const PRE: bool>(
     };
     vm.recycle_buf(out);
     vm.nat_ret1(fs, Value::Str(s))
+}
+
+/// Argument `arg` missing: the buffer's slot, `n` bytes so far, goes on
+/// the stack before the error, as PUC's is there.
+#[cold]
+#[inline(never)]
+fn no_value(vm: &mut Vm, n: usize, arg: u32) -> LuaError {
+    let buf = vm.buffer_slot(n);
+    vm.native_push(buf);
+    arg_error(vm, arg + 1, "no value")
+}
+
+/// An item raised `e`: the buffer's slot, `n` bytes so far, goes on the
+/// stack first, as PUC's is there.
+#[cold]
+#[inline(never)]
+fn item_failed(vm: &mut Vm, n: usize, e: LuaError) -> LuaError {
+    let buf = vm.buffer_slot(n);
+    vm.native_push(buf);
+    e
 }
 
 /// The result of a format that outgrew the buffer's first block: out of

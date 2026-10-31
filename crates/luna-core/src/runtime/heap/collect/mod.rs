@@ -170,7 +170,7 @@ impl Heap {
                 unsafe {
                     let h = s.as_ptr() as *mut GcHeader;
                     // strings are leaves: skip gray and go straight to black
-                    (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | BLACK);
+                    (*h).paint(BLACK);
                 }
             }
         };

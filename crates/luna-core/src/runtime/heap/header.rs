@@ -100,6 +100,22 @@ impl GcHeader {
         self.flags = self.with_slow((self.flags & !COLOR_BITS) | colour);
     }
 
+    /// White `white` from the flag and class bytes `f` and `cls` just
+    /// read, SLOW only for a read-only table, as [`GcHeader::with_slow`]
+    /// makes it: from the class byte's copy of the mark, without a branch,
+    /// for the sweeps' loops.
+    #[inline(always)]
+    pub(in crate::runtime) fn whiten_from(&mut self, (f, cls): (u8, u8), white: u8) {
+        self.flags = (f & !(COLOR_BITS | SLOW)) | white | ((cls & RO_CLS) << 1);
+    }
+
+    /// Black from the white flag byte `f` just read: BLACK always reads
+    /// through the slow path ([`GcHeader::with_slow`]).
+    #[inline(always)]
+    pub(in crate::runtime) fn blacken_from(&mut self, f: u8) {
+        self.flags = (f & !WHITE_BITS) | BLACK | SLOW;
+    }
+
     /// The whole flag byte replaced by `f` (a record made, a colour put
     /// back).
     #[inline(always)]

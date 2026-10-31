@@ -89,7 +89,7 @@ impl Heap {
             p.write(obj);
             let h = p as *mut GcHeader;
             (*h).cls |= SLAB;
-            (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+            (*h).paint(GRAY);
             (*h).next = self.fixed;
             self.fixed = h;
             self.live += 1;
@@ -192,7 +192,7 @@ impl Heap {
             let h = p as *mut GcHeader;
             (*h).cls |= SLAB;
             if fix {
-                (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+                (*h).paint(GRAY);
                 (*h).next = self.fixed;
                 self.fixed = h;
                 self.live += 1;

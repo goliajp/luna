@@ -38,7 +38,7 @@ impl Heap {
                     self.free_obj(cur);
                     freed += 1;
                 } else {
-                    (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
+                    (*cur).set_flags((f & !COLOR_BITS) | new_white);
                     link = ptr::addr_of_mut!((*cur).next);
                     self.puc_sweep_kept(cur);
                 }
@@ -133,7 +133,7 @@ impl Heap {
                         self.live -= 1;
                     }
                     Fate::Keep => {
-                        (*cur).flags = (*cur).with_slow((f & !COLOR_BITS) | new_white);
+                        (*cur).set_flags((f & !COLOR_BITS) | new_white);
                         self.sweep_prev = cur;
                         self.puc_sweep_kept(cur);
                         if to_live && listed {
@@ -218,7 +218,7 @@ impl Heap {
                     self.live -= 1;
                 } else {
                     // white, so SLOW only for a read-only table (`with_slow`)
-                    (*cur).flags = (f & !(COLOR_BITS | SLOW)) | new_white | ((cls & RO_CLS) << 1);
+                    (*cur).whiten_from((f, cls), new_white);
                     self.sweep_prev = cur;
                     n += self.puc_sweep_kept(cur);
                 }

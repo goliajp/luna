@@ -22,22 +22,20 @@ impl Heap {
     /// `tobefnz`); once its finalizer was taken, from 5.3 on, again
     /// (reference manual §2.5.3), 5.2 never.
     pub(crate) fn register_finalizable(&mut self, t: Gc<Table>) {
-        self.get_finalizer(t.as_ptr() as *mut GcHeader);
+        self.get_finalizer(t.hdr());
     }
 
     /// [`Heap::register_finalizable`] for a userdata (5.1: every userdata
     /// that gets a metatable, whose `__gc` the atomic step looks for).
     pub(crate) fn register_finalizable_userdata(&mut self, u: Gc<crate::runtime::Userdata>) {
-        self.get_finalizer(u.as_ptr() as *mut GcHeader);
+        self.get_finalizer(u.hdr());
     }
 
-    fn get_finalizer(&mut self, h: *mut GcHeader) {
-        // SAFETY: `h` heads a table or userdata the caller holds, so it is
-        // allocated and on `all`
-        unsafe {
-            if self.may_register((*h).flags) {
-                self.move_to_finobj(h);
-            }
+    fn get_finalizer(&mut self, h: Gc<GcHeader>) {
+        if self.may_register(h.flags) {
+            // SAFETY: a handle's object is allocated, and a table or
+            // userdata is on `all`
+            unsafe { self.move_to_finobj(h.as_ptr()) };
         }
     }
 

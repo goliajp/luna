@@ -79,7 +79,7 @@ pub(super) fn drain_marker(m: &mut Marker) {
 pub(super) unsafe fn blacken(h: *mut GcHeader, m: &mut Marker) {
     // SAFETY: the caller's contract
     unsafe {
-        (*h).flags = (*h).with_slow(((*h).flags & !WHITE_BITS) | BLACK);
+        (*h).set_flags(((*h).flags & !WHITE_BITS) | BLACK);
         trace_children(h, m);
     }
 }
@@ -218,7 +218,7 @@ impl Marker {
             if is_white(f) {
                 if !self.quiet_mode {
                     if self.puc_luna_only(h) {
-                        (*h).flags = (*h).with_slow(f & !WHITE_BITS);
+                        (*h).set_flags(f & !WHITE_BITS);
                         self.quiet.push(h);
                         return true;
                     }
@@ -233,19 +233,19 @@ impl Marker {
                 // (its bytes went to its parent's above): black at once,
                 // as PUC's `reallymarkobject` makes it
                 if f & self.leaf_black != 0 || (*h).tag == ObjTag::Str {
-                    (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
+                    (*h).set_flags((f & !WHITE_BITS) | BLACK);
                     model::object_marked(&mut *h);
                 } else if self.at_once(h) {
                     // an upvalue, and a userdata up to 5.3, are never gray:
                     // what they hold is marked as they are
-                    (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
+                    (*h).set_flags((f & !WHITE_BITS) | BLACK);
                     if (*h).tag == ObjTag::Userdata {
                         self.userdata_at_once(h);
                     } else {
                         trace_children(h, self);
                     }
                 } else {
-                    (*h).flags = (*h).with_slow(f & !WHITE_BITS);
+                    (*h).set_flags(f & !WHITE_BITS);
                     self.push_gray(h);
                 }
                 true

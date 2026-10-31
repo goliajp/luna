@@ -70,7 +70,7 @@ impl Marker {
                 if let Some(s) = &mut self.sizer {
                     s.marked += s.size(n);
                 }
-                (*n).flags = (*n).with_slow((f & !WHITE_BITS) | BLACK);
+                (*n).set_flags((f & !WHITE_BITS) | BLACK);
                 h = n;
             }
         }
@@ -96,7 +96,7 @@ impl Marker {
                     if let Some(z) = &mut self.sizer {
                         z.marked += z.size(h);
                     }
-                    (*h).flags = (f & !WHITE_BITS) | BLACK | SLOW;
+                    (*h).blacken_from(f);
                     model::string_held(&mut *h);
                 }
             }
@@ -158,7 +158,7 @@ impl Marker {
                     if !is_white(f) {
                         continue;
                     }
-                    (*h).flags = (*h).with_slow(f & !WHITE_BITS);
+                    (*h).set_flags(f & !WHITE_BITS);
                 }
                 blacken(h, self);
             }

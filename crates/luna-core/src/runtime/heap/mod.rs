@@ -54,6 +54,8 @@ const _: () = assert!(std::mem::size_of::<LuaStr>() == 32);
 pub(in crate::runtime) const WHITE0: u8 = 1;
 pub(in crate::runtime) const WHITE1: u8 = 2;
 pub(in crate::runtime) const BLACK: u8 = 4;
+/// no colour bit: gray, neither white nor black
+pub(in crate::runtime) const GRAY: u8 = 0;
 pub(in crate::runtime) const WHITE_BITS: u8 = WHITE0 | WHITE1;
 pub(in crate::runtime) const COLOR_BITS: u8 = WHITE_BITS | BLACK;
 
@@ -84,8 +86,8 @@ pub(crate) fn header_is_marked<T: GcObject>(g: Gc<T>) -> bool {
 mod header;
 pub use header::ObjTag;
 pub(crate) use header::{
-    AUX_OFFSET, EXTERNAL, LUNA_ONLY, READONLY_AUX, RO_CLS, SLAB, SLOW, STANDS, SUB_OFFSET,
-    UNCOUNTED, UNLISTED,
+    AUX_OFFSET, EXTERNAL, LUNA_ONLY, READONLY_AUX, SLAB, SLOW, STANDS, SUB_OFFSET, UNCOUNTED,
+    UNLISTED,
 };
 
 mod gc_ptr;
