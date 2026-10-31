@@ -198,7 +198,7 @@ impl Heap {
 }
 
 /// Mark the object of `g` as one the parser is building, or no more.
-pub(crate) fn set_parsing<T: GcObject>(g: Gc<T>, on: bool) {
+pub(in crate::runtime::puc) fn set_parsing<T: GcObject>(g: Gc<T>, on: bool) {
     let h = g.header();
     // SAFETY: a handle's object is allocated; only its class byte is written
     unsafe {
