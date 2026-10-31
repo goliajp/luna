@@ -22,6 +22,9 @@ pub(in crate::runtime::puc) struct Loads {
     /// what loads' readers counted that is set aside and not counted back
     /// yet (`Heap::reader_call_begins`)
     pub(in crate::runtime::puc::api) set_aside: isize,
+    /// loads set objects aside now (`records::parse::unborn`); here, with
+    /// the other flags, rather than in `Unborn`, where it would take a word
+    pub(in crate::runtime::puc) unborn_on: bool,
 }
 
 impl Loads {
@@ -34,6 +37,7 @@ impl Loads {
             load_holds: false,
             parse: Vec::new(),
             set_aside: 0,
+            unborn_on: false,
         }
     }
 }
