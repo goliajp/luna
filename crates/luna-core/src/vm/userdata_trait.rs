@@ -52,7 +52,7 @@ mod builder;
 mod trampoline;
 pub use builder::MetatableBuilder;
 
-pub use crate::runtime::userdata::UserdataMarker;
+pub use crate::runtime::userdata::marker::UserdataMarker;
 
 // ─────────────────────────────────────────────────────────────────────
 // MetaMethod — public-facing metamethod tag
