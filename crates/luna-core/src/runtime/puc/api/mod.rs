@@ -22,8 +22,8 @@ mod parse;
 mod step;
 mod text;
 
-pub(in crate::runtime::puc) use count::Count;
-pub(crate) use count::{CountingMark, CountingOff, GC_LIMIT_OFFSET};
+pub(crate) use super::count::GC_LIMIT_OFFSET;
+pub(crate) use count::{CountingMark, CountingOff};
 pub(crate) use defer::Deferred;
 use load_session::unpaired;
 pub(in crate::runtime::puc) use loads::Loads;

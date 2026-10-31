@@ -5,7 +5,7 @@ use super::*;
 /// PUC's structures luna has no object for, as far as the count goes.
 pub(in crate::runtime) struct PucModel {
     /// PUC's `totalbytes` and when the next step is due
-    pub(super) count: super::api::Count,
+    pub(super) count: super::count::Count,
     /// the dialect PUC's sizes, pace and steps are those of
     pub(super) dialect: crate::runtime::dialect::Dialect,
     /// `collectgarbage("stop")`: no step runs on its own while true
@@ -40,7 +40,7 @@ impl Default for PucModel {
         let d = crate::runtime::dialect::Dialect::L55;
         // nothing is counted until the dialect is known (`acct_boot`)
         PucModel {
-            count: super::api::Count::new(),
+            count: super::count::Count::new(),
             dialect: d,
             stopped: false,
             fin_stop: false,
