@@ -25,10 +25,21 @@ impl Vm {
     pub(crate) fn api_check_after<const PRE: bool>(&mut self, v: Value) -> Result<(), LuaError> {
         self.assert_rules::<PRE>();
         if !PRE && !self.checkpoint_idle() {
-            let r = self.rooted(&[v], |vm| vm.native_checkpoint_due());
-            return r;
+            return self.api_check_due(v);
         }
         Ok(())
+    }
+
+    /// [`Vm::api_check_after`] once a check is due. Out of line and taking
+    /// `v` by value: rooting it puts it in memory, and done in the caller
+    /// that copy would be what the caller then reads `v` back from, a load
+    /// spanning the two smaller stores that just made it, which stalls on
+    /// every call.
+    #[cold]
+    #[inline(never)]
+    #[track_caller]
+    fn api_check_due(&mut self, v: Value) -> Result<(), LuaError> {
+        self.rooted(&[v], |vm| vm.native_checkpoint_due())
     }
 
     /// 5.3 on: the check after an API call pushed `v` on the running C
@@ -42,6 +53,15 @@ impl Vm {
         if self.checkpoint_idle() {
             return Ok(());
         }
+        self.api_check_pushed_due(v)
+    }
+
+    /// [`Vm::api_check_pushed`] once a check is due, out of line as
+    /// [`Vm::api_check_due`] is.
+    #[cold]
+    #[inline(never)]
+    #[track_caller]
+    fn api_check_pushed_due(&mut self, v: Value) -> Result<(), LuaError> {
         self.native_push_vals(&[v])?;
         let r = self.native_checkpoint_due();
         self.native_pop(1);
