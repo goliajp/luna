@@ -154,12 +154,7 @@ impl<'a> Level<'a> {
         heap: &Heap,
     ) -> Proto {
         crate::runtime::function_close::mark_closing_returns(&mut self.code, &self.protos);
-        let env_upval_idx = self
-            .upvals
-            .iter()
-            .take(u8::MAX as usize)
-            .position(|u| &*u.name == "_ENV")
-            .map_or(u8::MAX, |i| i as u8);
+        let env_upval_idx = crate::runtime::debug_info::env_upval_index(&self.upvals);
         let proto = Proto {
             hdr: GcHeader::new(ObjTag::Proto),
             code: heap.block_of(self.code.drain_all()),

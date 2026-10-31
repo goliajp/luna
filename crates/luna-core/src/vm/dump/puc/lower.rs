@@ -107,12 +107,7 @@ pub(super) fn build(
         protos.push(build(heap, child, translate)?);
     }
     crate::runtime::function_close::mark_closing_returns(&mut lowered.code, &protos);
-    let env_upval_idx = raw
-        .upvals
-        .iter()
-        .take(u8::MAX as usize)
-        .position(|u| &*u.name == "_ENV")
-        .map_or(u8::MAX, |i| i as u8);
+    let env_upval_idx = crate::runtime::debug_info::env_upval_index(&raw.upvals);
     Ok(heap.try_adopt_proto(Proto {
         hdr: GcHeader::new(ObjTag::Proto),
         code: heap.try_block_of(lowered.code.into_iter())?,

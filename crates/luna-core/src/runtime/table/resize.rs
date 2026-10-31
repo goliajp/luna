@@ -169,25 +169,7 @@ impl Table {
                     old_asize,
                 );
             }
-            // growing appends nil slots, so the count stays; the prefix
-            // may lag behind the run (a refill scans only 64 slots ahead,
-            // a method-JIT store extends it by one) and catches up here
-            if self.aprefix == APREFIX_UNKNOWN {
-                self.recount_array();
-            } else {
-                let atags = self.atags();
-                let mut p = self.aprefix as usize;
-                while p < old_asize && atags[p] != raw::NIL {
-                    p += 1;
-                }
-                self.aprefix = p as u32;
-            }
-            #[cfg(debug_assertions)]
-            {
-                let kept = (self.acount, self.aprefix);
-                self.recount_array();
-                debug_assert_eq!(kept, (self.acount, self.aprefix));
-            }
+            self.grown_prefix(old_asize);
         } else {
             self.recount_array();
             // Re-insert old array entries via the set_norm path; the new
@@ -234,6 +216,30 @@ impl Table {
         // entries have been moved over
         unsafe { Self::free_nodes(mem, old_nodes, old_nodes_len) };
         Ok(())
+    }
+
+    /// The array grew from `old_asize` slots, the new ones nil: the count
+    /// stays, and the prefix, which may lag behind the run (a refill scans
+    /// only 64 slots ahead, a method-JIT store extends it by one), catches
+    /// up.
+    #[inline(always)]
+    fn grown_prefix(&mut self, old_asize: usize) {
+        if self.aprefix == APREFIX_UNKNOWN {
+            self.recount_array();
+        } else {
+            let atags = self.atags();
+            let mut p = self.aprefix as usize;
+            while p < old_asize && atags[p] != raw::NIL {
+                p += 1;
+            }
+            self.aprefix = p as u32;
+        }
+        #[cfg(debug_assertions)]
+        {
+            let kept = (self.acount, self.aprefix);
+            self.recount_array();
+            debug_assert_eq!(kept, (self.acount, self.aprefix));
+        }
     }
 
     /// Put back a key of the old hash part after a resize. The keys are

@@ -13,6 +13,25 @@ pub(in super::super) const MISS_RR: u8 = 1;
 pub(in super::super) const MISS_RK: u8 = 2;
 pub(in super::super) const MISS_SELF: u8 = 3;
 
+/// The object and the key of a read [`Vm::index_op_miss`] finds in place
+/// (`AT` not [`MISS_BY_OP`]): only their addresses, worked out here.
+#[inline(always)]
+fn miss_operands<const AT: u8>(
+    inst: Inst,
+    regs: *const Value,
+    kptr: *const Value,
+) -> (*const Value, *const Value) {
+    let (b, c) = (inst.b() as usize, inst.c() as usize);
+    match AT {
+        MISS_RR => (regs.wrapping_add(b), regs.wrapping_add(c)),
+        MISS_RK => (regs.wrapping_add(b), kptr.wrapping_add(c)),
+        _ => (
+            regs.wrapping_add(inst.a() as usize + 1),
+            super::fast::self_key(regs as *mut Value, kptr, inst),
+        ),
+    }
+}
+
 impl Vm {
     /// The rest of a read the fast loop's probe could not finish: the
     /// operands are decoded again from `inst` and the frame here (PUC
@@ -40,43 +59,20 @@ impl Vm {
         let (t, key, dst) = unsafe {
             let dst = (*fr).base + inst.a();
             if AT != MISS_BY_OP {
-                let (pt, pk) = match AT {
-                    MISS_RR => (regs.add(inst.b() as usize), regs.add(inst.c() as usize)),
-                    MISS_RK => (regs.add(inst.b() as usize), kptr.add(inst.c() as usize)),
-                    _ => (
-                        regs.add(inst.a() as usize + 1),
-                        super::fast::self_key(regs as *mut Value, kptr, inst),
-                    ),
-                };
+                let (pt, pk) = miss_operands::<AT>(inst, regs, kptr);
                 return self.index_miss_at(pt, pk, dst);
             }
-            match inst.op() {
-                Op::GetI => (
-                    *regs.add(inst.b() as usize),
-                    Value::Int(inst.c() as i64),
-                    dst,
-                ),
-                Op::GetTabUp => (
-                    self.upval_get((*fr).closure, inst.b()),
-                    *kptr.add(inst.c() as usize),
-                    dst,
-                ),
-                Op::GetGlobal => (
-                    self.upval_get((*fr).closure, 0),
-                    *kptr.add(inst.bx() as usize),
-                    dst,
-                ),
-                Op::GetTabUpR => (
-                    self.upval_get((*fr).closure, inst.b()),
-                    if inst.k() {
-                        *kptr.add(inst.c() as usize)
-                    } else {
-                        *regs.add(inst.c() as usize)
-                    },
-                    dst,
-                ),
+            let cl = (*fr).closure;
+            let (b, c) = (inst.b(), inst.c() as usize);
+            let (t, key) = match inst.op() {
+                Op::GetI => (*regs.add(b as usize), Value::Int(c as i64)),
+                Op::GetTabUp => (self.upval_get(cl, b), *kptr.add(c)),
+                Op::GetGlobal => (self.upval_get(cl, 0), *kptr.add(inst.bx() as usize)),
+                Op::GetTabUpR if inst.k() => (self.upval_get(cl, b), *kptr.add(c)),
+                Op::GetTabUpR => (self.upval_get(cl, b), *regs.add(c)),
                 op => unreachable!("index_op_miss on {op:?}"),
-            }
+            };
+            (t, key, dst)
         };
         self.index_miss(t, key, dst)
     }

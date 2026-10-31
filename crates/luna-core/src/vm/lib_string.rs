@@ -114,15 +114,9 @@ fn s_rep<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     let n = n as u128;
     let total = rep_size(vm, n, l, lsep)?;
     let mut out = vm.new_buf();
-    // PUC asks for the whole size at once (`luaL_buffinitsize`); from 5.3
-    // on a box is made first, which a refused block leaves behind
+    // PUC asks for the whole size at once (`luaL_buffinitsize`)
     if v >= LuaVersion::Lua53 && out.reserve(total as usize).is_err() {
-        if total as usize > Vm::lual_buffersize(v) {
-            // 5.4 on, the protected call that catches the error closes it
-            let slot = vm.native_top();
-            vm.new_box(slot)?;
-        }
-        return Err(vm.buf_error());
+        return Err(rep_refused(vm, total as usize));
     }
     let total = total as usize;
     vm.buf_reserve(&mut out, total)?;
@@ -141,6 +135,21 @@ fn s_rep<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
     vm.nat_ret1(fs, r)
+}
+
+/// `string.rep`'s block of `total` bytes refused (5.3 on): a box is made
+/// first, which the refusal leaves behind, and which from 5.4 on the
+/// protected call that catches the error closes.
+#[cold]
+#[inline(never)]
+fn rep_refused(vm: &mut Vm, total: usize) -> LuaError {
+    if total > Vm::lual_buffersize(vm.version()) {
+        let slot = vm.native_top();
+        if let Err(e) = vm.new_box(slot) {
+            return e;
+        }
+    }
+    vm.buf_error()
 }
 
 /// The size of `n` copies of `l` bytes with `lsep` between them, under

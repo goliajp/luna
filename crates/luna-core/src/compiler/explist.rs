@@ -72,22 +72,7 @@ impl<'a> Compiler<'a> {
         if exprs.is_empty() {
             if want > 0 {
                 self.reserve(want)?;
-                // PUC 5.1 `luaK_nil`: at function start (pc==0, no jump
-                // target yet: a block left at pc 0 makes one) a LoadNil whose
-                // first register is at-or-above nactvar is skipped — locals
-                // come in already nil at frame entry, so the op is a no-op.
-                // 5.2+ retired the optimization (the LoadNil shows up in the
-                // line table either way), so the gate is 5.1-only. db.lua's
-                // line-trace tests rely on the suppression — expected line
-                // events skip the `local a` line of a chunk that opens with
-                // an uninitialized declaration.
-                let lvl = self.lr();
-                let skip = self.version == LuaVersion::Lua51
-                    && lvl.code.is_empty()
-                    && lvl.last_target.is_none();
-                if !skip {
-                    self.load_nil(base, want);
-                }
+                self.nil_locals(base, want);
             }
             return Ok(base);
         }
@@ -123,5 +108,23 @@ impl<'a> Compiler<'a> {
         }
         self.set_freereg(base + want);
         Ok(base)
+    }
+
+    /// `want` locals from `base` declared with no values: nil. PUC 5.1
+    /// `luaK_nil`: at function start (pc==0, no jump target yet: a block
+    /// left at pc 0 makes one) a LoadNil whose first register is
+    /// at-or-above nactvar is skipped — locals come in already nil at frame
+    /// entry, so the op is a no-op. 5.2+ retired the optimization (the
+    /// LoadNil shows up in the line table either way), so the gate is
+    /// 5.1-only. db.lua's line-trace tests rely on the suppression —
+    /// expected line events skip the `local a` line of a chunk that opens
+    /// with an uninitialized declaration.
+    fn nil_locals(&mut self, base: u32, want: u32) {
+        let lvl = self.lr();
+        let skip =
+            self.version == LuaVersion::Lua51 && lvl.code.is_empty() && lvl.last_target.is_none();
+        if !skip {
+            self.load_nil(base, want);
+        }
     }
 }

@@ -4,6 +4,18 @@
 
 use super::*;
 
+/// The header of the object `v` holds, if it holds one.
+fn value_header(v: Value) -> Option<*mut GcHeader> {
+    match v {
+        Value::Str(s) => Some(s.as_ptr() as *mut GcHeader),
+        Value::Table(t) => Some(t.as_ptr() as *mut GcHeader),
+        Value::Closure(c) => Some(c.as_ptr() as *mut GcHeader),
+        Value::Native(n) => Some(n.as_ptr() as *mut GcHeader),
+        Value::Coro(c) => Some(c.as_ptr() as *mut GcHeader),
+        Value::Userdata(u) => Some(u.as_ptr() as *mut GcHeader),
+        _ => None,
+    }
+}
 impl Heap {
     /// `gc-verify` — the set of every live object header
     /// (all + fixed + finalizer queues), for callers that need to
@@ -102,17 +114,6 @@ impl Heap {
     pub fn verify_no_dangling(&self, ctx: &str) {
         use std::collections::HashSet;
         self.puc_hook_verify_kept(ctx);
-        fn value_header(v: Value) -> Option<*mut GcHeader> {
-            match v {
-                Value::Str(s) => Some(s.as_ptr() as *mut GcHeader),
-                Value::Table(t) => Some(t.as_ptr() as *mut GcHeader),
-                Value::Closure(c) => Some(c.as_ptr() as *mut GcHeader),
-                Value::Native(n) => Some(n.as_ptr() as *mut GcHeader),
-                Value::Coro(c) => Some(c.as_ptr() as *mut GcHeader),
-                Value::Userdata(u) => Some(u.as_ptr() as *mut GcHeader),
-                _ => None,
-            }
-        }
         let mut live: HashSet<usize> = HashSet::new();
         // SAFETY: `all` / `fixed` / finalizer-queue pointers are the
         // heap's own intrusive lists; every element is a live allocation

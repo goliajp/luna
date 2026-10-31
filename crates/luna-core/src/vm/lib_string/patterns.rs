@@ -108,6 +108,19 @@ fn no_specials(v: LuaVersion, p: &[u8]) -> bool {
     !pattern::has_specials(pattern_bytes(v, p))
 }
 
+/// Where `string.find` / `string.match` start in `ls` bytes, from the
+/// argument `init`: none when past the end (5.1 clamps such a start).
+fn find_init(v: LuaVersion, init: i64, ls: usize) -> Option<usize> {
+    let init = posrelat(start_pos(v, init), ls);
+    if v == LuaVersion::Lua51 {
+        Some((init - 1).clamp(0, ls as i64) as usize)
+    } else if init > ls as i64 + 1 {
+        None
+    } else {
+        Some((init.max(1) - 1) as usize)
+    }
+}
+
 fn find_aux<const PRE: bool>(
     vm: &mut Vm,
     fs: u32,
@@ -120,14 +133,8 @@ fn find_aux<const PRE: bool>(
     let p = argcheck::check_string(vm, a, 1)?;
     let (src, pat) = (s.as_bytes(), p.as_bytes());
     let ls = src.len();
-    let init = posrelat(start_pos(v, argcheck::opt_integer(vm, a, 2, 1)?), ls);
-    let init = if v == LuaVersion::Lua51 {
-        // 5.1 clamps a start past the end instead of failing
-        (init - 1).clamp(0, ls as i64) as usize
-    } else if init > ls as i64 + 1 {
+    let Some(init) = find_init(v, argcheck::opt_integer(vm, a, 2, 1)?, ls) else {
         return vm.nat_ret1(fs, Value::Nil);
-    } else {
-        (init.max(1) - 1) as usize
     };
     if find && (a.get(vm, 3).truthy() || no_specials(v, pat)) {
         return match pattern::plain_find(src, pat, init) {

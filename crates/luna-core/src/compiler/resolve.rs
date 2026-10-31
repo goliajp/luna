@@ -243,39 +243,40 @@ impl<'a> Compiler<'a> {
                     read_only = self.levels[li - 1].locals[idx].read_only;
                     src = Some(self.levels[li - 1].locals[idx].src);
                 }
-                let ui = self.levels[li].upvals.len() as u32;
-                if self.counted_upvals(li) >= max_upvals(self.version) {
-                    return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
-                }
-                self.levels[li].upvals.push_or_abort(UpvalDesc {
-                    in_stack: true,
-                    index: reg as u8,
-                    name: name.into(),
-                    read_only,
-                });
                 let src = src.expect("the local an upvalue captures");
-                self.levels[li].upval_srcs.push_or_abort(src);
-                self.log(super::puc_log::PEv::Upval(li as u32));
-                Ok(VarKind::Upval(ui))
+                self.add_upval(li, (true, reg as u8), name, read_only, src)
             }
             VarKind::Upval(pidx) => {
                 let read_only = self.levels[li - 1].upvals[pidx as usize].read_only;
                 let src = self.levels[li - 1].upval_srcs[pidx as usize];
-                let ui = self.levels[li].upvals.len() as u32;
-                if self.counted_upvals(li) >= max_upvals(self.version) {
-                    return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
-                }
-                self.levels[li].upvals.push_or_abort(UpvalDesc {
-                    in_stack: false,
-                    index: pidx as u8,
-                    name: name.into(),
-                    read_only,
-                });
-                self.levels[li].upval_srcs.push_or_abort(src);
-                self.log(super::puc_log::PEv::Upval(li as u32));
-                Ok(VarKind::Upval(ui))
+                self.add_upval(li, (false, pidx as u8), name, read_only, src)
             }
         }
+    }
+
+    /// Level `li`'s new upvalue `name`, of the enclosing level's local
+    /// (`in_stack`) or upvalue `index`, whose name came from `src`.
+    fn add_upval(
+        &mut self,
+        li: usize,
+        (in_stack, index): (bool, u8),
+        name: &str,
+        read_only: bool,
+        src: NameSrc,
+    ) -> Result<VarKind, SyntaxError> {
+        let ui = self.levels[li].upvals.len() as u32;
+        if self.counted_upvals(li) >= max_upvals(self.version) {
+            return Err(self.limit_err_at(li, "upvalues", max_upvals(self.version)));
+        }
+        self.levels[li].upvals.push_or_abort(UpvalDesc {
+            in_stack,
+            index,
+            name: name.into(),
+            read_only,
+        });
+        self.levels[li].upval_srcs.push_or_abort(src);
+        self.log(super::puc_log::PEv::Upval(li as u32));
+        Ok(VarKind::Upval(ui))
     }
 
     pub(super) fn local_is_read_only(&self, reg: u32) -> Option<&str> {

@@ -2,6 +2,7 @@
 //! context, resume and yield.
 
 use super::*;
+use crate::runtime::function::NativeAct;
 
 #[cfg(test)]
 mod depth_tests;
@@ -169,13 +170,7 @@ impl Vm {
         if !host_cont {
             // the yield is a level of its own while its return hook runs
             if let Some(nc) = yielder {
-                self.push_native(crate::runtime::function::NativeAct::new(
-                    nc,
-                    fslot,
-                    0,
-                    self.frames.len(),
-                    0,
-                ))?;
+                self.push_native(NativeAct::new(nc, fslot, 0, self.frames.len(), 0))?;
             }
             let r = self.hook_return(true, 1, n);
             if yielder.is_some() {
