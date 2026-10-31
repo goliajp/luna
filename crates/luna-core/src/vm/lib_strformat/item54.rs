@@ -34,26 +34,22 @@ fn checkformat(vm: &mut Vm, form: &[u8], flags: &[u8], precision: bool) -> Resul
     Ok(())
 }
 
-/// One conversion under 5.4 or 5.5. Returns where scanning resumes;
-/// `added` as for [`item51`].
+/// One conversion under 5.4 or 5.5, its specification's bytes at
+/// `start..p`. Returns where scanning resumes; `added` as for [`item51`].
 #[inline]
 pub(super) fn item54<const PRE: bool>(
     vm: &mut Vm,
     a: Args,
     arg: u32,
     fmt: &[u8],
-    start: usize,
+    (start, p): (usize, usize),
     out: &mut LVec<u8>,
     added: &mut Added,
 ) -> Result<usize, LuaError> {
     // every conversion but a long `%s` and `%q` fits in this
     vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     // getformat: flags, width and precision bytes ('0' counted as a flag),
-    // then the conversion
-    let mut p = start;
-    while fmt.get(p).is_some_and(|&c| super::spec_char(c)) {
-        p += 1;
-    }
+    // up to `p` (`spec_end`), then the conversion
     if p - start + 1 >= MAX_FORMAT - 10 {
         return Err(raise_str(vm, "invalid format (too long)"));
     }
