@@ -73,11 +73,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         float_only,
         ..
     } = *pl;
-    let Lower {
-        reg_state,
-        trace_fn_sig_ref,
-        ..
-    } = *lw;
+    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     // the index, the count or limit, the step, and the loop variable when
     // it is a copy of the index
     let v55 = rop.inst.op().plain_for_loop() == Op::ForLoop55;
@@ -92,9 +88,9 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         lw.current_kinds[r_step],
     ];
     let form = for_form(opts.pre53 && !v55, float_only, kinds)?;
-    let cur = lw.bcx.use_var(lw.regs_full[r_cur]);
-    let x = lw.bcx.use_var(lw.regs_full[r_x]);
-    let step = lw.bcx.use_var(lw.regs_full[r_step]);
+    let cur = lw.bcx.use_var(lw.entry.regs_full[r_cur]);
+    let x = lw.bcx.use_var(lw.entry.regs_full[r_x]);
+    let step = lw.bcx.use_var(lw.entry.regs_full[r_step]);
     let (cond, next) = match form {
         ForForm::IntCount => {
             let zero = lw.bcx.ins().iconst(types::I64, 0);
@@ -135,7 +131,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
     };
 
     // the caller window: see `emit_tail`
-    let caller_regs: &[Variable] = &lw.regs_full[..max_stack];
+    let caller_regs: &[Variable] = &lw.entry.regs_full[..max_stack];
     let continue_blk = lw.bcx.create_block();
     let exit_blk = lw.bcx.create_block();
     lw.bcx.ins().brif(cond, continue_blk, &[], exit_blk, &[]);
@@ -164,13 +160,13 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
             let next = lw.bcx.ins().iadd(cur, step);
             let one = lw.bcx.ins().iconst(types::I64, 1);
             let count_new = lw.bcx.ins().isub(x, one);
-            lw.bcx.def_var(lw.regs_full[r_x], count_new);
+            lw.bcx.def_var(lw.entry.regs_full[r_x], count_new);
             next
         }
     };
-    lw.bcx.def_var(lw.regs_full[r_cur], next);
+    lw.bcx.def_var(lw.entry.regs_full[r_cur], next);
     if let Some(r) = r_var {
-        lw.bcx.def_var(lw.regs_full[r], next);
+        lw.bcx.def_var(lw.entry.regs_full[r], next);
     }
     // ForLoop's continue branch jumps to the loop's
     // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
@@ -221,12 +217,8 @@ pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let Plan {
         record, max_stack, ..
     } = *pl;
-    let Lower {
-        reg_state,
-        trace_fn_sig_ref,
-        body_loop,
-        ..
-    } = *lw;
+    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
+    let Lower { body_loop, .. } = *lw;
     commit_back_edge(lw);
     let Some((cell, at)) = &lw.tier_count else {
         lw.bcx.ins().jump(body_loop, &[]);
@@ -239,7 +231,7 @@ pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     lw.bcx.seal_block(hot);
     emit_store_back_and_return_pc(
         &mut lw.bcx,
-        &lw.regs_full[..max_stack],
+        &lw.entry.regs_full[..max_stack],
         &lw.stored,
         reg_state,
         record.head_pc,

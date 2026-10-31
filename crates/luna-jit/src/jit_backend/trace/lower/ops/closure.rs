@@ -48,7 +48,7 @@ pub(super) fn emit_closure_op<E: Emit>(
                 let func_ref = lw.bcx.import_func(op_closure_id);
                 lw.bcx.ins().call(func_ref, &[bx_arg])
             } else {
-                let cl = lw.bcx.use_var(lw.regs_full[pl.frame_func[i] as usize]);
+                let cl = lw.bcx.use_var(lw.reg(pl.frame_func[i] as usize));
                 let off_arg = lw.bcx.ins().iconst(types::I64, off as i64);
                 let func_ref = lw.bcx.import_func(lw.h.op.op_closure_in_id);
                 lw.bcx.ins().call(func_ref, &[cl, bx_arg, off_arg])
@@ -102,7 +102,7 @@ pub(super) fn emit_closure_op<E: Emit>(
             if !std::ptr::eq(rop.proto.as_ptr(), pl.head_proto.as_ptr()) {
                 return emit_frame_upval_op(lw, pl, oc);
             }
-            let v = if let Some(&cached_var) = lw.upval_cache.get(&idx_b) {
+            let v = if let Some(&cached_var) = lw.upvals.cache.get(&idx_b) {
                 lw.bcx.use_var(cached_var)
             } else {
                 let idx_arg = lw.bcx.ins().iconst(types::I64, ins.b() as i64);
@@ -111,7 +111,7 @@ pub(super) fn emit_closure_op<E: Emit>(
                 let new_v = lw.bcx.inst_results(call)[0];
                 let cache_var = lw.bcx.declare_var(types::I64);
                 lw.bcx.def_var(cache_var, new_v);
-                lw.upval_cache.insert(idx_b, cache_var);
+                lw.upvals.cache.insert(idx_b, cache_var);
                 new_v
             };
             lw.bcx.def_var(regs[ins.a() as usize], v);
@@ -178,7 +178,7 @@ fn close_from<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>, a: usize
         if k.untyped() {
             continue;
         }
-        let raw_arg = lw.bcx.use_var(lw.regs_full[off + slot]);
+        let raw_arg = lw.bcx.use_var(lw.entry.regs_full[off + slot]);
         let tag_arg = emit_kind_tag(&mut lw.bcx, k, raw_arg).expect("typed");
         let slot_arg = lw.bcx.ins().iconst(types::I64, (off + slot) as i64);
         lw.bcx.ins().call(spill_ref, &[slot_arg, tag_arg, raw_arg]);

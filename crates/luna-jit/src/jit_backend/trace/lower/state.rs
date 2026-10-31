@@ -7,12 +7,8 @@ use super::*;
 pub(super) struct Lower<E: Emit> {
     pub(super) bcx: E,
     pub(super) h: Helpers,
-    pub(super) reg_state: Value,
-    pub(super) trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
-    pub(super) global_side_trace_box: Box<TCellPtr>,
-    pub(super) regs_full: Vec<Variable>,
-    pub(super) tforcall_tag_var: Variable,
-    pub(super) tforcall_val_tag_var: Variable,
+    /// What the entry block set up (see `emit_entry`).
+    pub(super) entry: EntryRegs,
     pub(super) precheck: Option<Block>,
     /// The block before the loop head that tests the tables
     /// `ro_invariant` names (see `readonly`).
@@ -73,26 +69,10 @@ pub(super) struct Lower<E: Emit> {
     /// The inlined self-recursive calls being lowered, innermost last:
     /// the frames an exit inside them rebuilds.
     pub(super) call_chain: Vec<FrameMaterializeInfo>,
-    /// Per upvalue index, the variable holding its value once read: the
-    /// running closure stays the same through a dispatch.
-    pub(super) upval_cache: std::collections::HashMap<u32, Variable>,
-    /// Per upvalue index, the checked typed read: its variable, out slot,
-    /// check result and type.
-    pub(super) upval_checked:
-        std::collections::HashMap<u32, (Variable, cranelift_codegen::ir::StackSlot, Value, u8)>,
-    /// The upvalues whose checked read has been guarded.
-    pub(super) upval_check_done: Vec<u32>,
-    /// The entry closure, fetched at the first inlined call, which
-    /// dominates every later one (the trace is linear).
-    pub(super) head_closure_var: Option<Variable>,
-    /// The integer constants registers hold at this point (from `LoadI` /
-    /// `LoadK` earlier in the pass), so a `//`, `%` or shift by one needs
-    /// no guard.
-    pub(super) known_int: Vec<Option<i64>>,
-    /// The registers holding a string constant loaded earlier in the same
-    /// pass: a table access by such a key may use the slot the recording
-    /// found it in.
-    pub(super) const_str: Vec<bool>,
+    /// The upvalues read so far.
+    pub(super) upvals: UpvalReads,
+    /// The constants registers hold so far.
+    pub(super) known: Known,
     /// The window slots the virtual registers of the op being lowered
     /// stand in, with the kinds the slots had (see `enter_virt`): an exit
     /// taken inside the op snapshots those kinds, not the virtual ones.
@@ -114,4 +94,61 @@ pub(super) struct Lower<E: Emit> {
     /// Every way to the op being lowered passed a check for a collection
     /// with nothing that may allocate since (see `gc_due`).
     pub(super) gc_quiet: bool,
+}
+
+impl<E: Emit> Lower<E> {
+    /// The variable of register `i` (of the window and the inline frames).
+    #[inline]
+    pub(super) fn reg(&self, i: usize) -> Variable {
+        self.entry.regs_full[i]
+    }
+}
+
+/// What reg_state holds for each register at the loop head on entry: the
+/// values the prelude loaded.
+pub(super) fn entry_values<E: Emit>(lw: &mut Lower<E>) -> Vec<Option<Value>> {
+    let (regs, bcx) = (&lw.entry.regs_full, &mut lw.bcx);
+    regs.iter().map(|&r| Some(bcx.use_var(r))).collect()
+}
+
+/// The upvalues a trace has read so far.
+#[derive(Default)]
+pub(super) struct UpvalReads {
+    /// Per upvalue index, the variable holding its value once read: the
+    /// running closure stays the same through a dispatch.
+    pub(super) cache: std::collections::HashMap<u32, Variable>,
+    /// Per upvalue index, the checked typed read: its variable, out slot,
+    /// check result and type.
+    pub(super) checked:
+        std::collections::HashMap<u32, (Variable, cranelift_codegen::ir::StackSlot, Value, u8)>,
+    /// The upvalues whose checked read has been guarded.
+    pub(super) check_done: Vec<u32>,
+    /// The entry closure, fetched at the first inlined call, which
+    /// dominates every later one (the trace is linear).
+    pub(super) head_closure: Option<Variable>,
+}
+
+/// The constants registers hold at this point of the pass.
+pub(super) struct Known {
+    /// The integer constants (from `LoadI` / `LoadK` earlier in the pass),
+    /// so a `//`, `%` or shift by one needs no guard.
+    pub(super) int: Vec<Option<i64>>,
+    /// The registers holding a string constant loaded earlier: a table
+    /// access by such a key may use the slot the recording found it in.
+    pub(super) str: Vec<bool>,
+}
+
+impl Known {
+    /// Nothing known yet of `n` registers.
+    pub(super) fn new(n: usize) -> Known {
+        Known {
+            int: vec![None; n],
+            str: vec![false; n],
+        }
+    }
+
+    /// The integer constant register `i` holds, if one is known.
+    pub(super) fn int_at(&self, i: usize) -> Option<i64> {
+        self.int.get(i).copied().flatten()
+    }
 }

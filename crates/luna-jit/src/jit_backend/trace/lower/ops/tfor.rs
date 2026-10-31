@@ -100,11 +100,8 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
     nvars: i64,
 ) {
     let Plan { max_stack, .. } = *pl;
-    let Lower {
-        tforcall_tag_var,
-        tforcall_val_tag_var,
-        ..
-    } = *lw;
+    let (tforcall_tag_var, tforcall_val_tag_var) =
+        (lw.entry.tforcall_tag_var, lw.entry.tforcall_val_tag_var);
     let OpHelpers { op_tforcall_id, .. } = lw.h.op;
     let OpCx { i, rop, .. } = *oc;
     let regs: &[Variable] = oc.regs;

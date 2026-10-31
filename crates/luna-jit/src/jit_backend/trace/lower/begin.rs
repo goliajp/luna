@@ -13,42 +13,22 @@ pub(super) fn begin_body<E: Emit>(
     flush_ctx: Option<FlushCtx>,
     blocks: (Option<Block>, Option<Block>, Option<Block>, Block),
 ) -> Lower<E> {
-    let EntryRegs {
-        reg_state,
-        trace_fn_sig_ref,
-        global_side_trace_box,
-        regs_full,
-        tforcall_tag_var,
-        tforcall_val_tag_var,
-    } = head;
     let (virt_vars, virt_kinds, sunk_alloc_seen) = sunk;
     let (precheck, ro_precheck, step_precheck, body_loop) = blocks;
-    let Plan {
-        record,
-        max_stack,
-        window_size_us,
-        ..
-    } = *pl;
     let current_kinds = entry_kinds(pl);
-    let head_kinds = current_kinds[..max_stack].to_vec();
     let ro_invariant = match ro_precheck {
         Some(_) => readonly_invariants(pl, &current_kinds),
-        None => vec![false; window_size_us],
+        None => vec![false; pl.window_size_us],
     };
     Lower {
         bcx,
         h,
-        reg_state,
-        trace_fn_sig_ref,
-        global_side_trace_box,
-        regs_full,
-        tforcall_tag_var,
-        tforcall_val_tag_var,
+        entry: head,
         precheck,
         ro_precheck,
         step_precheck,
         body_loop,
-        head_kinds,
+        head_kinds: current_kinds[..pl.max_stack].to_vec(),
         defined_aot_data,
         escape,
         flush_ctx,
@@ -64,15 +44,11 @@ pub(super) fn begin_body<E: Emit>(
         dispatchable: true,
         dispatch_off_reason: None,
         // about one exit per recorded op
-        per_exit_kinds: ExitKinds::with_capacity(record.ops.len(), max_stack),
+        per_exit_kinds: ExitKinds::with_capacity(pl.record.ops.len(), pl.max_stack),
         per_exit_inline_vec: Vec::new(),
         call_chain: Vec::new(),
-        upval_cache: std::collections::HashMap::new(),
-        upval_checked: std::collections::HashMap::new(),
-        upval_check_done: Vec::new(),
-        head_closure_var: None,
-        known_int: vec![None; window_size_us + NVIRT],
-        const_str: vec![false; window_size_us + NVIRT],
+        upvals: UpvalReads::default(),
+        known: Known::new(pl.window_size_us + NVIRT),
         virt_held: Vec::new(),
         alt_joins: std::collections::HashMap::new(),
         tier_count: None,

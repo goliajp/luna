@@ -134,7 +134,7 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
                 }
                 // a string key reads as a field does
                 Some((kind, want)) if key_is_str => {
-                    let constant = lw.const_str[off + ins.c() as usize];
+                    let constant = lw.known.str[off + ins.c() as usize];
                     let slotted = constant && kind != RegKind::Bool;
                     let v = match record.field_slot(i).filter(|_| slotted) {
                         Some(slot) => emit_field_slot_read(lw, pl, oc, t, key, slot, want),
@@ -282,7 +282,7 @@ pub(super) fn emit_table_set_op<E: Emit>(
             }
             let val = lw.bcx.use_var(regs[ins.c() as usize]);
             if key_kind == RegKind::Str {
-                let constant = lw.const_str[off + ins.b() as usize];
+                let constant = lw.known.str[off + ins.b() as usize];
                 return store_str_key(lw, pl, oc, t, key, val, val_kind, constant);
             }
             let stored_inline = match key_kind {

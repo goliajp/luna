@@ -14,11 +14,8 @@ pub(super) fn emit_ipairs_tfor_call<E: Emit>(
     let Plan {
         record, max_stack, ..
     } = *pl;
-    let Lower {
-        tforcall_tag_var,
-        tforcall_val_tag_var,
-        ..
-    } = *lw;
+    let (tforcall_tag_var, tforcall_val_tag_var) =
+        (lw.entry.tforcall_tag_var, lw.entry.tforcall_val_tag_var);
     let OpCx { i, rop, .. } = *oc;
     let regs: &[Variable] = oc.regs;
     let lay = oc.ins.op().for_layout().expect("a loop op");

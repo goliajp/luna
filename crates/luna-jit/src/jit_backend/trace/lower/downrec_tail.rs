@@ -14,16 +14,12 @@ pub(super) fn emit_downrec_tail<E: Emit>(
         window_size_us,
         ..
     } = *pl;
-    let Lower {
-        reg_state,
-        trace_fn_sig_ref,
-        ..
-    } = *lw;
+    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;
     // the caller window: see `emit_tail`
-    let caller_regs: &[Variable] = &lw.regs_full[..max_stack];
+    let caller_regs: &[Variable] = &lw.entry.regs_full[..max_stack];
     let mut downrec_link_for_compiled: Option<(u32, u32)> = None;
     // `TraceEnd::DownRec` close: emit the
     // stitch-sentinel + caller-pc-guard.
@@ -192,16 +188,12 @@ pub(super) fn emit_self_link_tail<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let Plan {
         record, max_stack, ..
     } = *pl;
-    let Lower {
-        reg_state,
-        trace_fn_sig_ref,
-        ..
-    } = *lw;
+    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;
     // the caller window: see `emit_tail`
-    let caller_regs: &[Variable] = &lw.regs_full[..max_stack];
+    let caller_regs: &[Variable] = &lw.entry.regs_full[..max_stack];
     // Self-link close deopts instead of looping natively.
     //
     // A native tail (slot-copy `regs_full[i] = regs_full[bump_off

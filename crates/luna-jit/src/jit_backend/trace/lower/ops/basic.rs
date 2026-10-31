@@ -20,14 +20,14 @@ pub(super) fn emit_basic_op<E: Emit>(
             lw.bcx.def_var(regs[ins.a() as usize], src);
             lw.current_kinds[off + ins.a() as usize] =
                 k_op(&lw.current_kinds, off as u32 + ins.b());
-            lw.const_str[off + ins.a() as usize] = lw.const_str[off + ins.b() as usize];
+            lw.known.str[off + ins.a() as usize] = lw.known.str[off + ins.b() as usize];
         }
         Op::LoadI => {
             let imm = ins.sbx() as i64;
             let v = lw.bcx.ins().iconst(types::I64, imm);
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Int;
-            lw.known_int[off + ins.a() as usize] = Some(imm);
+            lw.known.int[off + ins.a() as usize] = Some(imm);
         }
         Op::LoadF => {
             // R[A] := sBx as f64. Bitcast result to i64
@@ -55,7 +55,7 @@ pub(super) fn emit_basic_op<E: Emit>(
             let bx = ins.bx() as usize;
             let (v, k) = match oc.rop.proto.consts[bx] {
                 luna_core::runtime::Value::Int(n) => {
-                    lw.known_int[off + ins.a() as usize] = Some(n);
+                    lw.known.int[off + ins.a() as usize] = Some(n);
                     (lw.bcx.ins().iconst(types::I64, n), RegKind::Int)
                 }
                 luna_core::runtime::Value::Float(f) => {
@@ -64,7 +64,7 @@ pub(super) fn emit_basic_op<E: Emit>(
                     (bits, RegKind::Float)
                 }
                 luna_core::runtime::Value::Str(k) => {
-                    lw.const_str[off + ins.a() as usize] = true;
+                    lw.known.str[off + ins.a() as usize] = true;
                     (
                         emit_str_key_arg(&mut lw.bcx, k, pl.opts.aot, &mut lw.defined_aot_data),
                         RegKind::Str,
@@ -80,7 +80,7 @@ pub(super) fn emit_basic_op<E: Emit>(
             let v = lw.bcx.ins().iconst(types::I64, i64::from(t));
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Bool;
-            lw.known_int[off + ins.a() as usize] = None;
+            lw.known.int[off + ins.a() as usize] = None;
         }
         Op::Not => {
             let v = match k_op(&lw.current_kinds, off as u32 + ins.b()) {
@@ -97,7 +97,7 @@ pub(super) fn emit_basic_op<E: Emit>(
             };
             lw.bcx.def_var(regs[ins.a() as usize], v);
             lw.current_kinds[off + ins.a() as usize] = RegKind::Bool;
-            lw.known_int[off + ins.a() as usize] = None;
+            lw.known.int[off + ins.a() as usize] = None;
         }
         _ => unreachable!("routed by emit_op"),
     }

@@ -15,11 +15,7 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
         window_size_us,
         ..
     } = *pl;
-    let Lower {
-        reg_state,
-        trace_fn_sig_ref,
-        ..
-    } = *lw;
+    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     let RuntimeHelpers {
         suppress_admit_id,
         materialize_id,
@@ -62,7 +58,7 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             &lw.escape,
             &lw.virt_vars,
             &lw.virt_kinds,
-            &lw.regs_full,
+            &lw.entry.regs_full,
             &pl.op_offsets,
             i,
             &mut kinds_snapshot,
@@ -94,7 +90,7 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
         let _ = lw.bcx.ins().call(mat_ref, &[n_arg, ptr_arg, closures_arg]);
         emit_store_back_and_return_site(
             &mut lw.bcx,
-            &lw.regs_full[..window_size_us],
+            &lw.entry.regs_full[..window_size_us],
             &lw.stored,
             reg_state,
             site_idx,
@@ -115,7 +111,7 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             &lw.escape,
             &lw.virt_vars,
             &lw.virt_kinds,
-            &lw.regs_full,
+            &lw.entry.regs_full,
             &pl.op_offsets,
             i,
             lw.per_exit_kinds.kinds_mut(tag_side_local),
@@ -127,7 +123,7 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
         emit_tagged_exit(
             &mut lw.bcx,
             suppress_admit_id,
-            &lw.regs_full[..max_stack],
+            &lw.entry.regs_full[..max_stack],
             &lw.stored,
             reg_state,
             side_exit_pc,
@@ -154,7 +150,7 @@ fn emit_frame_closures<E: Emit>(lw: &mut Lower<E>, chain: &[FrameMaterializeInfo
     for (k, f) in chain.iter().enumerate() {
         let cl = lw
             .bcx
-            .use_var(lw.regs_full[(f.base_offset - f.n_varargs) as usize - 1]);
+            .use_var(lw.entry.regs_full[(f.base_offset - f.n_varargs) as usize - 1]);
         lw.bcx.ins().stack_store(types::I64, cl, ss, 8 * k as i32);
     }
     lw.bcx.ins().stack_addr(types::I64, ss, 0)

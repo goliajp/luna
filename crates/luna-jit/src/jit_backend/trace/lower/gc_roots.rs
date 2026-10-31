@@ -18,7 +18,7 @@ pub(super) fn emit_ssa_roots<E: Emit>(lw: &mut Lower<E>, i: usize, live_end: usi
     let mut vals: Vec<(Variable, u8)> = Vec::new();
     for (r, &k) in lw.current_kinds[..live_end].iter().enumerate() {
         if let Some(tag) = gc_tag(k) {
-            vals.push((lw.regs_full[r], tag));
+            vals.push((lw.entry.regs_full[r], tag));
         }
     }
     let empty: &[LiveBinding] = &[];
