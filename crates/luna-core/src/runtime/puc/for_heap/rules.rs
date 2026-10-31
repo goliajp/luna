@@ -95,6 +95,9 @@ pub(in crate::runtime) struct HeapRules {
     /// 5.3's upvalues are no collectable objects: never on the list, each
     /// counting the closures that hold it
     pub(in crate::runtime) upvals_refcounted: bool,
+    /// from 5.4 on the roots mark each thread's open upvalues; 5.1 to 5.3
+    /// mark an open upvalue only through its closures
+    pub(in crate::runtime) open_upvals_are_roots: bool,
     /// what a new open upvalue's `next` takes when it is kept off the
     /// list (null: it goes on the list), and a new closed one's
     pub(in crate::runtime) open_upval_mark: *mut GcHeader,
@@ -152,6 +155,7 @@ impl HeapRules {
             sweeps_string_table: matches!(d, Dialect::L51 | Dialect::L52),
             open_upvals_on_threads: matches!(d, Dialect::L51 | Dialect::L52),
             upvals_refcounted: d == Dialect::L53,
+            open_upvals_are_roots: d >= Dialect::L54,
             open_upval_mark: match d {
                 Dialect::L51 | Dialect::L52 => crate::runtime::heap::ON_THREAD,
                 Dialect::L53 => crate::runtime::heap::HELD,

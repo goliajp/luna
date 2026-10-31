@@ -4,20 +4,29 @@
 //! the count has reached that point.
 
 use super::*;
-use luna_core::version::LuaVersion;
+use luna_core::__private::Rules;
 
 /// Whether some op of the trace may check for a collection: an allocating
-/// op; in 5.1 an iterator call and the loop back to it; in 5.2 an inlined
+/// op; where a call from C checks as it returns (5.1), an iterator call
+/// and the loop back to it; where every call checks (5.2), an inlined
 /// call. A folded `string.sub` (from 5.3 on) learns it from its helper.
+impl Plan<'_> {
+    /// The rules of the dialect the trace is compiled for; `None` for code
+    /// for no dialect in particular.
+    pub(super) fn rules(&self) -> Option<Rules> {
+        self.opts.dialect.map(Rules::of)
+    }
+}
+
 fn may_check(pl: &Plan<'_>) -> bool {
-    let d = pl.opts.dialect;
-    let v51 = d == Some(LuaVersion::Lua51);
-    let v52 = d == Some(LuaVersion::Lua52);
+    let rules = pl.rules();
+    let on_return = rules.is_some_and(Rules::check_on_return);
+    let on_call = rules.is_some_and(Rules::check_on_call);
     pl.record.ops.iter().any(|r| match r.inst.op() {
         Op::NewTable | Op::Closure | Op::Concat => true,
-        Op::TForCall | Op::TForCall53 | Op::TForCall55 => v51,
-        Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => v51,
-        Op::Call => v52,
+        Op::TForCall | Op::TForCall53 | Op::TForCall55 => on_return,
+        Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => on_return,
+        Op::Call => on_call,
         _ => false,
     })
 }

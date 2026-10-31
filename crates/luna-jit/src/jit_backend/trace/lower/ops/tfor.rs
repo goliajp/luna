@@ -135,7 +135,7 @@ pub(super) fn emit_tfor_helper_call<E: Emit>(
         .ins()
         .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, status_or_tag, 0);
     guard!(lw, pl, ok, i, rop.pc);
-    note_return_check_51(lw, pl, rop.pc);
+    note_return_check(lw, pl, rop.pc);
     // key tag | value tag << 8 (Vm::jit_op_tforcall)
     let key_tag = lw.bcx.ins().band_imm_u(status_or_tag, 0xff);
     let val_tag = lw.bcx.ins().ushr_imm_u(status_or_tag, 8);
@@ -162,10 +162,11 @@ fn out_slot() -> cranelift_codegen::ir::StackSlotData {
     )
 }
 
-/// 5.1's `luaD_call` checks for a collection when the iterator returns: a
-/// step due is noted for whichever exit the loop takes next.
-fn note_return_check_51<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32) {
-    if pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua51) {
+/// Where a call from C checks for a collection as it returns (5.1's
+/// `luaD_call`), the iterator's return does: a step due is noted for
+/// whichever exit the loop takes next.
+fn note_return_check<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32) {
+    if pl.rules().is_some_and(|r| r.check_on_return()) {
         note_gc_due(lw, pc);
     }
 }

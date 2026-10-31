@@ -21,6 +21,7 @@ mod vm_alloc;
 mod vm_host;
 mod vm_jit;
 
+pub use crate::runtime::dialect::Rules;
 pub use capi_debug::VmCApiDebug;
 pub use capi_load::VmCApiLoad;
 pub use capi_state::VmCApiState;
