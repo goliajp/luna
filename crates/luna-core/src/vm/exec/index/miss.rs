@@ -62,14 +62,24 @@ impl Vm {
                 let (pt, pk) = miss_operands::<AT>(inst, regs, kptr);
                 return self.index_miss_at(pt, pk, dst);
             }
-            let cl = (*fr).closure;
-            let (b, c) = (inst.b(), inst.c() as usize);
             let (t, key) = match inst.op() {
-                Op::GetI => (*regs.add(b as usize), Value::Int(c as i64)),
-                Op::GetTabUp => (self.upval_get(cl, b), *kptr.add(c)),
-                Op::GetGlobal => (self.upval_get(cl, 0), *kptr.add(inst.bx() as usize)),
-                Op::GetTabUpR if inst.k() => (self.upval_get(cl, b), *kptr.add(c)),
-                Op::GetTabUpR => (self.upval_get(cl, b), *regs.add(c)),
+                Op::GetI => (*regs.add(inst.b() as usize), Value::Int(inst.c() as i64)),
+                Op::GetTabUp => (
+                    self.upval_get((*fr).closure, inst.b()),
+                    *kptr.add(inst.c() as usize),
+                ),
+                Op::GetGlobal => (
+                    self.upval_get((*fr).closure, 0),
+                    *kptr.add(inst.bx() as usize),
+                ),
+                Op::GetTabUpR => (
+                    self.upval_get((*fr).closure, inst.b()),
+                    if inst.k() {
+                        *kptr.add(inst.c() as usize)
+                    } else {
+                        *regs.add(inst.c() as usize)
+                    },
+                ),
                 op => unreachable!("index_op_miss on {op:?}"),
             };
             (t, key, dst)
