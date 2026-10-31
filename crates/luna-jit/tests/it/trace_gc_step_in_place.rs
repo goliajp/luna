@@ -53,6 +53,10 @@ fn run(v: LuaVersion, trace: bool, src: &str) -> (String, u64) {
 }
 
 #[test]
+#[cfg_attr(
+    feature = "gc-stress",
+    ignore = "collecting at every check moves the counts, and compiled code checks only once a step is due"
+)]
 fn a_step_in_a_trace_leaves_the_counts_the_interpreter_reads() {
     for v in VERSIONS {
         let (interp, _) = run(v, false, COUNTS);
