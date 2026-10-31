@@ -62,7 +62,7 @@ impl<T: Copy> LVec<T> {
     /// Append a copy of the first `k` elements, which must be there,
     /// without first filling the room it goes into.
     #[inline]
-    pub fn extend_from_front(&mut self, k: usize) -> Result<(), Oom> {
+    pub(crate) fn extend_from_front(&mut self, k: usize) -> Result<(), Oom> {
         assert!(k <= self.len);
         self.reserve(k)?;
         // SAFETY: room for `k` more was reserved above, so the slots

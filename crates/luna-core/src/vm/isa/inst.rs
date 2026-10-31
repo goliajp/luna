@@ -107,7 +107,7 @@ impl Inst {
 
     /// The opcode, or `None` where the field names no `Op`: code loaded
     /// from a binary chunk before the verifier has seen it.
-    pub fn try_op(self) -> Option<Op> {
+    pub(crate) fn try_op(self) -> Option<Op> {
         ((self.0 & 0x7F) as usize).lt(&NUM_OPS).then(|| self.op())
     }
 

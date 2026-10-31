@@ -148,7 +148,7 @@ impl ContKind {
 
     /// Whether the continuation is a host's `lua_pcall`, which takes no
     /// `CallInfo` of PUC's (`ci_top` 0): not a level of the thread's.
-    pub fn is_host_pcall(&self) -> bool {
+    pub(crate) fn is_host_pcall(&self) -> bool {
         matches!(
             self,
             ContKind::Pcall { ci_top: 0, .. } | ContKind::Xpcall { ci_top: 0, .. }
