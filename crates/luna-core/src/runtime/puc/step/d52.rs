@@ -50,14 +50,14 @@ pub(super) fn step_52<H: StepHost + ?Sized>(h: &mut H) -> Result<(), H::Error> {
 /// 5.2's `sweepthread` of each coroutine the sweep just kept (the main
 /// thread's comes at the end of the sweep).
 fn shrink_swept_52<H: StepHost + ?Sized>(h: &mut H) {
-    let swept = std::mem::take(&mut h.heap().puc.records.shrunk);
+    let swept = std::mem::take(&mut h.heap().puc.records.swept_52);
     for &t in &swept {
         // SAFETY: the sweep just kept `t`, a coroutine
         h.shrink_swept_thread_52(unsafe { crate::runtime::Gc::from_ptr_unchecked(t.cast()) });
     }
     let mut swept = swept;
     swept.clear();
-    h.heap().puc.records.shrunk = swept;
+    h.heap().puc.records.swept_52 = swept;
 }
 
 /// 5.2's `luaC_fullgc` from a pause: the whole cycle as single steps,
@@ -88,7 +88,7 @@ pub(in crate::runtime::puc) fn emergency_cycle_52<H: StepHost + ?Sized>(h: &mut 
     mark_52(h, Some(young));
     estimate_52(h);
     h.heap().gc_finish_sweep();
-    h.heap().puc.records.shrunk.clear();
+    h.heap().puc.records.swept_52.clear();
 }
 
 /// 5.2's marking from a pause up to its atomic step, what it traverses

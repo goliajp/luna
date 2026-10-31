@@ -47,9 +47,12 @@ const ATOMICSTEP: i64 = -2;
 /// `restartcollection` (5.1 `markroot`): the roots marked, the cycle
 /// propagating.
 fn restart<H: StepHost + ?Sized>(h: &mut H) {
-    // no thread shrunk yet this cycle
-    h.heap().puc.records.shrunk.clear();
-    h.heap().puc.cycle = h.heap().puc.cycle.wrapping_add(1);
+    // 5.2: a full collection that cut a sweep short leaves the threads
+    // the sweep never got to `sweepthread` for
+    h.heap().puc.records.swept_52.clear();
+    // 0 is no cycle: a new thread's mark (see `Coro::shrunk_in`)
+    let next = h.heap().puc.cycle.wrapping_add(1);
+    h.heap().puc.cycle = next.max(1);
     gc_count_marked(h);
     let mut m = h.heap().gc_begin_propagate();
     h.mark_roots_restart(&mut m);

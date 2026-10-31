@@ -139,3 +139,24 @@ fn a_5_2_emergency_leaves_the_estimate_its_cycle_traversed() {
     };
     assert_eq!(after(true), after(false));
 }
+
+#[test]
+fn the_cycle_after_the_last_number_is_not_a_new_thread_s_mark() {
+    let mut vm = Vm::new_minimal_with_hash_seed(LuaVersion::Lua53, 1);
+    vm.open_all_libs().expect("the libraries open");
+    vm.eval("collectgarbage('stop') collectgarbage()")
+        .expect("the script runs");
+    let co = match vm
+        .eval("return coroutine.create(function() end)")
+        .expect("made")[0]
+    {
+        crate::runtime::Value::Coro(c) => c,
+        other => panic!("a thread: {other:?}"),
+    };
+    vm.heap.puc.cycle = u32::MAX;
+    restart(&mut vm);
+    assert_eq!(vm.heap.puc.cycle, 1);
+    // PUC's traversal shrinks the new thread's stack in this cycle
+    assert!(vm.heap.puc_shrinks_now(co));
+    assert!(!vm.heap.puc_shrinks_now(co));
+}

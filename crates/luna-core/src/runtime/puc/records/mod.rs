@@ -39,7 +39,7 @@ pub(in crate::runtime::puc) struct Records {
     pub(in crate::runtime::puc) udsize: i64,
     /// 5.2: the threads the sweep kept, for the VM to shrink (5.3 marks
     /// its own on the thread, `Coro::shrunk_in`)
-    pub(in crate::runtime::puc) shrunk: Vec<*mut GcHeader>,
+    pub(in crate::runtime::puc) swept_52: Vec<*mut GcHeader>,
 }
 
 impl Records {
@@ -57,7 +57,7 @@ impl Records {
             reserved: [None; 23],
             gbuff: fmt::Gbuff::default(),
             udsize: 0,
-            shrunk: Vec::new(),
+            swept_52: Vec::new(),
         }
     }
 }
