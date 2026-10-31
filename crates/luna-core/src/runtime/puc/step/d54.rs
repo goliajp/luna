@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn step_54<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+pub(super) fn step_54<H: StepHost + ?Sized>(h: &mut H) -> Result<(), H::Error> {
     let d = Dialect::L54;
     let s = h.heap().puc.sizes;
     let stepmul = (h.heap().puc.params.get(Param::StepMul)) | 1;
@@ -37,7 +37,7 @@ pub(super) fn step_54<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
 
 pub(in crate::runtime::puc) fn singlestep_54<H: StepHost + ?Sized>(
     h: &mut H,
-) -> Result<i64, LuaError> {
+) -> Result<i64, H::Error> {
     Ok(match h.heap().puc.pace.state() {
         St::Pause => {
             restart(h);

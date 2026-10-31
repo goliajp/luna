@@ -8,7 +8,6 @@ use crate::runtime::dialect::Dialect;
 use crate::runtime::heap::{Heap, Marker, Running};
 use crate::runtime::puc::Param;
 use crate::runtime::puc::pace::*;
-use crate::vm::LuaError;
 
 mod atomic;
 mod d51;
@@ -66,7 +65,7 @@ fn restart<H: StepHost + ?Sized>(h: &mut H) {
 pub(in crate::runtime::puc) fn step_traced<H: StepHost + ?Sized>(
     h: &mut H,
     traced: bool,
-) -> Result<(), LuaError> {
+) -> Result<(), H::Error> {
     let d = h.heap().puc.dialect;
     if d != Dialect::L51 && !h.heap().gc_steps_run() {
         gc_step_not_running(h);
@@ -116,7 +115,7 @@ pub(super) fn gc_step_not_running<H: StepHost + ?Sized>(h: &mut H) {
 /// A step `lua_gc` asks for runs with the collector running: 5.2's
 /// `luaC_forcestep` whatever it is; 5.3 on, `gcrunning` (`gcstp`) set
 /// for it and put back after, unless the step raised.
-pub(super) fn puc_step_forced<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+pub(super) fn puc_step_forced<H: StepHost + ?Sized>(h: &mut H) -> Result<(), H::Error> {
     if h.heap().puc.dialect == Dialect::L51 {
         return super::api::puc_step(h);
     }

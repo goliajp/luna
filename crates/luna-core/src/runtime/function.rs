@@ -11,6 +11,7 @@ pub use crate::runtime::call_frame::{
     AfterClose, CallFrame, CloseCont, ContKind, Frame, FrameTm, HostCont, MetaAction, MetaCont,
     NativeCont,
 };
+pub(crate) use crate::runtime::call_frame::{DeadStack, NativeAct};
 pub use crate::runtime::debug_info::{DebugName, LocVar, UpvalDesc};
 pub use crate::runtime::upvalue::{UpvalState, Upvalue};
 

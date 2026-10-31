@@ -3,7 +3,7 @@
 use super::full::Young;
 use super::*;
 
-pub(super) fn step_52<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+pub(super) fn step_52<H: StepHost + ?Sized>(h: &mut H) -> Result<(), H::Error> {
     let d = Dialect::L52;
     let s = h.heap().puc.sizes;
     let stepmul = h.heap().puc.params.get(Param::StepMul).max(40);

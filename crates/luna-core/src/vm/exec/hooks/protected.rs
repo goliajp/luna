@@ -21,7 +21,7 @@ impl Vm {
             return Ok(());
         }
         let depth = self.frames.len();
-        self.push_native(crate::vm::callstack::NativeAct::new(
+        self.push_native(crate::runtime::function::NativeAct::new(
             nc, func_slot, nargs, depth, ccmt,
         ))?;
         let r = self.hook_call(true, nargs);
@@ -45,7 +45,7 @@ impl Vm {
         };
         let fs = nc.func_slot;
         let depth = self.frames.len();
-        let mut act = crate::vm::callstack::NativeAct::new(f, fs, first + n - fs - 1, depth, 0);
+        let mut act = crate::runtime::function::NativeAct::new(f, fs, first + n - fs - 1, depth, 0);
         act.raise_ci_top(0);
         self.push_native(act)?;
         let r = self.hook_return(true, first - fs, n);

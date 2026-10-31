@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn step_53<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+pub(super) fn step_53<H: StepHost + ?Sized>(h: &mut H) -> Result<(), H::Error> {
     let d = Dialect::L53;
     let s = h.heap().puc.sizes;
     let stepmul = h.heap().puc.params.get(Param::StepMul);
@@ -40,7 +40,7 @@ pub(super) fn step_53<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
 
 /// 5.3 `runafewfinalizers`: `gcfinnum` of them, twice as many the
 /// next time while some are left.
-pub(super) fn run_a_few_finalizers<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, LuaError> {
+pub(super) fn run_a_few_finalizers<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, H::Error> {
     let mut i = 0;
     while h.heap().has_tobefnz() && i < h.heap().puc.pace.fin_num {
         h.run_finalizer(true)?;
@@ -56,7 +56,7 @@ pub(super) fn run_a_few_finalizers<H: StepHost + ?Sized>(h: &mut H) -> Result<i6
 
 pub(in crate::runtime::puc) fn singlestep_53<H: StepHost + ?Sized>(
     h: &mut H,
-) -> Result<i64, LuaError> {
+) -> Result<i64, H::Error> {
     let s = h.heap().puc.sizes;
     let cost = sweepmax_52(&s) * sweepcost_52(&s);
     Ok(match h.heap().puc.pace.state() {

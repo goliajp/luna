@@ -111,7 +111,7 @@ impl Vm {
     #[inline(always)]
     pub(crate) fn push_native(
         &mut self,
-        act: crate::vm::callstack::NativeAct,
+        act: crate::runtime::function::NativeAct,
     ) -> Result<(), LuaError> {
         if self.frames.len() as i32 >= self.g.ci_hint {
             return self.push_native_counted(act);
@@ -137,7 +137,7 @@ impl Vm {
         nargs: u32,
         ccmt: u8,
     ) -> Result<(), LuaError> {
-        use crate::vm::callstack::NativeAct;
+        use crate::runtime::function::NativeAct;
         let depth = self.frames.len();
         if depth as i32 >= self.g.ci_hint {
             return self.push_native_counted(NativeAct::new(nc, func_slot, nargs, depth, ccmt));
@@ -159,7 +159,7 @@ impl Vm {
     #[inline(never)]
     fn push_native_counted(
         &mut self,
-        act: crate::vm::callstack::NativeAct,
+        act: crate::runtime::function::NativeAct,
     ) -> Result<(), LuaError> {
         if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
             self.grow_frames()?;

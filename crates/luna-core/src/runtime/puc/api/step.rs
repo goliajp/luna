@@ -9,17 +9,16 @@ use crate::runtime::puc::Param;
 use crate::runtime::puc::for_heap::ShrinkAt;
 use crate::runtime::puc::pace::*;
 use crate::runtime::puc::step::*;
-use crate::vm::LuaError;
 
 /// PUC `luaC_step`: the step that fell due.
-pub(crate) fn puc_step<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+pub(crate) fn puc_step<H: StepHost + ?Sized>(h: &mut H) -> Result<(), H::Error> {
     step_traced(h, true)
 }
 
 /// A full collection's steps from its finalizers to its pause
 /// (`luaC_runtilstate(L, bitmask(GCSpause))`); the steps run whether
 /// or not the collector runs.
-pub(crate) fn gc_steps_to_pause<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+pub(crate) fn gc_steps_to_pause<H: StepHost + ?Sized>(h: &mut H) -> Result<(), H::Error> {
     let d = h.heap().puc.dialect;
     h.heap().puc.pace.enter(if d == Dialect::L51 {
         St::Finalize
@@ -40,7 +39,7 @@ pub(crate) fn gc_steps_to_pause<H: StepHost + ?Sized>(h: &mut H) -> Result<(), L
 /// 5.3 on, a full collection first runs the finalizers left from a cycle
 /// whose finalizer raised, to its pause (`luaC_runtilstate(L,
 /// bitmask(GCSpause))` from `GCScallfin`), before its own cycle.
-pub(crate) fn gc_finish_finalizers<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+pub(crate) fn gc_finish_finalizers<H: StepHost + ?Sized>(h: &mut H) -> Result<(), H::Error> {
     if h.heap().puc.pace.state() == St::CallFin {
         gc_steps_to_pause(h)?;
     }
@@ -57,7 +56,7 @@ pub(crate) fn lua_step_skipped(heap: &crate::runtime::heap::Heap) -> bool {
 /// `lua_gc(L, LUA_GCSTEP, n)` (`collectgarbage("step", n)`) in
 /// incremental mode: the debt it sets and the steps it runs, whether
 /// or not the collector is stopped; true when a cycle ended.
-pub(crate) fn gc_lua_step<H: StepHost + ?Sized>(h: &mut H, n: i64) -> Result<bool, LuaError> {
+pub(crate) fn gc_lua_step<H: StepHost + ?Sized>(h: &mut H, n: i64) -> Result<bool, H::Error> {
     if lua_step_skipped(h.heap()) {
         return Ok(false);
     }

@@ -64,7 +64,7 @@ pub struct Coro {
     /// the frames and the natives running in it when an error killed it, as
     /// PUC leaves a dead thread's stack in place: what `debug.traceback`,
     /// `debug.getinfo` and `Vm::coroutine_error_traceback` see of it
-    pub(crate) dead: Option<crate::vm::callstack::DeadStack>,
+    pub(crate) dead: Option<crate::runtime::function::DeadStack>,
     /// while it waits on a coroutine it resumed (status normal): its own
     /// running natives, as indices into the Vm's `running_natives`
     pub(crate) natives: std::ops::Range<usize>,

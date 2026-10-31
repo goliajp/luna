@@ -164,7 +164,7 @@ macro_rules! native_call {
         // through a scope guard.
         // a tail call resolved its `__call` chain before
         // calling here and passed the count in tail_ccmt
-        $vm.push_native(crate::vm::callstack::NativeAct::new(
+        $vm.push_native(crate::runtime::function::NativeAct::new(
             nc,
             func_slot,
             nargs,

@@ -6,6 +6,8 @@ use super::*;
 /// What a step needs of the VM: the threads it holds and their stacks, the
 /// marking from its roots, its finalizers.
 pub(crate) trait StepHost {
+    /// What running a finalizer can raise.
+    type Error;
     fn heap(&mut self) -> &mut Heap;
     /// The running thread and the main one, as the collector finds them.
     fn running(&self) -> Running;
@@ -43,7 +45,7 @@ pub(crate) trait StepHost {
     /// it freed; `None` once the list is done.
     fn sweep_quota(&mut self, quota: i64) -> Option<(i64, i64)>;
     /// `GCTM`: the next finalizer run.
-    fn run_finalizer(&mut self, propagate: bool) -> Result<(), LuaError>;
+    fn run_finalizer(&mut self, propagate: bool) -> Result<(), Self::Error>;
     /// Whether the stack has room for a finalizer's call.
     fn finalizer_has_room(&mut self, closing: bool) -> bool;
     /// 5.2's `sweepthread` of coroutine `h`, which the sweep just kept
