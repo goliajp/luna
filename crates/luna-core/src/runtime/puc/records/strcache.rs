@@ -96,5 +96,3 @@ impl StrCache {
         });
     }
 }
-
-impl Heap {}

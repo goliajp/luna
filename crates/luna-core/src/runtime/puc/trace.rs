@@ -3,7 +3,6 @@
 //! records' counts.
 
 use super::step::StepHost;
-use super::*;
 use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::pace::St;
 
@@ -85,5 +84,3 @@ pub(in crate::runtime) fn trace_full_end<H: StepHost + ?Sized>(h: &mut H) {
         h.heap().hooks.trace.line(format_args!("x"));
     }
 }
-
-impl Heap {}

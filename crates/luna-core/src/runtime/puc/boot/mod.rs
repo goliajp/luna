@@ -70,8 +70,6 @@ impl Heap {
     }
 }
 
-impl Heap {}
-
 impl Heap {
     /// A string just made: counted, or, while luna builds its own objects,
     /// marked as one PUC has not made.

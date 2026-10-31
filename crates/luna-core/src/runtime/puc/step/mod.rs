@@ -17,7 +17,6 @@ mod d54;
 mod d55;
 mod full;
 mod host;
-mod mode;
 mod pause;
 #[cfg(test)]
 mod tests;

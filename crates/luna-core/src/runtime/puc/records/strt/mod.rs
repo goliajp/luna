@@ -247,8 +247,6 @@ fn hash_52(bytes: &[u8], seed: u32) -> u32 {
     h
 }
 
-impl Heap {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

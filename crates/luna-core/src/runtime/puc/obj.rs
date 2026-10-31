@@ -118,5 +118,3 @@ impl PucObj {
         }
     }
 }
-
-impl Heap {}

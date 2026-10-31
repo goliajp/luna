@@ -65,5 +65,3 @@ pub(crate) enum CiCount {
     /// all the thread has
     Allocated,
 }
-
-impl Heap {}
