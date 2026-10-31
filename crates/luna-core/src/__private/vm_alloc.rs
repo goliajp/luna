@@ -7,6 +7,14 @@ use crate::runtime::heap::Gc;
 use crate::runtime::mem::LVec;
 use crate::vm::Vm;
 
+/// `Vm::jit_gc_due`'s op: the one before the pc compiled code resumes at.
+pub const JIT_GC_PREV: u32 = u32::MAX;
+/// `Vm::jit_gc_due`'s op: the call that entered the frame it resumes in.
+pub const JIT_GC_CALL: u32 = u32::MAX - 1;
+/// Where the point a collection step falls due at lies from the count
+/// [`VmJitAlloc::jit_due_words`] points at, in bytes.
+pub const JIT_GC_LIMIT_OFFSET: i32 = crate::runtime::puc::GC_LIMIT_OFFSET as i32;
+
 /// The internals of `Vm` luna's other crates use.
 pub trait VmJitAlloc {
     /// Compiled code just allocated (or 5.2 entered a call): whether a
@@ -22,7 +30,7 @@ pub trait VmJitAlloc {
     /// `exit_ret` when [`VmJitAlloc::jit_step_window`] allowed them: 0 to
     /// go on, otherwise leave through that exit.
     fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64;
-    /// The count and, [`crate::jit::JIT_GC_LIMIT_OFFSET`] bytes after it,
+    /// The count and, [`JIT_GC_LIMIT_OFFSET`] bytes after it,
     /// the point a collection step falls due at: compiled code calls
     /// [`VmJitAlloc::jit_gc_due`] only once the count has reached it.
     fn jit_due_words(&self) -> *const usize;

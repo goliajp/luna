@@ -30,7 +30,7 @@ pub use free::*;
 pub use panic_watch::{panic_free, panics_in};
 pub use runtime::*;
 pub use types::*;
-pub use vm_alloc::VmJitAlloc;
+pub use vm_alloc::{JIT_GC_CALL, JIT_GC_LIMIT_OFFSET, JIT_GC_PREV, VmJitAlloc};
 pub use vm_host::VmHostInternals;
 pub use vm_jit::VmJitFrames;
 
