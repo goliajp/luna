@@ -65,6 +65,7 @@ impl Heap {
             no_ephemeron: !self.rules.ephemeron(),
             rules: *self.puc_rules(),
             leaf_black: LEAF,
+            count_leaves: false,
             leaf_bytes: 0,
             sizer,
             quiet: Vec::new(),
@@ -292,6 +293,7 @@ impl Heap {
             .take()
             .expect("propagate state taken outside Propagate phase");
         let (sizer, lent) = self.puc_lend();
+        let rules = *self.puc_rules();
         Marker {
             stack: self.gray.take(),
             overflow: std::mem::take(&mut self.gray_overflow),
@@ -299,8 +301,9 @@ impl Heap {
             weak: std::mem::take(&mut prop.weak),
             ephemeron: std::mem::take(&mut prop.ephemeron),
             no_ephemeron: prop.no_ephemeron,
-            rules: *self.puc_rules(),
+            rules,
             leaf_black: 0,
+            count_leaves: rules.counts_leaf_work(),
             leaf_bytes: 0,
             sizer,
             quiet: std::mem::take(&mut prop.quiet),

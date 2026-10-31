@@ -6,6 +6,14 @@
 use super::*;
 
 impl Marker {
+    /// The model's work for marking the leaf `h` (5.2 and 5.3), out of
+    /// line: the other dialects' marking does not call it.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn count_leaf(&mut self, h: Gc<GcHeader>) {
+        self.leaf_bytes += self.rules.leaf_work(h);
+    }
+
     /// Whether PUC marks `h` with what it holds as soon as it marks it.
     ///
     /// # Safety
@@ -56,8 +64,8 @@ impl Marker {
                 if !is_white(f) {
                     return;
                 }
-                if self.rules.counts_leaf_work() {
-                    self.leaf_bytes += self.rules.leaf_work(n);
+                if self.count_leaves {
+                    self.count_leaf(next.hdr());
                 }
                 if let Some(s) = &mut self.sizer {
                     s.marked += s.size(n);
@@ -73,7 +81,7 @@ impl Marker {
     /// through the slow path, as `header` leaves it.
     pub(crate) fn mark_strings<'a>(&mut self, strs: impl Iterator<Item = &'a Gc<LuaStr>>) {
         let plain = !self.verify.active();
-        if !plain || self.rules.counts_leaf_work() {
+        if !plain || self.count_leaves {
             for &s in strs {
                 self.mark(s);
             }
