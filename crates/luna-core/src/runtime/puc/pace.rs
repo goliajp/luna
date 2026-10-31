@@ -44,22 +44,22 @@ pub(in crate::runtime::puc) struct Pace {
     /// (the count plus `GCdebt`)
     base: i64,
     /// 5.1 `estimate`, 5.2 to 5.4 `GCestimate`, 5.5 `GCmarked`
-    pub(in crate::runtime) estimate: i64,
+    pub(super) estimate: i64,
     /// 5.2 `GCmemtrav`: the memory the cycle has traversed
-    pub(in crate::runtime) trav: i64,
+    pub(super) trav: i64,
     /// 5.1 `gcdept`
-    pub(in crate::runtime) dept: i64,
+    pub(super) dept: i64,
     /// 5.2 and 5.3 `sweepstrgc` (5.1 too): the string table's buckets swept
-    pub(in crate::runtime) strt_swept: i64,
+    pub(super) strt_swept: i64,
     /// what is left of a sweep over one of PUC's lists luna keeps on its
     /// one list (the objects with finalizers, those to be finalized)
-    pub(in crate::runtime) fin_left: Option<i64>,
+    pub(super) fin_left: Option<i64>,
     /// 5.5: markings count what they mark (`GCmarked`)
-    pub(in crate::runtime) count_marked: bool,
+    pub(super) count_marked: bool,
     /// the threads the VM holds, as the step under way found them
-    pub(in crate::runtime) run: Option<crate::runtime::heap::Running>,
+    pub(super) run: Option<crate::runtime::heap::Running>,
     /// 5.3 `gcfinnum`: how many finalizers the next batch runs
-    pub(in crate::runtime) fin_num: u32,
+    pub(super) fin_num: u32,
 }
 
 /// 5.1 `GCSTEPSIZE`

@@ -108,7 +108,7 @@ pub(in crate::runtime) struct HeapRules {
 }
 
 impl HeapRules {
-    pub(in crate::runtime) fn of(d: Dialect, sizes: &PucSizes) -> HeapRules {
+    pub(in crate::runtime::puc) fn of(d: Dialect, sizes: &PucSizes) -> HeapRules {
         let l51 = d == Dialect::L51;
         HeapRules {
             dialect: d,

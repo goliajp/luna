@@ -11,40 +11,40 @@ use crate::runtime::dialect::Dialect;
 
 /// The structure sizes of one dialect on one pointer width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::runtime) struct PucSizes {
+pub(in crate::runtime::puc) struct PucSizes {
     /// `TValue`: an array slot, a constant, a stack slot
-    pub tvalue: usize,
+    pub(super) tvalue: usize,
     /// a hash node
-    pub node: usize,
-    pub table: usize,
-    pub upval: usize,
-    pub proto: usize,
-    pub callinfo: usize,
+    pub(super) node: usize,
+    pub(super) table: usize,
+    pub(super) upval: usize,
+    pub(super) proto: usize,
+    pub(super) callinfo: usize,
     /// a thread (`lua_State`, with 5.3+'s extra space in front)
-    pub thread: usize,
-    pub locvar: usize,
+    pub(super) thread: usize,
+    pub(super) locvar: usize,
     /// a prototype's upvalue record (5.1: a name pointer)
-    pub upvaldesc: usize,
+    pub(super) upvaldesc: usize,
     /// 5.4+ `AbsLineInfo`
-    pub abslineinfo: usize,
-    pub ptr: usize,
+    pub(super) abslineinfo: usize,
+    pub(super) ptr: usize,
     /// a string's header; a string of `l` bytes takes `str_hdr + l + 1`
-    pub str_hdr: usize,
+    pub(super) str_hdr: usize,
     /// 5.5's long string header (else the same as `str_hdr`)
-    pub lngstr_hdr: usize,
+    pub(super) lngstr_hdr: usize,
     /// a Lua closure takes `lcl_base + lcl_per * n` with `n` upvalues
-    pub lcl_base: usize,
-    pub lcl_per: usize,
+    pub(super) lcl_base: usize,
+    pub(super) lcl_per: usize,
     /// a C closure takes `ccl_base + ccl_per * n`
-    pub ccl_base: usize,
-    pub ccl_per: usize,
+    pub(super) ccl_base: usize,
+    pub(super) ccl_per: usize,
     /// userdata: up to 5.3 a header and the block; 5.4+ the block after
     /// `udata0_off` without user values, else after `udata_uv_off` and the
     /// user values
-    pub udata_hdr: usize,
-    pub udata0_off: usize,
-    pub udata_uv_off: usize,
-    pub uvalue: usize,
+    pub(super) udata_hdr: usize,
+    pub(super) udata0_off: usize,
+    pub(super) udata_uv_off: usize,
+    pub(super) uvalue: usize,
 }
 
 #[cfg(target_pointer_width = "64")]

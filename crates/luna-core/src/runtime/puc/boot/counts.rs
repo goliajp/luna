@@ -127,15 +127,15 @@ pub(in crate::runtime::puc) fn reserved_words(d: Dialect) -> &'static [&'static 
 /// The sizes of what `lua_newstate` allocates that luna has no object for.
 pub(in crate::runtime::puc) struct BootSizes {
     /// the global state with the main thread
-    pub lg: usize,
+    pub(in crate::runtime::puc) lg: usize,
     /// the main thread's stack slots
-    pub stack_slots: usize,
+    pub(in crate::runtime::puc) stack_slots: usize,
     /// 5.1's CallInfo array, in entries
-    pub ci_entries: usize,
+    pub(in crate::runtime::puc) ci_entries: usize,
     /// the string table's first size
-    pub strtab: usize,
+    pub(in crate::runtime::puc) strtab: usize,
     /// the registry's array part
-    pub registry_array: usize,
+    pub(in crate::runtime::puc) registry_array: usize,
 }
 
 pub(in crate::runtime::puc) fn boot_sizes(d: Dialect) -> BootSizes {
