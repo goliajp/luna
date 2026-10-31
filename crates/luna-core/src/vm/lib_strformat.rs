@@ -109,7 +109,8 @@ fn format<const PRE: bool>(
     }
     // the room asked for before each item (5.2 on), and whether a `%f`
     // asks for more (5.4 on)
-    let room = max_item(v);
+    // (`PRE`, 5.1 and 5.2, asks for 512: a constant, no register)
+    let room = if PRE { 512 } else { max_item(v) };
     let room_f = !PRE && v >= LuaVersion::Lua54;
     let mut arg = 0u32;
     let mut i = 0;
@@ -144,21 +145,24 @@ fn format<const PRE: bool>(
         if arg >= nargs {
             return Err(no_value(vm, out.len(), arg));
         }
-        // 5.4 on read the specification once (`getformat`'s bytes end at
-        // `p`), and ask for more for a `%f` once it is read (an over-long
-        // one is refused first, by the item)
-        let p = if room_f { spec_end(fmt, i) } else { i };
-        if room_f && byte_at(fmt, p) == b'f' && p - i + 1 < MAX_FORMAT - 10 {
-            let m = 110 + 308;
-            tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
-        }
-        let before = out.len();
         let mut added = Added::Sized;
         // `PRE` is 5.1 and 5.2: their build has no 5.4 item to carry
-        let item = if room_f {
-            item54::<PRE>(vm, a, arg, fmt, (i, p), &mut out, &mut added)
+        let (before, item) = if room_f {
+            // 5.4 on read the specification once (`getformat`'s bytes end
+            // at `p`), and ask for more for a `%f` once it is read (an
+            // over-long one is refused first, by the item)
+            let p = spec_end(fmt, i);
+            if byte_at(fmt, p) == b'f' && p - i + 1 < MAX_FORMAT - 10 {
+                let m = 110 + 308;
+                tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
+            }
+            let before = out.len();
+            let item = item54::<PRE>(vm, a, arg, fmt, (i, p), &mut out, &mut added);
+            (before, item)
         } else {
-            item51::<PRE>(vm, v, a, arg, fmt, i, &mut out, &mut added)
+            let before = out.len();
+            let item = item51::<PRE>(vm, v, a, arg, fmt, i, &mut out, &mut added);
+            (before, item)
         };
         i = match item {
             Ok(i) => i,
