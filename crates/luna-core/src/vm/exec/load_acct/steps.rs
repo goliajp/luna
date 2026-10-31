@@ -39,14 +39,10 @@ impl Vm {
         let open = self.heap.open_parse_frame(frame);
         let stepped = self.native_checkpoint_due();
         self.heap.close_parse_frame(open);
-        // gc-verify: the long strings the scanner made and no constant took
-        // are held by its table, so the step left them
-        #[cfg(feature = "gc-verify")]
+        // the long strings the scanner made and no constant took are held
+        // by its table, so the step left them
         for (l, _) in &r.longs {
-            assert!(
-                self.heap.holds_live(l.header()),
-                "a scanned long string was freed"
-            );
+            self.heap.hook_scanned_kept(l.header());
         }
         // 5.1 and 5.2 drop a function's table when it ends: a name the step
         // freed is made again where it is scanned next. gc-stress collects

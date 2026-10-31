@@ -14,6 +14,24 @@ impl Heap {
         let _ = h;
     }
 
+    /// gc-verify: `g`, found again by its bytes, is the string the table
+    /// holds for them.
+    #[inline(always)]
+    pub(crate) fn hook_refound(&self, g: crate::runtime::Gc<crate::runtime::LuaStr>) {
+        #[cfg(feature = "gc-verify")]
+        self.check_refound(g);
+        let _ = g;
+    }
+
+    /// gc-verify: the long string at `h`, which a scanner's table holds,
+    /// outlived the step.
+    #[inline(always)]
+    pub(crate) fn hook_scanned_kept(&self, h: *const GcHeader) {
+        #[cfg(feature = "gc-verify")]
+        assert!(self.holds_live(h), "a scanned long string was freed");
+        let _ = h;
+    }
+
     /// An object is made at `h`, which may have been freed before (a
     /// table from the pool, or memory the allocator gave again).
     #[inline(always)]

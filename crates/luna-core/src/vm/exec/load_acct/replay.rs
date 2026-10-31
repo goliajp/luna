@@ -196,8 +196,7 @@ impl<'s> Replay<'s> {
     ) -> Replay<'s> {
         let (mut opening, mut closing) = (Vec::new(), Vec::new());
         walk(proto, &mut opening, &mut closing);
-        #[cfg(any(debug_assertions, feature = "gc-trace"))]
-        crate::vm::dump::check_compiled(&proto, version);
+        crate::vm::dump::hook_compiled(&proto, version);
         Replay {
             d,
             sizes,

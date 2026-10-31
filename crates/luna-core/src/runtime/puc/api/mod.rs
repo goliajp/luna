@@ -5,12 +5,16 @@
 
 mod collector;
 mod count;
+#[cfg(feature = "gc-trace")]
+mod count_trace;
 mod loads;
 mod parse;
 mod text;
 
 pub(crate) use collector::PucCollector;
 pub(crate) use count::PucCount;
+#[cfg(feature = "gc-trace")]
+pub(crate) use count_trace::PucCountTrace;
 pub(crate) use loads::PucLoads;
 pub(crate) use parse::PucParse;
 pub(crate) use text::PucText;
