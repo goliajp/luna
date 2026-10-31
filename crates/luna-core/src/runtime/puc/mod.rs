@@ -15,7 +15,6 @@ use crate::runtime::string::{self, LuaStr};
 use crate::runtime::table::Table;
 use crate::runtime::userdata::Userdata;
 use crate::runtime::value::Value;
-use records::{parse, strcache};
 
 pub(crate) mod api;
 pub(in crate::runtime) mod boot;

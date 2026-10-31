@@ -4,6 +4,40 @@
 use super::super::*;
 use crate::runtime::puc::records::parse::ParseFrame;
 
+/// The loads under way, as the model sees them.
+pub(in crate::runtime::puc) struct Loads {
+    /// the message of the last load that failed, made as PUC makes it,
+    /// until the load's caller takes it
+    load_msg: Option<Gc<crate::runtime::LuaStr>>,
+    /// the load about to run was checked for a collection already (5.4+
+    /// `lua_load`, before its reader read)
+    load_checked: bool,
+    /// the failed load's replay shrank the stack where `luaD_pcall` caught
+    /// its error (`Heap::load_caught`)
+    load_caught: bool,
+    /// a load that must not collect is running (`Vm::load`)
+    load_holds: bool,
+    /// the loads a collection step runs in the middle of
+    pub(in crate::runtime::puc) parse: Vec<ParseFrame>,
+    /// what loads' readers counted that is set aside and not counted back
+    /// yet (`Heap::reader_call_begins`)
+    pub(in crate::runtime::puc::api) set_aside: isize,
+}
+
+impl Loads {
+    /// No load under way.
+    pub(in crate::runtime::puc) fn new() -> Loads {
+        Loads {
+            load_msg: None,
+            load_checked: false,
+            load_caught: false,
+            load_holds: false,
+            parse: Vec::new(),
+            set_aside: 0,
+        }
+    }
+}
+
 /// How many parser frames were open at some point, to return to with
 /// [`Heap::restore_parse_frames`].
 #[must_use]

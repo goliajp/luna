@@ -165,7 +165,7 @@ impl Heap {
     /// [`GC_LIMIT_OFFSET`] bytes after it, for compiled code to compare
     /// itself: no step is due while `bytes < gc_limit`.
     ///
-    /// [`GC_LIMIT_OFFSET`]: crate::runtime::puc::GC_LIMIT_OFFSET
+    /// [`GC_LIMIT_OFFSET`]: crate::runtime::puc::api::GC_LIMIT_OFFSET
     pub(crate) fn due_words(&self) -> *const usize {
         std::ptr::from_ref(&self.puc.count).cast()
     }

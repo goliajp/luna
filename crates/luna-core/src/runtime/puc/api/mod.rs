@@ -20,9 +20,11 @@ mod parse;
 mod step;
 mod text;
 
-pub(crate) use count::{CountingMark, CountingOff};
+pub(in crate::runtime::puc) use count::Count;
+pub(crate) use count::{CountingMark, CountingOff, GC_LIMIT_OFFSET};
 pub(crate) use defer::Deferred;
 use load_session::unpaired;
+pub(in crate::runtime::puc) use loads::Loads;
 pub(in crate::runtime::puc) use opening::Opening;
 pub(crate) use step::{
     change_mode, full_collect, gc_finish_finalizers, gc_full_pause, gc_full_repause, gc_lua_step,
@@ -41,6 +43,5 @@ pub(crate) use super::records::parse::{
 };
 pub(crate) use super::records::strcache::{CStr, site};
 pub(crate) use super::records::{Ghost, GhostRef};
-pub(crate) use super::state::GC_LIMIT_OFFSET;
 pub(crate) use super::step::{CiCount, StepHost};
 pub(crate) use super::thread::Thread;

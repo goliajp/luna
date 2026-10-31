@@ -6,6 +6,38 @@ use crate::runtime::heap::UNLISTED;
 use crate::runtime::mem::Oom;
 use crate::runtime::puc::records::GhostRef;
 
+/// PUC's count. A safe point compares `bytes` with `gc_limit`, side by
+/// side here, in this order: compiled code reads the two words itself
+/// (see [`GC_LIMIT_OFFSET`]).
+#[repr(C)]
+pub(in crate::runtime::puc) struct Count {
+    /// PUC's `totalbytes`: every object and block at the size PUC gives it
+    /// (`sizes`), not what luna's own objects take (see `runtime::puc`)
+    pub(in crate::runtime::puc) bytes: usize,
+    /// where the next collection step falls due (`pace`), or `usize::MAX`
+    /// while there is none: the one comparison a safe point makes
+    gc_limit: usize,
+    /// above 0, nothing is counted (objects PUC made elsewhere, or not at
+    /// all, are being built): changed only through [`CountingOff`] and
+    /// [`CountingMark`]
+    silent: u32,
+}
+
+/// Where `gc_limit` lies from `bytes` in [`Count`].
+pub(crate) const GC_LIMIT_OFFSET: usize = std::mem::offset_of!(Count, gc_limit);
+
+impl Count {
+    /// Nothing counted, and nothing counted until the dialect is known
+    /// ([`Heap::counting_begins`]).
+    pub(in crate::runtime::puc) const fn new() -> Count {
+        Count {
+            bytes: 0,
+            gc_limit: usize::MAX,
+            silent: 1,
+        }
+    }
+}
+
 /// Counting stopped once (luna builds objects PUC made elsewhere, or not
 /// at all), until [`Heap::counting_on`] takes the token back. Only
 /// [`Heap::counting_off`] makes one. A token dropped any other way is
@@ -37,6 +69,30 @@ impl Drop for CountingOff {
 pub(crate) struct CountingMark(u32);
 
 impl Heap {
+    /// Whether the count reaches the next step's due point once `more`
+    /// bytes more are counted.
+    #[inline(always)]
+    pub(in crate::runtime::puc) fn puc_due_after(&self, more: usize) -> bool {
+        self.puc.count.bytes + more >= self.puc.count.gc_limit
+    }
+
+    /// Where the next step falls due, from the pace; never while 5.1's
+    /// collector is `stopped_51` (an unreachable threshold).
+    #[inline]
+    pub(in crate::runtime::puc) fn puc_set_limit(&mut self, stopped_51: bool) {
+        self.puc.count.gc_limit = if stopped_51 {
+            usize::MAX
+        } else {
+            self.puc.pace.limit(self.puc.dialect)
+        };
+    }
+
+    /// The dialect is known: what is made from here on is counted
+    /// ([`Heap::acct_boot`]).
+    pub(in crate::runtime::puc) fn counting_begins(&mut self) {
+        self.puc.count.silent = 0;
+    }
+
     /// Where counting stands now, to return to with [`Heap::restore_counting`].
     #[inline]
     pub(in crate::runtime::puc) fn counting_mark(&self) -> CountingMark {
