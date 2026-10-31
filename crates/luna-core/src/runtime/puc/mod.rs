@@ -18,7 +18,7 @@ use crate::runtime::userdata::Userdata;
 use crate::runtime::value::Value;
 
 pub(crate) mod api;
-pub(in crate::runtime) mod boot;
+mod boot;
 mod count;
 pub(in crate::runtime) use count::{FIXED_EXT, PucKind};
 pub(in crate::runtime) mod for_heap;

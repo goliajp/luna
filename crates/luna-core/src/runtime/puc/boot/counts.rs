@@ -6,7 +6,7 @@
 use crate::runtime::dialect::Dialect;
 
 /// The tag-method names `luaT_init` makes, in its order.
-pub(in crate::runtime::puc) fn tm_names(d: Dialect) -> &'static [&'static str] {
+pub(super) fn tm_names(d: Dialect) -> &'static [&'static str] {
     match d {
         Dialect::L51 => &[
             "__index",
@@ -103,7 +103,7 @@ pub(in crate::runtime::puc) fn tm_names(d: Dialect) -> &'static [&'static str] {
 }
 
 /// The reserved words `luaX_init` makes, in its order.
-pub(in crate::runtime::puc) fn reserved_words(d: Dialect) -> &'static [&'static str] {
+pub(super) fn reserved_words(d: Dialect) -> &'static [&'static str] {
     const W51: &[&str] = &[
         "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in",
         "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
