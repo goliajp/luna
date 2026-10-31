@@ -35,6 +35,10 @@ optimization.
   `Builtin`, the array encoding (`raw`, `RawVal`), `HostStdout`, the C
   API's debug and load types, `JitState`, and the `cerrno` and
   `native_stack` modules. Their old paths are gone.
+- `ObjTag` has a new variant, `Ghost`: the header of a record the
+  collector keeps for an object PUC makes and luna does not. No value a
+  program or an embedder holds is one, but a `match` on `ObjTag` needs an
+  arm for it.
 - `TraceCompiler` and `JitStorage`, the traits a trace JIT backend
   implements, moved to `luna_core::__private` with the methods that were
   hidden from their docs.
