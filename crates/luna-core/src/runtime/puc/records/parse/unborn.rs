@@ -10,19 +10,16 @@ use super::*;
 pub(in crate::runtime::puc) struct Unborn {
     /// the objects, in the order they were made; null once forgotten
     objs: Vec<*mut GcHeader>,
-    /// loads set objects aside now
-    on: bool,
     /// the first of `objs`: luna's names PUC makes when first used
     /// (`Heap::try_intern_name`)
     names: usize,
 }
 
 impl Unborn {
-    /// Nothing set aside, and loads setting nothing aside.
+    /// Nothing set aside.
     pub(in crate::runtime::puc) fn new() -> Unborn {
         Unborn {
             objs: Vec::new(),
-            on: false,
             names: 0,
         }
     }
@@ -42,7 +39,7 @@ impl Heap {
     #[inline(always)]
     pub(in crate::runtime) unsafe fn set_aside(&mut self, h: *mut GcHeader) -> bool {
         // SAFETY: the caller's contract
-        self.puc.unborn.on && unsafe { self.set_aside_now(h) }
+        self.puc.loads.unborn_on && unsafe { self.set_aside_now(h) }
     }
 
     /// [`Heap::set_aside`] while loads set objects aside.
@@ -88,20 +85,20 @@ impl Heap {
     /// until the token goes back to [`Heap::loads_aside_back`].
     #[inline]
     pub(in crate::runtime::puc) fn set_loads_aside(&mut self, on: bool) -> LoadsAside {
-        LoadsAside(std::mem::replace(&mut self.puc.unborn.on, on))
+        LoadsAside(std::mem::replace(&mut self.puc.loads.unborn_on, on))
     }
 
     /// Where loads were set aside at some point (a load unwound by running
     /// out of memory goes back there).
     #[inline]
     pub(in crate::runtime::puc) fn loads_aside_mark(&self) -> LoadsAside {
-        LoadsAside(self.puc.unborn.on)
+        LoadsAside(self.puc.loads.unborn_on)
     }
 
     /// Back to what [`Heap::set_loads_aside`] changed.
     #[inline]
     pub(in crate::runtime::puc) fn loads_aside_back(&mut self, a: LoadsAside) {
-        self.puc.unborn.on = a.0;
+        self.puc.loads.unborn_on = a.0;
     }
 
     /// [`Heap::loads_aside_back`] after making luna's names: what is set
