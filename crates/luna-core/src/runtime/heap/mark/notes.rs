@@ -76,7 +76,9 @@ impl Marker {
 
     /// 5.5: what the marking counted, taken back by the model.
     #[inline]
-    pub(in crate::runtime) fn take_sizer(&mut self) -> Option<super::super::collect::Sizer> {
+    pub(in crate::runtime) fn take_sizer(
+        &mut self,
+    ) -> Option<crate::runtime::puc::for_heap::Sizer> {
         self.sizer.take()
     }
 }

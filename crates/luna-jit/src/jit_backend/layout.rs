@@ -62,7 +62,6 @@ pub(crate) const TABLE_READONLY_BYTE_MASK: i64 =
 /// `runtime::table::jit_layout` module computes this against the live
 /// `Table` struct, then we re-export it here so trace.rs can refer to
 /// it locally.
-#[allow(dead_code)]
 pub(crate) const TABLE_NODES_PTR_OFFSET: usize =
     luna_core::runtime::table::jit_layout::TABLE_NODES_OFFSET;
 /// The `u32` node mask (node count - 1, `u32::MAX` when empty). The IC's
@@ -74,34 +73,23 @@ pub(crate) const TABLE_NODE_MASK_OFFSET: usize =
 /// byte (`#[repr(C, u8)]`) lives at offset 0 of the Value, so the
 /// key's tag is at `NODE_KEY_OFFSET` (= 0) and the key's raw
 /// 8-byte payload at `NODE_KEY_OFFSET + 8`.
-#[allow(dead_code)]
 pub(crate) const NODE_KEY_OFFSET: usize = luna_core::runtime::table::jit_layout::NODE_KEY_OFFSET;
 /// Byte offset of `val: Value` within a `Node`. The val's tag is
 /// at `NODE_VAL_OFFSET` (= 16), payload at `NODE_VAL_OFFSET + 8`.
-#[allow(dead_code)]
 pub(crate) const NODE_VAL_OFFSET: usize = luna_core::runtime::table::jit_layout::NODE_VAL_OFFSET;
 /// Total `Node` size in bytes — stride for `node_addr = nodes_ptr +
 /// slot_idx * SIZEOF_NODE`.
-#[allow(dead_code)]
 pub(crate) const SIZEOF_NODE: usize = luna_core::runtime::table::jit_layout::SIZEOF_NODE;
 /// Byte offset of the value's tag byte inside the `val: Value` field
 /// of a `Node`. Value is `#[repr(C, u8)]`, discriminant at byte 0.
-#[allow(dead_code)]
 pub(crate) const NODE_VAL_TAG_OFFSET: usize = NODE_VAL_OFFSET;
 /// Byte offset of the value's 8-byte raw payload inside `val: Value`.
 /// 7 bytes of alignment padding sit between the tag and the payload.
-#[allow(dead_code)]
 pub(crate) const NODE_VAL_RAW_OFFSET: usize = NODE_VAL_OFFSET + 8;
 /// Byte offset of the key's 8-byte raw payload inside `key: Value`.
 /// IC's "slot key still matches" guard reads 8 bytes here and
 /// compares against the recorder-cached `Gc<LuaStr>` pointer bits.
-#[allow(dead_code)]
 pub(crate) const NODE_KEY_RAW_OFFSET: usize = NODE_KEY_OFFSET + 8;
-/// Byte offset of the key's tag byte (`#[repr(C, u8)]`). The IC
-/// also guards `key.tag == raw::STR` so a recycled slot that happens
-/// to hold a non-string key with matching raw bits would deopt.
-#[allow(dead_code)]
-pub(crate) const NODE_KEY_TAG_OFFSET: usize = NODE_KEY_OFFSET;
 
 pub(super) const RAW_TAG_INT: i64 = luna_core::__private::raw::INT as i64;
 pub(super) const RAW_TAG_FLOAT: i64 = luna_core::__private::raw::FLOAT as i64;
