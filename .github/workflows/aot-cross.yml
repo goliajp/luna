@@ -17,9 +17,8 @@ name: aot-cross
 #
 # Run conditions:
 # - Push to develop / master
-# - Manual workflow_dispatch
-# - Weekly cron (Mondays 06:00 UTC) — picks up cranelift / target
-#   spec drift without a code commit
+# - Manual workflow_dispatch (the pre-merge branch check dispatches it
+#   on the branch head)
 #
 # Non-blocking — failure here does not gate PR merge (the matrix
 # expands the cross-compile reach, but tier-1 targets in ci.yml are
@@ -32,8 +31,6 @@ on:
   pull_request:
     branches: [develop, master]
     paths-ignore: ['**/*.md', 'docs/**', 'web/**']
-  schedule:
-    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 # a newer push supersedes a running check; master and tag runs are release runs and always finish

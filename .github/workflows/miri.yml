@@ -1,4 +1,4 @@
-# Miri nightly CI.
+# Miri CI.
 #
 # Miri = stricter than ASAN: catches UB (uninitialized reads,
 # aliasing violations, integer overflow under SB/TB models) +
@@ -20,10 +20,6 @@
 name: miri
 
 on:
-  schedule:
-    # Nightly at 04:00 UTC — staggered after asan.yml (03:00) so
-    # the runners aren't queued behind each other.
-    - cron: '0 4 * * *'
   workflow_dispatch:
 
 jobs:
@@ -36,10 +32,6 @@ jobs:
       MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-disable-isolation
     steps:
       - uses: actions/checkout@v7
-        with:
-          # scheduled runs start on the default branch (master, the last
-          # release); test the code that is about to ship instead
-          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
 
       - name: Install nightly + miri
         run: |
@@ -98,8 +90,6 @@ jobs:
       SHARD: ${{ toJSON(matrix.shard) }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
 
       - name: Install nightly + miri
         run: |
