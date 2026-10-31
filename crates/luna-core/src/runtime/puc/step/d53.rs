@@ -54,7 +54,9 @@ pub(super) fn run_a_few_finalizers<H: StepHost + ?Sized>(h: &mut H) -> Result<i6
     Ok(i64::from(i))
 }
 
-pub(super) fn singlestep_53<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, LuaError> {
+pub(in crate::runtime::puc) fn singlestep_53<H: StepHost + ?Sized>(
+    h: &mut H,
+) -> Result<i64, LuaError> {
     let s = h.heap().puc.sizes;
     let cost = sweepmax_52(&s) * sweepcost_52(&s);
     Ok(match h.heap().puc.pace.state() {

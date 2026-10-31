@@ -4,8 +4,7 @@
 use super::*;
 use crate::numeric::c_pointer;
 use crate::runtime::LuaStr;
-use crate::runtime::puc::api::PucText;
-use crate::runtime::puc::fmt::FmtArg;
+use crate::runtime::puc::api::FmtArg;
 
 impl Vm {
     /// `luaL_tolstring`: `__tostring` (whose result must be a string or a

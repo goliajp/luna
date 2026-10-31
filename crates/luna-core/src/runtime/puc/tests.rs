@@ -10,7 +10,7 @@ use crate::version::LuaVersion;
 use crate::vm::{LuaError, Vm};
 
 thread_local! {
-    static OFF: std::cell::RefCell<Vec<super::state::CountingOff>> = const { std::cell::RefCell::new(Vec::new()) };
+    static OFF: std::cell::RefCell<Vec<super::api::CountingOff>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn quiet(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {

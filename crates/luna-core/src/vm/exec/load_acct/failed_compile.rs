@@ -8,7 +8,6 @@
 use super::*;
 use crate::frontend::ast::Names;
 use crate::frontend::parser::Marks;
-use crate::runtime::puc::api::{PucLoads, PucParse};
 
 impl Vm {
     /// Count the load of `src` that failed with `e`, its compiled tree's
@@ -20,7 +19,7 @@ impl Vm {
         e: &SyntaxError,
         names: &Names,
         rec: (&Marks, &Scanned),
-        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::api::Deferred)>,
     ) -> Result<(), SyntaxError> {
         let opts = std::mem::take(&mut self.compile_scratch.replay);
         let (Some(proto), Some((at, near))) = (opts.sealed, opts.at) else {

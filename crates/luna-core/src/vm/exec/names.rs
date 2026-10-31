@@ -2,7 +2,6 @@
 //! name of a function.
 
 use super::*;
-use crate::runtime::puc::api::PucText;
 
 impl Vm {
     /// PUC's debug-API placeholder for an unnamed vararg slot returned by

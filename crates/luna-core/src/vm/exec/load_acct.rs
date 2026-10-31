@@ -20,11 +20,8 @@ use crate::compiler::puc_rec::{At, Rec};
 use crate::frontend::parser::scan::{ScanKind, ScanText, Scanned};
 use crate::runtime::Proto;
 use crate::runtime::dialect::Dialect;
-use crate::runtime::puc::PucObj;
-use crate::runtime::puc::api::{PucCount, PucParse};
-use crate::runtime::puc::records::parse::{
-    FuncArrays, GrowVec, PKey, PTab, ParserArray, ParserSizes,
-};
+use crate::runtime::puc::api::PucObj;
+use crate::runtime::puc::api::{FuncArrays, GrowVec, PKey, PTab, ParserArray, ParserSizes};
 
 mod consts;
 mod events;
@@ -54,7 +51,7 @@ impl Vm {
         chunk: &crate::frontend::ast::Chunk,
         rec: (&crate::frontend::parser::Marks, &Scanned),
         cl: Gc<LuaClosure>,
-        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::api::Deferred)>,
     ) -> Result<(), SyntaxError> {
         let proto = cl.proto;
         let (marks, scanned) = rec;

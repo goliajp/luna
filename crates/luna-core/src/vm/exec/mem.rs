@@ -12,7 +12,6 @@
 use super::*;
 use crate::runtime::LuaStr;
 use crate::runtime::mem::{LVec, Oom};
-use crate::runtime::puc::api::{PucCollector, PucCount};
 use crate::runtime::table::TableError;
 
 impl Vm {
@@ -50,12 +49,12 @@ impl Vm {
         // luna makes without counting (a load)
         let counting = self.heap.count_all();
         let young = self.heap.young_len();
-        crate::runtime::puc::step::full_collect(self, Some(young));
+        crate::runtime::puc::api::full_collect(self, Some(young));
         self.heap.keep_young(young);
         self.heap.release_pool();
         self.gc_top = live_top;
         self.heap.finalizers_due();
-        crate::runtime::puc::step::gc_full_pause(self);
+        crate::runtime::puc::api::gc_full_pause(self);
         self.heap.restore_counting(counting);
         crate::runtime::gc_hooks::hook_full_end(self);
         true

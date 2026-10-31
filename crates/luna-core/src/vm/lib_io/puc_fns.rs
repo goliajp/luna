@@ -4,7 +4,6 @@ use super::*;
 use crate::runtime::Builtin;
 use crate::vm::opening::{Ctor, Natives, Opener, run_open};
 
-use crate::runtime::puc::api::{PucCollector, PucLoads};
 use Ctor::{C, F};
 
 pub(crate) const PUC_FNS: Natives = &[

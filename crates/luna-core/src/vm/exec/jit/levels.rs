@@ -5,7 +5,6 @@
 //! crosses what the last visit allowed (`JitLimits`).
 
 use super::*;
-use crate::runtime::puc::api::PucCount;
 
 /// When compiled code next needs `Vm::jit_self_level`: a level whose
 /// base is at `base` or above.
@@ -64,12 +63,16 @@ impl Vm {
             LuaVersion::Lua52 => {
                 let stack = if grows {
                     let n = (2 * self.stack_size + max) as usize;
-                    self.heap.puc_size(crate::runtime::puc::PucObj::Slots(n))
+                    self.heap
+                        .puc_size(crate::runtime::puc::api::PucObj::Slots(n))
                 } else {
                     0
                 };
                 self.jit_due_after(
-                    stack + self.heap.puc_size(crate::runtime::puc::PucObj::CallInfo),
+                    stack
+                        + self
+                            .heap
+                            .puc_size(crate::runtime::puc::api::PucObj::CallInfo),
                 )
             }
             LuaVersion::Lua53 | LuaVersion::Lua54 => grows && self.jit_due_after(0),

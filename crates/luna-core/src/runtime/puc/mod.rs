@@ -4,7 +4,8 @@
 //! it through `for_heap`, the counting entries every allocation goes
 //! through (`count.rs`, `parts.rs`, `Heap::counting`, `Heap::uncounted`,
 //! `Heap::puc_size`) and the methods of the records it keeps (`records`);
-//! the VM, the libraries and the JIT through the traits of `api`.
+//! the VM, the libraries and the JIT through `api` alone, the only module
+//! visible outside the runtime.
 
 use std::ptr;
 
@@ -17,38 +18,33 @@ use crate::runtime::value::Value;
 use records::{parse, strcache};
 
 pub(crate) mod api;
-pub(crate) mod boot;
-mod control;
+pub(in crate::runtime) mod boot;
 mod count;
-pub(crate) use count::*;
-mod defer;
+pub(in crate::runtime) use count::*;
 pub(in crate::runtime) mod for_heap;
 mod lent;
-pub(crate) use lent::Lent;
-mod load_session;
-mod loads;
-pub(crate) use defer::Deferred;
-pub(crate) mod fmt;
+pub(in crate::runtime) use lent::Lent;
+pub(in crate::runtime) mod fmt;
 mod obj;
-pub(crate) mod pace;
+pub(in crate::runtime) mod pace;
 mod params;
-pub(crate) use obj::PucObj;
-pub(crate) use params::{GcParams, LUNA_PAUSE, LUNA_STEPMUL, Param};
+pub(in crate::runtime) use obj::PucObj;
+pub(in crate::runtime) use params::{GcParams, Param};
 mod parts;
 mod proto;
-pub(crate) use proto::ENV51;
-pub(crate) mod records;
-pub(crate) mod size;
+pub(in crate::runtime) use proto::ENV51;
+pub(in crate::runtime) mod records;
+pub(in crate::runtime) mod size;
 mod state;
-pub(crate) mod step;
+pub(in crate::runtime) mod step;
 #[cfg(feature = "gc-trace")]
-pub(crate) mod trace;
+pub(in crate::runtime) mod trace;
 #[cfg(feature = "gc-verify")]
-pub(crate) mod verify;
-pub(crate) use state::{GC_LIMIT_OFFSET, PucModel};
+pub(in crate::runtime) mod verify;
+pub(in crate::runtime) use state::PucModel;
 mod thread;
-pub(crate) use thread::{BASIC_CI_51, Thread};
+pub(in crate::runtime) use thread::{BASIC_CI_51, Thread};
 #[cfg(test)]
 mod tests;
-pub(crate) mod work;
-pub(crate) use work::native_puc_upvals;
+pub(in crate::runtime) mod work;
+pub(in crate::runtime) use work::native_puc_upvals;

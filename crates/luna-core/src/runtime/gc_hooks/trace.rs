@@ -19,7 +19,7 @@ impl Heap {
 
     /// gc-trace: an object of PUC's `kind` and `size` bytes counted.
     #[inline(always)]
-    pub(crate) fn hook_alloc(&mut self, kind: PucKind, size: usize) {
+    pub(in crate::runtime) fn hook_alloc(&mut self, kind: PucKind, size: usize) {
         #[cfg(feature = "gc-trace")]
         {
             let tag = crate::runtime::gc_trace::puc_tag(kind, self.dialect());

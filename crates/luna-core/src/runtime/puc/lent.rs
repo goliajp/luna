@@ -8,7 +8,7 @@ use crate::runtime::puc::records::parse::ParseFrame;
 
 /// The model's values a marker holds.
 #[derive(Default)]
-pub(crate) struct Lent {
+pub(in crate::runtime) struct Lent {
     /// 5.1's environment records
     pub(in crate::runtime) env51: Option<Box<Env51>>,
     /// the loads a step runs inside

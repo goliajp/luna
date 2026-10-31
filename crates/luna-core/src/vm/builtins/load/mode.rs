@@ -2,8 +2,7 @@
 //! refuses the chunk, an error from the reader.
 
 use super::*;
-use crate::runtime::puc::api::PucParse;
-use crate::runtime::puc::fmt::FmtArg;
+use crate::runtime::puc::api::FmtArg;
 
 /// What `lua_load` counted before its parser met an error, when no replay
 /// counts it: 5.5's anchor table and the reader's calls so far.

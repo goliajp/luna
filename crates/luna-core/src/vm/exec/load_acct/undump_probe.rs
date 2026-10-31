@@ -41,7 +41,7 @@ impl Vm {
         let long = cut_long.map(|len| {
             let size = len
                 .checked_add(1 << 8)
-                .map(|_| self.heap.puc_bytes(PucObj::Str { len, long: true }));
+                .map(|_| self.heap.puc_size(PucObj::Str { len, long: true }));
             (evs.len(), Some(size.unwrap_or(usize::MAX)))
         });
         let blocks: Vec<(usize, Option<usize>)> = arrays.chain(long).collect();

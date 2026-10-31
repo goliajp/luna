@@ -2,7 +2,6 @@
 
 use super::stack::size::{self as stack_size, Grown};
 use super::*;
-use crate::runtime::puc::api::PucCollector;
 
 impl Vm {
     /// Register a table for finalization if its (just-set) metatable carries a
@@ -53,8 +52,8 @@ impl Vm {
         if self.heap.full_calls_pending_first() {
             return self.call_all_pending(true);
         }
-        crate::runtime::puc::step::gc_steps_to_pause(self)?;
-        crate::runtime::puc::step::gc_full_repause(self);
+        crate::runtime::puc::api::gc_steps_to_pause(self)?;
+        crate::runtime::puc::api::gc_full_repause(self);
         Ok(())
     }
 
@@ -176,7 +175,7 @@ impl Vm {
     fn warn_uncallable_gc(&mut self, gc: Value) {
         // `luaG_callerror`: the name part is a string of its own
         // (`formatvarinfo`), then `typeerror`'s message
-        use crate::runtime::puc::fmt::FmtArg;
+        use crate::runtime::puc::api::FmtArg;
         let tn = self.obj_typename(gc);
         let v = self.lib_scope(|vm| {
             let extra = vm.pushfstring(
@@ -247,7 +246,7 @@ impl Vm {
         };
         // made piece by piece, as `luaO_pushfstring` makes it
         let fmt = b"error in __gc metamethod (%s)";
-        let v = match self.pushfstring(fmt, &[crate::runtime::puc::fmt::FmtArg::S(&msg)]) {
+        let v = match self.pushfstring(fmt, &[crate::runtime::puc::api::FmtArg::S(&msg)]) {
             Ok(s) => Value::Str(s),
             Err(e) => e.0,
         };

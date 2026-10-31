@@ -3,7 +3,6 @@
 //! the function's name.
 
 use super::*;
-use crate::runtime::puc::api::PucText;
 use crate::vm::callstack::func_name::FuncName;
 
 impl Vm {

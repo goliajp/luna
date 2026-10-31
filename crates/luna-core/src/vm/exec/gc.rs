@@ -1,7 +1,6 @@
 //! Collector pacing, the root set and full collections.
 
 use super::*;
-use crate::runtime::puc::api::PucCollector;
 #[cfg(feature = "gc-verify")]
 mod gc_verify;
 pub(super) mod hooks;
@@ -23,7 +22,7 @@ impl Vm {
     pub(crate) fn gc_switch_mode(&mut self, new: &'static str) -> &'static str {
         let prev = std::mem::replace(&mut self.gc_mode, new);
         self.heap.hook_mode(new == "generational");
-        crate::runtime::puc::step::change_mode(self, prev, new);
+        crate::runtime::puc::api::change_mode(self, prev, new);
         prev
     }
 
@@ -68,7 +67,7 @@ impl Vm {
         // (`finish_results`, the Op::TailCall collapse, pcall unwind) clears
         // the slots it vacates, mirroring PUC's L->top discipline.
         self.gc_top = live_top;
-        crate::runtime::puc::step::puc_step(self)
+        crate::runtime::puc::api::puc_step(self)
     }
 
     /// The running stack's contract with the collector (PUC
@@ -88,10 +87,10 @@ impl Vm {
     /// `luaC_fullgc`), finishing an incremental cycle in progress first.
     /// Returns the number of objects freed.
     pub(crate) fn full_collect(&mut self) -> usize {
-        let freed = crate::runtime::puc::step::full_collect(self, None);
+        let freed = crate::runtime::puc::api::full_collect(self, None);
         // there may be objects to be finalized
         self.heap.finalizers_due();
-        crate::runtime::puc::step::gc_full_pause(self);
+        crate::runtime::puc::api::gc_full_pause(self);
         freed
     }
 
@@ -122,7 +121,7 @@ impl Vm {
             if self.heap.full_calls_pending_first() {
                 self.call_all_pending(true)?;
             } else {
-                crate::runtime::puc::step::gc_finish_finalizers(self)?;
+                crate::runtime::puc::api::gc_finish_finalizers(self)?;
                 self.clear_dead_stack();
             }
             freed = self.full_collect();

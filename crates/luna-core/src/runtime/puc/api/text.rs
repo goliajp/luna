@@ -2,71 +2,148 @@
 //! makes them.
 
 use super::super::*;
-use crate::numeric::Num;
-use crate::runtime::heap::Heap;
-use crate::runtime::mem::Oom;
-use crate::runtime::puc::fmt::FmtArg;
-use crate::runtime::puc::records::strcache::CStr;
+use crate::numeric::{self, Num};
+use crate::runtime::dialect::Dialect;
+use crate::runtime::mem::{LVec, Oom};
+use crate::runtime::puc::fmt::*;
+use crate::runtime::puc::records::strcache::*;
 
-/// The strings PUC makes formatting messages and joining strings, as PUC
-/// makes them.
-pub(crate) trait PucText {
+impl Heap {
     /// The text of a number as PUC writes it (`lua_number2str`,
     /// `tostringbuff`); 5.1 and 5.2 have no integers.
-    fn number_text(&self, n: Num) -> String;
+    pub(crate) fn number_text(&self, n: Num) -> String {
+        let n = match (self.puc.dialect, n) {
+            (Dialect::L51 | Dialect::L52, Num::Int(i)) => Num::Float(i as f64),
+            (_, n) => n,
+        };
+        numeric::num_to_string_for(n, self.float_fmt())
+    }
+
+    /// The string of `fmt` with each directive replaced by the next of
+    /// `args`, made as PUC's `lua_pushfstring` makes it.
+    pub(crate) fn pushfstring(
+        &mut self,
+        fmt: &[u8],
+        args: &[FmtArg<'_>],
+    ) -> Result<Gc<LuaStr>, Oom> {
+        match self.puc.dialect {
+            Dialect::L54 => self.pushfstring_54(fmt, args),
+            Dialect::L55 => self.pushfstring_55(fmt, args),
+            _ => self.pushfstring_pieces(fmt, args),
+        }
+    }
+
     /// 5.1 and 5.2's buffer for concatenations made room for `n` bytes
     /// (`luaZ_openspace`, at least `LUA_MINBUFFER`).
-    fn open_gbuff(&mut self, n: usize) -> Result<(), Oom>;
+    pub(crate) fn open_gbuff(&mut self, n: usize) -> Result<(), Oom> {
+        let old = self.puc.records.gbuff.size();
+        if n > old {
+            let mem = self.mem();
+            let size = n.max(32);
+            let b = self
+                .puc
+                .records
+                .gbuff
+                .0
+                .get_or_insert_with(|| LVec::new(mem));
+            b.reserve_exact(size)?;
+            let waited = self.refusal_waits();
+            self.acct_part(old, size);
+            // gc-trace: `LUNA_GC_REFUSE` refused this growth of PUC's, which is
+            // then as if the allocation failed
+            if let Some(bytes) = self.take_new_refusal(waited) {
+                self.puc.count.bytes = (self.puc.count.bytes as i64 - bytes) as usize;
+                self.shrink_gbuff_to(old);
+                return Err(Oom(mem));
+            }
+        }
+        Ok(())
+    }
+
     /// PUC `luaV_concat(L, total)` over the top `total` values of `st`,
     /// every one a string or a number: what it makes, in its order, and
     /// the one value it leaves in their place.
-    fn puc_concat(&mut self, st: &mut Vec<Value>, total: usize) -> Result<(), Oom>;
-    /// The string of `fmt` with each directive replaced by the next of
-    /// `args`, made as PUC's `lua_pushfstring` makes it.
-    fn pushfstring(&mut self, fmt: &[u8], args: &[FmtArg<'_>]) -> Result<Gc<LuaStr>, Oom>;
+    pub(crate) fn puc_concat(&mut self, st: &mut Vec<Value>, total: usize) -> Result<(), Oom> {
+        let d = self.puc.dialect;
+        let mut total = total;
+        while total > 1 {
+            let top = st.len();
+            self.tostring_value(&mut st[top - 1])?;
+            let Value::Str(y) = st[top - 1] else {
+                unreachable!("converted above")
+            };
+            let mut n = 2;
+            if y.is_empty() {
+                self.tostring_value(&mut st[top - 2])?;
+            } else if d >= Dialect::L52 && matches!(st[top - 2], Value::Str(s) if s.is_empty()) {
+                st[top - 2] = Value::Str(y);
+            } else {
+                let mut tl = y.len();
+                n = 1;
+                while n < total {
+                    self.tostring_value(&mut st[top - n - 1])?;
+                    let Value::Str(s) = st[top - n - 1] else {
+                        unreachable!("converted above")
+                    };
+                    tl += s.len();
+                    n += 1;
+                }
+                if d <= Dialect::L52 {
+                    self.open_gbuff(tl)?;
+                }
+                let parts: Vec<&[u8]> = st[top - n..]
+                    .iter()
+                    .map(|v| match v {
+                        Value::Str(s) => s.as_bytes(),
+                        _ => unreachable!("converted above"),
+                    })
+                    .collect();
+                let s = self.try_intern_parts(&parts)?;
+                st[top - n] = Value::Str(s);
+            }
+            st.truncate(top - (n - 1));
+            total -= n - 1;
+        }
+        Ok(())
+    }
+
+    /// PUC `luaS_new` of the C string at `at` holding `bytes`: from 5.3 a
+    /// long string found in the cache at that address, else a new one,
+    /// which the cache keeps there.
+    pub(crate) fn intern_at(&mut self, at: CStr, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
+        let cached = matches!(self.puc.dialect, Dialect::L53 | Dialect::L54 | Dialect::L55)
+            && bytes.len() > string::MAX_SHORT_LEN;
+        if let Some(s) = self.puc.records.strcache.find(at, bytes).filter(|_| cached) {
+            return Ok(s);
+        }
+        let s = self.try_intern(bytes)?;
+        if cached {
+            self.puc.records.strcache.put(at, s);
+        }
+        Ok(s)
+    }
+
     /// The parser's string of a chunk's name (`luaY_parser`'s `luaS_new`),
     /// `name` the Lua string whose characters it is, if any: that string
     /// itself where it is interned (5.1 interns every string), else a long
     /// string through the cache.
-    fn chunk_name(&mut self, chunkname: &[u8], name: Option<Gc<LuaStr>>)
-    -> Result<Gc<LuaStr>, Oom>;
-    /// PUC `luaS_new` of the C string at `at` holding `bytes`: from 5.3 a
-    /// long string found in the cache at that address, else a new one,
-    /// which the cache keeps there.
-    fn intern_at(&mut self, at: CStr, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom>;
-}
-
-impl PucText for Heap {
-    #[inline(always)]
-    fn number_text(&self, n: Num) -> String {
-        Heap::number_text(self, n)
-    }
-
-    #[inline(always)]
-    fn open_gbuff(&mut self, n: usize) -> Result<(), Oom> {
-        Heap::open_gbuff(self, n)
-    }
-
-    #[inline(always)]
-    fn puc_concat(&mut self, st: &mut Vec<Value>, total: usize) -> Result<(), Oom> {
-        Heap::puc_concat(self, st, total)
-    }
-
-    #[inline(always)]
-    fn pushfstring(&mut self, fmt: &[u8], args: &[FmtArg<'_>]) -> Result<Gc<LuaStr>, Oom> {
-        Heap::pushfstring(self, fmt, args)
-    }
-
-    #[inline(always)]
-    fn chunk_name(
+    pub(crate) fn chunk_name(
         &mut self,
         chunkname: &[u8],
         name: Option<Gc<LuaStr>>,
     ) -> Result<Gc<LuaStr>, Oom> {
-        Heap::chunk_name(self, chunkname, name)
+        let long = chunkname.len() > string::MAX_SHORT_LEN && self.puc.dialect != Dialect::L51;
+        match name {
+            Some(n) if !long => Ok(n),
+            Some(n) => self.intern_at(CStr::In(n.as_ptr() as *const GcHeader, 0), chunkname),
+            None => self.try_intern(chunkname),
+        }
     }
-    #[inline(always)]
-    fn intern_at(&mut self, at: CStr, bytes: &[u8]) -> Result<Gc<LuaStr>, Oom> {
-        Heap::intern_at(self, at, bytes)
+
+    /// Reserved word number `k` (in the order of 5.5's `luaX_tokens`),
+    /// which the state made and fixed, if the dialect has it.
+    #[inline]
+    pub(crate) fn reserved_word(&self, k: u8) -> Option<Gc<LuaStr>> {
+        self.puc.records.reserved[usize::from(k)]
     }
 }

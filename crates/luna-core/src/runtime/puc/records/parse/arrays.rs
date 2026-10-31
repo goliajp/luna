@@ -28,22 +28,22 @@ pub(crate) enum ParserArray {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct GrowVec {
     pub(crate) n: usize,
-    pub(crate) cap: usize,
+    pub(in crate::runtime) cap: usize,
 }
 
 /// The arrays of a function being compiled, and where its line info
 /// stands (5.4+ `savelineinfo`).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FuncArrays {
-    pub(crate) code: GrowVec,
-    pub(crate) line: GrowVec,
-    pub(crate) abs: GrowVec,
+    pub(in crate::runtime) code: GrowVec,
+    pub(in crate::runtime) line: GrowVec,
+    pub(in crate::runtime) abs: GrowVec,
     pub(crate) k: GrowVec,
     pub(crate) p: GrowVec,
     pub(crate) loc: GrowVec,
     pub(crate) up: GrowVec,
     /// the line of the last instruction
-    pub(crate) prev_line: u32,
+    pub(in crate::runtime) prev_line: u32,
     iwthabs: u32,
     /// the last instruction's line entry: absolute, and the line before it
     /// (to take it back, PUC `removelastlineinfo`)
@@ -96,8 +96,8 @@ const DIMS: [[(usize, usize); 10]; 5] = {
 /// sizes), for a count made away from the heap.
 #[derive(Clone, Copy)]
 pub(crate) struct ParserSizes {
-    d: Dialect,
-    s: PucSizes,
+    pub(in crate::runtime::puc) d: Dialect,
+    pub(in crate::runtime::puc) s: PucSizes,
 }
 
 impl ParserSizes {
@@ -174,54 +174,17 @@ impl FuncArrays {
 }
 
 impl Heap {
-    /// What the parser's arrays' bytes depend on now.
-    #[inline]
-    pub(in crate::runtime::puc) fn parser_sizes(&self) -> ParserSizes {
-        ParserSizes {
-            d: self.puc.dialect,
-            s: self.puc.sizes,
-        }
-    }
-
     /// The bytes of one element of array `a`.
     #[inline(always)]
-    fn parser_elem(&self, a: ParserArray) -> usize {
+    pub(in crate::runtime::puc) fn parser_elem(&self, a: ParserArray) -> usize {
         self.parser_sizes().elem(a)
-    }
-
-    /// The bytes of array `a` with room for `n` elements.
-    pub(in crate::runtime::puc) fn parser_bytes(&self, a: ParserArray, n: usize) -> usize {
-        n * self.parser_elem(a)
-    }
-
-    /// One more element in `v`.
-    #[inline(always)]
-    pub(in crate::runtime::puc) fn parser_push(&mut self, v: &mut GrowVec, a: ParserArray) {
-        if v.n + 1 > v.cap {
-            self.parser_grow(v, a);
-        }
-        v.n += 1;
-    }
-
-    /// `v` grown to hold `n` (the descriptor arrays, which shrink and grow
-    /// again).
-    pub(in crate::runtime::puc) fn parser_reach(
-        &mut self,
-        v: &mut GrowVec,
-        a: ParserArray,
-        n: usize,
-    ) {
-        while v.cap < n {
-            self.parser_grow(v, a);
-        }
-        v.n = n;
     }
 
     /// `v` doubled (at least 4), or grown to its limit once doubling would
     /// pass half of it (`luaM_growaux_`).
     #[cold]
     #[inline(never)]
-    fn parser_grow(&mut self, v: &mut GrowVec, a: ParserArray) {
+    pub(in crate::runtime::puc) fn parser_grow(&mut self, v: &mut GrowVec, a: ParserArray) {
         let (elem, limit) = DIMS[self.puc.dialect as usize - 1][a as usize];
         let new = if v.cap >= limit / 2 {
             limit
@@ -232,27 +195,10 @@ impl Heap {
         v.cap = new;
     }
 
-    /// `v` freed (`luaD_protectedparser` frees the descriptor arrays).
-    pub(in crate::runtime::puc) fn parser_free(&mut self, v: GrowVec, a: ParserArray) {
-        let b = self.parser_bytes(a, v.cap);
-        self.acct_block(b, 0);
-    }
-
     /// `v` trimmed to its elements.
-    fn parser_trim(&mut self, v: &mut GrowVec, a: ParserArray) {
+    pub(in crate::runtime::puc) fn parser_trim(&mut self, v: &mut GrowVec, a: ParserArray) {
         let elem = self.parser_elem(a);
         self.acct_block(v.cap * elem, v.n * elem);
         v.cap = v.n;
-    }
-
-    /// The function ends (`close_func`): each array trimmed to its count.
-    pub(in crate::runtime::puc) fn parser_close(&mut self, f: &mut FuncArrays) {
-        self.parser_trim(&mut f.code, ParserArray::Code);
-        self.parser_trim(&mut f.line, ParserArray::LineInfo);
-        self.parser_trim(&mut f.abs, ParserArray::AbsLines);
-        self.parser_trim(&mut f.k, ParserArray::Consts);
-        self.parser_trim(&mut f.p, ParserArray::Protos);
-        self.parser_trim(&mut f.loc, ParserArray::LocVars);
-        self.parser_trim(&mut f.up, ParserArray::Upvals);
     }
 }

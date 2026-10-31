@@ -14,7 +14,7 @@ impl Heap {
     /// 5.4: the pieces gathered in a buffer of `BUFVFS` bytes; each time it
     /// fills (and at the end) its contents become a string, joined to the
     /// one before.
-    pub(super) fn pushfstring_54(
+    pub(in crate::runtime::puc) fn pushfstring_54(
         &mut self,
         fmt: &[u8],
         args: &[FmtArg<'_>],
@@ -63,7 +63,7 @@ impl Heap {
 
     /// 5.5: one buffer, on the C stack until a piece does not fit, then a
     /// block grown by each such piece (counted); one string at the end.
-    pub(super) fn pushfstring_55(
+    pub(in crate::runtime::puc) fn pushfstring_55(
         &mut self,
         fmt: &[u8],
         args: &[FmtArg<'_>],

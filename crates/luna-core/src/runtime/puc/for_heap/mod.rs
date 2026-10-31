@@ -22,22 +22,6 @@ impl Heap {
         self.puc.count.bytes + more >= self.puc.count.gc_limit
     }
 
-    /// Whether the count has reached the point a step falls due at: the
-    /// comparison compiled code makes with the words of [`Heap::due_words`].
-    #[inline]
-    pub(crate) fn due_reached(&self) -> bool {
-        self.puc_due_after(0)
-    }
-
-    /// The two words a safe point compares, `bytes` and `gc_limit`
-    /// [`GC_LIMIT_OFFSET`] bytes after it, for compiled code to compare
-    /// itself: no step is due while `bytes < gc_limit`.
-    ///
-    /// [`GC_LIMIT_OFFSET`]: crate::runtime::puc::GC_LIMIT_OFFSET
-    pub(crate) fn due_words(&self) -> *const usize {
-        std::ptr::from_ref(&self.puc.count).cast()
-    }
-
     /// The collector restarts (`collectgarbage("restart")`): a step falls
     /// due at once (5.1 `GCthreshold = totalbytes`, later
     /// `luaE_setdebt(g, 0)`).
@@ -150,26 +134,6 @@ impl Heap {
     pub(in crate::runtime::puc) fn strt_bytes(&self) -> usize {
         self.puc.records.strt_size * self.puc.sizes.ptr
     }
-
-    /// The light function the opening made as function `id`.
-    pub(in crate::runtime) fn light(&self, id: usize) -> Option<Gc<crate::runtime::NativeClosure>> {
-        self.puc.opening.lights.get(id).copied().flatten()
-    }
-
-    /// Function `id` of the opening's `count` is the light function `g`:
-    /// one value however often pushed.
-    pub(in crate::runtime) fn set_light(
-        &mut self,
-        id: usize,
-        count: usize,
-        g: Gc<crate::runtime::NativeClosure>,
-    ) {
-        let l = &mut self.puc.opening.lights;
-        if l.len() <= id {
-            l.resize(count.max(id + 1), None);
-        }
-        l[id] = Some(g);
-    }
 }
 
 mod bits;
@@ -181,7 +145,7 @@ pub(in crate::runtime) mod hooks;
 mod marker;
 mod sizer;
 mod work;
-pub(crate) use sizer::Sizer;
+pub(in crate::runtime) use sizer::Sizer;
 mod rules;
 mod sweep;
 pub(in crate::runtime) use born::{
@@ -189,8 +153,8 @@ pub(in crate::runtime) use born::{
     StandingFor,
 };
 pub(in crate::runtime) use rules::HeapRules;
-pub(crate) use rules::ShrinkAt;
-pub(crate) use sweep::Fate;
+pub(in crate::runtime) use rules::ShrinkAt;
+pub(in crate::runtime) use sweep::Fate;
 
 // the names of the model's records the heap goes by: it reaches the model
 // through this module and the methods on `Heap`, never its other modules

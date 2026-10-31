@@ -4,8 +4,7 @@
 //! PUC's, or a record of one luna does not have.
 
 use super::*;
-use crate::runtime::puc::api::{PucCount, PucLoads, PucParse};
-use crate::runtime::puc::fmt::FmtArg;
+use crate::runtime::puc::api::FmtArg;
 use crate::vm::dump::{Arr, UEv};
 
 /// `LUA_MINBUFFER`: the least a load buffer grows to.

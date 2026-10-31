@@ -1,7 +1,6 @@
 //! The minimal state every constructor starts from.
 
 use super::*;
-use crate::runtime::puc::api::{PucCollector, PucCount};
 
 impl Vm {
     pub(super) fn new_minimal_on(version: LuaVersion, heap: Heap) -> Vm {

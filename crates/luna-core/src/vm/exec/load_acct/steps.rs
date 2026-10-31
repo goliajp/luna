@@ -5,8 +5,7 @@
 
 use super::*;
 use crate::runtime::heap::GcHeader;
-use crate::runtime::puc::api::{PucLoads, PucParse};
-use crate::runtime::puc::records::parse::{OpenView, ParseFrame};
+use crate::runtime::puc::api::{OpenView, ParseFrame};
 
 /// The header of the object of `g`.
 fn hdr<T: crate::runtime::heap::GcObject>(g: Gc<T>) -> *mut GcHeader {

@@ -211,7 +211,7 @@ pub struct Heap {
     /// the threads PUC's collector visits: since the last marking, the kept
     threads: Vec<Gc<crate::runtime::Coro>>,
     /// PUC's own structures luna has none of (see `runtime::puc`)
-    pub(crate) puc: model::PucModel,
+    pub(in crate::runtime) puc: model::PucModel,
     /// what the builds only tests use keep (`runtime::gc_hooks`)
     pub(crate) hooks: crate::runtime::gc_hooks::HookState,
     strings: StringTable,

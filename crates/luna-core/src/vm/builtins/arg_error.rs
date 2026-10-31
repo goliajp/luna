@@ -1,7 +1,7 @@
 //! `luaL_argerror`: the message a bad argument raises.
 
 use super::*;
-use crate::runtime::puc::fmt::FmtArg;
+use crate::runtime::puc::api::FmtArg;
 
 /// PUC `luaL_argerror`: "bad argument #n to 'name' (extra)".
 ///

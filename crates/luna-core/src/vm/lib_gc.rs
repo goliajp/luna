@@ -13,7 +13,6 @@
 //! pacing unchanged and doubling a parameter doubles its effect.
 
 use crate::runtime::Value;
-use crate::runtime::puc::api::PucCollector;
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::error::LuaError;
@@ -22,8 +21,8 @@ use crate::vm::exec::Vm;
 /// luna's own step size: objects per step.
 const LUNA_STEPSIZE: i64 = 13;
 
-pub(crate) use crate::runtime::puc::Param;
-use crate::runtime::puc::{LUNA_PAUSE, LUNA_STEPMUL};
+pub(crate) use crate::runtime::puc::api::Param;
+use crate::runtime::puc::api::{LUNA_PAUSE, LUNA_STEPMUL};
 
 /// `collectgarbage([opt [, ...]])`.
 pub(crate) fn nat_collectgarbage(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -168,14 +167,14 @@ fn options(v: LuaVersion) -> &'static [&'static str] {
 /// takes many of them to finish a cycle), and one of the `stepsize`
 /// parameter's size from 5.4 on, where stepsize 0 completes the cycle.
 pub(crate) fn step(vm: &mut Vm, n: i64) -> Result<bool, LuaError> {
-    if crate::runtime::puc::step::lua_step_skipped(&vm.heap) {
+    if crate::runtime::puc::api::lua_step_skipped(&vm.heap) {
         return Ok(false);
     }
     if vm.gc_mode_is_generational() {
         vm.collect_garbage();
         return Ok(false);
     }
-    crate::runtime::puc::step::gc_lua_step(vm, n)
+    crate::runtime::puc::api::gc_lua_step(vm, n)
 }
 
 /// `setpause` / `setstepmul` / `setmajorinc`: store the new value (≤5.3 take

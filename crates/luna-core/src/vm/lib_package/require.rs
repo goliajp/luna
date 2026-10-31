@@ -1,7 +1,7 @@
 //! `require` and the loader search behind it.
 
 use super::*;
-use crate::runtime::puc::fmt::FmtArg;
+use crate::runtime::puc::api::FmtArg;
 use crate::vm::puc_buffer::PucBuffer;
 
 /// `findloader`: ask each searcher in turn; the first one to return a
@@ -278,6 +278,6 @@ fn store_loaded(
 /// (`luaL_checkstring`): in the string.
 pub(super) fn name_at(
     name: crate::runtime::Gc<crate::runtime::LuaStr>,
-) -> crate::runtime::puc::records::strcache::CStr {
-    crate::runtime::puc::records::strcache::CStr::In(name.as_ptr() as *const _, 0)
+) -> crate::runtime::puc::api::CStr {
+    crate::runtime::puc::api::CStr::In(name.as_ptr() as *const _, 0)
 }

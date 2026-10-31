@@ -103,7 +103,7 @@ pub(crate) fn value_type_error(vm: &mut Vm, v: Value, argno: u32, expected: &str
 
 /// [`type_error_msg`] of `v` (`None`: no value).
 fn value_type_msg(vm: &mut Vm, v: Option<Value>, expected: &str) -> Result<String, LuaError> {
-    use crate::runtime::puc::fmt::FmtArg::S;
+    use crate::runtime::puc::api::FmtArg::S;
     let got = v.map_or_else(|| "no value".to_string(), |v| typename_of(vm, v));
     let v = v.filter(|_| vm.version() >= LuaVersion::Lua53);
     if let Some(v) = v {

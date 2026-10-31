@@ -9,9 +9,8 @@
 
 use super::run::Opener;
 use crate::runtime::Value;
-use crate::runtime::puc::PucObj;
-use crate::runtime::puc::api::{PucCollector, PucCount, PucLoads};
-use crate::runtime::puc::records::env51::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE};
+use crate::runtime::puc::api::PucObj;
+use crate::runtime::puc::api::{ENV_IO, ENV_IO_POPEN, ENV_IO_STD, ENV_PACKAGE};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
@@ -21,8 +20,10 @@ impl Opener {
     pub(crate) fn newfenv(&mut self, vm: &mut Vm, k: usize) -> Result<(), LuaError> {
         self.before(vm)?;
         vm.heap.new_obj(PucObj::Table);
-        vm.heap
-            .acct_block(0, vm.heap.puc_size(crate::runtime::puc::PucObj::Nodes(1)));
+        vm.heap.acct_block(
+            0,
+            vm.heap.puc_size(crate::runtime::puc::api::PucObj::Nodes(1)),
+        );
         let h = vm.heap.env51_born(k);
         vm.heap.set_phantoms(true);
         self.push(vm, Value::LightUserdata(h as *const ()))?;

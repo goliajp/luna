@@ -8,51 +8,12 @@ use crate::runtime::puc::for_heap::ShrinkAt;
 /// The objects made since the last safe point (see `Heap::young_len`).
 pub(in crate::runtime::puc) type Young = (Option<usize>, bool);
 
-/// A full collection, a marking in progress dropped first; `emergency`
-/// with the young objects for one an allocation runs. Returns the number
-/// of objects freed (counted for the program's only).
-pub(crate) fn full_collect<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Young>) -> usize {
-    let rules = *h.heap().puc_rules();
-    let program = emergency.is_none();
-    // a sweep (the one in progress, or 5.1's from a pause, which it treats
-    // as marking) ends before the full cycle, with `checkSizes`; none when
-    // 5.1's collector is past its sweep, running finalizers
-    let swept = !h.heap().gc_phase_is_pause()
-        || (rules.full_from_pause_sweeps && h.heap().puc.pace.state() != St::Finalize);
-    gc_hold_threads(h);
-    h.before_step();
-    // a marking under way is dropped, the objects back to white, and the
-    // collection starts over (`entersweep`), the program's or an
-    // emergency's alike
-    if h.heap().gc_phase_is_propagate() {
-        h.heap().gc_abandon_marking();
-    }
-    h.heap().gc_finish_sweep();
-    let freed = if program {
-        if swept {
-            h.heap().acct_check_sizes();
-        }
-        if rules.shrink_at == ShrinkAt::Sweep {
-            full_cycle_52(h, swept)
-        } else {
-            full_mark_and_sweep(h, None)
-        }
-    } else if let (ShrinkAt::Sweep, Some(young)) = (rules.shrink_at, emergency) {
-        emergency_cycle_52(h, young);
-        0
-    } else {
-        full_mark_and_sweep(h, emergency)
-    };
-    h.collection_ends();
-    if !program && rules.shrink_at == ShrinkAt::Sweep {
-        h.shrink_threads_emergency();
-    }
-    freed
-}
-
 /// The stop-the-world marking and sweep of every dialect but 5.2, whose
 /// full cycle runs its steps; an emergency's too.
-fn full_mark_and_sweep<H: StepHost + ?Sized>(h: &mut H, emergency: Option<Young>) -> usize {
+pub(in crate::runtime::puc) fn full_mark_and_sweep<H: StepHost + ?Sized>(
+    h: &mut H,
+    emergency: Option<Young>,
+) -> usize {
     let rules = *h.heap().puc_rules();
     gc_count_marked(h);
     let mut m = h.heap().gc_begin_full();

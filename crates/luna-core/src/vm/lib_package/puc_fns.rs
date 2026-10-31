@@ -4,7 +4,7 @@
 use super::progdir;
 use super::*;
 use crate::runtime::Builtin;
-use crate::runtime::puc::records::strcache::{CStr, site};
+use crate::runtime::puc::api::{CStr, site};
 use crate::vm::opening::{Ctor, Natives, Opener, run_open};
 use Ctor::{C, F};
 

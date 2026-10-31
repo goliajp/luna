@@ -4,7 +4,6 @@
 use super::*;
 use crate::runtime::LuaStr;
 use crate::runtime::heap::GcHeader;
-use crate::runtime::puc::api::{PucCount, PucParse};
 
 impl Vm {
     /// The long names PUC's scanner made that its prototypes keep as the

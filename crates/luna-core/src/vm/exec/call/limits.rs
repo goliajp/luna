@@ -1,7 +1,6 @@
 //! The Lua stack and frame array limits of a call.
 
 use super::*;
-use crate::runtime::puc::api::PucCount;
 use crate::vm::exec::stack::size::{self as stack_size, Grown};
 
 impl Vm {

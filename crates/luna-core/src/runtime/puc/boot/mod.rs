@@ -3,7 +3,7 @@
 
 use super::*;
 
-pub(crate) mod counts;
+pub(in crate::runtime) mod counts;
 use crate::runtime::dialect::Dialect;
 
 impl Heap {
@@ -70,21 +70,7 @@ impl Heap {
     }
 }
 
-impl Heap {
-    /// `cs`, a long string luna's compiler made without counting, is the
-    /// one PUC's scanner made as `ss` (counted) and keeps as the constant:
-    /// the count moves to `cs`.
-    pub(in crate::runtime::puc) fn acct_move_long(&mut self, ss: Gc<LuaStr>, cs: Gc<LuaStr>) {
-        if !ss.hdr().is_uncounted() && cs.hdr().is_uncounted() {
-            // SAFETY: both are handles, so their objects are live; nothing
-            // borrows the headers while their per-type bytes are written
-            unsafe {
-                (*ss.header()).set_uncounted(true);
-                (*cs.header()).set_uncounted(false);
-            }
-        }
-    }
-}
+impl Heap {}
 
 impl Heap {
     /// A string just made: counted, or, while luna builds its own objects,
@@ -109,40 +95,6 @@ impl Heap {
             if held {
                 self.strt_enter(s);
             }
-        }
-    }
-
-    /// A string luna made for itself is made by the program now: PUC makes
-    /// it here.
-    #[cold]
-    #[inline(never)]
-    pub(in crate::runtime::puc) fn acct_promote(&mut self, s: Gc<LuaStr>, len: usize) {
-        let h = s.header();
-        if !self.counting() {
-            return;
-        }
-        // SAFETY: `h` comes from a handle, so its string is live; nothing
-        // borrows the header while its per-type byte is written
-        unsafe {
-            self.born(h);
-            (*h).set_uncounted(false);
-        }
-        self.acct_string(len);
-        self.strt_enter(s);
-    }
-
-    /// Reserved word number `k` (in the order of 5.5's `luaX_tokens`),
-    /// which the state made and fixed, if the dialect has it.
-    #[inline]
-    pub(crate) fn reserved_word(&self, k: u8) -> Option<Gc<LuaStr>> {
-        self.puc.records.reserved[usize::from(k)]
-    }
-
-    /// The parser's string of the chunk name `s`: counted now if luna made
-    /// it without counting (PUC found it made already otherwise).
-    pub(in crate::runtime::puc) fn acct_source(&mut self, s: Gc<LuaStr>) {
-        if s.hdr.sub & UNCOUNTED != 0 {
-            self.acct_promote(s, s.len());
         }
     }
 }

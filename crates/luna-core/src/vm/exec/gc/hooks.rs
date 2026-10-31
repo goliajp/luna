@@ -4,13 +4,12 @@
 //! `gc::trace_k`, `gc::gc_verify`, `gc_refuse`, `index_verify`,
 //! `jit_rt::recording_check`).
 
-use super::*;
 #[cfg(feature = "gc-stress")]
-use crate::runtime::puc::api::PucCollector;
 
 /// gc-stress: which checkpoints collect; nothing in the product.
 #[cfg(feature = "gc-stress")]
 pub(in super::super) use super::stress::Stress as StressState;
+use super::*;
 #[cfg(not(feature = "gc-stress"))]
 #[derive(Default)]
 pub(in super::super) struct StressState;

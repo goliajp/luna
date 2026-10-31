@@ -10,7 +10,7 @@ pub(super) fn os_getenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         // the value lives where the environment keeps it, one place for
         // each variable
         Some(val) => {
-            use crate::runtime::puc::records::strcache::{CStr, site};
+            use crate::runtime::puc::api::{CStr, site};
             let at = CStr::Fixed(site::GETENV, site::name_hash(&name));
             with_rules!(vm, P => vm.api_push_string_at::<P>(at, &os_bytes(&val)))?
         }

@@ -11,7 +11,6 @@
 
 use super::*;
 use crate::frontend::parser::{ParseScratch, completed, parse_in_place};
-use crate::runtime::puc::api::{PucLoads, PucParse};
 
 impl Vm {
     /// Count the load of `src`, named `source`, that failed with `e`; its
@@ -21,7 +20,7 @@ impl Vm {
         src: &[u8],
         e: &SyntaxError,
         source: Gc<crate::runtime::LuaStr>,
-        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::api::Deferred)>,
     ) -> Result<(), SyntaxError> {
         let (v, depth) = (self.version, self.g.nccalls);
         let Some(failed) = self.parse_scratch.failed else {
@@ -220,7 +219,7 @@ impl Vm {
     /// is replayed.
     pub(in crate::vm::exec) fn splices_stand(
         &mut self,
-        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::api::Deferred)>,
     ) -> Result<(), SyntaxError> {
         for (_, d) in splices {
             self.heap.replay_reader_call(d);
@@ -232,7 +231,7 @@ impl Vm {
     /// the shrink of `luaD_pcall` catching its error.
     pub(in crate::vm::exec) fn splices_stand_caught(
         &mut self,
-        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::api::Deferred)>,
     ) -> Result<(), SyntaxError> {
         self.splices_stand(splices)?;
         self.shrink_caught_error();

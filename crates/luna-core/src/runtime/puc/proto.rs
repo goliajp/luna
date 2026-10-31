@@ -5,7 +5,7 @@ use super::*;
 use crate::runtime::dialect::Dialect;
 
 /// A Lua closure's header bit: see [`Heap::env51`].
-pub(crate) const ENV51: u8 = 0x40;
+pub(in crate::runtime) const ENV51: u8 = 0x40;
 
 impl Heap {
     /// The bytes of each of PUC's arrays for `p` (see `Proto::puc_arrays`),

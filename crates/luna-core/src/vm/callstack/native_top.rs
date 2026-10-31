@@ -8,7 +8,7 @@
 //! and the error helpers they share follow what the C code pushes and pops.
 
 use crate::runtime::Value;
-use crate::runtime::puc::records::strcache::CStr;
+use crate::runtime::puc::api::CStr;
 use crate::version::LuaVersion;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;

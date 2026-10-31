@@ -107,7 +107,7 @@ impl VmHostInternals for crate::vm::Vm {
     fn error_object_message(&mut self, e: Value) -> Result<Gc<crate::runtime::LuaStr>, LuaError> {
         let ty = e.type_name().as_bytes();
         let fmt = b"(error object is a %s value)";
-        let args = [crate::runtime::puc::fmt::FmtArg::S(ty)];
+        let args = [crate::runtime::puc::api::FmtArg::S(ty)];
         self.pushfstring(fmt, &args)
     }
     #[inline]

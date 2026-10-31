@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::runtime::mem::{LVec, MemOwner};
-use crate::runtime::puc::api::PucCount;
 use crate::vm::exec::state::CallGuards;
 
 mod jit_install;

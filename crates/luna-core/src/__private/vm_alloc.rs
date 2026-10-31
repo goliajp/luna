@@ -13,7 +13,7 @@ pub const JIT_GC_PREV: u32 = u32::MAX;
 pub const JIT_GC_CALL: u32 = u32::MAX - 1;
 /// Where the point a collection step falls due at lies from the count
 /// [`VmJitAlloc::jit_due_words`] points at, in bytes.
-pub const JIT_GC_LIMIT_OFFSET: i32 = crate::runtime::puc::GC_LIMIT_OFFSET as i32;
+pub const JIT_GC_LIMIT_OFFSET: i32 = crate::runtime::puc::api::GC_LIMIT_OFFSET as i32;
 
 /// The internals of `Vm` luna's other crates use.
 pub trait VmJitAlloc {

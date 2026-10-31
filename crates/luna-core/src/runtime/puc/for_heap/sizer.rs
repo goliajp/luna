@@ -5,7 +5,7 @@ use super::*;
 /// What a 5.5 marking needs to count the objects it marks (`GCmarked`):
 /// the sizes, the stand-ins (lent by the heap meanwhile) and
 /// the threads the VM holds.
-pub(crate) struct Sizer {
+pub(in crate::runtime) struct Sizer {
     sizes: crate::runtime::puc::size::PucSizes,
     stand_ins: Vec<(*mut GcHeader, usize)>,
     run: Running,

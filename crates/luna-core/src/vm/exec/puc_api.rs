@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::runtime::LuaStr;
-use crate::runtime::puc::api::PucText;
 
 impl Vm {
     /// 5.1 and 5.2: the check before an API call allocates.
@@ -225,7 +224,7 @@ impl Vm {
         &mut self,
         conv: u32,
         fmt: &[u8],
-        args: &[crate::runtime::puc::fmt::FmtArg<'_>],
+        args: &[crate::runtime::puc::api::FmtArg<'_>],
     ) -> Result<Gc<LuaStr>, LuaError> {
         if let Some(e) = self.format_pushes(&[Some(conv)]) {
             return Err(e);
@@ -257,7 +256,7 @@ impl Vm {
     /// `lua_pushstring`, through `luaS_new`'s cache.
     pub(crate) fn api_push_string_at<const PRE: bool>(
         &mut self,
-        at: crate::runtime::puc::records::strcache::CStr,
+        at: crate::runtime::puc::api::CStr,
         bytes: &[u8],
     ) -> Result<Value, LuaError> {
         self.api_check_before::<PRE>()?;
@@ -269,7 +268,7 @@ impl Vm {
     /// [`Vm::str_value`] through `luaS_new`'s cache, the C string at `at`.
     pub(crate) fn str_value_at(
         &mut self,
-        at: crate::runtime::puc::records::strcache::CStr,
+        at: crate::runtime::puc::api::CStr,
         bytes: &[u8],
     ) -> Result<Value, LuaError> {
         let s = self.retry_oom(|vm| vm.heap.intern_at(at, bytes))?;
