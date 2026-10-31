@@ -28,8 +28,7 @@ mod proto_parts;
 mod width;
 
 pub(crate) use self::width::Layout;
-#[cfg(any(debug_assertions, feature = "gc-trace"))]
-pub(crate) use self::width::check_compiled;
+pub(crate) use self::width::hook_compiled;
 
 use self::asm::{Asm, Res};
 use self::proto_parts::{check_skips, consts_for, needs_close, vararg_byte};
@@ -272,7 +271,6 @@ fn encode_body(
             body.frame
         ));
     }
-    #[cfg(any(debug_assertions, feature = "gc-trace"))]
-    width::check(p, d, &body);
+    width::hook_encoded(p, d, &body);
     Ok(body)
 }

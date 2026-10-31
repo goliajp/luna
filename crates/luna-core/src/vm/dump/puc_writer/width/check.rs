@@ -1,5 +1,5 @@
-//! The encoders' output checked against [`Layout`], in debug and gc-trace
-//! builds.
+//! The encoders' output checked against [`Layout`], in debug, gc-trace and
+//! gc-verify builds.
 
 use super::*;
 

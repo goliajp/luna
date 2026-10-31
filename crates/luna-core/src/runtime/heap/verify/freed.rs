@@ -4,6 +4,19 @@
 use super::*;
 
 impl Heap {
+    /// `g`, found again by its bytes, is the string the table holds for
+    /// them.
+    pub(crate) fn check_refound(&self, g: crate::runtime::Gc<crate::runtime::LuaStr>) {
+        assert!(
+            self.interns(g.len())
+                && self
+                    .strings
+                    .find(g.as_bytes(), self.seed, self.rules.hash51())
+                    == Some(g.as_ptr()),
+            "a string found again is not the table's"
+        );
+    }
+
     /// The first object never swept (`fixedgc`).
     #[inline]
     pub(in crate::runtime) fn fixed_head(&self) -> *mut GcHeader {

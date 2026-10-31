@@ -14,15 +14,7 @@ impl Heap {
     /// holds for them: what finding it does, without the lookup.
     #[inline]
     pub(crate) fn refind(&mut self, g: Gc<LuaStr>) -> Gc<LuaStr> {
-        #[cfg(feature = "gc-verify")]
-        assert!(
-            self.interns(g.len())
-                && self
-                    .strings
-                    .find(g.as_bytes(), self.seed, self.rules.hash51())
-                    == Some(g.as_ptr()),
-            "a string found again is not the table's"
-        );
+        self.hook_refound(g);
         self.found_string(g, g.len())
     }
 }

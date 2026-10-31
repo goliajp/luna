@@ -47,10 +47,6 @@ pub(crate) trait PucCount {
     /// the registry PUC's state starts with): counted unless luna is
     /// building its own objects.
     fn acct_table_resize(&mut self, old: (usize, usize), new: (usize, usize));
-    /// gc-trace: the count moved by `delta` where the instrumented PUC's
-    /// allocation function refused a growth.
-    #[cfg(feature = "gc-trace")]
-    fn adjust_count(&mut self, delta: i64);
     /// `t`, made while nothing was counted, is a table PUC's state starts
     /// with, which [`Heap::acct_boot`] counted in its place: counted from
     /// here on, as it grows and when it is freed.
@@ -155,12 +151,6 @@ impl PucCount for Heap {
     #[inline(always)]
     fn acct_table_resize(&mut self, old: (usize, usize), new: (usize, usize)) {
         Heap::acct_table_resize(self, old, new)
-    }
-
-    #[cfg(feature = "gc-trace")]
-    #[inline(always)]
-    fn adjust_count(&mut self, delta: i64) {
-        Heap::adjust_count(self, delta)
     }
 
     #[inline(always)]

@@ -4,7 +4,7 @@
 //! back where the VM may collect.
 
 use super::*;
-use crate::runtime::puc::api::PucCount;
+use crate::runtime::puc::api::PucCountTrace;
 
 impl Vm {
     /// [`Vm::refused_stack`] when a refusal waits.

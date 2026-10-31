@@ -4,8 +4,8 @@
 //!
 //! The rules the encoders branch on are here and the encoders call them;
 //! the counts that follow from a branch are written once more below, and
-//! `build` checks them against what the encoders emitted in debug and
-//! gc-trace builds.
+//! `build` checks them against what the encoders emitted in debug,
+//! gc-trace and gc-verify builds.
 //!
 //! An `RK` operand or an immediate's constant past index 255 costs an extra
 //! `LOADK`, and finding an immediate's constant index takes a search; a
@@ -17,12 +17,26 @@ use crate::runtime::function::Proto;
 use crate::version::LuaVersion;
 use crate::vm::isa::{MAX_SC, MIN_SC, Op};
 
-#[cfg(any(debug_assertions, feature = "gc-trace"))]
+#[cfg(any(debug_assertions, feature = "gc-trace", feature = "gc-verify"))]
 mod check;
-#[cfg(any(debug_assertions, feature = "gc-trace"))]
-pub(super) use check::check;
-#[cfg(any(debug_assertions, feature = "gc-trace"))]
-pub(crate) use check::check_compiled;
+
+/// Debug, gc-trace and gc-verify builds check what the encoder emitted for
+/// `p` against [`Layout::width`]; the product build does nothing.
+#[inline(always)]
+pub(super) fn hook_encoded(p: &Proto, d: Dialect, body: &super::asm::Body) {
+    #[cfg(any(debug_assertions, feature = "gc-trace", feature = "gc-verify"))]
+    check::check(p, d, body);
+    let _ = (p, d, body);
+}
+
+/// Debug, gc-trace and gc-verify builds check that the encoder adds no
+/// constant to code luna compiled; the product build does nothing.
+#[inline(always)]
+pub(crate) fn hook_compiled(proto: &Proto, version: LuaVersion) {
+    #[cfg(any(debug_assertions, feature = "gc-trace", feature = "gc-verify"))]
+    check::check_compiled(proto, version);
+    let _ = (proto, version);
+}
 
 /// A 5.4 / 5.5 key the fast field ops take: a string PUC 5.3+ interns.
 pub(super) fn short_key(consts: &[Value], k: u32) -> bool {
