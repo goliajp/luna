@@ -8,18 +8,22 @@ use super::*;
 use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::pace::{St, pause_debt, pause_debt_55, threshold_51};
 
+/// Uncounted objects of luna's standing for objects of PUC's of the given
+/// size, one entry for each object of PUC's.
+pub(in crate::runtime::puc) struct StandIns(Vec<(*mut GcHeader, usize)>);
+
+impl Default for StandIns {
+    fn default() -> StandIns {
+        // the standard libraries make about twenty
+        StandIns(Vec::with_capacity(32))
+    }
+}
+
 impl Heap {
     /// PUC's `totalbytes`.
     #[inline(always)]
     pub(in crate::runtime) fn puc_bytes(&self) -> usize {
         self.puc.count.bytes
-    }
-
-    /// Whether the count reaches the next step's due point once `more`
-    /// bytes more are counted.
-    #[inline(always)]
-    pub(in crate::runtime::puc) fn puc_due_after(&self, more: usize) -> bool {
-        self.puc.count.bytes + more >= self.puc.count.gc_limit
     }
 
     /// The collector restarts (`collectgarbage("restart")`): a step falls
@@ -31,17 +35,6 @@ impl Heap {
             Dialect::L51 => self.puc.pace.set_threshold(self.puc.count.bytes as i64),
             _ => self.puc.pace.set_debt(d, self.puc.count.bytes, 0),
         }
-    }
-
-    /// Where the next step falls due, from the pace; never while 5.1's
-    /// collector is `stopped_51` (an unreachable threshold).
-    #[inline]
-    pub(in crate::runtime::puc) fn puc_set_limit(&mut self, stopped_51: bool) {
-        self.puc.count.gc_limit = if stopped_51 {
-            usize::MAX
-        } else {
-            self.puc.pace.limit(self.puc.dialect)
-        };
     }
 
     /// A cycle ended with the count at what it is now: the pause before
@@ -116,15 +109,15 @@ impl Heap {
     pub(in crate::runtime::puc) fn stand_for(&mut self, h: *mut GcHeader, objs: &[PucObj]) {
         for &o in objs {
             let size = self.puc_size(o);
-            self.puc.records.stand_ins.push((h, size));
+            self.puc.stand_ins.0.push((h, size));
         }
     }
 
     /// The objects of PUC's that `h`, an uncounted object of luna's, stood
     /// for are freed with it.
     pub(in crate::runtime::puc) fn free_stand_in(&mut self, h: *mut GcHeader) {
-        while let Some(i) = self.puc.records.stand_ins.iter().position(|(p, _)| *p == h) {
-            let (_, size) = self.puc.records.stand_ins.swap_remove(i);
+        while let Some(i) = self.puc.stand_ins.0.iter().position(|(p, _)| *p == h) {
+            let (_, size) = self.puc.stand_ins.0.swap_remove(i);
             self.acct_part(size, 0);
         }
     }

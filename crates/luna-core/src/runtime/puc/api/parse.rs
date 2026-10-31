@@ -201,8 +201,7 @@ impl Heap {
         }
         let a = self.set_loads_aside(true);
         let s = self.try_intern(bytes);
-        self.loads_aside_back(a);
-        self.puc.loads.names_aside = self.puc.loads.unborn.len();
+        self.names_aside_back(a);
         s
     }
 

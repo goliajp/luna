@@ -17,7 +17,7 @@ impl Heap {
         let d = self.puc.dialect;
         let b = boot_sizes(d);
         let s = self.puc.sizes;
-        self.puc.count.silent = 0;
+        self.counting_begins();
         self.acct_obj(PucKind::Thread, b.lg);
         // `lua_newstate`: no debt (5.1 sets its threshold when the state is
         // built)

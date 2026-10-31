@@ -57,7 +57,7 @@ impl Heap {
         let run = self.puc.pace.run.filter(|_| self.puc.pace.count_marked)?;
         Some(Sizer {
             sizes: self.puc.sizes,
-            stand_ins: std::mem::take(&mut self.puc.records.stand_ins),
+            stand_ins: std::mem::take(&mut self.puc.stand_ins.0),
             run,
             marked: 0,
         })
@@ -69,7 +69,7 @@ impl Heap {
         self.settle_model(&mut m.lent);
         if let Some(s) = m.take_sizer() {
             self.puc.pace.estimate += s.marked;
-            self.puc.records.stand_ins = s.stand_ins;
+            self.puc.stand_ins.0 = s.stand_ins;
         }
     }
 
@@ -87,7 +87,7 @@ impl Heap {
             // SAFETY: the caller's contract
             let n = unsafe { s.size(h) };
             self.puc.pace.estimate += n;
-            self.puc.records.stand_ins = s.stand_ins;
+            self.puc.stand_ins.0 = s.stand_ins;
         }
     }
 }
