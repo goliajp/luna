@@ -98,90 +98,100 @@ pub(super) fn item51<const PRE: bool>(
             }
             _ => *added = addliteral::<PRE>(vm, a, arg, out)?,
         },
-        b's' => {
-            if v >= LuaVersion::Lua53
-                && body.is_empty()
-                && let Some(s) = plain_str::<PRE>(vm, a, arg)?
-            {
-                vm.buf_push(out, s.as_bytes())?;
-                *added = Added::Value(s);
-                return Ok(p + 1);
-            }
-            let gs = if v == LuaVersion::Lua51 {
-                Some(argcheck::check_string(vm, a, arg)?)
-            } else {
-                // a `__tostring` runs above the buffer's slot
-                let buf = vm.buffer_slot(out.len());
-                if buf > 0 {
-                    vm.native_hold_top(&[Vm::buffer_box()])?;
-                }
-                if v == LuaVersion::Lua52 {
-                    tolstring_52::<PRE>(vm, a.get(vm, arg), buf)?
-                } else {
-                    let v = a.get(vm, arg);
-                    Some(vm.tolstring::<PRE>(v, buf)?)
-                }
-            };
-            // the argument itself stays where it is, rooted; a string made
-            // from it is copied before the buffer may grow
-            let held;
-            let s: &[u8] = match &gs {
-                None => b"(null)",
-                Some(g) if matches!(a.get(vm, arg), Value::Str(x) if x.as_ptr() == g.as_ptr()) => {
-                    g.as_bytes()
-                }
-                Some(g) => {
-                    held = g.as_bytes().to_vec();
-                    &held
-                }
-            };
-            let has_prec = body.contains(&b'.');
-            if v >= LuaVersion::Lua53
-                && body.is_empty()
-                && let Some(gs) = gs
-            {
-                vm.buf_push(out, s)?;
-                *added = Added::Value(gs);
-            } else {
-                if v >= LuaVersion::Lua53 && s.contains(&0) {
-                    // over the `luaL_tolstring` result
-                    vm.native_push(1);
-                    return Err(arg_error(vm, arg + 1, "string contains zeros"));
-                }
-                if !has_prec
-                    && s.len() >= 100
-                    && let Some(gs) = gs
-                {
-                    vm.buf_push(out, s)?;
-                    *added = Added::Value(gs);
-                } else {
-                    cfmt::cstr(out, &sp, s);
-                }
-            }
-        }
-        _ => {
-            // 5.1's "%c" of a NUL is an empty piece (`pushstr` takes its
-            // length with `strlen`)
-            let fmt = b"invalid option '%%%c' to 'format'";
-            return Err(if v == LuaVersion::Lua51 && conv == 0 {
-                let fmt = b"invalid option '%%%s' to 'format'";
-                crate::vm::builtins::raise_lib(
-                    vm,
-                    fmt,
-                    &[crate::runtime::puc::api::FmtArg::S(b"")],
-                    2,
-                )
-            } else {
-                crate::vm::builtins::raise_lib(
-                    vm,
-                    fmt,
-                    &[crate::runtime::puc::api::FmtArg::C(conv)],
-                    2,
-                )
-            });
-        }
+        b's' => string_item51::<PRE>(vm, v, (a, arg), body, &sp, out, added)?,
+        _ => return Err(invalid_option(vm, v, conv)),
     }
     Ok(p + 1)
+}
+
+/// `%s` under 5.1, 5.2 or 5.3: the argument as `luaL_tolstring` (5.1
+/// `luaL_checklstring`) makes it, formatted by `body`.
+#[cfg_attr(luna_hot, inline(always))]
+fn string_item51<const PRE: bool>(
+    vm: &mut Vm,
+    v: LuaVersion,
+    (a, arg): (Args, u32),
+    body: &[u8],
+    sp: &Spec,
+    out: &mut LVec<u8>,
+    added: &mut Added,
+) -> Result<(), LuaError> {
+    if v >= LuaVersion::Lua53
+        && body.is_empty()
+        && let Some(s) = plain_str::<PRE>(vm, a, arg)?
+    {
+        vm.buf_push(out, s.as_bytes())?;
+        *added = Added::Value(s);
+        return Ok(());
+    }
+    let gs = if v == LuaVersion::Lua51 {
+        Some(argcheck::check_string(vm, a, arg)?)
+    } else {
+        // a `__tostring` runs above the buffer's slot
+        let buf = vm.buffer_slot(out.len());
+        if buf > 0 {
+            vm.native_hold_top(&[Vm::buffer_box()])?;
+        }
+        if v == LuaVersion::Lua52 {
+            tolstring_52::<PRE>(vm, a.get(vm, arg), buf)?
+        } else {
+            let v = a.get(vm, arg);
+            Some(vm.tolstring::<PRE>(v, buf)?)
+        }
+    };
+    // the argument itself stays where it is, rooted; a string made
+    // from it is copied before the buffer may grow
+    let held;
+    let s: &[u8] = match &gs {
+        None => b"(null)",
+        Some(g) if matches!(a.get(vm, arg), Value::Str(x) if x.as_ptr() == g.as_ptr()) => {
+            g.as_bytes()
+        }
+        Some(g) => {
+            held = g.as_bytes().to_vec();
+            &held
+        }
+    };
+    let has_prec = body.contains(&b'.');
+    if v >= LuaVersion::Lua53
+        && body.is_empty()
+        && let Some(gs) = gs
+    {
+        vm.buf_push(out, s)?;
+        *added = Added::Value(gs);
+    } else {
+        if v >= LuaVersion::Lua53 && s.contains(&0) {
+            // over the `luaL_tolstring` result
+            vm.native_push(1);
+            return Err(arg_error(vm, arg + 1, "string contains zeros"));
+        }
+        if !has_prec
+            && s.len() >= 100
+            && let Some(gs) = gs
+        {
+            vm.buf_push(out, s)?;
+            *added = Added::Value(gs);
+        } else {
+            cfmt::cstr(out, sp, s);
+        }
+    }
+    Ok(())
+}
+
+/// An unknown conversion `conv`. 5.1's "%c" of a NUL is an empty piece
+/// (`pushstr` takes its length with `strlen`).
+#[cold]
+#[inline(never)]
+fn invalid_option(vm: &mut Vm, v: LuaVersion, conv: u8) -> LuaError {
+    let s;
+    let arg = if v == LuaVersion::Lua51 && conv == 0 {
+        s = b"invalid option '%%%s' to 'format'";
+        crate::runtime::puc::api::FmtArg::S(b"")
+    } else {
+        s = b"invalid option '%%%c' to 'format'";
+        crate::runtime::puc::api::FmtArg::C(conv)
+    };
+    crate::vm::builtins::raise_lib(vm, s, &[arg], 2)
 }
 
 /// C's `(int)` conversion of a double on the reference platform: a
