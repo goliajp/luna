@@ -63,7 +63,10 @@ fn shrink_swept_52<H: StepHost + ?Sized>(h: &mut H) {
 /// 5.2's `luaC_fullgc` from a pause: the whole cycle as single steps,
 /// as PUC runs it, the estimate what it traverses. The objects freed.
 /// `swept`: a cycle was under way, whose sweep has ended.
-pub(crate) fn full_cycle_52<H: StepHost + ?Sized>(h: &mut H, swept: bool) -> usize {
+pub(in crate::runtime::puc) fn full_cycle_52<H: StepHost + ?Sized>(
+    h: &mut H,
+    swept: bool,
+) -> usize {
     let before = h.heap().live_objects();
     if swept {
         shrink_swept_52(h);
@@ -129,7 +132,7 @@ pub(super) fn atomic_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
 /// 5.2's `luaC_changemode` into generational mode: the cycle under way
 /// runs on to its propagation (`luaC_runtilstate`), and the estimate is
 /// what is in use.
-pub(crate) fn enter_generational_52<H: StepHost + ?Sized>(h: &mut H) {
+pub(in crate::runtime::puc) fn enter_generational_52<H: StepHost + ?Sized>(h: &mut H) {
     while h.heap().puc.pace.state() != St::Propagate {
         singlestep_52(h);
     }
@@ -138,7 +141,7 @@ pub(crate) fn enter_generational_52<H: StepHost + ?Sized>(h: &mut H) {
 
 /// 5.2's `luaC_changemode` back to incremental mode: `entersweep`, then
 /// the sweep to its end (`luaC_runtilstate(L, ~sweepphases)`).
-pub(crate) fn leave_generational_52<H: StepHost + ?Sized>(h: &mut H) {
+pub(in crate::runtime::puc) fn leave_generational_52<H: StepHost + ?Sized>(h: &mut H) {
     if h.heap().gc_phase_is_pause() || h.heap().puc.pace.state() == St::Propagate {
         h.heap().gc_sweep_unmarked_52();
         h.heap().puc.pace.enter(St::SweepString);
@@ -196,7 +199,7 @@ pub(super) fn singlestep_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
 
 /// 5.2's sweep of the string table is over: the objects with finalizers
 /// come next.
-pub(crate) fn strings_swept_52(heap: &mut Heap) {
+pub(in crate::runtime::puc) fn strings_swept_52(heap: &mut Heap) {
     heap.end_string_sweep();
     heap.puc.pace.enter(St::SweepUdata);
     // `entersweep`'s `sweeptolive` sweeps `finobj` up to its first live
@@ -209,7 +212,7 @@ pub(crate) fn strings_swept_52(heap: &mut Heap) {
 /// `luaS_resize` while the collector sweeps the string table: 5.2 runs
 /// that sweep to its end first (`luaC_runtilstate`), counted in no
 /// step; 5.1 does not resize (false).
-pub(crate) fn strt_resize_in_sweep(heap: &mut Heap) -> bool {
+pub(in crate::runtime::puc) fn strt_resize_in_sweep(heap: &mut Heap) -> bool {
     if heap.puc.pace.state() != St::SweepString {
         return true;
     }

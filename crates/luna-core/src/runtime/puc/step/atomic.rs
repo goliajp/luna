@@ -5,7 +5,7 @@ use crate::runtime::puc::for_heap::ShrinkAt;
 
 /// The atomic step and the way into the sweep: the work, and the objects
 /// the sweep went over on the way in.
-pub(crate) fn atomic<H: StepHost + ?Sized>(h: &mut H) -> (i64, i64) {
+pub(in crate::runtime::puc) fn atomic<H: StepHost + ?Sized>(h: &mut H) -> (i64, i64) {
     let rules = *h.heap().puc_rules();
     h.clear_dead_stack();
     if rules.shrink_at == ShrinkAt::Atomic {
