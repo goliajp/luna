@@ -79,7 +79,7 @@ impl Heap {
             f,
             upvals: crate::runtime::mem::LSlice::empty(self.mem()),
             is_async: false,
-            kind: crate::vm::exec::native::call::NativeKind::of(builtin),
+            kind: crate::runtime::call_frame::NativeKind::of(builtin),
             builtin,
         };
         let p = self.slab_block()?;
@@ -113,7 +113,7 @@ impl Heap {
             f,
             upvals: crate::runtime::mem::LSlice::empty(self.mem()),
             is_async: false,
-            kind: crate::vm::exec::native::call::NativeKind::of(builtin),
+            kind: crate::runtime::call_frame::NativeKind::of(builtin),
             builtin,
         };
         let p = self.slab_block()?;
@@ -170,9 +170,9 @@ impl Heap {
         let mut hdr = GcHeader::native(upvals);
         hdr.aux = self.take_id();
         let kind = if is_async {
-            crate::vm::exec::native::call::NativeKind::Async
+            crate::runtime::call_frame::NativeKind::Async
         } else {
-            crate::vm::exec::native::call::NativeKind::of(builtin)
+            crate::runtime::call_frame::NativeKind::of(builtin)
         };
         let nup = upvals.len();
         let upvals = LSlice::from_slice(self.mem(), upvals)?;

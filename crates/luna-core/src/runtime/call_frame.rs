@@ -5,12 +5,17 @@ use crate::runtime::function::LuaClosure;
 use crate::runtime::heap::Gc;
 use crate::runtime::value::Value;
 
+/// PUC `LUA_MINSTACK`.
+pub(crate) const MIN_STACK: u32 = 20;
+
 mod conts;
 pub use conts::*;
 mod dead_stack;
 pub(crate) use dead_stack::DeadStack;
 mod native_act;
 pub(crate) use native_act::NativeAct;
+mod native_kind;
+pub(crate) use native_kind::NativeKind;
 
 /// An activation record on a thread's call stack. Pure data (closure handle +
 /// stack offsets), so it lives in `runtime` where the GC can trace a suspended

@@ -33,7 +33,7 @@ pub(crate) mod gc_verify_probe {
         FREED.with(|f| f.borrow().contains(&p))
     }
 }
-mod call_frame;
+pub(crate) mod call_frame;
 pub(crate) mod debug_info;
 mod fnv;
 pub mod function;
