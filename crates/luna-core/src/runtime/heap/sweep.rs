@@ -7,6 +7,19 @@ impl Heap {
     /// current-white so the next cycle can re-mark them. Returns the number of objects freed.
     pub(super) fn full_sweep(&mut self) -> usize {
         self.sweep_begins();
+        let freed = self.sweep_all_list();
+        self.whiten_fin_lists();
+        self.puc_sweep_ends();
+        self.live -= freed;
+        // a sweep keeps the order of `all` (see `Heap::keep_young`)
+        self.check_no_dangling("full_sweep");
+        self.check_slow_bits("full_sweep");
+        freed
+    }
+
+    /// [`Heap::full_sweep`]'s pass over `all`: the dead freed (or set
+    /// aside), the survivors whitened; the number freed.
+    fn sweep_all_list(&mut self) -> usize {
         // detach the list first so freeing never aliases a pointer into self
         let mut freed = 0;
         let new_white = self.current_white;
@@ -55,12 +68,6 @@ impl Heap {
                 self.all = added;
             }
         }
-        self.whiten_fin_lists();
-        self.puc_sweep_ends();
-        self.live -= freed;
-        // a sweep keeps the order of `all` (see `Heap::keep_young`)
-        self.check_no_dangling("full_sweep");
-        self.check_slow_bits("full_sweep");
         freed
     }
 
