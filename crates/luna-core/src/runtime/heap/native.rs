@@ -184,6 +184,18 @@ impl Heap {
             kind,
             builtin,
         };
+        let g = self.place_native(obj, fix)?;
+        if fix {
+            return Ok(g);
+        }
+        let fixed = self.fix_natives;
+        self.puc_born(g, NativeFunction { nup, fixed });
+        Ok(g)
+    }
+
+    /// The native `obj` placed in a slab block: on the fixed list when
+    /// `fix`, else on the list of objects.
+    fn place_native(&mut self, obj: NativeClosure, fix: bool) -> Result<Gc<NativeClosure>, Oom> {
         // made in a slab block; a fixed one goes straight onto the fixed list
         let p = self.slab_block()?;
         // SAFETY: `p` is a free slot of a slab block, for one native
@@ -201,16 +213,6 @@ impl Heap {
             }
             Gc::from_ptr(p)
         };
-        if fix {
-            return Ok(g);
-        }
-        self.puc_born(
-            g,
-            NativeFunction {
-                nup,
-                fixed: self.fix_natives,
-            },
-        );
         Ok(g)
     }
 }
