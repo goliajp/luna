@@ -74,6 +74,7 @@ impl Heap {
 
     /// The count moved by `delta` where the instrumented PUC's allocation
     /// function refused a growth (gc-trace's `LUNA_GC_REFUSE`).
+    #[cfg(feature = "gc-trace")]
     pub(crate) fn adjust_count(&mut self, delta: i64) {
         self.puc.count.bytes = (self.puc.count.bytes as i64 + delta) as usize;
     }

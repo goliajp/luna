@@ -49,10 +49,8 @@ impl Heap {
             b.reserve_exact(size)?;
             let waited = self.refusal_waits();
             self.acct_part(old, size);
-            // gc-trace: `LUNA_GC_REFUSE` refused this growth of PUC's, which is
-            // then as if the allocation failed
-            if let Some(bytes) = self.take_new_refusal(waited) {
-                self.adjust_count(-bytes);
+            // gc-trace: `LUNA_GC_REFUSE` refused this growth of PUC's
+            if self.refused_growth(waited) {
                 self.shrink_gbuff_to(old);
                 return Err(Oom(mem));
             }
