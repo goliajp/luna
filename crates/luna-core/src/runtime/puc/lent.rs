@@ -18,10 +18,12 @@ pub(in crate::runtime) struct Lent {
 impl Heap {
     /// What a marker borrows.
     pub(in crate::runtime::puc) fn lend_model(&mut self) -> Lent {
-        Lent {
+        let mut l = Lent {
             env51: self.puc.records.env51_box.take(),
-            parse: self.lend_parse_frames(),
-        }
+            parse: Vec::new(),
+        };
+        self.lend_parse_frames(&mut l);
+        l
     }
 
     /// What a marker borrowed, back.
@@ -29,6 +31,6 @@ impl Heap {
         if let Some(e) = l.env51.take() {
             self.puc.records.env51_box = Some(e);
         }
-        self.settle_parse_frames(&mut l.parse);
+        self.settle_parse_frames(l);
     }
 }
