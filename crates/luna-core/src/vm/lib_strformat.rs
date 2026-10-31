@@ -16,7 +16,7 @@ mod item51;
 mod item54;
 mod quoted;
 use item51::item51;
-use item54::item54;
+use item54::{item54, spec_end};
 pub(crate) use quoted::*;
 
 /// PUC `MAX_FORMAT`: a 5.4+ specification plus '%', a length modifier
@@ -72,6 +72,11 @@ fn abandon(vm: &mut Vm, b: &mut Option<PucBuffer>) {
     }
 }
 
+/// `string.format`'s work. The buffer is made only once the content and
+/// the room asked for before an item outgrow its first block (until then
+/// it allocates nothing and counts the content's length), with the length
+/// before that step: `lim`, one past the first block until then and zero
+/// after, tells in one compare both that and whether the buffer exists.
 #[inline(always)]
 fn format<const PRE: bool>(
     vm: &mut Vm,
@@ -86,12 +91,6 @@ fn format<const PRE: bool>(
     // room for the format and an item before the buffer regrows
     let mut out = vm.new_buf();
     vm.buf_reserve(&mut out, fmt.len() + cfmt::ITEM_MAX)?;
-    // While the content, and the room asked for before an item, fit the
-    // buffer's first block, nothing the buffer does allocates and its count
-    // is the content's length: it is made only once that stops holding,
-    // with the length the content had before that step. `lim` is one past
-    // the first block until then and zero after, so a step's one compare
-    // also tells whether the buffer exists.
     let mut lim = PucBuffer::first_size::<PRE>(vm) + 1;
     macro_rules! tell {
         ($need:expr, $before:expr, |$b:ident| $step:expr) => {
@@ -107,9 +106,8 @@ fn format<const PRE: bool>(
             }
         };
     }
-    // the room asked for before each item (5.2 on), and whether a `%f`
-    // asks for more (5.4 on)
-    // (`PRE`, 5.1 and 5.2, asks for 512: a constant, no register)
+    // the room asked for before each item (5.2 on; a constant for `PRE`),
+    // and whether a `%f` asks for more (5.4 on)
     let room = if PRE { 512 } else { max_item(v) };
     let room_f = !PRE && v >= LuaVersion::Lua54;
     let mut arg = 0u32;
@@ -220,26 +218,6 @@ fn finish_begun<const PRE: bool>(
     out: &[u8],
 ) -> Result<crate::runtime::Gc<crate::runtime::LuaStr>, LuaError> {
     b.take().expect("a begun buffer").finish::<PRE>(vm, out)
-}
-
-/// Where the 5.4 specification starting at `i` ends: past its flags,
-/// width and precision bytes, at its conversion.
-#[inline]
-fn spec_end(fmt: &[u8], i: usize) -> usize {
-    let mut p = i;
-    while fmt.get(p).is_some_and(|&c| spec_char(c)) {
-        p += 1;
-    }
-    p
-}
-
-/// Whether `c` may come before a 5.4 specification's conversion: a flag,
-/// a digit or the `.` (`L_FMTFLAGSX`, then `getformat`'s digits).
-#[inline(always)]
-fn spec_char(c: u8) -> bool {
-    // digits first: a width or a precision is what a specification
-    // mostly holds
-    c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'#' | b' ' | b'.')
 }
 
 fn byte_at(fmt: &[u8], i: usize) -> u8 {
