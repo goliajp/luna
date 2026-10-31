@@ -125,6 +125,7 @@ pub(crate) fn check_any(vm: &mut Vm, a: Args, i: u32) -> Result<Value, LuaError>
 
 /// `lua_tonumberx` on a value: numbers as-is, strings through the dialect's
 /// string-to-number conversion, anything else `None`.
+#[inline]
 pub(crate) fn to_num(vm: &Vm, v: Value) -> Option<Num> {
     match v {
         Value::Int(x) => Some(Num::Int(x)),

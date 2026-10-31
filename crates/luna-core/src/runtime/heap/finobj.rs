@@ -31,7 +31,7 @@ impl Heap {
             // marking keeps its color (`keepinvariant`); a sweep would have
             // turned it white
             if self.phase != GcPhase::Propagate {
-                (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
+                (*h).paint(self.current_white);
             }
             let mut link: *mut *mut GcHeader = ptr::addr_of_mut!(self.all);
             while *link != h {
@@ -155,10 +155,10 @@ impl Heap {
             self.tobefnz_len -= 1;
             let f = (*h).flags & !FIN;
             // marking keeps its color (`keepinvariant`)
-            (*h).flags = match self.phase {
-                GcPhase::Propagate => f,
-                _ => (f & !(COLOR_BITS | SLOW)) | self.current_white | (((*h).cls & RO_CLS) << 1),
-            };
+            match self.phase {
+                GcPhase::Propagate => (*h).flags = f,
+                _ => (*h).whiten_from((f, (*h).cls), self.current_white),
+            }
             if let Some(a) = self.udata_after {
                 let a = a.as_ptr();
                 (*h).next = (*a).next;
@@ -185,8 +185,7 @@ impl Heap {
             // SAFETY: the lists link allocated objects; only headers are written
             unsafe {
                 while !cur.is_null() {
-                    let (f, cls) = ((*cur).flags, (*cur).cls);
-                    (*cur).flags = (f & !(COLOR_BITS | SLOW)) | white | ((cls & RO_CLS) << 1);
+                    (*cur).whiten_from(((*cur).flags, (*cur).cls), white);
                     cur = (*cur).next;
                 }
             }

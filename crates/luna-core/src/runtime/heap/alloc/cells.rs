@@ -117,7 +117,7 @@ impl Heap {
                 state: UpvalState::Closed(Value::Nil),
             });
             let h = p as *mut GcHeader;
-            (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+            (*h).paint(GRAY);
             (*h).next = self.fixed;
             self.fixed = h;
             Gc::from_ptr(p)

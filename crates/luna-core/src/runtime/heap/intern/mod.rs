@@ -21,7 +21,7 @@ impl Heap {
     #[cold]
     #[inline(never)]
     fn resurrect(&self, h: &mut GcHeader) {
-        h.flags = h.with_slow((h.flags & !WHITE_BITS) | self.current_white);
+        h.set_flags((h.flags & !WHITE_BITS) | self.current_white);
         // found again: no more a string only a load holds
         model::string_held(h);
     }
@@ -228,7 +228,7 @@ impl Heap {
         unsafe {
             self.all = (*h).next;
             (*h).next = self.fixed;
-            (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+            (*h).paint(GRAY);
         }
         self.fixed = h;
     }
@@ -248,7 +248,7 @@ impl Heap {
                     }
                     *link = (*h).next;
                     (*h).next = self.fixed;
-                    (*h).flags = (*h).with_slow((*h).flags & !COLOR_BITS);
+                    (*h).paint(GRAY);
                     self.fixed = h;
                     return;
                 }

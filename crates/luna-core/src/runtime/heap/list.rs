@@ -80,7 +80,7 @@ impl Heap {
             // one made while marking is marked by the atomic step if it is
             // reachable then (the roots are marked again there, and a black
             // object that took it was sent back to gray by its barrier)
-            (*h).flags = (*h).with_slow(((*h).flags & !COLOR_BITS) | self.current_white);
+            (*h).paint(self.current_white);
             match self.udata_after {
                 Some(a) if (*h).tag == ObjTag::Userdata => {
                     let a = a.as_ptr();

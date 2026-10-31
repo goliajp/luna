@@ -65,10 +65,10 @@ impl Heap {
             }
             self.count_marked(ch);
             if (*ch).tag == ObjTag::Str {
-                (*ch).flags = (*ch).with_slow((cf & !COLOR_BITS) | BLACK);
+                (*ch).set_flags((cf & !COLOR_BITS) | BLACK);
                 model::string_held(&mut *ch);
             } else {
-                (*ch).flags = (*ch).with_slow(cf & !WHITE_BITS);
+                (*ch).set_flags(cf & !WHITE_BITS);
                 self.push_gray(ch);
             }
         }
@@ -133,7 +133,7 @@ impl Heap {
             if !is_black(f) {
                 return;
             }
-            (*parent).flags = (*parent).with_slow(f & !COLOR_BITS);
+            (*parent).set_flags(f & !COLOR_BITS);
             // traversed again by the atomic step only (PUC `grayagain`): a
             // table the program keeps writing does not hold up propagation
             if self.grayagain.push(parent).is_err() {

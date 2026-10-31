@@ -41,7 +41,7 @@ impl Heap {
             // heap; only the flag byte is written
             unsafe {
                 if (*cur).tag == ObjTag::Str {
-                    (*cur).flags = (*cur).with_slow(((*cur).flags & !COLOR_BITS) | c);
+                    (*cur).paint(c);
                 }
                 cur = (*cur).next;
             }
@@ -82,7 +82,7 @@ impl Heap {
             let mut cur = self.all;
             while !cur.is_null() {
                 self.puc_sweep_reach(cur);
-                (*cur).flags = (*cur).with_slow(((*cur).flags & !COLOR_BITS) | white);
+                (*cur).paint(white);
                 self.puc_sweep_kept(cur);
                 cur = (*cur).next;
             }
