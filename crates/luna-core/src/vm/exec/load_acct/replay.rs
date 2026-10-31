@@ -52,6 +52,19 @@ pub(super) struct Cut {
 }
 
 impl Cut {
+    /// Whether the replay stops before event `ev`, logged at token `t`
+    /// (named by `at`), a token of the cut's or past it.
+    #[inline(never)]
+    pub(super) fn stops(
+        &self,
+        t: i64,
+        at: At,
+        ev: PEv,
+        marks: &crate::frontend::parser::Marks,
+    ) -> bool {
+        !(self.ended && t == self.events && self.takes(at, ev, marks))
+    }
+
     /// Whether event `ev`, logged at token `t` (named by `at`), the token of the cut, is
     /// replayed: one of a node that ended before the token (done while
     /// the parser looked at it, before it failed on it), or, when the
