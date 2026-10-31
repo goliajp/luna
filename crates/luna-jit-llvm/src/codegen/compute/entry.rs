@@ -92,23 +92,27 @@ pub(super) fn emit_entry<'ctx>(
         builder.position_at_end(go);
     }
     let (self_ctx, limit, base) = if self_calls {
-        let words = i64_type.array_type(luna_jit_helpers::SELF_CTX_WORDS as u32);
+        let words = i64_type.array_type(luna_jit_helpers::SelfCtx::SIZE / 8);
         let at = builder.build_alloca(words, "self_ctx").ok()?;
         let addr = builder
             .build_ptr_to_int(at, i64_type, "self_ctx_addr")
             .ok()?;
         let fill = helpers.get("luna_jit_enter_ctx").copied()?;
         builder.build_call(fill, &[addr.into()], "fill_ctx").ok()?;
-        let word = |w: u64, name: &str| -> Option<inkwell::values::IntValue<'ctx>> {
+        let field = |off: i32, name: &str| -> Option<inkwell::values::IntValue<'ctx>> {
             let a = builder
-                .build_int_add(addr, i64_type.const_int(8 * w, false), name)
+                .build_int_add(addr, i64_type.const_int(off as u64, false), name)
                 .ok()?;
             let p = builder
                 .build_int_to_ptr(a, ctx.ptr_type(Default::default()), name)
                 .ok()?;
             Some(builder.build_load(i64_type, p, name).ok()?.into_int_value())
         };
-        (addr, word(0, "limit")?, word(3, "base")?)
+        (
+            addr,
+            field(luna_jit_helpers::SelfCtx::STACK_LIMIT, "limit")?,
+            field(luna_jit_helpers::SelfCtx::BASE0, "base")?,
+        )
     } else {
         (zero, zero, zero)
     };

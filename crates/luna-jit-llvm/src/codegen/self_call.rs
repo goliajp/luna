@@ -47,23 +47,23 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         Some(())
     }
 
-    /// The address of word `w` of the self-call context (the body's first
-    /// parameter).
+    /// The address of the self-call context's field at byte offset `off`
+    /// (a `SelfCtx` constant); the context is the body's first parameter.
     pub(super) fn ctx_addr(
         &self,
-        w: u64,
+        off: i32,
         name: &str,
     ) -> Option<inkwell::values::PointerValue<'ctx>> {
         let base = self.function.get_nth_param(0)?.into_int_value();
-        let off = self.i64_type.const_int(8 * w, false);
+        let off = self.i64_type.const_int(off as u64, false);
         let at = self.builder.build_int_add(base, off, name).ok()?;
         self.builder
             .build_int_to_ptr(at, self.ctx.ptr_type(Default::default()), name)
             .ok()
     }
 
-    pub(super) fn ctx_word(&self, w: u64, name: &str) -> Option<inkwell::values::IntValue<'ctx>> {
-        let p = self.ctx_addr(w, name)?;
+    pub(super) fn ctx_word(&self, off: i32, name: &str) -> Option<inkwell::values::IntValue<'ctx>> {
+        let p = self.ctx_addr(off, name)?;
         Some(
             self.builder
                 .build_load(self.i64_type, p, name)
@@ -150,7 +150,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
     ) -> Option<()> {
         let builder = self.builder;
         let i64t = self.i64_type;
-        let base_limit = self.ctx_word(2, "base_limit")?;
+        let base_limit = self.ctx_word(luna_jit_helpers::SelfCtx::LEVEL_BASE, "base_limit")?;
         let cross = builder
             .build_int_compare(inkwell::IntPredicate::SGE, base, base_limit, "high")
             .ok()?;
@@ -243,7 +243,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
             .ok()?;
         builder.position_at_end(slow_bb);
         // the interpreter makes the call
-        let flag_at = self.ctx_addr(1, "flag_at")?;
+        let flag_at = self.ctx_addr(luna_jit_helpers::SelfCtx::FLAG, "flag_at")?;
         let not_started = i64t.const_int(luna_jit_helpers::SELF_NOT_STARTED as u64, false);
         builder.build_store(flag_at, not_started).ok()?;
         builder.build_return(Some(&i64t.const_zero())).ok()?;

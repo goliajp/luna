@@ -4,7 +4,7 @@
 
 use super::*;
 use luna_core::__private::raw;
-use luna_jit_helpers::{SELF_FAILED, SELF_HANDED, SELF_NOT_STARTED};
+use luna_jit_helpers::{SELF_FAILED, SELF_HANDED, SELF_NOT_STARTED, SelfCtx};
 
 /// Record this level's frame, which the interpreter goes on with at `pc`
 /// (a value), with its registers as `st` has them, and return; a level of
@@ -56,7 +56,8 @@ pub(super) fn emit_handoff<M: Module>(
     if f.self_calls.is_some() {
         let ctx = bcx.ins().get_pinned_reg(types::I64);
         let handed = bcx.ins().iconst(types::I64, SELF_HANDED);
-        bcx.ins().store(MemFlagsData::trusted(), handed, ctx, 8);
+        bcx.ins()
+            .store(MemFlagsData::trusted(), handed, ctx, SelfCtx::FLAG);
     }
     let zero = bcx.ins().iconst(types::I64, 0);
     bcx.ins().return_(&[zero]);
@@ -75,7 +76,7 @@ pub(super) fn emit_after_self_call<M: Module>(
 ) -> Option<()> {
     let flags = MemFlagsData::trusted();
     let ctx = bcx.ins().get_pinned_reg(types::I64);
-    let flag = bcx.ins().load(types::I64, flags, ctx, 8);
+    let flag = bcx.ins().load(types::I64, flags, ctx, SelfCtx::FLAG);
     let cold = bcx.create_block();
     let failed = bcx.create_block();
     let hand = bcx.create_block();
