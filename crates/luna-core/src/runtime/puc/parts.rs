@@ -98,61 +98,12 @@ impl Heap {
 }
 
 impl Heap {
-    /// A new string of `len` bytes (PUC `createstrobj`).
-    #[inline(always)]
-    pub(in crate::runtime::puc) fn acct_string(&mut self, len: usize) {
-        // a short string with no trace to write: only the sum is seen
-        // (the table grows on the same condition either side of the
-        // string's own count)
-        if !crate::runtime::gc_hooks::TRACE && self.counting() {
-            if len > self.puc.records.short_max {
-                let l55 = self.puc.dialect == Dialect::L55;
-                self.puc.count.bytes += self.puc.sizes.string(len, l55);
-                return;
-            }
-            if self.puc.records.strt_nuse >= self.puc.records.strt_size {
-                self.grow_strtab();
-            }
-            self.puc.count.bytes += self.puc.sizes.string(len, false);
-            self.puc.records.strt_nuse += 1;
-            return;
-        }
-        self.acct_string_traced(len);
-    }
-
-    /// [`Heap::acct_string`] with a trace to write or while luna builds
-    /// its own objects.
-    #[inline(never)]
-    fn acct_string_traced(&mut self, len: usize) {
-        let d = self.puc.dialect;
-        let long = len > crate::runtime::string::MAX_SHORT_LEN && d != Dialect::L51;
-        let kind = if long {
-            PucKind::LongStr
-        } else {
-            PucKind::ShortStr
-        };
-        let size = self.puc.sizes.string(len, long && d == Dialect::L55);
-        if long || !self.counting() {
-            return self.acct_obj(kind, size);
-        }
-        // the string table grows when it is full: 5.2 on before the new
-        // string goes in, 5.1 once it is past full
-        if d != Dialect::L51 && self.puc.records.strt_nuse >= self.puc.records.strt_size {
-            self.grow_strtab();
-        }
-        self.acct_obj(kind, size);
-        self.puc.records.strt_nuse += 1;
-        if d == Dialect::L51 && self.puc.records.strt_nuse > self.puc.records.strt_size {
-            self.grow_strtab();
-        }
-    }
-
     /// The string table doubling: 5.1 allocates the new one and frees the
     /// old, later versions reallocate. The table is PUC's state's: its
     /// blocks count whatever luna builds meanwhile (see
     /// [`Heap::acct_part`]), as the strings it holds come and go.
     #[cold]
-    fn grow_strtab(&mut self) {
+    pub(in crate::runtime::puc) fn grow_strtab(&mut self) {
         if !crate::runtime::puc::step::strt_resize_in_sweep(self) {
             return;
         }

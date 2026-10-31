@@ -15,12 +15,6 @@ pub(crate) struct FinalizerStop {
 }
 
 impl Heap {
-    /// Approximate heap size in bytes: PUC's `totalbytes`.
-    #[inline(always)]
-    pub fn bytes(&self) -> usize {
-        self.puc.count.bytes
-    }
-
     /// Whether allocation has crossed the auto-GC threshold (cheap safe-point
     /// check for the interpreter loop).
     #[inline(always)]
@@ -46,7 +40,7 @@ impl Heap {
     #[inline]
     pub(in crate::runtime::puc) fn fin51_threshold(&mut self) -> i64 {
         let saved = self.puc.pace.threshold();
-        self.puc.pace.set_threshold(2 * self.puc.count.bytes as i64);
+        self.puc.pace.set_threshold(2 * self.bytes() as i64);
         saved
     }
 
@@ -62,7 +56,7 @@ impl Heap {
     /// has handed out, when it counts them (a host function or a policy),
     /// else PUC's count ([`Heap::bytes`]).
     pub(crate) fn cap_bytes(&self) -> usize {
-        self.mem_ctx().in_use().unwrap_or(self.puc.count.bytes)
+        self.mem_ctx().in_use().unwrap_or(self.bytes())
     }
 
     /// [`Heap::gc_due`] once `more` bytes more are counted.
@@ -185,14 +179,5 @@ impl Heap {
     #[inline]
     pub(crate) fn due_reached(&self) -> bool {
         self.puc_due_after(0)
-    }
-
-    /// The two words a safe point compares, `bytes` and `gc_limit`
-    /// [`GC_LIMIT_OFFSET`] bytes after it, for compiled code to compare
-    /// itself: no step is due while `bytes < gc_limit`.
-    ///
-    /// [`GC_LIMIT_OFFSET`]: crate::runtime::puc::api::GC_LIMIT_OFFSET
-    pub(crate) fn due_words(&self) -> *const usize {
-        std::ptr::from_ref(&self.puc.count).cast()
     }
 }

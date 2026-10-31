@@ -20,7 +20,7 @@ impl Heap {
     pub(in crate::runtime::puc) fn lend_model(&mut self) -> Lent {
         Lent {
             env51: self.puc.records.env51_box.take(),
-            parse: std::mem::take(&mut self.puc.loads.parse),
+            parse: self.lend_parse_frames(),
         }
     }
 
@@ -29,8 +29,6 @@ impl Heap {
         if let Some(e) = l.env51.take() {
             self.puc.records.env51_box = Some(e);
         }
-        if !l.parse.is_empty() || self.puc.loads.parse.is_empty() {
-            self.puc.loads.parse = std::mem::take(&mut l.parse);
-        }
+        self.settle_parse_frames(&mut l.parse);
     }
 }

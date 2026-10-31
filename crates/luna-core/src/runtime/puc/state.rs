@@ -31,7 +31,7 @@ pub(in crate::runtime) struct PucModel {
     /// given size (see `Heap::stand_sizes_on`)
     pub(super) stand_ins: super::for_heap::StandIns,
     /// the loads under way, as the model sees them
-    pub(super) loads: super::api::Loads,
+    pub(super) loads: super::count::Loads,
     /// what loads made before PUC does, kept off the list
     pub(super) unborn: super::records::parse::Unborn,
     /// what the opening of the standard libraries made
@@ -54,7 +54,7 @@ impl Default for PucModel {
             pace: super::pace::Pace::new(),
             records: super::records::Records::new(),
             stand_ins: super::for_heap::StandIns::default(),
-            loads: super::api::Loads::new(),
+            loads: super::count::Loads::new(),
             unborn: super::records::parse::Unborn::new(),
             opening: super::api::Opening::default(),
         }
@@ -62,6 +62,19 @@ impl Default for PucModel {
 }
 
 impl Heap {
+    /// The model takes on `version`: PUC's sizes and dialect, and 5.1's
+    /// string table holding every string.
+    pub(in crate::runtime::puc) fn puc_dialect(&mut self, version: crate::version::LuaVersion) {
+        let d = crate::runtime::dialect::Dialect::of(version);
+        self.puc.dialect = d;
+        self.puc.params = super::GcParams::new(version);
+        self.puc.sizes = super::size::PucSizes::of(d);
+        self.puc.rules = super::for_heap::HeapRules::of(d, &self.puc.sizes);
+        if d == crate::runtime::dialect::Dialect::L51 {
+            self.puc.records.short_max = usize::MAX;
+        }
+    }
+
     /// Run `f` with counting off.
     #[inline]
     pub(in crate::runtime) fn uncounted<R>(&mut self, f: impl FnOnce(&mut Heap) -> R) -> R {

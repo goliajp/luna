@@ -1,18 +1,25 @@
-//! The model as the code outside the runtime sees it, and all of it that
-//! code reaches: the heap's methods defined in these files, the collector's
-//! steps the VM drives (`step.rs`, run on the VM as their `StepHost`), and
-//! the types their arguments and results name, re-exported below, with
-//! those types' own methods, and the marker's `keep` (`mark.rs`). The
-//! model's other modules are visible to the runtime alone, so the compiler
-//! refuses any other way in.
+//! The model as the code outside the runtime sees it. Its facade is every
+//! `pub(crate)` method of the heap the model defines, which live in:
+//! - this module's files: the collector and its pace (`collector.rs`), 5.1's
+//!   environments (`env51.rs`), the records of objects luna has none of
+//!   (`ghost.rs`), a load's span (`load_session.rs`), open upvalues
+//!   (`open_upvals.rs`), the standard libraries' opening (`opening.rs`),
+//!   the parser's replay (`parse.rs`), the strings PUC makes for text
+//!   (`text.rs`)
+//! - `count`: PUC's count and what moves it (`total.rs`, `objects.rs`,
+//!   `blocks.rs`, `defer.rs`) and the loads under way (`loads.rs`), whose
+//!   fields are that module's alone
+//!
+//! Besides those methods, the facade is the collector's steps the VM
+//! drives (`step.rs`, run on the VM as their `StepHost`), the marker's
+//! `keep` (`mark.rs`), and the types their arguments and results name,
+//! re-exported below with their own methods. The model's other items are
+//! visible to the runtime alone, so the compiler refuses any other way in.
 
 mod collector;
-mod count;
-mod defer;
 mod env51;
 mod ghost;
 mod load_session;
-mod loads;
 mod mark;
 mod open_upvals;
 mod opening;
@@ -20,11 +27,8 @@ mod parse;
 mod step;
 mod text;
 
-pub(crate) use super::count::GC_LIMIT_OFFSET;
-pub(crate) use count::{CountingMark, CountingOff};
-pub(crate) use defer::Deferred;
-use load_session::unpaired;
-pub(in crate::runtime::puc) use loads::Loads;
+pub(crate) use super::count::{CountingMark, CountingOff, Deferred, GC_LIMIT_OFFSET};
+pub(in crate::runtime::puc) use load_session::unpaired;
 pub(in crate::runtime::puc) use opening::Opening;
 pub(crate) use step::{
     change_mode, full_collect, gc_finish_finalizers, gc_full_pause, gc_full_repause, gc_lua_step,

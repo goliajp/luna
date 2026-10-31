@@ -18,7 +18,6 @@ mod unborn;
 mod unborn_tests;
 pub(crate) use arrays::{FuncArrays, GrowVec, ParserArray, ParserSizes};
 pub(crate) use table::{PKey, PTab};
-pub(in crate::runtime) use unborn::LoadsAside;
 pub(in crate::runtime::puc) use unborn::Unborn;
 
 /// In a record's `sub` byte: a parser table.
