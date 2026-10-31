@@ -50,7 +50,7 @@ impl Vm {
     /// all, after its pause is set; the others as their steps call them,
     /// before the pause), and the pause it ends with.
     pub(super) fn full_gc_finalizers(&mut self) -> Result<(), LuaError> {
-        if self.version == LuaVersion::Lua52 {
+        if self.heap.full_calls_pending_first() {
             return self.call_all_pending(true);
         }
         crate::runtime::puc::step::gc_steps_to_pause(self)?;

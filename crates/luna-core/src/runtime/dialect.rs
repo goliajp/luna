@@ -30,9 +30,10 @@ impl Dialect {
     }
 }
 
-/// The rules of one dialect.
+/// The rules of one dialect. luna's other crates read the ones they
+/// need through `__private::Rules`.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Rules {
+pub struct Rules {
     dialect: Dialect,
     ephemeron: bool,
     refinalize: bool,
@@ -41,7 +42,8 @@ pub(crate) struct Rules {
 }
 
 impl Rules {
-    pub(crate) const fn of(v: LuaVersion) -> Rules {
+    /// The rules of dialect `v`.
+    pub const fn of(v: LuaVersion) -> Rules {
         Rules::for_dialect(Dialect::of(v))
     }
 
@@ -92,20 +94,20 @@ impl Rules {
 
     /// 5.2 checks for a collection on every call (`luaD_precall`).
     #[inline]
-    pub(crate) fn check_on_call(self) -> bool {
+    pub fn check_on_call(self) -> bool {
         matches!(self.dialect, Dialect::L52)
     }
 
     /// 5.1 checks when a call from C returns (`luaD_call`).
     #[inline]
-    pub(crate) fn check_on_return(self) -> bool {
+    pub fn check_on_return(self) -> bool {
         matches!(self.dialect, Dialect::L51)
     }
 
     /// 5.1 and 5.2: the C API checks before it allocates; later ones after
     /// it pushed what it made.
     #[inline]
-    pub(crate) fn api_checks_before(self) -> bool {
+    pub fn api_checks_before(self) -> bool {
         self.dialect <= Dialect::L52
     }
 }

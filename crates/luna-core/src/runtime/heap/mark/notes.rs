@@ -12,6 +12,13 @@ impl Marker {
         self.rules.dialect()
     }
 
+    /// Whether the roots mark each thread's open upvalues (5.4 on); before
+    /// that an open upvalue is marked only through its closures.
+    #[inline]
+    pub(crate) fn open_upvals_are_roots(&self) -> bool {
+        self.rules.open_upvals_are_roots
+    }
+
     /// The model's rules for the dialect.
     #[inline(always)]
     pub(in crate::runtime) fn rules(&self) -> &crate::runtime::puc::for_heap::HeapRules {

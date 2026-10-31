@@ -113,9 +113,10 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 nresults: shape.nresults,
                 n_varargs: shape.n_varargs,
             });
-            // 5.2 checks for a collection on every call of a Lua function,
-            // with the new frame's top: leave in the callee when one is due
-            if pl.opts.dialect == Some(luna_core::version::LuaVersion::Lua52) {
+            // where every call of a Lua function checks for a collection
+            // (5.2), with the new frame's top: leave in the callee when one
+            // is due
+            if pl.rules().is_some_and(|r| r.check_on_call()) {
                 call_gc_check(lw, pl, i);
             }
         }

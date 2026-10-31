@@ -1,5 +1,4 @@
 use super::*;
-use luna_core::version::LuaVersion;
 
 /// A `string.sub` fold at its call: on a string and numbers the trace
 /// knows as such; anything else is not compiled. A float position equal
@@ -17,9 +16,10 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
         str_sub_checked_id,
         ..
     } = lw.h.rt;
-    // 5.1 and 5.2 check for a collection before the string is made; code
-    // for no dialect in particular does not fold the call
-    let checks_before = pl.opts.dialect? <= LuaVersion::Lua52;
+    // where the C API checks for a collection before the string is made
+    // (5.1, 5.2) the check comes first; code for no dialect in particular
+    // does not fold the call
+    let checks_before = pl.rules()?.api_checks_before();
     let Plan { record, .. } = *pl;
     let off = oc.off;
     let regs: &[Variable] = oc.regs;
