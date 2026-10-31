@@ -45,7 +45,7 @@ pub(crate) struct Marker {
     /// that work so far (PUC `GCmemtrav`), as the model counts it
     pub(in crate::runtime::heap) leaf_bytes: i64,
     /// 5.5: counts what is marked
-    pub(in crate::runtime::heap) sizer: Option<super::collect::Sizer>,
+    pub(in crate::runtime::heap) sizer: Option<crate::runtime::puc::for_heap::Sizer>,
     /// luna's own objects reached, gray off the stack until
     /// [`Marker::drain_quiet`] marks what they hold
     pub(in crate::runtime::heap) quiet: Vec<*mut GcHeader>,

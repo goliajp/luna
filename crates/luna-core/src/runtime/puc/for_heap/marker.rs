@@ -64,7 +64,6 @@ impl HeapRules {
     /// The work of marking the leaf `h`: a string's size (PUC's
     /// `sizelstring`), a userdata's PUC size, 5.2's closed upvalue; 0 for
     /// anything of luna's own.
-    ///
     #[inline(always)]
     pub(in crate::runtime) fn leaf_work(&self, h: Gc<GcHeader>) -> i64 {
         let h = h.as_ptr();

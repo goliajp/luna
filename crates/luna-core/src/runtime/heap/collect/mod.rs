@@ -3,7 +3,6 @@
 use super::*;
 
 mod step;
-pub(super) use step::Sizer;
 pub(crate) use step::{Propagated, Running};
 
 impl Heap {
