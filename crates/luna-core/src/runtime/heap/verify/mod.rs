@@ -184,6 +184,7 @@ impl Heap {
             no_ephemeron: !self.rules.ephemeron(),
             rules: *self.puc_rules(),
             leaf_black: 0,
+            count_leaves: false,
             leaf_bytes: 0,
             sizer: None,
             quiet: Vec::new(),

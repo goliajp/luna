@@ -39,8 +39,10 @@ pub(crate) struct Marker {
     /// children go BLACK on sight (only the stop-the-world mark sets it; a
     /// native standing for a C closure has work an incremental step counts).
     pub(in crate::runtime::heap) leaf_black: u8,
-    /// 5.2 and 5.3: the work of marking strings, userdata and closed
-    /// upvalues so far (PUC `GCmemtrav`), as the model counts it
+    /// 5.2 and 5.3 in a step's marking: what marking a leaf adds to the
+    /// work is counted; a full collection's work goes nowhere
+    pub(in crate::runtime::heap) count_leaves: bool,
+    /// that work so far (PUC `GCmemtrav`), as the model counts it
     pub(in crate::runtime::heap) leaf_bytes: i64,
     /// 5.5: counts what is marked
     pub(in crate::runtime::heap) sizer: Option<super::collect::Sizer>,
@@ -220,8 +222,8 @@ impl Marker {
                         self.quiet.push(h);
                         return true;
                     }
-                    if self.rules.counts_leaf_work() {
-                        self.leaf_bytes += self.rules.leaf_work(h);
+                    if self.count_leaves {
+                        self.count_leaf(Gc::from_ptr_unchecked(h));
                     }
                     if let Some(s) = &mut self.sizer {
                         s.marked += s.size(h);
