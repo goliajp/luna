@@ -2,11 +2,29 @@
 //! registers.
 
 use super::*;
+use expr::CallAt;
 
 impl Compiler<'_> {
-    /// `f(args)`, its function `fe` compiled with `base` the free register
-    /// before it.
+    /// `f(args)`, its function `fe` compiled with `at.base` the free
+    /// register before it; the line pin it lifted is put back.
     pub(super) fn call_close(
+        &mut self,
+        id: ExprId,
+        fe: Exp,
+        at: CallAt,
+    ) -> Result<Exp, SyntaxError> {
+        let CallAt {
+            args,
+            line,
+            base,
+            force,
+        } = at;
+        let e = self.call_close_at(id, fe, args, line, base);
+        self.force_line = force;
+        e
+    }
+
+    fn call_close_at(
         &mut self,
         id: ExprId,
         fe: Exp,
@@ -29,9 +47,27 @@ impl Compiler<'_> {
         Ok(Exp::Open { pc, base })
     }
 
-    /// `obj:method(args)`, its receiver `oe` compiled with `base` the free
-    /// register before it.
+    /// `obj:method(args)`, its receiver `oe` compiled with `at.base` the
+    /// free register before it; the line pin it lifted is put back.
     pub(super) fn method_close(
+        &mut self,
+        id: ExprId,
+        oe: Exp,
+        method: Name,
+        at: CallAt,
+    ) -> Result<Exp, SyntaxError> {
+        let CallAt {
+            args,
+            line,
+            base,
+            force,
+        } = at;
+        let e = self.method_close_at(id, oe, method, args, line, base);
+        self.force_line = force;
+        e
+    }
+
+    fn method_close_at(
         &mut self,
         id: ExprId,
         oe: Exp,

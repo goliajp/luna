@@ -26,19 +26,23 @@ pub(super) enum Pending {
     },
     Call {
         id: ExprId,
-        args: List<ExprId>,
-        line: u32,
-        base: u32,
-        force: Option<u32>,
+        at: CallAt,
     },
     Method {
         id: ExprId,
         method: Name,
-        args: List<ExprId>,
-        line: u32,
-        base: u32,
-        force: Option<u32>,
+        at: CallAt,
     },
+}
+
+/// A call's arguments and line, the free register before its function
+/// and the line pin it lifted (see [`Compiler::unpin`]).
+#[derive(Clone, Copy)]
+pub(super) struct CallAt {
+    pub(super) args: List<ExprId>,
+    pub(super) line: u32,
+    pub(super) base: u32,
+    pub(super) force: Option<u32>,
 }
 
 impl<'a> Compiler<'a> {
@@ -92,15 +96,8 @@ impl<'a> Compiler<'a> {
                     }
                 },
                 Expr::Call { func, args, line } => {
-                    let base = self.lr().freereg;
-                    let force = self.unpin();
-                    self.spine.push_or_abort(Pending::Call {
-                        id: cur,
-                        args,
-                        line,
-                        base,
-                        force,
-                    });
+                    let at = self.call_at(args, line);
+                    self.spine.push_or_abort(Pending::Call { id: cur, at });
                     cur = func;
                 }
                 Expr::MethodCall {
@@ -109,15 +106,11 @@ impl<'a> Compiler<'a> {
                     args,
                     line,
                 } => {
-                    let base = self.lr().freereg;
-                    let force = self.unpin();
+                    let at = self.call_at(args, line);
                     self.spine.push_or_abort(Pending::Method {
                         id: cur,
                         method,
-                        args,
-                        line,
-                        base,
-                        force,
+                        at,
                     });
                     cur = obj;
                 }
@@ -135,32 +128,23 @@ impl<'a> Compiler<'a> {
                 } => self.binop_close(op, e, rhs, line, open)?,
                 Pending::AndOr { op, rhs, line } => self.and_or_close(op, e, rhs, line)?,
                 Pending::Index { id, key, saved } => self.index_close(id, e, key, saved)?,
-                Pending::Call {
-                    id,
-                    args,
-                    line,
-                    base,
-                    force,
-                } => {
-                    let e = self.call_close(id, e, args, line, base)?;
-                    self.force_line = force;
-                    e
-                }
-                Pending::Method {
-                    id,
-                    method,
-                    args,
-                    line,
-                    base,
-                    force,
-                } => {
-                    let e = self.method_close(id, e, method, args, line, base)?;
-                    self.force_line = force;
-                    e
-                }
+                Pending::Call { id, at } => self.call_close(id, e, at)?,
+                Pending::Method { id, method, at } => self.method_close(id, e, method, at)?,
             };
         }
         Ok(e)
+    }
+
+    /// A call of `args` on `line` opened now.
+    fn call_at(&mut self, args: List<ExprId>, line: u32) -> CallAt {
+        let base = self.lr().freereg;
+        let force = self.unpin();
+        CallAt {
+            args,
+            line,
+            base,
+            force,
+        }
     }
 
     /// From 5.2, the line a binary operator after the expression pinned

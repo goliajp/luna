@@ -223,22 +223,7 @@ impl Vm {
             }
             *t = tag;
         }
-        // a slot past the compile-time tags is checked like one read
-        let past = frame[n..]
-            .iter()
-            .zip(regs_past.iter_mut().zip(tags_past.iter_mut()));
-        for (v, (r, t)) in past {
-            let (tag, payload) = unpack_word(*v);
-            *r = payload;
-            if PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
-                match bool_entry(tag, tag) {
-                    Some(p) => *r = p,
-                    None => return false,
-                }
-            }
-            *t = tag;
-        }
-        true
+        marshal_past(&frame[n..], regs_past, tags_past)
     }
 
     /// The downrec trace returned through its close: count the stitch hit or
@@ -453,4 +438,22 @@ fn unpack_word(v: Value) -> (u8, i64) {
 fn bool_entry(want: u8, tag: u8) -> Option<i64> {
     use crate::runtime::value::raw;
     (want == raw::FALSE && (tag == raw::FALSE || tag == raw::TRUE)).then(|| i64::from(tag - want))
+}
+
+/// [`Vm::marshal_in_slots`] of the slots past the compile-time tags, each
+/// checked like one read.
+#[inline(always)]
+fn marshal_past(frame: &[Value], regs: &mut [i64], tags: &mut [u8]) -> bool {
+    for (v, (r, t)) in frame.iter().zip(regs.iter_mut().zip(tags.iter_mut())) {
+        let (tag, payload) = unpack_word(*v);
+        *r = payload;
+        if crate::jit::trace::PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
+            match bool_entry(tag, tag) {
+                Some(p) => *r = p,
+                None => return false,
+            }
+        }
+        *t = tag;
+    }
+    true
 }

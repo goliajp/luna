@@ -1,6 +1,7 @@
 //! 5.1-only base functions: `newproxy`, `gcinfo`, `setfenv`, `getfenv`.
 
 use super::*;
+use crate::runtime::{Gc, Table};
 
 /// PUC 5.1 `newproxy([false | true | proxy])`: an empty userdata, with no
 /// metatable, a fresh one, or the metatable of another proxy. Only a
@@ -11,38 +12,14 @@ pub(super) fn nat_newproxy<const PRE: bool>(
     fs: u32,
     nargs: u32,
 ) -> Result<u32, LuaError> {
-    use crate::runtime::userdata::UserdataPayload;
     let Value::Table(proxies) = vm.nat_upval(fs, 0) else {
         unreachable!("newproxy is registered with its metatable set")
     };
     let arg = vm.nat_arg(fs, nargs, 0);
-    vm.native_settop(1);
-    // `lua_newuserdata(L, 0)` comes first, kept on the stack; it and
-    // `lua_newtable` check for a collection before they allocate
-    vm.api_check_before::<PRE>()?;
-    let size = vm
-        .heap
-        .puc_size(crate::runtime::puc::api::PucObj::udata(1, 0));
-    let u = vm.lib_userdata(UserdataPayload::Empty, false, size)?;
-    vm.native_push(1);
-    vm.lib_roots.push(Value::Userdata(u));
-    let mt = match arg {
-        v if !v.truthy() => Ok(None),
-        Value::Bool(true) => (|| {
-            vm.api_check_before::<PRE>()?;
-            let m = vm.alloc_table()?;
-            // `proxies` is the weak set newproxy carries as its upvalue, so
-            // the running native keeps it alive
-            vm.lib_set_value(proxies, Value::Table(m), Value::Bool(true))?;
-            Ok(Some(m))
-        })(),
-        v => match vm.metatable_of(v) {
-            Some(m) if proxies.get(Value::Table(m)).truthy() => Ok(Some(m)),
-            _ => Err(arg_error(vm, 1, "boolean or proxy expected")),
-        },
-    };
-    vm.lib_roots.pop();
-    let mt = mt?;
+    let u = proxy_userdata::<PRE>(vm)?;
+    let mt = vm.rooted(&[Value::Userdata(u)], |vm| {
+        proxy_metatable::<PRE>(vm, proxies, arg)
+    })?;
     if let Some(mt) = mt {
         // SAFETY: `u` was allocated above and is held by its stack slot; the borrow covers one call
         unsafe { u.as_mut() }.set_metatable(Some(mt));
@@ -56,6 +33,47 @@ pub(super) fn nat_newproxy<const PRE: bool>(
         vm.heap.register_finalizable_userdata(u);
     }
     vm.nat_ret1(fs, Value::Userdata(u))
+}
+
+/// The proxy, `lua_newuserdata(L, 0)`: made first and kept on the stack.
+/// It and `lua_newtable` check for a collection before they allocate.
+fn proxy_userdata<const PRE: bool>(vm: &mut Vm) -> Result<Gc<crate::runtime::Userdata>, LuaError> {
+    vm.native_settop(1);
+    vm.api_check_before::<PRE>()?;
+    let size = vm
+        .heap
+        .puc_size(crate::runtime::puc::api::PucObj::udata(1, 0));
+    let u = vm.lib_userdata(
+        crate::runtime::userdata::UserdataPayload::Empty,
+        false,
+        size,
+    )?;
+    vm.native_push(1);
+    Ok(u)
+}
+
+/// The proxy's metatable for argument `arg`: none, a new one noted in the
+/// weak set `proxies`, or another proxy's.
+fn proxy_metatable<const PRE: bool>(
+    vm: &mut Vm,
+    proxies: Gc<Table>,
+    arg: Value,
+) -> Result<Option<Gc<Table>>, LuaError> {
+    match arg {
+        v if !v.truthy() => Ok(None),
+        Value::Bool(true) => {
+            vm.api_check_before::<PRE>()?;
+            let m = vm.alloc_table()?;
+            // `proxies` is the weak set newproxy carries as its upvalue, so
+            // the running native keeps it alive
+            vm.lib_set_value(proxies, Value::Table(m), Value::Bool(true))?;
+            Ok(Some(m))
+        }
+        v => match vm.metatable_of(v) {
+            Some(m) if proxies.get(Value::Table(m)).truthy() => Ok(Some(m)),
+            _ => Err(arg_error(vm, 1, "boolean or proxy expected")),
+        },
+    }
 }
 
 /// PUC 5.1 `gcinfo()` — memory in use, in KB (an integer in PUC, which had
