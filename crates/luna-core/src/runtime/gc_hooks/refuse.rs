@@ -47,16 +47,19 @@ impl Heap {
         false
     }
 
-    /// gc-trace: the bytes counted since a growth the instrumented PUC
-    /// refused, when it refused one since `waited` was read.
+    /// gc-trace: the instrumented PUC refused a growth since `waited` was
+    /// read, which is then as if the allocation failed: the bytes counted
+    /// since come off the count.
     #[inline(always)]
-    pub(crate) fn take_new_refusal(&mut self, waited: bool) -> Option<i64> {
+    pub(crate) fn refused_growth(&mut self, waited: bool) -> bool {
         #[cfg(feature = "gc-trace")]
         if !waited && self.hooks.trace.refused() {
-            return Some(self.hooks.trace.take_refused().1);
+            let bytes = self.hooks.trace.take_refused().1;
+            self.adjust_count(-bytes);
+            return true;
         }
         let _ = waited;
-        None
+        false
     }
 
     /// gc-trace: the stack top an emergency collection answering a refusal
