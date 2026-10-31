@@ -9,6 +9,7 @@ use super::func_name::FuncName;
 use super::levels::tail_ar;
 
 mod plan;
+mod puc;
 pub(super) use plan::traceback_plan;
 
 /// One line of a traceback: a level, or where levels were left out.

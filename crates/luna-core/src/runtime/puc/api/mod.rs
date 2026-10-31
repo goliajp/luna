@@ -8,8 +8,6 @@
 
 mod collector;
 mod count;
-#[cfg(feature = "gc-trace")]
-mod count_trace;
 mod defer;
 mod env51;
 mod ghost;

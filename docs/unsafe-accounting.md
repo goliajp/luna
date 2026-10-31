@@ -509,7 +509,7 @@ which check for a collection before the string is made, so that neither
 helper reads the dialect as it runs. 4 more in `luna-jit-helpers`; the
 tree's count stays at the ceiling, 1802, other sites having gone since.
 
-`LVec::extend_from_front` (`runtime/mem/vec_clone.rs`) appends a copy of
+`LVec::extend_from_front` (`runtime/mem/vec/clone.rs`) appends a copy of
 the vector's first elements into the room it reserved, one block, so that
 `string.rep` doubles the copies it made without filling the room with
 zeros first. 1803.

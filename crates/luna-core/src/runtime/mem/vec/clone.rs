@@ -1,8 +1,8 @@
 //! `LVec` operations that copy elements: clones appended, filled, or
 //! taken from the vector's own front.
 
-use super::ctx::{MemRef, Oom};
-use super::vec::LVec;
+use super::super::ctx::{MemRef, Oom};
+use super::LVec;
 
 impl<T: Clone> LVec<T> {
     /// Append clones of `s`.

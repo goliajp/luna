@@ -1,6 +1,6 @@
 //! What only the gc-trace build's VM asks of the count.
 
-use super::super::*;
+use super::super::super::*;
 
 impl Heap {
     /// gc-trace: the count moved by `delta` where the instrumented PUC's

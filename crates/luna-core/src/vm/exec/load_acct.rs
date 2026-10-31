@@ -26,7 +26,6 @@ use crate::runtime::puc::api::{FuncArrays, GrowVec, PKey, PTab, ParserArray, Par
 mod consts;
 mod events;
 mod failed;
-mod failed_compile;
 mod funcs;
 #[cfg(test)]
 mod long_tests;
@@ -35,7 +34,6 @@ mod scan;
 mod steps;
 mod syntax_msg;
 mod undump;
-mod undump_probe;
 mod view;
 use replay::{Cut, Fs, Replay, walk};
 pub(super) use replay::{PVal, TabOp};

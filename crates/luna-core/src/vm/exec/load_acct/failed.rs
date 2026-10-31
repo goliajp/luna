@@ -10,6 +10,8 @@
 //! on the way out.
 
 use super::*;
+
+mod compile;
 use crate::frontend::parser::{ParseScratch, completed, parse_in_place};
 
 impl Vm {
