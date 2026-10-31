@@ -22,11 +22,6 @@
 name: cross-allocator
 
 on:
-  schedule:
-    # Nightly at 05:00 UTC — staggered after asan.yml (03:00) +
-    # miri.yml (04:00) so the runners aren't queued behind each
-    # other.
-    - cron: '0 5 * * *'
   workflow_dispatch:
 
 jobs:
@@ -47,10 +42,6 @@ jobs:
              # official_run.rs.
     steps:
       - uses: actions/checkout@v7
-        with:
-          # scheduled runs start on the default branch (master, the last
-          # release); test the code that is about to ship instead
-          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
 

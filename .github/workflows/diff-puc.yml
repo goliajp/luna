@@ -11,7 +11,7 @@
 # Fixtures are deterministic programs (no os.time /
 # math.random / io non-determinism).
 #
-# Runs on every push to develop, nightly, and on demand, on x86_64
+# Runs on every push to develop and on demand, on x86_64
 # and aarch64: PUC's floating-point results depend on how the C
 # compiler builds it for the architecture. The PUC builds are cached
 # per version set and architecture, so a run builds them only once.
@@ -23,10 +23,6 @@ on:
   # but a divergence shows up on the commit that caused it
   push:
     branches: [develop]
-  schedule:
-    # Nightly at 06:00 UTC — staggered after the earlier nightly
-    # jobs.
-    - cron: '0 6 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -50,10 +46,6 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v7
-        with:
-          # scheduled runs start on the default branch (master, the last
-          # release); test the code that is about to ship instead
-          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
 

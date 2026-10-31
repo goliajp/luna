@@ -1,24 +1,22 @@
-# AddressSanitizer nightly CI.
+# AddressSanitizer CI.
 #
 # Catches heap-use-after-free + heap-buffer-overflow + double-free
 # at write/read time instead of at the downstream symptom that
 # `cargo test --release` exposes (a real UAF in the GC root path
 # can surface as an unrelated panic in a later bytecode handler).
 #
-# Why nightly schedule + manual trigger:
+# Why manual trigger only:
 # - Build-std with sanitizer = full rebuild of the standard library
 #   per job, ~30-40 min before tests even run.
-# - Per-PR is too slow; nightly cron catches drift quickly enough.
-# - workflow_dispatch lets us trigger on-demand when investigating
-#   a specific UAF.
+# - Per-push is too slow; the pre-merge branch check dispatches it on
+#   the branch head instead, so a failure lands on the branch that
+#   caused it rather than on develop the next morning.
+# - workflow_dispatch also lets us trigger it on-demand when
+#   investigating a specific UAF.
 
 name: asan
 
 on:
-  schedule:
-    # Nightly at 03:00 UTC — outside US/EU business hours so retries
-    # land before workday starts. matches docs.yml convention.
-    - cron: '0 3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -37,10 +35,6 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v7
-        with:
-          # scheduled runs start on the default branch (master, the last
-          # release); test the code that is about to ship instead
-          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
 
       - name: Install nightly + rust-src + llvm-tools
         run: |

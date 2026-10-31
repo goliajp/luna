@@ -8,8 +8,6 @@ on:
   push:
     branches: [master, develop]
     paths-ignore: ['**/*.md', 'docs/**', 'web/**']
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -33,10 +31,6 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          # scheduled runs start on the default branch (master, the last
-          # release); test the code that is about to ship instead
-          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       # the AOT tests build and run both Windows targets natively: MSVC
       # (cl.exe / link.exe found in the Visual Studio install) and MinGW
