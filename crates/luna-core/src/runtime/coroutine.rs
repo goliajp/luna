@@ -87,6 +87,10 @@ pub struct Coro {
     /// values gone to the resumer (PUC `lua_xmove`); `u32::MAX` after a
     /// yield from a C function of the host.
     pub(crate) yield_top: u32,
+    /// 5.3: the collection cycle whose propagation last shrank the
+    /// thread's stack (PUC's traversal shrinks it the first time it comes
+    /// up in a cycle); 0 before any
+    pub(crate) shrunk_in: std::cell::Cell<u64>,
     /// Saved `Vm::stack_size`: PUC's size of the thread's stack, 0 for a
     /// thread that has not run.
     pub stack_size: u32,
