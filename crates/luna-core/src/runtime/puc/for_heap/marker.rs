@@ -65,9 +65,13 @@ impl HeapRules {
     /// `sizelstring`), a userdata's PUC size, 5.2's closed upvalue; 0 for
     /// anything of luna's own.
     ///
+    /// Out of line: only 5.2 and 5.3 count it, and the marking's hot
+    /// path stays small.
+    ///
     /// # Safety
     /// `h` heads an allocated object.
-    #[inline(always)]
+    #[cold]
+    #[inline(never)]
     pub(in crate::runtime) unsafe fn leaf_work(&self, h: *mut GcHeader) -> i64 {
         // SAFETY: the caller's contract; the tag names the type
         unsafe {

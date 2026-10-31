@@ -6,17 +6,6 @@
 use super::*;
 
 impl Marker {
-    /// The model's work for marking the leaf `h` (5.2 and 5.3).
-    ///
-    /// # Safety
-    /// `h` heads an allocated object.
-    #[cold]
-    #[inline(never)]
-    pub(super) unsafe fn count_leaf(&mut self, h: *mut GcHeader) {
-        // SAFETY: the caller's contract
-        self.leaf_bytes += unsafe { self.rules.leaf_work(h) };
-    }
-
     /// Whether PUC marks `h` with what it holds as soon as it marks it.
     ///
     /// # Safety
@@ -68,7 +57,7 @@ impl Marker {
                     return;
                 }
                 if self.rules.counts_leaf_work() {
-                    self.count_leaf(n);
+                    self.leaf_bytes += self.rules.leaf_work(n);
                 }
                 if let Some(s) = &mut self.sizer {
                     s.marked += s.size(n);
