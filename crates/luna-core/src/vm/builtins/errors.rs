@@ -88,7 +88,7 @@ pub(crate) fn nat_error<const PRE: bool>(
     }
     // `luaL_where` and the message, concatenated into one value
     vm.native_push(1);
-    let r: Result<Value, LuaError> = vm.lib_scope(|vm| {
+    let r: Result<Value, LuaError> = vm.lib_scope(|vm, _| {
         let at = vm.api_pushing::<PRE>(|vm| lual_where(vm, pos))?;
         vm.api_check_before::<PRE>()?;
         let v = concat2(vm, Value::Str(at), msg)?;
@@ -119,7 +119,7 @@ fn raise_by<const PRE: bool>(vm: &mut Vm, msg: Message<'_>, conv: Option<u32>) -
     // concatenated into one value; each piece is pushed, as the API calls
     // that make them check for a collection
     vm.native_push(1);
-    let r: Result<Value, LuaError> = vm.lib_scope(|vm| {
+    let r: Result<Value, LuaError> = vm.lib_scope(|vm, _| {
         // 5.3+ `assert` pushes its message before `luaB_error` positions it
         let early = match msg {
             Message::Pushed(m) => Some(vm.api_pushing::<PRE>(|vm| vm.alloc_str(m))?),

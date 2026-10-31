@@ -150,7 +150,7 @@ pub(super) fn file_fail_values(
     let m = match fname {
         Some(n) => {
             let args = [FmtArg::S(c_str(n)), FmtArg::S(text.as_bytes())];
-            let pushed = |vm: &mut Vm| with_rules!(vm, P => vm.api_pushing::<P>(|vm| vm.pushfstring(b"%s: %s", &args)));
+            let pushed = |vm: &mut Vm, _: &_| with_rules!(vm, P => vm.api_pushing::<P>(|vm| vm.pushfstring(b"%s: %s", &args)));
             Value::Str(vm.lib_scope(pushed)?)
         }
         None => vm.api_push_string_dyn(text.as_bytes())?,

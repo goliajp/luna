@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::runtime::puc::api::FmtArg;
+use crate::vm::exec::LibScope;
 use crate::vm::puc_buffer::PucBuffer;
 
 /// `findloader`: ask each searcher in turn; the first one to return a
@@ -9,6 +10,7 @@ use crate::vm::puc_buffer::PucBuffer;
 /// collected into the "not found" message.
 pub(super) fn find_loader(
     vm: &mut Vm,
+    sc: &LibScope,
     pkg: Gc<Table>,
     name: Value,
 ) -> Result<(Value, Value), LuaError> {
@@ -28,7 +30,7 @@ pub(super) fn find_loader(
     }
     let mut msg = Vec::new();
     // 5.2 on: the message in a `luaL_Buffer`
-    let mut buf = (v >= LuaVersion::Lua52).then(|| PucBuffer::new(vm));
+    let mut buf = (v >= LuaVersion::Lua52).then(|| PucBuffer::new(vm, sc));
     // 5.4+'s message, in the buffer's place while the error is made
     let mut made = None;
     for i in 1.. {
@@ -58,10 +60,9 @@ pub(super) fn find_loader(
             return Ok((first, second));
         }
         // the searcher's result is on PUC's stack while the message grows
-        let r = vm.rooted(&[first], |vm| {
+        vm.rooted(&[first], |vm| {
             add_message(vm, first, &mut msg, buf.as_mut(), &mut acc)
-        });
-        r?;
+        })?;
     }
     Err(not_found(vm, name, made, &msg))
 }
@@ -120,7 +121,7 @@ fn not_found(
     let Value::Str(n) = name else {
         unreachable!("require passes the name as a string");
     };
-    vm.lib_scope(|vm| {
+    vm.lib_scope(|vm, _| {
         vm.lib_roots.extend(made.map(Value::Str));
         let args = [FmtArg::S(c_str(n.as_bytes())), FmtArg::S(msg)];
         crate::vm::builtins::raise_lib(vm, b"module '%s' not found:%s", &args, 2)
@@ -199,7 +200,7 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         vm.native_pop(1);
     }
     // the message's buffer is let go on an error
-    let (loader, data) = vm.lib_scope(|vm| find_loader(vm, pkg, name))?;
+    let (loader, data) = vm.lib_scope(|vm, sc| find_loader(vm, sc, pkg, name))?;
     // the loader is called where it sits: 5.4+ keep the buffer and the
     // loader data below it
     if v >= LuaVersion::Lua54 {

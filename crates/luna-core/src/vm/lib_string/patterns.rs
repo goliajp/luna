@@ -74,7 +74,7 @@ fn push_captures<const PRE: bool>(
     crate::vm::argcheck::check_stack_at(vm, top, n as i64, "too many captures")?;
     // what is pushed stays rooted while the next is made, which may
     // collect
-    vm.lib_scope(|vm| {
+    vm.lib_scope(|vm, _| {
         vm.lib_roots.extend_from_slice(out);
         push_each::<PRE>(vm, ms, src, (s, e, n), out)
     })

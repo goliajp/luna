@@ -5,6 +5,7 @@
 use super::*;
 use crate::runtime::LuaStr;
 use crate::runtime::puc::api::FmtArg;
+use crate::vm::exec::LibScope;
 use crate::vm::puc_buffer::PucBuffer;
 
 /// What a search found: the file name's bytes, where 5.4 on has them in
@@ -38,11 +39,11 @@ pub(super) fn search(
     sep: &[u8],
     dirsep: &[u8],
 ) -> Result<Result<Found, Gc<LuaStr>>, LuaError> {
-    vm.lib_scope(|vm| {
+    vm.lib_scope(|vm, sc| {
         if vm.version() >= LuaVersion::Lua54 {
-            search_54(vm, name, path, sep, dirsep)
+            search_54(vm, sc, name, path, sep, dirsep)
         } else {
-            search_51(vm, name, path, sep, dirsep)
+            search_51(vm, sc, name, path, sep, dirsep)
         }
     })
 }
@@ -51,16 +52,17 @@ pub(super) fn search(
 /// readable.
 fn search_54(
     vm: &mut Vm,
+    sc: &LibScope,
     name: &[u8],
     path: &[u8],
     sep: &[u8],
     dirsep: &[u8],
 ) -> Result<Result<Found, Gc<LuaStr>>, LuaError> {
     let name = match sep.first() {
-        Some(&s) if name.contains(&s) => gsub(vm, name, sep, dirsep)?.0,
+        Some(&s) if name.contains(&s) => gsub(vm, sc, name, sep, dirsep)?.0,
         _ => name.to_vec(),
     };
-    let mut b = PucBuffer::new(vm);
+    let mut b = PucBuffer::new(vm, sc);
     let mut out = Vec::new();
     addgsub(vm, &mut b, &mut out, path, b"?", &name)?;
     out.push(0);
@@ -85,7 +87,7 @@ fn search_54(
     let pushed = with_rules!(vm, P => b.finish::<P>(vm, &out))?;
     vm.lib_roots.push(Value::Str(pushed));
     // `pusherrornotfound(L, lua_tostring(L, -1))`
-    let mut b = PucBuffer::new(vm);
+    let mut b = PucBuffer::new(vm, sc);
     let mut msg = b"no file '".to_vec();
     b.add(vm, &msg, msg.len())?;
     addgsub(vm, &mut b, &mut msg, expanded, b";", b"'\n\tno file '")?;
@@ -99,21 +101,18 @@ fn search_54(
 /// concatenation in 5.1).
 fn search_51(
     vm: &mut Vm,
+    sc: &LibScope,
     name: &[u8],
     path: &[u8],
     sep: &[u8],
     dirsep: &[u8],
 ) -> Result<Result<Found, Gc<LuaStr>>, LuaError> {
     let v51 = vm.version() == LuaVersion::Lua51;
-    let mut msg = if v51 {
-        None
-    } else {
-        Some((PucBuffer::new(vm), Vec::new()))
-    };
+    let mut msg = (!v51).then(|| (PucBuffer::new(vm, sc), Vec::new()));
     // 5.1 always replaces the name's dots; 5.2 and 5.3 when the separator
     // is not empty
     let name = if v51 || !sep.is_empty() {
-        gsub(vm, name, sep, dirsep)?.0
+        gsub(vm, sc, name, sep, dirsep)?.0
     } else {
         name.to_vec()
     };
@@ -138,7 +137,7 @@ fn search_51(
         let (tpl, next) = rest.split_at(end);
         rest = next;
         with_rules!(vm, P => vm.api_pushing::<P>(|vm| vm.alloc_str(tpl)))?;
-        let (file, made) = gsub(vm, tpl, b"?", &name)?;
+        let (file, made) = gsub(vm, sc, tpl, b"?", &name)?;
         // `lua_remove(L, -2)`: the template goes, the file name stays
         remove_below_top(vm);
         if readable(&file) {
@@ -185,8 +184,14 @@ fn remove_below_top(vm: &mut Vm) {
 }
 
 /// `luaL_gsub(L, s, p, r)`: the result's bytes and the string pushed.
-fn gsub(vm: &mut Vm, s: &[u8], p: &[u8], r: &[u8]) -> Result<(Vec<u8>, Gc<LuaStr>), LuaError> {
-    let mut b = PucBuffer::new(vm);
+fn gsub(
+    vm: &mut Vm,
+    sc: &LibScope,
+    s: &[u8],
+    p: &[u8],
+    r: &[u8],
+) -> Result<(Vec<u8>, Gc<LuaStr>), LuaError> {
+    let mut b = PucBuffer::new(vm, sc);
     let mut out = Vec::new();
     addgsub(vm, &mut b, &mut out, s, p, r)?;
     let made = with_rules!(vm, P => b.finish::<P>(vm, &out))?;

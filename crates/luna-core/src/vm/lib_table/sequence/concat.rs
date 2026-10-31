@@ -1,6 +1,7 @@
 //! `table.concat`.
 
 use super::*;
+use crate::vm::exec::LibScope;
 use crate::vm::puc_buffer::PucBuffer;
 
 /// The separator `concat` appends: the argument string itself (rooted by
@@ -37,10 +38,15 @@ pub(in crate::vm::lib_table) fn t_concat<const PRE: bool>(
     nargs: u32,
 ) -> Result<u32, LuaError> {
     // 5.1's buffer keeps its strings on the stack: an error lets them go
-    vm.lib_scope(|vm| concat::<PRE>(vm, fs, nargs))
+    vm.lib_scope(|vm, sc| concat::<PRE>(vm, sc, fs, nargs))
 }
 
-fn concat<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn concat<const PRE: bool>(
+    vm: &mut Vm,
+    sc: &LibScope,
+    fs: u32,
+    nargs: u32,
+) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let (tv, sep, i, last) = if vm.version() <= V::Lua52 {
         // ≤5.2 reads the separator before checking the table, and takes
@@ -62,7 +68,7 @@ fn concat<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         (tv, sep, i, last)
     };
     let mut out = vm.new_buf();
-    let mut b = PucBuffer::new(vm);
+    let mut b = PucBuffer::new(vm, sc);
     // PUC appends `[i, last)` each followed by the separator, then `last`
     // on its own, so `last == maxinteger` never overflows the counter.
     let mut k = i;
