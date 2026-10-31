@@ -43,12 +43,11 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     } else {
         lw.bcx.ins().iconst(types::I64, -1)
     };
-    let sub_id = if checks_before {
+    let sub_ref = lw.bcx.import_func(if checks_before {
         str_sub_checked_id
     } else {
         str_sub_id
-    };
-    let sub_ref = lw.bcx.import_func(sub_id);
+    });
     let call = lw.bcx.ins().call(sub_ref, &[s, from, to]);
     let r = lw.bcx.inst_results(call)[0];
     // a string the helper could not make (0, a deopt parked), or one 5.1
@@ -57,21 +56,31 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     let made = lw.bcx.ins().icmp_imm_s(IntCC::NotEqual, r, 0);
     guard!(lw, pl, made, oc.i, record.ops[fold.start_idx].pc);
     lw.current_kinds[off + a as usize] = RegKind::Str;
+    def_sub_result(lw, pl, oc, regs[a as usize], r, checks_before);
+    Some(())
+}
+
+/// The string `r` the `string.sub` helper made, into `var`. From 5.3 the
+/// check for a collection comes after `lua_pushlstring` pushed it, where
+/// the helper set the low bit (cleared on the way that goes on and on the
+/// way that checks).
+fn def_sub_result<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    oc: &OpCx<'_>,
+    var: Variable,
+    r: Value,
+    checks_before: bool,
+) {
+    lw.bcx.def_var(var, r);
     if checks_before {
-        lw.bcx.def_var(regs[a as usize], r);
-        return Some(());
+        return;
     }
-    // 5.3 on check after `lua_pushlstring` pushed it, where the helper set
-    // the low bit
-    // (clear on the way that goes on, cleared on the way that checks)
     let reached = lw.bcx.ins().band_imm_s(r, 1);
-    lw.bcx.def_var(regs[a as usize], r);
-    let var = regs[a as usize];
     gc_due_exit_if(lw, pl, reached, oc.i, oc.rop.pc + 1, |lw| {
         let clear = lw.bcx.ins().bxor_imm_u(r, 1);
         lw.bcx.def_var(var, clear);
     });
-    Some(())
 }
 
 /// Whether `string.sub`'s operands of `fold` (in the frame at `off`) are

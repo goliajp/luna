@@ -61,53 +61,7 @@ impl<'a> Compiler<'a> {
             let reg = (i + is_method as usize) as u32;
             self.declare_local(self.nm(p), NameSrc::Sym(p.sym), reg, false)?;
         }
-        // 5.5 (PUC `parlist`): an anonymous `...` is a parameter too, with a
-        // register after the fixed ones that holds nil
-        // the vararg parameter is made once `...` is read
-        let vararg_local =
-            self.lr().has_vararg_table_pseudo || matches!(body.vararg, ast::Vararg::Named(_));
-        if vararg_local {
-            self.at(open.plus(2 + 2 * params.len() as i32));
-        }
-        if self.lr().has_vararg_table_pseudo {
-            let r = self.reserve(1)?;
-            self.declare_local(
-                "(vararg table)",
-                const { NameSrc::literal("(vararg table)") },
-                r,
-                false,
-            )?;
-        }
-        if let ast::Vararg::Named(n) = &body.vararg {
-            let name: &str = self.nm(n);
-            let r = self.reserve(1)?;
-            // 5.5: the named vararg table is a read-only local. If the pre-scan
-            // proves it is only ever read as `t[k]`/`t.n` (never written, never
-            // escaping, not `_ENV`) it stays *virtual* — indexed straight off the
-            // stack varargs with no heap table. Otherwise materialize it now.
-            let virtual_ok = name != "_ENV" && !self.vararg_forced(&body.block, name);
-            self.l().named_vararg = true;
-            if virtual_ok {
-                self.declare_local(name, NameSrc::Sym(n.sym), r, true)?;
-                self.l().locals.last_mut().expect("just declared").vararg = Varg::Virtual;
-            } else {
-                self.emit(Inst::iabc(Op::GetVarg, r, 0, 0, false));
-                self.declare_local(name, NameSrc::Sym(n.sym), r, true)?;
-                self.l().locals.last_mut().expect("just declared").vararg = Varg::Table;
-            }
-        }
-        // PUC 5.1's `LUA_COMPAT_VARARG` declares a local `arg` after the
-        // fixed parameters of every `(...)` function. It holds a table of the
-        // extra arguments (`VARARG_NEEDSARG`) only when the body does not use
-        // `...` itself (lparser.c `simpleexp` clears the flag on `TK_DOTS`);
-        // otherwise it is nil, and it still hides a global `arg`.
-        if self.version <= LuaVersion::Lua51 && matches!(body.vararg, ast::Vararg::Anonymous) {
-            let r = self.reserve(1)?;
-            self.declare_local("arg", const { NameSrc::literal("arg") }, r, false)?;
-            if !block_uses_vararg(self.ast, &body.block) {
-                self.l().has_compat_vararg_arg = true;
-            }
-        }
+        let vararg_local = self.declare_varargs(body, open, params.len())?;
         // `)`: past the names and their commas, and `...` with its comma
         let n = params.len() as i32;
         let dots = match body.vararg {
@@ -163,6 +117,66 @@ impl<'a> Compiler<'a> {
             };
         }
         Ok(Exp::Reloc(pc))
+    }
+
+    /// The locals a vararg function's `...` makes, as its parameter list
+    /// is read past the `nparams` named ones (from `open`, its `(`): 5.5's
+    /// vararg parameter, anonymous or named, and 5.1's compatibility `arg`.
+    /// Whether the vararg parameter is a local.
+    fn declare_varargs(
+        &mut self,
+        body: &'a FuncBody,
+        open: TokRef,
+        nparams: usize,
+    ) -> Result<bool, SyntaxError> {
+        // 5.5 (PUC `parlist`): an anonymous `...` is a parameter too, with a
+        // register after the fixed ones that holds nil
+        // the vararg parameter is made once `...` is read
+        let vararg_local =
+            self.lr().has_vararg_table_pseudo || matches!(body.vararg, ast::Vararg::Named(_));
+        if vararg_local {
+            self.at(open.plus(2 + 2 * nparams as i32));
+        }
+        if self.lr().has_vararg_table_pseudo {
+            let r = self.reserve(1)?;
+            self.declare_local(
+                "(vararg table)",
+                const { NameSrc::literal("(vararg table)") },
+                r,
+                false,
+            )?;
+        }
+        if let ast::Vararg::Named(n) = &body.vararg {
+            let name: &str = self.nm(n);
+            let r = self.reserve(1)?;
+            // 5.5: the named vararg table is a read-only local. If the pre-scan
+            // proves it is only ever read as `t[k]`/`t.n` (never written, never
+            // escaping, not `_ENV`) it stays *virtual* — indexed straight off the
+            // stack varargs with no heap table. Otherwise materialize it now.
+            let virtual_ok = name != "_ENV" && !self.vararg_forced(&body.block, name);
+            self.l().named_vararg = true;
+            if virtual_ok {
+                self.declare_local(name, NameSrc::Sym(n.sym), r, true)?;
+                self.l().locals.last_mut().expect("just declared").vararg = Varg::Virtual;
+            } else {
+                self.emit(Inst::iabc(Op::GetVarg, r, 0, 0, false));
+                self.declare_local(name, NameSrc::Sym(n.sym), r, true)?;
+                self.l().locals.last_mut().expect("just declared").vararg = Varg::Table;
+            }
+        }
+        // PUC 5.1's `LUA_COMPAT_VARARG` declares a local `arg` after the
+        // fixed parameters of every `(...)` function. It holds a table of the
+        // extra arguments (`VARARG_NEEDSARG`) only when the body does not use
+        // `...` itself (lparser.c `simpleexp` clears the flag on `TK_DOTS`);
+        // otherwise it is nil, and it still hides a global `arg`.
+        if self.version <= LuaVersion::Lua51 && matches!(body.vararg, ast::Vararg::Anonymous) {
+            let r = self.reserve(1)?;
+            self.declare_local("arg", const { NameSrc::literal("arg") }, r, false)?;
+            if !block_uses_vararg(self.ast, &body.block) {
+                self.l().has_compat_vararg_arg = true;
+            }
+        }
+        Ok(vararg_local)
     }
 
     pub(super) fn function_stat(
