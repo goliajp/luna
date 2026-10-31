@@ -8,32 +8,27 @@
 //! safety or the collector's invariants when misused are `unsafe fn`,
 //! with their conditions under `# Safety`.
 
-mod capi_debug;
-mod capi_load;
-mod capi_state;
-mod capi_values;
+mod capi;
 mod fields;
 mod free;
 mod panic_watch;
 mod runtime;
 mod types;
-mod vm_alloc;
-mod vm_host;
-mod vm_jit;
+mod vm;
 
 pub use crate::runtime::dialect::Rules;
-pub use capi_debug::VmCApiDebug;
-pub use capi_load::VmCApiLoad;
-pub use capi_state::VmCApiState;
-pub use capi_values::VmCApiValues;
+pub use capi::debug::VmCApiDebug;
+pub use capi::load::VmCApiLoad;
+pub use capi::state::VmCApiState;
+pub use capi::values::VmCApiValues;
 pub use fields::{CoroHostInternals, ProtoTraceInternals, TRACE_HEADS_NONE, VmJitState};
 pub use free::*;
 pub use panic_watch::{panic_free, panics_in};
 pub use runtime::*;
 pub use types::*;
-pub use vm_alloc::{JIT_GC_CALL, JIT_GC_LIMIT_OFFSET, JIT_GC_PREV, VmJitAlloc};
-pub use vm_host::VmHostInternals;
-pub use vm_jit::VmJitFrames;
+pub use vm::alloc::{JIT_GC_CALL, JIT_GC_LIMIT_OFFSET, JIT_GC_PREV, VmJitAlloc};
+pub use vm::host::VmHostInternals;
+pub use vm::jit::VmJitFrames;
 
 /// Have every collection on this thread end by checking the trace
 /// being recorded, if any, holds only objects the collector keeps.

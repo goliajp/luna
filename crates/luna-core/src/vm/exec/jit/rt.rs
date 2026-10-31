@@ -5,6 +5,7 @@ use super::*;
 mod recording_check;
 #[cfg(any(feature = "gc-stress", feature = "gc-verify"))]
 mod recording_live;
+pub(in crate::vm::exec) mod strbuf;
 mod sunk;
 pub(crate) use sunk::TraceGhosts;
 mod upvals;
