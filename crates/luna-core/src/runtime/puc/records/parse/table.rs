@@ -173,8 +173,8 @@ impl PTab {
 
     /// `k` set to nil: the key goes, its node stays taken.
     pub(crate) fn remove(&mut self, heap: &mut Heap, k: PKey, obj: Option<Gc<GcHeader>>) {
-        if let Some(t) = self.tab {
-            heap.load_tab_unref(t, obj.map_or(std::ptr::null_mut(), |o| o.as_ptr()));
+        if let (Some(t), Some(o)) = (self.tab, obj) {
+            heap.load_tab_unref(t, o);
         }
         if self.keys.remove(&k) {
             if let Some(i) = k.index() {

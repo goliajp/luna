@@ -125,20 +125,20 @@ pub(in crate::runtime::puc) fn reserved_words(d: Dialect) -> &'static [&'static 
 }
 
 /// The sizes of what `lua_newstate` allocates that luna has no object for.
-pub(in crate::runtime::puc) struct BootSizes {
+pub(super) struct BootSizes {
     /// the global state with the main thread
-    pub(in crate::runtime::puc) lg: usize,
+    pub(super) lg: usize,
     /// the main thread's stack slots
-    pub(in crate::runtime::puc) stack_slots: usize,
+    pub(super) stack_slots: usize,
     /// 5.1's CallInfo array, in entries
-    pub(in crate::runtime::puc) ci_entries: usize,
+    pub(super) ci_entries: usize,
     /// the string table's first size
-    pub(in crate::runtime::puc) strtab: usize,
+    pub(super) strtab: usize,
     /// the registry's array part
-    pub(in crate::runtime::puc) registry_array: usize,
+    pub(super) registry_array: usize,
 }
 
-pub(in crate::runtime::puc) fn boot_sizes(d: Dialect) -> BootSizes {
+pub(super) fn boot_sizes(d: Dialect) -> BootSizes {
     let lg64 = [616, 704, 1552, 1624, 1624];
     let lg32 = [348, 372, 808, 848, 852];
     let i = d as usize - 1;
