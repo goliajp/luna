@@ -74,7 +74,7 @@ impl Heap {
     /// `cs`, a long string luna's compiler made without counting, is the
     /// one PUC's scanner made as `ss` (counted) and keeps as the constant:
     /// the count moves to `cs`.
-    pub(in crate::runtime) fn acct_move_long(&mut self, ss: Gc<LuaStr>, cs: Gc<LuaStr>) {
+    pub(in crate::runtime::puc) fn acct_move_long(&mut self, ss: Gc<LuaStr>, cs: Gc<LuaStr>) {
         if !ss.hdr().is_uncounted() && cs.hdr().is_uncounted() {
             // SAFETY: both are handles, so their objects are live; nothing
             // borrows the headers while their per-type bytes are written
@@ -116,7 +116,7 @@ impl Heap {
     /// it here.
     #[cold]
     #[inline(never)]
-    pub(in crate::runtime) fn acct_promote(&mut self, s: Gc<LuaStr>, len: usize) {
+    pub(in crate::runtime::puc) fn acct_promote(&mut self, s: Gc<LuaStr>, len: usize) {
         let h = s.header();
         if !self.counting() {
             return;
@@ -140,7 +140,7 @@ impl Heap {
 
     /// The parser's string of the chunk name `s`: counted now if luna made
     /// it without counting (PUC found it made already otherwise).
-    pub(in crate::runtime) fn acct_source(&mut self, s: Gc<LuaStr>) {
+    pub(in crate::runtime::puc) fn acct_source(&mut self, s: Gc<LuaStr>) {
         if s.hdr.sub & UNCOUNTED != 0 {
             self.acct_promote(s, s.len());
         }

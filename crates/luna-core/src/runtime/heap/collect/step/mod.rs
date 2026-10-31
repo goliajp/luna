@@ -4,7 +4,7 @@
 use super::*;
 
 mod atomic;
-pub(crate) use crate::runtime::puc::Sizer;
+pub(crate) use crate::runtime::puc::for_heap::Sizer;
 
 impl Heap {
     /// Begin an incremental mark cycle (precondition: `Pause`): enter

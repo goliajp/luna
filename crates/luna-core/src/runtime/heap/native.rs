@@ -133,7 +133,7 @@ impl Heap {
     /// 5.2 on none: a light function), whatever upvalues luna gives it.
     pub(crate) fn set_native_puc_nup(&mut self, g: Gc<NativeClosure>, n: usize) {
         let h = g.as_ptr() as *mut GcHeader;
-        debug_assert!(n + 1 < usize::from(puc::ENV51));
+        debug_assert!(n + 1 < usize::from(model::ENV51));
         // SAFETY: `g` is a live native; only its per-type byte is written
         unsafe { (*h).sub = (*h).sub & UNCOUNTED | (n as u8 + 1) };
     }

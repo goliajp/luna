@@ -87,7 +87,7 @@ impl Heap {
     /// `lua_setfield` of `key` and the record `v` (a closure) into the
     /// record `t`, one of the io library's tables: 5.1's `luaC_barriert`.
     /// Both must be records of this heap's.
-    pub(in crate::runtime) fn env51_set_key(
+    pub(in crate::runtime::puc) fn env51_set_key(
         &mut self,
         t: *mut GcHeader,
         key: Gc<LuaStr>,

@@ -61,14 +61,9 @@ pub(crate) struct Marker {
     /// children go BLACK on sight (only the stop-the-world mark sets it; a
     /// native standing for a C closure has work an incremental step counts).
     pub(in crate::runtime::heap) leaf_black: u8,
-    /// 5.2 and 5.3: the size of a string's header, to count what marking
-    /// a string or a userdata adds to the work (PUC `GCmemtrav`); 0 for
-    /// the other dialects
-    pub(in crate::runtime::heap) leaf_hdr: usize,
-    /// that work so far
+    /// 5.2 and 5.3: the work of marking strings, userdata and closed
+    /// upvalues so far (PUC `GCmemtrav`), as the model counts it
     pub(in crate::runtime::heap) leaf_bytes: i64,
-    /// 5.2: the size of a closed upvalue, whose marking is work too; else 0
-    pub(in crate::runtime::heap) leaf_upval: usize,
     /// 5.5: counts what is marked
     pub(in crate::runtime::heap) sizer: Option<super::collect::Sizer>,
     /// luna's own objects reached, gray off the stack until
@@ -77,7 +72,7 @@ pub(crate) struct Marker {
     /// marking what `quiet` holds: nothing is counted
     pub(in crate::runtime::heap) quiet_mode: bool,
     /// what the marking reads of the PUC model, borrowed from it
-    pub(in crate::runtime) lent: crate::runtime::puc::Lent,
+    pub(in crate::runtime) lent: model::Lent,
     /// `gc-verify`: instead of marking a child, report one the sweep about
     /// to run would free (see `gc_hooks::ChildCheck`)
     pub(in crate::runtime::heap) verify: crate::runtime::gc_hooks::ChildCheck,
@@ -247,7 +242,7 @@ impl Marker {
                         self.quiet.push(h);
                         return true;
                     }
-                    if self.leaf_hdr != 0 {
+                    if self.rules.counts_leaf_work() {
                         self.count_leaf(h);
                     }
                     if let Some(s) = &mut self.sizer {
@@ -259,7 +254,7 @@ impl Marker {
                 // as PUC's `reallymarkobject` makes it
                 if f & self.leaf_black != 0 || (*h).tag == ObjTag::Str {
                     (*h).flags = (*h).with_slow((f & !WHITE_BITS) | BLACK);
-                    (*h).cls &= !model::kept_bit((*h).tag);
+                    model::object_marked(&mut *h);
                 } else if self.at_once(h) {
                     // an upvalue, and a userdata up to 5.3, are never gray:
                     // what they hold is marked as they are

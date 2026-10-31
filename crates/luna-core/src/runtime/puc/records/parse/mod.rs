@@ -26,12 +26,12 @@ const LOADTAB: u8 = 0x20;
 pub(crate) const PARSING: u8 = 0x20;
 /// In a string's `cls`: only a load in progress holds it, which PUC has
 /// not made it for yet. PUC frees it; luna keeps it, uncounted.
-pub(in crate::runtime) const KEPT: u8 = 0x20;
+pub(in crate::runtime::puc) const KEPT: u8 = 0x20;
 
 /// [`KEPT`] for a string, nothing for another object (whose bit means
 /// something else).
 #[inline(always)]
-pub(in crate::runtime) fn kept_bit(tag: ObjTag) -> u8 {
+pub(in crate::runtime::puc) fn kept_bit(tag: ObjTag) -> u8 {
     if tag == ObjTag::Str { KEPT } else { 0 }
 }
 
@@ -97,7 +97,7 @@ pub(in crate::runtime::puc) unsafe fn load_tab_size(
 
 impl Heap {
     /// A new empty parser table (PUC `luaH_new`), counted.
-    pub(in crate::runtime) fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom> {
+    pub(in crate::runtime::puc) fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom> {
         let mut hdr = GcHeader::new(ObjTag::Ghost);
         (hdr.sub, hdr.cls) = (LOADTAB, 0);
         hdr.set_flags(0);
@@ -115,7 +115,7 @@ impl Heap {
 
     /// The parser table `t` resized to `a` array slots and `h` nodes (PUC
     /// `luaH_resize`).
-    pub(in crate::runtime) fn load_tab_resize(&mut self, t: Gc<LoadTab>, a: usize, h: usize) {
+    pub(in crate::runtime::puc) fn load_tab_resize(&mut self, t: Gc<LoadTab>, a: usize, h: usize) {
         // SAFETY: `t` is a handle, so the parser table is live, and nothing
         // else borrows it
         let lt = unsafe { t.as_mut() };
@@ -129,7 +129,7 @@ impl Heap {
     /// `obj` keyed in the parser table `t`: a black table that takes a
     /// white object goes back to gray (`luaC_barrierback` in
     /// `luaH_newkey`).
-    pub(in crate::runtime) fn load_tab_ref(
+    pub(in crate::runtime::puc) fn load_tab_ref(
         &mut self,
         t: Gc<LoadTab>,
         obj: Gc<GcHeader>,
@@ -146,7 +146,7 @@ impl Heap {
 
     /// `obj`'s key in the parser table `t` set to nil: a dead key, which
     /// a traversal does not mark.
-    pub(in crate::runtime) fn load_tab_unref(&mut self, t: Gc<LoadTab>, obj: *mut GcHeader) {
+    pub(in crate::runtime::puc) fn load_tab_unref(&mut self, t: Gc<LoadTab>, obj: *mut GcHeader) {
         // SAFETY: `t` is a handle, so the parser table is live, and nothing
         // else borrows it
         let refs = unsafe { &mut t.as_mut().refs };
@@ -246,7 +246,7 @@ impl Heap {
 impl Heap {
     /// `luaC_objbarrier` from the main closure `cl` to its new upvalue
     /// `uv`: an upvalue is marked with what it holds at once, never gray.
-    pub(in crate::runtime) fn barrier_new_upval(
+    pub(in crate::runtime::puc) fn barrier_new_upval(
         &mut self,
         cl: Gc<crate::runtime::LuaClosure>,
         uv: Gc<crate::runtime::function::Upvalue>,

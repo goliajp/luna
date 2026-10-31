@@ -1,7 +1,8 @@
-//! What the heap asks of the model besides the counting entries
-//! (`count.rs`, `parts.rs`) and the records' own: the count against the
-//! next step, the pause a cycle ends with, the numbers objects hash by,
-//! and what a cycle notes of threads and strings for PUC's structures.
+//! What the heap asks of the model besides the counting entries and the
+//! records' own methods (see the model's module): the count against the
+//! next step, the pause a cycle ends with, the work and sizes a cycle
+//! counts, the model's bits in a header, and what a cycle notes of threads
+//! and strings for PUC's structures.
 
 use super::*;
 use crate::runtime::dialect::Dialect;
@@ -171,14 +172,16 @@ impl Heap {
     }
 }
 
+mod bits;
 mod born;
 mod cycle;
 mod free;
 #[cfg(any(feature = "gc-trace", feature = "gc-verify", test))]
 pub(in crate::runtime) mod hooks;
 mod marker;
-mod pace;
-pub(in crate::runtime) use pace::FinalizerStop;
+mod sizer;
+mod work;
+pub(crate) use sizer::Sizer;
 mod rules;
 mod sweep;
 pub(in crate::runtime) use born::{
@@ -192,8 +195,7 @@ pub(crate) use sweep::Fate;
 // the names of the model's records the heap goes by: it reaches the model
 // through this module and the methods on `Heap`, never its other modules
 pub(in crate::runtime) use crate::runtime::puc::records::Ghost;
-pub(in crate::runtime) use crate::runtime::puc::records::parse::{
-    KEPT, LoadTab, ParseFrame, kept_bit,
-};
-pub(in crate::runtime) use crate::runtime::puc::records::strt::SWEPT;
+pub(in crate::runtime) use crate::runtime::puc::records::parse::{LoadTab, ParseFrame};
+pub(in crate::runtime) use crate::runtime::puc::{ENV51, Lent, PucModel};
 pub(in crate::runtime) use crate::runtime::puc::{PucKind, PucObj};
+pub(in crate::runtime) use bits::{STR_MODEL_BITS, object_marked, string_held, take_swept};

@@ -9,7 +9,7 @@ use crate::runtime::puc::pace::St;
 
 impl St {
     /// The state's number in the dialect's `lgc.h`.
-    pub(crate) fn number(self, d: Dialect) -> u8 {
+    pub(in crate::runtime::puc) fn number(self, d: Dialect) -> u8 {
         use St::*;
         match d {
             Dialect::L51 => match self {
@@ -89,7 +89,7 @@ pub(crate) fn trace_full_end<H: StepHost + ?Sized>(h: &mut H) {
 impl Heap {
     /// gc-trace: the count moved by `delta` where the instrumented PUC's
     /// allocation function refused a growth.
-    pub(in crate::runtime) fn adjust_count(&mut self, delta: i64) {
+    pub(in crate::runtime::puc) fn adjust_count(&mut self, delta: i64) {
         self.puc.count.bytes = (self.puc.count.bytes as i64 + delta) as usize;
     }
 }

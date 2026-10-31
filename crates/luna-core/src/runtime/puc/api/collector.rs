@@ -5,7 +5,7 @@ use super::super::*;
 use crate::runtime::Coro;
 use crate::runtime::function::Upvalue;
 use crate::runtime::heap::Heap;
-use crate::runtime::puc::for_heap::FinalizerStop;
+use crate::runtime::puc::pace::FinalizerStop;
 use crate::runtime::puc::records::open_upvals::OpenLend;
 use crate::runtime::puc::step::CiCount;
 

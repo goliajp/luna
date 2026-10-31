@@ -10,7 +10,7 @@ pub(crate) struct Gbuff(Option<LVec<u8>>);
 
 impl Gbuff {
     /// `buff->buffsize`
-    pub(crate) fn size(&self) -> usize {
+    pub(in crate::runtime::puc) fn size(&self) -> usize {
         self.0.as_ref().map_or(0, LVec::capacity)
     }
 }
@@ -18,7 +18,7 @@ impl Gbuff {
 impl Heap {
     /// 5.1 and 5.2's buffer for concatenations made room for `n` bytes
     /// (`luaZ_openspace`, at least `LUA_MINBUFFER`).
-    pub(in crate::runtime) fn open_gbuff(&mut self, n: usize) -> Result<(), Oom> {
+    pub(in crate::runtime::puc) fn open_gbuff(&mut self, n: usize) -> Result<(), Oom> {
         let old = self.puc.records.gbuff.size();
         if n > old {
             let mem = self.mem();

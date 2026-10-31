@@ -6,10 +6,13 @@
 use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::size::PucSizes;
 
+mod switches;
+pub(crate) use switches::FinalizerStop;
+
 /// PUC's collector states. Their numbers in each version's `lgc.h` are
 /// [`St::number`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum St {
+pub(in crate::runtime::puc) enum St {
     Pause,
     Propagate,
     /// 5.4 and 5.5: the step that runs `atomic`
@@ -35,7 +38,7 @@ pub(crate) enum St {
 /// The collector's pace: PUC's own fields, kept against luna's count
 /// (`Heap::bytes`, PUC's `totalbytes` as `gettotalbytes` reads it).
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Pace {
+pub(in crate::runtime::puc) struct Pace {
     state: St,
     /// where the next step falls due: 5.1 `GCthreshold`; 5.2 to 5.4 the
     /// `totalbytes` field (the count less `GCdebt`); 5.5 `GCtotalbytes`
@@ -61,39 +64,39 @@ pub(crate) struct Pace {
 }
 
 /// 5.1 `GCSTEPSIZE`
-pub(crate) const STEPSIZE_51: i64 = 1024;
+pub(in crate::runtime::puc) const STEPSIZE_51: i64 = 1024;
 /// 5.1 `GCSWEEPMAX`, `GCSWEEPCOST`
-pub(crate) const SWEEPMAX_51: i64 = 40;
-pub(crate) const SWEEPCOST_51: i64 = 10;
+pub(in crate::runtime::puc) const SWEEPMAX_51: i64 = 40;
+pub(in crate::runtime::puc) const SWEEPCOST_51: i64 = 10;
 /// 5.1 `GCFINALIZECOST`
-pub(crate) const FINALIZECOST_51: i64 = 100;
+pub(in crate::runtime::puc) const FINALIZECOST_51: i64 = 100;
 /// 5.2 and 5.3 `STEPMULADJ`; 5.2 to 5.4 `PAUSEADJ`
 const STEPMULADJ: i64 = 200;
 const PAUSEADJ: i64 = 100;
 /// 5.4 `GCSWEEPMAX`
-pub(crate) const SWEEPMAX_54: i64 = 100;
+pub(in crate::runtime::puc) const SWEEPMAX_54: i64 = 100;
 /// 5.4 `GCFINMAX` and `GCFINALIZECOST`
-pub(crate) const FINMAX_54: i64 = 10;
-pub(crate) const FINALIZECOST_54: i64 = 50;
+pub(in crate::runtime::puc) const FINMAX_54: i64 = 10;
+pub(in crate::runtime::puc) const FINALIZECOST_54: i64 = 50;
 /// 5.5 `CWUFIN`
-pub(crate) const CWUFIN_55: i64 = 10;
+pub(in crate::runtime::puc) const CWUFIN_55: i64 = 10;
 /// 5.5 `GCSWEEPMAX`
-pub(crate) const SWEEPMAX_55: i64 = 20;
+pub(in crate::runtime::puc) const SWEEPMAX_55: i64 = 20;
 
 impl Pace {
     /// The state the cycle is in (PUC `gcstate`).
     #[inline]
-    pub(crate) fn state(&self) -> St {
+    pub(in crate::runtime::puc) fn state(&self) -> St {
         self.state
     }
 
     /// The cycle moves to `st`: the one place the state changes.
     #[inline]
-    pub(crate) fn enter(&mut self, st: St) {
+    pub(in crate::runtime::puc) fn enter(&mut self, st: St) {
         self.state = st;
     }
 
-    pub(crate) fn new() -> Pace {
+    pub(in crate::runtime::puc) fn new() -> Pace {
         Pace {
             state: St::Pause,
             base: 0,
@@ -109,7 +112,7 @@ impl Pace {
     }
 
     /// 5.2 to 5.5 `GCdebt` with the count at `bytes`.
-    pub(crate) fn debt(&self, d: Dialect, bytes: usize) -> i64 {
+    pub(in crate::runtime::puc) fn debt(&self, d: Dialect, bytes: usize) -> i64 {
         match d {
             Dialect::L55 => self.base - bytes as i64,
             _ => bytes as i64 - self.base,
@@ -125,7 +128,7 @@ impl Pace {
     }
 
     /// 5.1 `GCthreshold`.
-    pub(crate) fn threshold(&self) -> i64 {
+    pub(in crate::runtime::puc) fn threshold(&self) -> i64 {
         self.base
     }
 
@@ -135,7 +138,7 @@ impl Pace {
 
     /// The count at which a step falls due: 5.1 `totalbytes >=
     /// GCthreshold`, 5.2 to 5.4 `GCdebt > 0`, 5.5 `GCdebt <= 0`.
-    pub(crate) fn limit(&self, d: Dialect) -> usize {
+    pub(in crate::runtime::puc) fn limit(&self, d: Dialect) -> usize {
         let l = match d {
             Dialect::L51 | Dialect::L55 => self.base,
             _ => self.base.saturating_add(1),

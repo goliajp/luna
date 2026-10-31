@@ -433,7 +433,7 @@ pub(in crate::runtime::puc) const fn dyd_sizes(d: Dialect) -> (usize, usize) {
 
 impl PucSizes {
     /// The sizes for `d` on the pointer width luna is built for.
-    pub(crate) const fn of(d: Dialect) -> PucSizes {
+    pub(in crate::runtime::puc) const fn of(d: Dialect) -> PucSizes {
         #[cfg(target_pointer_width = "64")]
         return s64(d);
         #[cfg(target_arch = "wasm32")]
@@ -443,7 +443,7 @@ impl PucSizes {
     }
 
     /// A string of `len` bytes; `long` from 5.5 on uses the long header.
-    pub(crate) fn string(&self, len: usize, long: bool) -> usize {
+    pub(in crate::runtime::puc) fn string(&self, len: usize, long: bool) -> usize {
         let hdr = if long { self.lngstr_hdr } else { self.str_hdr };
         hdr + len + 1
     }
@@ -452,13 +452,13 @@ impl PucSizes {
         self.lcl_base + self.lcl_per * nupvals
     }
 
-    pub(crate) fn c_closure(&self, nupvals: usize) -> usize {
+    pub(in crate::runtime::puc) fn c_closure(&self, nupvals: usize) -> usize {
         self.ccl_base + self.ccl_per * nupvals
     }
 
     /// A userdata of `nbytes` with `nuv` user values (up to 5.3 always one
     /// user value, kept in the header).
-    pub(crate) fn userdata(&self, nuv: usize, nbytes: usize) -> usize {
+    pub(in crate::runtime::puc) fn userdata(&self, nuv: usize, nbytes: usize) -> usize {
         if self.udata_hdr != 0 {
             self.udata_hdr + nbytes
         } else if nuv == 0 {

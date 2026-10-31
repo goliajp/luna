@@ -44,7 +44,7 @@ impl Heap {
     /// # Safety
     /// `h` heads a live object of this heap.
     #[inline]
-    pub(in crate::runtime) unsafe fn born(&mut self, h: *mut GcHeader) {
+    pub(in crate::runtime::puc) unsafe fn born(&mut self, h: *mut GcHeader) {
         // SAFETY: the caller's contract
         unsafe {
             if !Heap::is_detached(h) {
@@ -134,7 +134,7 @@ impl Heap {
     /// set aside, among the first objects set aside (which no load's
     /// setting aside reaches), so that PUC making it puts it at the list's
     /// head, as PUC's is. See [`Heap::name_aside_again`].
-    pub(in crate::runtime) fn try_intern_name(
+    pub(in crate::runtime::puc) fn try_intern_name(
         &mut self,
         bytes: &[u8],
         made_later: bool,

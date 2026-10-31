@@ -1,7 +1,10 @@
 //! The PUC model: PUC's `totalbytes` and what changes it, PUC's sizes of
 //! its structures, its collector's pace and steps, and the records of
-//! objects PUC has and luna does not. luna's own collector (`heap`) calls
-//! into it only through `for_heap`.
+//! objects PUC has and luna does not. luna's own collector (`heap`) reaches
+//! it through `for_heap`, the counting entries every allocation goes
+//! through (`count.rs`, `parts.rs`, `Heap::counting`, `Heap::uncounted`,
+//! `Heap::puc_size`) and the methods of the records it keeps (`records`);
+//! the VM, the libraries and the JIT through the traits of `api`.
 
 use std::ptr;
 
@@ -36,8 +39,6 @@ mod proto;
 pub(crate) use proto::ENV51;
 pub(crate) mod records;
 pub(crate) mod size;
-mod sizer;
-pub(crate) use sizer::Sizer;
 mod state;
 pub(crate) mod step;
 #[cfg(feature = "gc-trace")]

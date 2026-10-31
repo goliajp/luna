@@ -73,7 +73,7 @@ impl PKey {
 /// A key hasher for [`PTab`]'s set: the keys are distinct addresses and
 /// small numbers.
 #[derive(Default)]
-pub(crate) struct KeyHasher(u64);
+pub(in crate::runtime::puc) struct KeyHasher(u64);
 
 impl std::hash::Hasher for KeyHasher {
     fn finish(&self) -> u64 {

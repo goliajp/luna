@@ -54,9 +54,9 @@ pub(in crate::runtime) struct HeapRules {
     pub(in crate::runtime) fixed_strings_marked: bool,
     /// what 5.2 and 5.3 count for each string and userdata a traversal
     /// marks: its header
-    pub(in crate::runtime) leaf_hdr: usize,
+    pub(in crate::runtime::puc) leaf_hdr: usize,
     /// what 5.2 counts for each closed upvalue a traversal marks
-    pub(in crate::runtime) leaf_upval: usize,
+    pub(in crate::runtime::puc) leaf_upval: usize,
     /// where a thread's stack shrinks
     pub(crate) shrink_at: ShrinkAt,
     /// the objects to be finalized are marked as a cycle starts; 5.1 marks

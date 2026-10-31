@@ -43,7 +43,7 @@ pub(crate) struct GcParams {
 }
 
 impl GcParams {
-    pub(crate) fn new(version: LuaVersion) -> Self {
+    pub(in crate::runtime::puc) fn new(version: LuaVersion) -> Self {
         let mut p = GcParams {
             version,
             stored: [0; PARAMS.len()],
@@ -121,7 +121,7 @@ impl GcParams {
     /// `param` applied to `x` as the collector does (5.5
     /// `applygcparam`: the floating-point byte times `x`; elsewhere the
     /// percentage of `x`).
-    pub(crate) fn apply(&self, param: Param, x: i64) -> i64 {
+    pub(in crate::runtime::puc) fn apply(&self, param: Param, x: i64) -> i64 {
         match self.version {
             LuaVersion::Lua55 => apply_param(self.stored[Self::slot(param)] as u8, x),
             _ => x.saturating_mul(self.get(param)) / 100,
