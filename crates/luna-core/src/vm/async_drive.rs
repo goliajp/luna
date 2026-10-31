@@ -294,6 +294,5 @@ impl Vm {
     }
 }
 
-#[path = "async_future.rs"]
 mod future;
 pub use future::EvalFuture;

@@ -328,5 +328,4 @@ mod os {
 }
 
 #[cfg(test)]
-#[path = "native_stack_tests.rs"]
 mod tests;

@@ -837,7 +837,7 @@ handler, and inside the handler `vm.traceback(Some(msg), 1)` is
 the handler sees: the traceback ends with the function the host called. `vm.load_file(name, mode)` and
 `vm.load_buffer(src, chunkname, mode)` are `luaL_loadfilex` /
 `luaL_loadbufferx`, returning the error message those leave. The `luna`
-CLI (`crates/luna-jit/src/bin/luna.rs`) is built on these.
+CLI (`crates/luna-jit/src/bin/luna/main.rs`) is built on these.
 
 `LuaErrorKind` classifies common cases:
 

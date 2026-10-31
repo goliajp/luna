@@ -373,12 +373,9 @@ pub struct NativeClosure {
     pub builtin: crate::runtime::Builtin,
 }
 
-#[path = "function_jit.rs"]
 mod jit_state;
 pub use jit_state::{JIT_NEXT_NONE, JitProtoState};
-#[path = "function_trace.rs"]
 mod trace;
-#[path = "function_upvals.rs"]
 mod upvals;
 
 /// The failed recordings of one trace head.

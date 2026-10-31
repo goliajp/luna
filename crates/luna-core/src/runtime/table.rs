@@ -43,45 +43,28 @@ use crate::runtime::dialect::Dialect;
 ///   at 8, where a `Value` keeps them, `dead_key` and `next` in the
 ///   bytes between (a `Value`'s padding), and `val` at offset 16; 32
 ///   bytes in all. `dead_key` and `next` are not read by the IC.
-#[path = "table_jit_layout.rs"]
 pub mod jit_layout;
 
-#[path = "table_array.rs"]
 mod array;
-#[path = "table_ctor.rs"]
 mod ctor;
 pub(crate) use ctor::new_table_sizes;
 pub(crate) use ctor::{int2fb, new_table_operands};
 pub(crate) use len::set_len_search_seed;
-#[path = "table_error.rs"]
 mod error;
 pub use error::TableError;
-#[path = "table_get.rs"]
 mod get;
-#[path = "table_grow.rs"]
 mod grow;
-#[path = "table_hash.rs"]
 mod hash;
-#[path = "table_len.rs"]
 mod len;
-#[path = "table_node.rs"]
 mod node;
-#[path = "table_rehash55.rs"]
 mod rehash55;
-#[path = "table_resize.rs"]
 mod resize;
-#[path = "table_set.rs"]
 mod set;
-#[path = "table_sizes.rs"]
 pub(crate) mod sizes;
 use sizes::ceil_log2;
-#[path = "table_slab.rs"]
 mod slab;
-#[path = "table_trace.rs"]
 mod trace;
-#[path = "table_walk.rs"]
 mod walk;
-#[path = "table_weak.rs"]
 mod weak;
 use node::{NONE, Node};
 
@@ -325,7 +308,6 @@ impl Table {
 }
 
 #[cfg(feature = "gc-verify")]
-#[path = "table_gc_verify.rs"]
 mod gc_verify;
 
 #[inline]
@@ -342,5 +324,4 @@ fn normalize_set_key(key: Value) -> Result<Value, TableError> {
 }
 
 #[cfg(test)]
-#[path = "table_tests.rs"]
 mod tests;

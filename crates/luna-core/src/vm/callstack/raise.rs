@@ -268,5 +268,4 @@ impl Vm {
 }
 
 #[cfg(test)]
-#[path = "raise_tests.rs"]
 mod tests;

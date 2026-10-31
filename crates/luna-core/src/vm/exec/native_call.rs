@@ -250,5 +250,4 @@ impl Vm {
 }
 
 #[cfg(test)]
-#[path = "native_call_tests.rs"]
 mod tests;

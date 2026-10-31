@@ -1,7 +1,6 @@
 use super::*;
 use crate::runtime::heap::Heap;
 
-#[path = "table_length_tests.rs"]
 mod length;
 
 pub(super) fn with_table(f: impl FnOnce(&mut Heap, &mut Table)) {

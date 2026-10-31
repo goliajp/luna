@@ -7,7 +7,6 @@ use crate::{Interp, lua_tostring};
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 
-#[path = "repl/input.rs"]
 mod input;
 use input::Input;
 pub(crate) use input::Line;
