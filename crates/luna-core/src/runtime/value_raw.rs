@@ -56,6 +56,14 @@ impl Value {
         }
     }
 
+    /// [`Self::copy_raw`] between references, for a value just made in
+    /// pieces (a native's result).
+    #[cfg_attr(luna_hot, inline(always))]
+    pub(crate) fn set_split(dst: &mut Value, src: &Value) {
+        // SAFETY: both are references to initialised values, `dst` unique
+        unsafe { Value::copy_raw(dst, src) }
+    }
+
     /// Copy the value at `src` to `dst` as one 16-byte access. For a source
     /// that was not just written a byte and a word at a time (an object
     /// register `SelfOp` copies, a `TestSet` operand, a generic-for control
