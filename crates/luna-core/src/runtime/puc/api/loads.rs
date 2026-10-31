@@ -1,7 +1,9 @@
-//! A load as the model sees it: its span, the objects built ahead of PUC,
-//! its message, and the readers it calls.
+//! The loads under way as the model sees them: the parser frames a
+//! collection step runs in the middle of, the message of the last one that
+//! failed, and the flags a load's run leaves for the next.
 
 use super::super::*;
+use crate::runtime::puc::Lent;
 use crate::runtime::puc::records::parse::ParseFrame;
 
 /// The loads under way, as the model sees them.
@@ -19,12 +21,6 @@ pub(in crate::runtime::puc) struct Loads {
     load_holds: bool,
     /// the loads a collection step runs in the middle of
     parse: Vec<ParseFrame>,
-    /// what loads' readers counted that is set aside and not counted back
-    /// yet (`Heap::reader_call_begins`)
-    pub(super) set_aside: isize,
-    /// loads set objects aside now (`records::parse::unborn`); here, with
-    /// the other flags, rather than in `Unborn`, where it would take a word
-    unborn_on: bool,
 }
 
 impl Loads {
@@ -36,8 +32,6 @@ impl Loads {
             load_caught: false,
             load_holds: false,
             parse: Vec::new(),
-            set_aside: 0,
-            unborn_on: false,
         }
     }
 }
@@ -171,53 +165,17 @@ impl Heap {
     }
 }
 
-/// Whether loads were set aside before (see [`Heap::set_loads_aside`]).
-#[must_use = "loads stay as set until the token goes back to `Heap::loads_aside_back`"]
-pub(in crate::runtime) struct LoadsAside(bool);
-
 impl Heap {
-    /// A new object a load makes before PUC does (luna compiles first),
-    /// kept off the list until PUC makes it, which puts it where PUC's is.
-    /// False when there is no room to note it (it goes on the list now).
-    ///
-    /// # Safety
-    /// As [`Heap::link`]'s.
-    #[inline(always)]
-    pub(in crate::runtime) unsafe fn set_aside(&mut self, h: *mut GcHeader) -> bool {
-        // SAFETY: the caller's contract
-        self.puc.loads.unborn_on && unsafe { self.set_aside_now(h) }
+    /// The loads' parser frames, lent to the marker `l`.
+    pub(in crate::runtime::puc) fn lend_parse_frames(&mut self, l: &mut Lent) {
+        l.parse = std::mem::take(&mut self.puc.loads.parse);
     }
 
-    /// Set what a load makes before PUC does aside (`on`), or no more,
-    /// until the token goes back to [`Heap::loads_aside_back`].
-    #[inline]
-    pub(in crate::runtime::puc) fn set_loads_aside(&mut self, on: bool) -> LoadsAside {
-        LoadsAside(std::mem::replace(&mut self.puc.loads.unborn_on, on))
-    }
-
-    /// Where loads were set aside at some point (a load unwound by running
-    /// out of memory goes back there).
-    #[inline]
-    pub(in crate::runtime::puc) fn loads_aside_mark(&self) -> LoadsAside {
-        LoadsAside(self.puc.loads.unborn_on)
-    }
-
-    /// Back to what [`Heap::set_loads_aside`] changed.
-    #[inline]
-    pub(in crate::runtime::puc) fn loads_aside_back(&mut self, a: LoadsAside) {
-        self.puc.loads.unborn_on = a.0;
-    }
-
-    /// The loads' parser frames, lent to a marker.
-    pub(in crate::runtime::puc) fn lend_parse_frames(&mut self) -> Vec<ParseFrame> {
-        std::mem::take(&mut self.puc.loads.parse)
-    }
-
-    /// The frames a marker borrowed, back, unless frames were opened
+    /// The frames the marker `l` borrowed, back, unless frames were opened
     /// meanwhile and the marker's are none.
-    pub(in crate::runtime::puc) fn settle_parse_frames(&mut self, lent: &mut Vec<ParseFrame>) {
-        if !lent.is_empty() || self.puc.loads.parse.is_empty() {
-            self.puc.loads.parse = std::mem::take(lent);
+    pub(in crate::runtime::puc) fn settle_parse_frames(&mut self, l: &mut Lent) {
+        if !l.parse.is_empty() || self.puc.loads.parse.is_empty() {
+            self.puc.loads.parse = std::mem::take(&mut l.parse);
         }
     }
 }

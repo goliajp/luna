@@ -14,10 +14,16 @@ pub(in crate::runtime::puc) struct Count {
     /// where the next collection step falls due (`pace`), or `usize::MAX`
     /// while there is none: the one comparison a safe point makes
     gc_limit: usize,
+    /// what loads' readers counted that is set aside and not counted back
+    /// yet (`Heap::reader_call_begins`)
+    pub(super) set_aside: isize,
     /// above 0, nothing is counted (objects PUC made elsewhere, or not at
     /// all, are being built): changed only through `CountingOff` and
     /// `CountingMark`
     silent: u32,
+    /// loads set objects aside now (`records::parse::unborn`), read where
+    /// every new object is linked; in the word `silent` leaves
+    pub(super) unborn_on: bool,
 }
 
 /// Where `gc_limit` lies from `bytes` in [`Count`].
@@ -30,7 +36,9 @@ impl Count {
         Count {
             bytes: 0,
             gc_limit: usize::MAX,
+            set_aside: 0,
             silent: 1,
+            unborn_on: false,
         }
     }
 }

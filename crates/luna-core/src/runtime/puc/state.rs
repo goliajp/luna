@@ -32,7 +32,7 @@ pub(in crate::runtime) struct PucModel {
     /// given size (see `Heap::stand_sizes_on`)
     pub(super) stand_ins: super::for_heap::StandIns,
     /// the loads under way, as the model sees them
-    pub(super) loads: super::count::Loads,
+    pub(super) loads: super::api::Loads,
     /// what loads made before PUC does, kept off the list
     pub(super) unborn: super::records::parse::Unborn,
     /// what the opening of the standard libraries made
@@ -55,7 +55,7 @@ impl Default for PucModel {
             pace: super::pace::Pace::new(),
             records: super::records::Records::new(),
             stand_ins: super::for_heap::StandIns::default(),
-            loads: super::count::Loads::new(),
+            loads: super::api::Loads::new(),
             unborn: super::records::parse::Unborn::new(),
             opening: super::api::Opening::default(),
         }
