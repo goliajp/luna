@@ -221,10 +221,19 @@ fn finish_begun<const PRE: bool>(
 #[inline]
 fn f_conv(fmt: &[u8], i: usize) -> bool {
     let mut p = i;
-    while fmt.get(p).is_some_and(|c| b"-+#0 123456789.".contains(c)) {
+    while fmt.get(p).is_some_and(|&c| spec_char(c)) {
         p += 1;
     }
     byte_at(fmt, p) == b'f' && p - i + 1 < MAX_FORMAT - 10
+}
+
+/// Whether `c` may come before a 5.4 specification's conversion: a flag,
+/// a digit or the `.` (`L_FMTFLAGSX`, then `getformat`'s digits).
+#[inline(always)]
+fn spec_char(c: u8) -> bool {
+    // digits first: a width or a precision is what a specification
+    // mostly holds
+    c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'#' | b' ' | b'.')
 }
 
 fn byte_at(fmt: &[u8], i: usize) -> u8 {
@@ -237,7 +246,10 @@ fn byte_at(fmt: &[u8], i: usize) -> u8 {
 #[inline]
 fn scanformat(vm: &mut Vm, fmt: &[u8], start: usize) -> Result<usize, LuaError> {
     let mut p = start;
-    while fmt.get(p).is_some_and(|c| FLAGS.contains(c)) {
+    while fmt
+        .get(p)
+        .is_some_and(|&c| matches!(c, b'-' | b'+' | b' ' | b'#' | b'0'))
+    {
         p += 1;
     }
     if p - start > FLAGS.len() {

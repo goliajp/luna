@@ -51,7 +51,7 @@ pub(super) fn item54<const PRE: bool>(
     // getformat: flags, width and precision bytes ('0' counted as a flag),
     // then the conversion
     let mut p = start;
-    while fmt.get(p).is_some_and(|c| b"-+#0 123456789.".contains(c)) {
+    while fmt.get(p).is_some_and(|&c| super::spec_char(c)) {
         p += 1;
     }
     if p - start + 1 >= MAX_FORMAT - 10 {
