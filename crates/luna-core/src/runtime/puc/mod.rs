@@ -2,10 +2,11 @@
 //! its structures, its collector's pace and steps, and the records of
 //! objects PUC has and luna does not. luna's own collector (`heap`) reaches
 //! it through `for_heap`, the counting entries every allocation goes
-//! through (`count.rs`, `parts.rs`, `Heap::counting`, `Heap::uncounted`,
+//! through (`count`, `parts.rs`, `Heap::counting`, `Heap::uncounted`,
 //! `Heap::puc_size`) and the methods of the records it keeps (`records`);
-//! the VM, the libraries and the JIT through `api` alone, the only module
-//! visible outside the runtime.
+//! the VM, the libraries and the JIT through the facade `api` describes:
+//! the model's `pub(crate)` heap methods and the types `api` names, the
+//! only module visible outside the runtime.
 
 use std::ptr;
 
@@ -19,7 +20,7 @@ use crate::runtime::value::Value;
 pub(crate) mod api;
 pub(in crate::runtime) mod boot;
 mod count;
-pub(in crate::runtime) use count::*;
+pub(in crate::runtime) use count::{FIXED_EXT, PucKind};
 pub(in crate::runtime) mod for_heap;
 mod lent;
 pub(in crate::runtime) use lent::Lent;

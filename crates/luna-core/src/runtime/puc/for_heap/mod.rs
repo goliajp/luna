@@ -26,8 +26,8 @@ impl Heap {
     pub(in crate::runtime::puc) fn puc_restart_due(&mut self) {
         let d = self.puc.dialect;
         match d {
-            Dialect::L51 => self.puc.pace.set_threshold(self.puc.count.bytes as i64),
-            _ => self.puc.pace.set_debt(d, self.puc.count.bytes, 0),
+            Dialect::L51 => self.puc.pace.set_threshold(self.bytes() as i64),
+            _ => self.puc.pace.set_debt(d, self.bytes(), 0),
         }
     }
 
@@ -36,7 +36,7 @@ impl Heap {
     /// 5.1 `setthreshold`), the collector in its pause.
     pub(in crate::runtime::puc) fn puc_pause(&mut self, pause: i64) {
         let d = self.puc.dialect;
-        let bytes = self.puc.count.bytes;
+        let bytes = self.bytes();
         match d {
             Dialect::L51 => {
                 self.puc.pace.estimate = bytes as i64;

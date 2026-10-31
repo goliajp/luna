@@ -48,3 +48,26 @@ impl Heap {
         self.puc.opening.phantoms = on;
     }
 }
+
+impl Heap {
+    /// `s`, a string a library of PUC's keeps and luna's may not, kept
+    /// alive (once, however often pinned).
+    #[inline]
+    pub(crate) fn pin(&mut self, s: Gc<LuaStr>) {
+        if !self
+            .puc
+            .records
+            .pins
+            .iter()
+            .any(|p| p.as_ptr() == s.as_ptr())
+        {
+            self.puc.records.pins.push(s);
+        }
+    }
+
+    /// Mark the strings [`Heap::pin`] keeps.
+    #[inline]
+    pub(crate) fn mark_pins(&self, m: &mut Marker) {
+        m.mark_strings(self.puc.records.pins.iter());
+    }
+}

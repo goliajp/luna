@@ -202,7 +202,7 @@ impl Heap {
     /// The string sweep went up to bucket `upto`: the dead strings of the
     /// buckets before it leave the count. Returns the bytes freed.
     pub(in crate::runtime::puc) fn sweep_strings_upto(&mut self, upto: i64) -> i64 {
-        let before = self.puc.count.bytes as i64;
+        let before = self.bytes() as i64;
         let new_white = self.white();
         // taken for the walk, so that it is not read again each step
         let s = &mut self.puc.records.strt;
@@ -227,7 +227,7 @@ impl Heap {
         }
         self.puc.records.strt.next = next;
         self.puc.records.strt.dead = dead;
-        before - self.puc.count.bytes as i64
+        before - self.bytes() as i64
     }
 }
 

@@ -52,7 +52,7 @@ impl Heap {
             // gc-trace: `LUNA_GC_REFUSE` refused this growth of PUC's, which is
             // then as if the allocation failed
             if let Some(bytes) = self.take_new_refusal(waited) {
-                self.puc.count.bytes = (self.puc.count.bytes as i64 - bytes) as usize;
+                self.adjust_count(-bytes);
                 self.shrink_gbuff_to(old);
                 return Err(Oom(mem));
             }

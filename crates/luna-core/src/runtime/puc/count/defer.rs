@@ -13,7 +13,7 @@ use super::super::*;
 pub(crate) struct DeferMark {
     bytes: usize,
     objs: usize,
-    aside: crate::runtime::puc::records::parse::LoadsAside,
+    aside: super::loads::LoadsAside,
 }
 
 /// What was counted while counting was set aside.
