@@ -84,24 +84,7 @@ impl<S: Source> Lexer<'_, S> {
 
     fn name_or_keyword(&mut self) -> Tok {
         let start = self.pos;
-        // the name's bytes read in place; the last one is left by `bump`,
-        // which reads a stream's next piece past it
-        let bytes = self.src.bytes();
-        let mut p = start + 1;
-        while p < bytes.len() && matches!(bytes[p], b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_')
-        {
-            p += 1;
-        }
-        self.pos = p - 1;
-        self.bump();
-        while S::STREAMS
-            && matches!(
-                self.cur(),
-                Some(b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_')
-            )
-        {
-            self.bump();
-        }
+        self.scan_name(start);
         let text = &self.src.bytes()[start..self.pos];
         match text {
             b"and" => Token::And,
@@ -136,6 +119,28 @@ impl<S: Source> Lexer<'_, S> {
                 }
                 Token::Name(())
             }
+        }
+    }
+
+    /// Past the name starting at `start`: its bytes read in place, the last
+    /// one left by `bump`, which reads a stream's next piece past it.
+    #[inline(always)]
+    fn scan_name(&mut self, start: usize) {
+        let bytes = self.src.bytes();
+        let mut p = start + 1;
+        while p < bytes.len() && matches!(bytes[p], b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_')
+        {
+            p += 1;
+        }
+        self.pos = p - 1;
+        self.bump();
+        while S::STREAMS
+            && matches!(
+                self.cur(),
+                Some(b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_')
+            )
+        {
+            self.bump();
         }
     }
 }
