@@ -17,15 +17,10 @@ impl Heap {
                 ObjTag::Table => {
                     let t = h as *mut Table;
                     self.puc_freed(&*t);
-                    // pool recycle. Drop the
-                    // Box-owned interior (slab, nodes, metatable) so the
-                    // Table struct itself can be re-handed-out by a
-                    // future `new_table` without re-mallocing. Cap pool
-                    // at 4096 entries to bound idle memory.
+                    // its parts freed, the block kept for a later `new_table`
+                    // by a pool of at most 4096 (one that cannot grow frees it)
                     const TABLE_POOL_CAP: usize = 4096;
                     (*t).free_parts(self.mem());
-                    // the pool owns the table's block until reuse or the
-                    // heap's drop; a pool that cannot grow frees it instead
                     if self.table_pool.len() < TABLE_POOL_CAP
                         && self.table_pool.try_reserve(1).is_ok()
                     {
