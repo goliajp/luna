@@ -60,29 +60,30 @@ impl Heap {
         Ok(())
     }
 
-    /// PUC `luaV_concat(L, total)` over the top `total` values of `st`,
-    /// every one a string or a number: what it makes, in its order, and
-    /// the one value it leaves in their place.
-    pub(crate) fn puc_concat(&mut self, st: &mut Vec<Value>, total: usize) -> Result<(), Oom> {
+    /// PUC `luaV_concat(L, *top)` over the first `*top` values of `st`,
+    /// every one a string or a number: what it makes, in its order, joined
+    /// from the last as on PUC's stack. `*top` comes down as values are
+    /// joined: 1 when it succeeds, the value in `st[0]`; where it stopped
+    /// when it fails.
+    pub(crate) fn puc_concat(&mut self, st: &mut [Value], top: &mut usize) -> Result<(), Oom> {
         let d = self.puc.dialect;
-        let mut total = total;
-        while total > 1 {
-            let top = st.len();
-            self.tostring_value(&mut st[top - 1])?;
-            let Value::Str(y) = st[top - 1] else {
+        while *top > 1 {
+            let at = *top;
+            self.tostring_value(&mut st[at - 1])?;
+            let Value::Str(y) = st[at - 1] else {
                 unreachable!("converted above")
             };
             let mut n = 2;
             if y.is_empty() {
-                self.tostring_value(&mut st[top - 2])?;
-            } else if d >= Dialect::L52 && matches!(st[top - 2], Value::Str(s) if s.is_empty()) {
-                st[top - 2] = Value::Str(y);
+                self.tostring_value(&mut st[at - 2])?;
+            } else if d >= Dialect::L52 && matches!(st[at - 2], Value::Str(s) if s.is_empty()) {
+                st[at - 2] = Value::Str(y);
             } else {
                 let mut tl = y.len();
                 n = 1;
-                while n < total {
-                    self.tostring_value(&mut st[top - n - 1])?;
-                    let Value::Str(s) = st[top - n - 1] else {
+                while n < at {
+                    self.tostring_value(&mut st[at - n - 1])?;
+                    let Value::Str(s) = st[at - n - 1] else {
                         unreachable!("converted above")
                     };
                     tl += s.len();
@@ -91,7 +92,7 @@ impl Heap {
                 if d <= Dialect::L52 {
                     self.open_gbuff(tl)?;
                 }
-                let parts: Vec<&[u8]> = st[top - n..]
+                let parts: Vec<&[u8]> = st[at - n..at]
                     .iter()
                     .map(|v| match v {
                         Value::Str(s) => s.as_bytes(),
@@ -99,10 +100,9 @@ impl Heap {
                     })
                     .collect();
                 let s = self.try_intern_parts(&parts)?;
-                st[top - n] = Value::Str(s);
+                st[at - n] = Value::Str(s);
             }
-            st.truncate(top - (n - 1));
-            total -= n - 1;
+            *top = at - (n - 1);
         }
         Ok(())
     }

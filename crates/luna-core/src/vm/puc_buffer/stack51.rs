@@ -66,7 +66,8 @@ impl PucBuffer {
         let from = vm.lib_roots.len() - n;
         let mut st: Vec<Value> = vm.lib_roots[from..].to_vec();
         vm.api_check_before::<true>()?;
-        vm.concat_pieces(&mut st, n)?;
+        let mut left = n;
+        vm.concat_pieces(&mut st, &mut left)?;
         vm.lib_roots.pop_n(n);
         vm.lib_roots.push(st[0]);
         Ok(())

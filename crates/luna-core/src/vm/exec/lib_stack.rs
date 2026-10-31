@@ -63,17 +63,19 @@ impl LibStack {
     }
 
     /// `join` the top `total` values into one, on the values themselves
-    /// (`lua_concat` works on a stack of its own): when it succeeds, the
-    /// one it leaves takes their place and nothing below them moved.
+    /// (`lua_concat` works on a stack of its own): it sees only them and
+    /// brings the count of those left down from `total`, to 1 when it
+    /// succeeds; the stack keeps that many.
     #[inline]
     pub(crate) fn join_top<E>(
         &mut self,
         total: usize,
-        join: impl FnOnce(&mut Vec<Value>) -> Result<(), E>,
+        join: impl FnOnce(&mut [Value], &mut usize) -> Result<(), E>,
     ) -> Result<(), E> {
         let below = self.vals.len() - total;
-        let r = join(&mut self.vals);
-        debug_assert!(r.is_err() || self.vals.len() == below + total.min(1));
+        let mut left = total;
+        let r = join(&mut self.vals[below..], &mut left);
+        self.vals.truncate(below + left);
         r
     }
 }

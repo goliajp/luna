@@ -107,13 +107,14 @@ impl Vm {
             with_rules!(self, P => self.api_check_before::<P>())?;
             let dot = self.heap.try_intern(b".")?;
             with_rules!(self, P => self.api_check_after::<P>(Value::Str(dot)))?;
-            let mut st = vec![Value::Str(path.outer), Value::Str(dot), Value::Str(inner)];
+            let mut st = [Value::Str(path.outer), Value::Str(dot), Value::Str(inner)];
             let r = self.rooted(
                 &[Value::Str(dot)],
                 |vm| with_rules!(vm, P => vm.api_check_before::<P>()),
             );
             r?;
-            self.heap.puc_concat(&mut st, 3)?;
+            let mut left = 3;
+            self.heap.puc_concat(&mut st, &mut left)?;
             with_rules!(self, P => self.api_check_after::<P>(st[0]))?;
         }
         if path.under_g() && self.version >= LuaVersion::Lua53 {

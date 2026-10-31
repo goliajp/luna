@@ -137,8 +137,9 @@ impl Bufvfs {
         self.pushed = Some(match self.pushed {
             None => new,
             Some(prev) => {
-                let mut st = vec![Value::Str(prev), Value::Str(new)];
-                h.puc_concat(&mut st, 2)?;
+                let mut st = [Value::Str(prev), Value::Str(new)];
+                let mut left = 2;
+                h.puc_concat(&mut st, &mut left)?;
                 match st[0] {
                     Value::Str(s) => s,
                     _ => unreachable!("strings join into a string"),

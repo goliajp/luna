@@ -64,26 +64,24 @@ impl Vm {
     /// does not see: they are held while it collects.
     pub(crate) fn concat_pieces(
         &mut self,
-        st: &mut Vec<Value>,
-        total: usize,
+        st: &mut [Value],
+        top: &mut usize,
     ) -> Result<(), LuaError> {
-        let len = st.len();
-        let Err(o) = self.heap.puc_concat(st, total) else {
+        let Err(o) = self.heap.puc_concat(st, top) else {
             return Ok(());
         };
-        let collected = self.rooted(st, |vm| vm.emergency_collect());
+        let collected = self.rooted(&st[..*top], |vm| vm.emergency_collect());
         if !collected {
             return Err(o.into());
         }
         // what was joined before the failure stays joined
-        let left = total - (len - st.len());
-        Ok(self.heap.puc_concat(st, left)?)
+        Ok(self.heap.puc_concat(st, top)?)
     }
 
     /// `lua_concat` of the last `total` values of `lib_roots`.
     pub(crate) fn concat_roots(&mut self, total: usize) -> Result<(), LuaError> {
         let mut st = std::mem::take(&mut self.lib_roots);
-        let r = st.join_top(total, |v| self.concat_pieces(v, total));
+        let r = st.join_top(total, |v, top| self.concat_pieces(v, top));
         self.lib_roots = st;
         r
     }
