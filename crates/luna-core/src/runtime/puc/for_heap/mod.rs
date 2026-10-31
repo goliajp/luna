@@ -20,12 +20,6 @@ impl Default for StandIns {
 }
 
 impl Heap {
-    /// PUC's `totalbytes`.
-    #[inline(always)]
-    pub(in crate::runtime) fn puc_bytes(&self) -> usize {
-        self.puc.count.bytes
-    }
-
     /// The collector restarts (`collectgarbage("restart")`): a step falls
     /// due at once (5.1 `GCthreshold = totalbytes`, later
     /// `luaE_setdebt(g, 0)`).

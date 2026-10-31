@@ -15,6 +15,32 @@ pub(crate) struct FinalizerStop {
 }
 
 impl Heap {
+    /// Approximate heap size in bytes: PUC's `totalbytes`.
+    #[inline(always)]
+    pub fn bytes(&self) -> usize {
+        self.puc.count.bytes
+    }
+
+    /// Whether allocation has crossed the auto-GC threshold (cheap safe-point
+    /// check for the interpreter loop).
+    #[inline(always)]
+    pub fn gc_due(&self) -> bool {
+        self.gc_due_after(0)
+    }
+
+    /// A cycle ended with the count at what it is now: the pause before
+    /// the next one, `pause` in percent of what survived (PUC `setpause`;
+    /// 5.1 `setthreshold`).
+    pub fn rearm_gc_pause(&mut self, pause: i64) {
+        self.puc_pause(pause);
+        self.refresh_gc_limit();
+    }
+
+    /// [`Heap::rearm_gc_pause`] with PUC's usual pause (200%).
+    pub fn rearm_gc(&mut self) {
+        self.rearm_gc_pause(200);
+    }
+
     /// 5.1's `GCTM` runs a finalizer: under a threshold of twice the
     /// count. The threshold it had, for [`Heap::fin51_threshold_back`].
     #[inline]

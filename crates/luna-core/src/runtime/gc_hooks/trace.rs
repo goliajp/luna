@@ -35,9 +35,9 @@ impl Heap {
     pub(crate) fn hook_block(&mut self, old: usize, new: usize) {
         #[cfg(feature = "gc-verify")]
         assert!(
-            self.puc_bytes() + new >= old,
+            self.bytes() + new >= old,
             "[gc-verify] a block of {old} bytes freed from a count of {}",
-            self.puc_bytes()
+            self.bytes()
         );
         #[cfg(feature = "gc-trace")]
         self.hooks.trace.block(old, new);

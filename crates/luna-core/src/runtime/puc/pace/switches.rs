@@ -1,7 +1,7 @@
 //! The collector's pacing and its stop switches, as PUC keeps them: the
 //! count against the next step, `collectgarbage("stop")` and 5.4's and
-//! 5.5's stop while a finalizer runs. The VM and the libraries read and
-//! write them only through these methods.
+//! 5.5's stop while a finalizer runs. The VM and the libraries reach them
+//! through the model's facade (`api`).
 
 use crate::runtime::puc::*;
 
@@ -13,18 +13,6 @@ pub(in crate::runtime::puc) struct RunMark {
 }
 
 impl Heap {
-    /// Approximate heap size in bytes.
-    pub fn bytes(&self) -> usize {
-        self.puc.count.bytes
-    }
-
-    /// Whether allocation has crossed the auto-GC threshold (cheap safe-point
-    /// check for the interpreter loop).
-    #[inline(always)]
-    pub fn gc_due(&self) -> bool {
-        self.gc_due_after(0)
-    }
-
     /// 5.1: an explicit step sets the threshold that `stop` had put out of
     /// reach, so the collector runs on its own again after it.
     pub(in crate::runtime::puc) fn gc_unstop_51(&mut self) {
@@ -42,19 +30,6 @@ impl Heap {
     /// collector is stopped, nor while a 5.4 or 5.5 finalizer runs.
     pub(in crate::runtime::puc) fn gc_steps_run(&self) -> bool {
         !self.puc.stopped && !self.puc.fin_stop
-    }
-
-    /// A cycle ended with the count at what it is now: the pause before
-    /// the next one, `pause` in percent of what survived (PUC `setpause`;
-    /// 5.1 `setthreshold`).
-    pub fn rearm_gc_pause(&mut self, pause: i64) {
-        self.puc_pause(pause);
-        self.refresh_gc_limit();
-    }
-
-    /// [`Heap::rearm_gc_pause`] with PUC's usual pause (200%).
-    pub fn rearm_gc(&mut self) {
-        self.rearm_gc_pause(200);
     }
 
     /// Whether the collector runs as it does now (stopped, and stopped for

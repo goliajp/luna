@@ -275,3 +275,11 @@ impl Heap {
         }
     }
 }
+
+impl GcHeader {
+    /// Whether this object is one PUC has not made (see [`Heap::acct_new`]).
+    #[inline(always)]
+    pub(crate) fn is_uncounted(&self) -> bool {
+        self.sub & UNCOUNTED != 0
+    }
+}
