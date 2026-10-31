@@ -19,7 +19,7 @@ return ok1, ok2, ok3
 /// A message handler that recurses until the stack overflows: from 5.2
 /// on, whose Lua calls no call count stops, a million slots of calls,
 /// which Miri does not get through in hours (the overflow and the
-/// handler's own overflow are covered there by `call_limits`' test, which
+/// handler's own overflow are covered there by `call::limits`' test, which
 /// fills the stack with one call's results).
 const OVERFLOWS: &str = r#"
 local function h(m) return h(m) .. '' end
