@@ -208,7 +208,7 @@ impl Heap {
             tbc: LVec::new(mem),
             top: 0,
             gc_top: u32::MAX,
-            shrunk_in: std::cell::Cell::new(0),
+            shrunk_in: std::cell::Cell::new(None),
             yield_top: u32::MAX,
             meta_conts: 0,
             host_conts: 0,

@@ -153,9 +153,9 @@ fn the_cycle_after_the_last_number_is_not_a_new_thread_s_mark() {
         crate::runtime::Value::Coro(c) => c,
         other => panic!("a thread: {other:?}"),
     };
-    vm.heap.puc.cycle = u32::MAX;
+    vm.heap.puc.cycle = std::num::NonZeroU32::MAX;
     restart(&mut vm);
-    assert_eq!(vm.heap.puc.cycle, 1);
+    assert_eq!(vm.heap.puc.cycle.get(), 1);
     // PUC's traversal shrinks the new thread's stack in this cycle
     assert!(vm.heap.puc_shrinks_now(co));
     assert!(!vm.heap.puc_shrinks_now(co));

@@ -89,8 +89,8 @@ pub struct Coro {
     pub(crate) yield_top: u32,
     /// 5.3: the collection cycle whose propagation last shrank the
     /// thread's stack (PUC's traversal shrinks it the first time it comes
-    /// up in a cycle); 0, which is no cycle, before any
-    pub(in crate::runtime) shrunk_in: std::cell::Cell<u32>,
+    /// up in a cycle); `None` before any
+    pub(in crate::runtime) shrunk_in: std::cell::Cell<Option<std::num::NonZeroU32>>,
     /// Saved `Vm::stack_size`: PUC's size of the thread's stack, 0 for a
     /// thread that has not run.
     pub stack_size: u32,

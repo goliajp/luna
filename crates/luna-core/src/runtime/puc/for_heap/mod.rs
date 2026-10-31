@@ -87,7 +87,7 @@ impl Heap {
     #[inline]
     pub(in crate::runtime) fn puc_shrinks_now(&self, co: Gc<crate::runtime::Coro>) -> bool {
         let now = self.puc.cycle;
-        co.shrunk_in.replace(now) != now
+        co.shrunk_in.replace(Some(now)) != Some(now)
     }
 
     /// 5.2: the sweep kept thread `h`, which `sweepthread` shrinks.
