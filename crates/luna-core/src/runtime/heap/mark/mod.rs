@@ -221,7 +221,7 @@ impl Marker {
                         return true;
                     }
                     if self.rules.counts_leaf_work() {
-                        self.count_leaf(h);
+                        self.leaf_bytes += self.rules.leaf_work(h);
                     }
                     if let Some(s) = &mut self.sizer {
                         s.marked += s.size(h);
