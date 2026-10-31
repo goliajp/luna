@@ -28,7 +28,6 @@ mod step;
 mod text;
 
 pub(crate) use super::count::{CountingMark, CountingOff, Deferred, GC_LIMIT_OFFSET};
-pub(in crate::runtime::puc) use load_session::unpaired;
 pub(in crate::runtime::puc) use opening::Opening;
 pub(crate) use step::{
     change_mode, full_collect, gc_finish_finalizers, gc_full_pause, gc_full_repause, gc_lua_step,

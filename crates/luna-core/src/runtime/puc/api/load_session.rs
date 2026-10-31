@@ -14,6 +14,7 @@ use super::super::*;
 use super::{CountingMark, CountingOff};
 use crate::runtime::puc::count::LoadsAside;
 use crate::runtime::puc::count::ParseMark;
+use crate::runtime::puc::count::unpaired;
 
 /// A load from its start to its end ([`Heap::load_begins`],
 /// [`Heap::load_ends`]).
@@ -39,12 +40,6 @@ pub(crate) struct LoadUnwind {
     frames: ParseMark,
     aside: LoadsAside,
     unborn: usize,
-}
-
-pub(in crate::runtime::puc) fn unpaired(what: &str) {
-    if crate::runtime::gc_hooks::DEBUG_CHECKS && !std::thread::panicking() {
-        panic!("{what} dropped without its end");
-    }
 }
 
 impl Drop for LoadSpan {

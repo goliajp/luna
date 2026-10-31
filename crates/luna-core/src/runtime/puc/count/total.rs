@@ -55,7 +55,7 @@ impl CountingOff {
 impl Drop for CountingOff {
     fn drop(&mut self) {
         if !self.back {
-            crate::runtime::puc::api::unpaired("counting turned off");
+            super::unpaired("counting turned off");
         }
     }
 }
