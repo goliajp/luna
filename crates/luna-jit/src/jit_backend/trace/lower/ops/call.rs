@@ -35,7 +35,7 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                 // callee is that very closure. Anything else (another
                 // closure of the proto, a reassigned upvalue, another
                 // function) leaves here and the interpreter makes the call.
-                let head_cl = match lw.head_closure_var {
+                let head_cl = match lw.upvals.head_closure {
                     Some(var) => lw.bcx.use_var(var),
                     None => {
                         let func_ref = lw.bcx.import_func(head_closure_id);
@@ -43,7 +43,7 @@ pub(super) fn emit_call_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<
                         let v = lw.bcx.inst_results(call)[0];
                         let var = lw.bcx.declare_var(types::I64);
                         lw.bcx.def_var(var, v);
-                        lw.head_closure_var = Some(var);
+                        lw.upvals.head_closure = Some(var);
                         v
                     }
                 };
@@ -193,26 +193,26 @@ pub(super) struct Slot {
 
 pub(super) fn read_slot<E: Emit>(lw: &mut Lower<E>, r: usize) -> Slot {
     Slot {
-        v: lw.bcx.use_var(lw.regs_full[r]),
+        v: lw.bcx.use_var(lw.entry.regs_full[r]),
         kind: lw.current_kinds[r],
-        int: lw.known_int[r],
-        str_const: lw.const_str[r],
+        int: lw.known.int[r],
+        str_const: lw.known.str[r],
     }
 }
 
 pub(super) fn write_slot<E: Emit>(lw: &mut Lower<E>, r: usize, s: Slot) {
-    lw.bcx.def_var(lw.regs_full[r], s.v);
+    lw.bcx.def_var(lw.entry.regs_full[r], s.v);
     lw.current_kinds[r] = s.kind;
-    lw.known_int[r] = s.int;
-    lw.const_str[r] = s.str_const;
+    lw.known.int[r] = s.int;
+    lw.known.str[r] = s.str_const;
 }
 
 pub(super) fn nil_slot<E: Emit>(lw: &mut Lower<E>, r: usize) {
     let z = lw.bcx.ins().iconst(types::I64, 0);
-    lw.bcx.def_var(lw.regs_full[r], z);
+    lw.bcx.def_var(lw.entry.regs_full[r], z);
     lw.current_kinds[r] = RegKind::Nil;
-    lw.known_int[r] = None;
-    lw.const_str[r] = false;
+    lw.known.int[r] = None;
+    lw.known.str[r] = false;
 }
 
 /// Sets the stack top to register `rel` of the head frame, where an op

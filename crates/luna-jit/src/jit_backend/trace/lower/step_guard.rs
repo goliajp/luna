@@ -49,15 +49,11 @@ pub(super) fn emit_step_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         suppress_admit_id, ..
     } = lw.h.rt;
     let (reg_state, trace_fn_sig_ref, body_loop) =
-        (lw.reg_state, lw.trace_fn_sig_ref, lw.body_loop);
+        (lw.entry.reg_state, lw.entry.trace_fn_sig_ref, lw.body_loop);
     lw.bcx.switch_to_block(block);
     lw.bcx.seal_block(block);
-    let entry_stored: Vec<Option<Value>> = lw
-        .regs_full
-        .iter()
-        .map(|&v| Some(lw.bcx.use_var(v)))
-        .collect();
-    let s = lw.bcx.use_var(lw.regs_full[step]);
+    let entry_stored = entry_values(lw);
+    let s = lw.bcx.use_var(lw.entry.regs_full[step]);
     let positive = lw.bcx.ins().icmp_imm_s(IntCC::SignedGreaterThan, s, 0);
     let exit_blk = lw.bcx.create_block();
     if up {
@@ -75,7 +71,7 @@ pub(super) fn emit_step_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     emit_tagged_exit(
         &mut lw.bcx,
         suppress_admit_id,
-        &lw.regs_full[..max_stack],
+        &lw.entry.regs_full[..max_stack],
         &entry_stored,
         reg_state,
         record.head_pc,

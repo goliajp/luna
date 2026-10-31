@@ -125,9 +125,8 @@ pub(super) fn emit_readonly_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) 
     let Plan {
         record, max_stack, ..
     } = *pl;
+    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     let Lower {
-        reg_state,
-        trace_fn_sig_ref,
         ro_precheck,
         body_loop,
         ..
@@ -146,17 +145,13 @@ pub(super) fn emit_readonly_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) 
             .jump(lw.step_precheck.unwrap_or(body_loop), &[]);
         return;
     }
-    let entry_stored: Vec<Option<Value>> = lw
-        .regs_full
-        .iter()
-        .map(|&v| Some(lw.bcx.use_var(v)))
-        .collect();
+    let entry_stored = entry_values(lw);
     let exit_blk = lw.bcx.create_block();
     for r in 0..max_stack {
         if !lw.ro_invariant[r] {
             continue;
         }
-        let t = lw.bcx.use_var(lw.regs_full[r]);
+        let t = lw.bcx.use_var(lw.entry.regs_full[r]);
         let ok_blk = lw.bcx.create_block();
         array_slot::emit_writable_guard_to(&mut lw.bcx, t, exit_blk, ok_blk);
         lw.bcx.switch_to_block(ok_blk);
@@ -175,7 +170,7 @@ pub(super) fn emit_readonly_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) 
     emit_tagged_exit(
         &mut lw.bcx,
         suppress_admit_id,
-        &lw.regs_full[..max_stack],
+        &lw.entry.regs_full[..max_stack],
         &entry_stored,
         reg_state,
         record.head_pc,

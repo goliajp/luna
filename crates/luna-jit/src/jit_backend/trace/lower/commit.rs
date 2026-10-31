@@ -137,15 +137,15 @@ pub(super) fn pure_op(op: Op) -> bool {
 /// Sets what reg_state holds at the loop head (`Lower::stored`), before
 /// the body.
 pub(super) fn commit_start<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
-    lw.stored.reserve(lw.regs_full.len());
+    lw.stored.reserve(lw.entry.regs_full.len());
     if !lw.at_exits {
-        for &v in &lw.regs_full {
+        for &v in &lw.entry.regs_full {
             let val = use_var_resolved(&mut lw.bcx, v);
             lw.stored.push(Some(val));
         }
         return;
     }
-    let mut written = vec![false; lw.regs_full.len()];
+    let mut written = vec![false; lw.entry.regs_full.len()];
     for w in compute_body_writes(pl.record, &pl.op_offsets) {
         if let Some(x) = written.get_mut(w as usize) {
             *x = true;
@@ -155,7 +155,7 @@ pub(super) fn commit_start<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         // inline frames' windows: written by the calls the trace inlines
         *x |= idx >= pl.max_stack;
     }
-    for (idx, &v) in lw.regs_full.iter().enumerate() {
+    for (idx, &v) in lw.entry.regs_full.iter().enumerate() {
         let val = use_var_resolved(&mut lw.bcx, v);
         let promise = (!written[idx]).then_some(val);
         lw.stored.push(promise);
@@ -171,13 +171,13 @@ pub(super) fn commit_before<E: Emit>(
     i: usize,
     rewritten: &[bool],
 ) {
-    let reg_state = lw.reg_state;
+    let reg_state = lw.entry.reg_state;
     if syncs_before(pl.record, pl, i) {
-        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+        sync_reg_state(&mut lw.bcx, &lw.entry.regs_full, &mut lw.stored, reg_state);
     } else if !lw.at_exits {
         sync_reg_state_except(
             &mut lw.bcx,
-            &lw.regs_full,
+            &lw.entry.regs_full,
             &mut lw.stored,
             reg_state,
             rewritten,
@@ -190,17 +190,17 @@ pub(super) fn commit_before<E: Emit>(
 /// baseline tier, what the closing op does not write again.
 pub(super) fn commit_end<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, end: usize) {
     let record = pl.record;
-    let reg_state = lw.reg_state;
+    let reg_state = lw.entry.reg_state;
     let generic_for = pl
         .for_loop_idx_opt
         .is_some_and(|k| record.ops[k].inst.op() == Op::TForLoop);
     if generic_for || pl.downrec_idx_opt.is_some() || pl.self_link_idx_opt.is_some() {
-        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+        sync_reg_state(&mut lw.bcx, &lw.entry.regs_full, &mut lw.stored, reg_state);
     } else if !lw.at_exits {
-        let closing = writes_of(lw.regs_full.len(), record, pl, end);
+        let closing = writes_of(lw.entry.regs_full.len(), record, pl, end);
         sync_reg_state_except(
             &mut lw.bcx,
-            &lw.regs_full,
+            &lw.entry.regs_full,
             &mut lw.stored,
             reg_state,
             &closing,
@@ -212,14 +212,14 @@ pub(super) fn commit_end<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, end: usize) 
 /// optimizing tiers, the head's promise (`Lower::head_stored`), storing a
 /// register the body was not expected to write but did.
 pub(super) fn commit_back_edge<E: Emit>(lw: &mut Lower<E>) {
-    let reg_state = lw.reg_state;
+    let reg_state = lw.entry.reg_state;
     if !lw.at_exits {
-        sync_reg_state(&mut lw.bcx, &lw.regs_full, &mut lw.stored, reg_state);
+        sync_reg_state(&mut lw.bcx, &lw.entry.regs_full, &mut lw.stored, reg_state);
         return;
     }
-    for idx in 0..lw.regs_full.len() {
+    for idx in 0..lw.entry.regs_full.len() {
         if let Some(hv) = lw.head_stored[idx] {
-            let v = use_var_resolved(&mut lw.bcx, lw.regs_full[idx]);
+            let v = use_var_resolved(&mut lw.bcx, lw.entry.regs_full[idx]);
             if v != hv && lw.stored[idx] != Some(v) {
                 lw.bcx
                     .ins()

@@ -18,12 +18,8 @@ pub(super) fn emit_tail<E: Emit>(
         do_internal_loop,
         ..
     } = *pl;
-    let Lower {
-        reg_state,
-        trace_fn_sig_ref,
-        body_loop,
-        ..
-    } = *lw;
+    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
+    let Lower { body_loop, .. } = *lw;
     // --- tail.
     //
     // Four cases pick the clean-close shape:
@@ -51,7 +47,7 @@ pub(super) fn emit_tail<E: Emit>(
     // the caller's window back to interp stack. Slots at
     // [max_stack..window_size) are inline-frame scratch and must not
     // leak into the dispatcher's reg_state restore.
-    let caller_regs: &[Variable] = &lw.regs_full[..max_stack];
+    let caller_regs: &[Variable] = &lw.entry.regs_full[..max_stack];
     // populated by the `downrec_idx_opt` arm when
     // it emits the stitch sentinel. Flows into `CompiledTrace.
     // downrec_link` at the struct literal below. `None` for every

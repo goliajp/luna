@@ -20,7 +20,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
     // mutably while it reads it), plus `kvars` for the virtual registers
     let mut regs_w: Vec<Variable> = Vec::with_capacity(frame_w + NVIRT);
     checkpoint("pre:main-emit-loop");
-    let n_regs = lw.regs_full.len();
+    let n_regs = lw.entry.regs_full.len();
     let rewritten = rewritten_before_sync(n_regs, record, pl, effective_end);
     for (i, rop) in record.ops[..effective_end].iter().enumerate() {
         commit_before(lw, pl, i, &rewritten[i * n_regs..(i + 1) * n_regs]);
@@ -33,16 +33,14 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
             Some(VSrc::Const(VConst::Int(n))) => Some(n),
             Some(_) => None,
             None => lw
-                .known_int
-                .get(pl.op_offsets[i] as usize + rop.inst.c() as usize)
-                .copied()
-                .flatten(),
+                .known
+                .int_at(pl.op_offsets[i] as usize + rop.inst.c() as usize),
         };
         for w in op_writes_at_offset(rop, pl.op_offsets[i]) {
-            if let Some(slot) = lw.known_int.get_mut(w as usize) {
+            if let Some(slot) = lw.known.int.get_mut(w as usize) {
                 *slot = None;
             }
-            if let Some(slot) = lw.const_str.get_mut(w as usize) {
+            if let Some(slot) = lw.known.str.get_mut(w as usize) {
                 *slot = false;
             }
         }
@@ -55,7 +53,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         // Vec with explicit `off + X` indexing.
         let off = pl.op_offsets[i] as usize;
         regs_w.clear();
-        regs_w.extend_from_slice(&lw.regs_full[off..off + frame_w]);
+        regs_w.extend_from_slice(&lw.entry.regs_full[off..off + frame_w]);
         // the op's virtual registers, `frame_w` up (defined by
         // `enter_virt`); an op without any keeps its window exactly
         // `frame_w` wide, which the ops spilling their window rely on
@@ -194,16 +192,16 @@ fn enter_virt<E: Emit>(
         held[j] = Some((
             slot,
             lw.current_kinds[slot],
-            lw.known_int[slot],
-            lw.const_str[slot],
+            lw.known.int[slot],
+            lw.known.str[slot],
         ));
         lw.virt_held.push((slot, lw.current_kinds[slot]));
         lw.current_kinds[slot] = vsrc_kind(src);
-        lw.known_int[slot] = match src {
+        lw.known.int[slot] = match src {
             VSrc::Const(VConst::Int(n)) => Some(n),
             _ => None,
         };
-        lw.const_str[slot] = matches!(src, VSrc::Const(VConst::Str(_)));
+        lw.known.str[slot] = matches!(src, VSrc::Const(VConst::Str(_)));
     }
     Some(held)
 }
@@ -212,8 +210,8 @@ fn enter_virt<E: Emit>(
 fn leave_virt<E: Emit>(lw: &mut Lower<E>, held: Held) {
     for (slot, kind, int, s) in held.into_iter().flatten() {
         lw.current_kinds[slot] = kind;
-        lw.known_int[slot] = int;
-        lw.const_str[slot] = s;
+        lw.known.int[slot] = int;
+        lw.known.str[slot] = s;
     }
     lw.virt_held.clear();
 }

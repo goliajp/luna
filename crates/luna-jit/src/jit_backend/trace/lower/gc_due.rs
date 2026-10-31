@@ -89,7 +89,7 @@ fn call_gc_due<E: Emit>(lw: &mut Lower<E>, check: u32) -> Value {
 fn call_gc_step<E: Emit>(lw: &mut Lower<E>, check: u32, exit: Value) -> Value {
     let fref = lw.bcx.import_func(lw.h.rt.gc_due_id);
     let check = lw.bcx.ins().iconst(types::I64, i64::from(check));
-    let call = lw.bcx.ins().call(fref, &[check, exit, lw.reg_state]);
+    let call = lw.bcx.ins().call(fref, &[check, exit, lw.entry.reg_state]);
     lw.bcx.inst_results(call)[0]
 }
 
@@ -125,12 +125,15 @@ fn step_in_place<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, next_pc: u32, check:
     let tags = lw
         .per_exit_kinds
         .push(next_pc, &lw.current_kinds[..n], Box::new(TCellPtr::null()));
-    for (idx, v) in lw.regs_full[..n].iter().copied().enumerate() {
+    for (idx, v) in lw.entry.regs_full[..n].iter().copied().enumerate() {
         let val = use_var_resolved(&mut lw.bcx, v);
         if lw.stored[idx] != Some(val) {
-            lw.bcx
-                .ins()
-                .store(MemFlagsData::new(), val, lw.reg_state, (idx as i32) * 8);
+            lw.bcx.ins().store(
+                MemFlagsData::new(),
+                val,
+                lw.entry.reg_state,
+                (idx as i32) * 8,
+            );
         }
     }
     let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
@@ -145,14 +148,14 @@ fn step_in_place<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, next_pc: u32, check:
     emit_tagged_exit(
         &mut lw.bcx,
         lw.h.rt.suppress_admit_id,
-        &lw.regs_full[..n],
+        &lw.entry.regs_full[..n],
         &lw.stored,
-        lw.reg_state,
+        lw.entry.reg_state,
         next_pc,
         pl.record.head_pc,
         tags,
         None,
-        lw.trace_fn_sig_ref,
+        lw.entry.trace_fn_sig_ref,
     );
     lw.bcx.switch_to_block(cont);
     lw.bcx.seal_block(cont);

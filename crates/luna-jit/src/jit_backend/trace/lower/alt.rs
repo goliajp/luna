@@ -25,7 +25,7 @@ pub(super) fn alt_taken<E: Emit>(
             for inst in ops {
                 let a = inst.a() as usize;
                 let v = match inst.op() {
-                    Op::Move => lw.bcx.use_var(lw.regs_full[inst.b() as usize]),
+                    Op::Move => lw.bcx.use_var(lw.entry.regs_full[inst.b() as usize]),
                     Op::LoadI => lw.bcx.ins().iconst(types::I64, inst.sbx() as i64),
                     Op::LoadF => {
                         let f = lw.bcx.ins().f64const(inst.sbx() as f64);
@@ -40,10 +40,10 @@ pub(super) fn alt_taken<E: Emit>(
                         _ => unreachable!("simple loads are numbers"),
                     },
                 };
-                lw.bcx.def_var(lw.regs_full[a], v);
+                lw.bcx.def_var(lw.entry.regs_full[a], v);
                 // a value of either way past the rejoin
-                lw.known_int[a] = None;
-                lw.const_str[a] = false;
+                lw.known.int[a] = None;
+                lw.known.str[a] = false;
             }
             lw.bcx.ins().jump(continue_blk, &[]);
             true
@@ -79,8 +79,8 @@ pub(super) fn alt_join<E: Emit>(lw: &mut Lower<E>, i: usize) {
         lw.bcx.switch_to_block(blk);
         lw.bcx.seal_block(blk);
         for w in writes {
-            lw.known_int[w as usize] = None;
-            lw.const_str[w as usize] = false;
+            lw.known.int[w as usize] = None;
+            lw.known.str[w as usize] = false;
         }
         // a table tested on only one of the ways is not tested here
         lw.ro_checked.clear();

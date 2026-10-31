@@ -47,7 +47,7 @@ use ops::*;
 use plan::*;
 use prologue::*;
 use readonly::*;
-use state::Lower;
+use state::{Known, Lower, UpvalReads, entry_values};
 use step_guard::*;
 use sunk_sites::*;
 use tail::*;
@@ -209,6 +209,7 @@ fn emit_trace<E: Emit>(
     emit_body(lw, pl)?;
     let (downrec_link_for_compiled, downrec_multi_way_count_for_compiled) = emit_tail(lw, pl)?;
     let Lower {
+        entry,
         bcx,
         current_kinds,
         dispatchable,
@@ -219,7 +220,6 @@ fn emit_trace<E: Emit>(
         materialize_emit_count,
         closure_seen,
         escape,
-        global_side_trace_box,
         tier_count,
         ..
     } = lower;
@@ -235,7 +235,7 @@ fn emit_trace<E: Emit>(
             materialize_emit_count,
             closure_seen,
             escape,
-            global_side_trace_box,
+            global_side_trace_box: entry.global_side_trace_box,
             downrec_link_for_compiled,
             downrec_multi_way_count_for_compiled,
             tier_count,

@@ -11,9 +11,8 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         opts,
         ..
     } = *pl;
+    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     let Lower {
-        reg_state,
-        trace_fn_sig_ref,
         precheck,
         body_loop,
         ..
@@ -29,11 +28,7 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         lw.bcx.switch_to_block(precheck);
         lw.bcx.seal_block(precheck);
         // Before the loop head reg_state holds what the prelude loaded.
-        let entry_stored: Vec<Option<Value>> = lw
-            .regs_full
-            .iter()
-            .map(|&v| Some(lw.bcx.use_var(v)))
-            .collect();
+        let entry_stored = entry_values(lw);
         // interned, so one pointer per name
         let mut checked: Vec<*const u8> = Vec::new();
         for fold in &pl.math_folds {
@@ -69,7 +64,7 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
             emit_tagged_exit(
                 &mut lw.bcx,
                 suppress_admit_id,
-                &lw.regs_full[..max_stack],
+                &lw.entry.regs_full[..max_stack],
                 &entry_stored,
                 reg_state,
                 record.head_pc,

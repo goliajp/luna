@@ -16,18 +16,17 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
         do_internal_loop,
         ..
     } = *pl;
-    let Lower {
-        reg_state,
-        trace_fn_sig_ref,
-        tforcall_tag_var,
-        tforcall_val_tag_var,
-        ..
-    } = *lw;
+    let (reg_state, trace_fn_sig_ref, tforcall_tag_var, tforcall_val_tag_var) = (
+        lw.entry.reg_state,
+        lw.entry.trace_fn_sig_ref,
+        lw.entry.tforcall_tag_var,
+        lw.entry.tforcall_val_tag_var,
+    );
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;
     // the caller window: see `emit_tail`
-    let caller_regs: &[Variable] = &lw.regs_full[..max_stack];
+    let caller_regs: &[Variable] = &lw.entry.regs_full[..max_stack];
     // the back edge: a nil key exits after the loop (its kinds snapshot
     // says the slot is nil, not the entry's int); a key (and value) of the
     // tags the body was compiled for loops (R[A+2] = R[A+4]); another tag
@@ -132,8 +131,8 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     lw.bcx.switch_to_block(continue_blk);
     lw.bcx.seal_block(continue_blk);
     if lay.copies_control() {
-        let ctrl = lw.bcx.use_var(lw.regs_full[first]);
-        lw.bcx.def_var(lw.regs_full[a + 2], ctrl);
+        let ctrl = lw.bcx.use_var(lw.entry.regs_full[first]);
+        lw.bcx.def_var(lw.entry.regs_full[a + 2], ctrl);
     }
     // as for ForLoop: continue at the loop body, which is
     // the trace head only when the trace was recorded from it

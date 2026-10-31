@@ -17,7 +17,7 @@ pub(super) fn checked_upval_read<E: Emit>(
         ..
     } = lw.h.rt;
     let bcx = &mut lw.bcx;
-    let checked = lw.upval_checked.entry(idx).or_insert_with(|| {
+    let checked = lw.upvals.checked.entry(idx).or_insert_with(|| {
         let var = bcx.declare_var(types::I64);
         let ss = bcx.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
             cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
@@ -37,8 +37,8 @@ pub(super) fn checked_upval_read<E: Emit>(
         return None;
     }
     // the first read of this upvalue made the check
-    if !lw.upval_check_done.contains(&idx) {
-        lw.upval_check_done.push(idx);
+    if !lw.upvals.check_done.contains(&idx) {
+        lw.upvals.check_done.push(idx);
         guard!(lw, pl, ok, i, rop.pc);
         let v = lw.bcx.ins().stack_load(types::I64, types::I64, ss, 0);
         lw.bcx.def_var(var, v);
@@ -101,7 +101,9 @@ pub(super) fn frame_upval_read<E: Emit>(
         upval_of_checked_id,
         ..
     } = lw.h.rt;
-    let cl = lw.bcx.use_var(lw.regs_full[pl.frame_func[i] as usize]);
+    let cl = lw
+        .bcx
+        .use_var(lw.entry.regs_full[pl.frame_func[i] as usize]);
     let idx_arg = lw.bcx.ins().iconst(types::I64, i64::from(idx));
     let ss = lw
         .bcx
