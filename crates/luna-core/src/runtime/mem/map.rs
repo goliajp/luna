@@ -162,7 +162,7 @@ impl<K: Copy + Eq + Hash, V: Copy> LMap<K, V> {
     /// left as it was, or not added), with no memory error to return: see
     /// `oom_abort`.
     #[inline]
-    pub fn update_or_abort(&mut self, k: K, f: impl FnOnce(Option<V>) -> Option<V>) {
+    pub(crate) fn update_or_abort(&mut self, k: K, f: impl FnOnce(Option<V>) -> Option<V>) {
         let h = word_hash(&k);
         let mut free = None;
         if !self.slots.is_empty() {
