@@ -169,7 +169,7 @@ pub(crate) fn reset_errno(vm: &Vm) {
 
 /// `luaL_fileresult` for success.
 pub(super) fn file_ok(vm: &mut Vm, fs: u32) -> Result<u32, LuaError> {
-    vm.nat_ret(fs, &[Value::Bool(true)])
+    vm.nat_ret1(fs, Value::Bool(true))
 }
 
 /// `luaL_execresult` on a waited-for child (5.2+): `(true|nil, "exit"|

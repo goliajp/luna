@@ -54,7 +54,7 @@ pub(super) fn nat_newproxy<const PRE: bool>(
         // setmetatable time; that's gated by version when needed.
         vm.heap.register_finalizable_userdata(u);
     }
-    vm.nat_ret(fs, &[Value::Userdata(u)])
+    vm.nat_ret1(fs, Value::Userdata(u))
 }
 
 /// PUC 5.1 `gcinfo()` — memory in use, in KB (an integer in PUC, which had
@@ -62,7 +62,7 @@ pub(super) fn nat_newproxy<const PRE: bool>(
 /// `collectgarbage("count")`. gc.lua 5.1 :88 uses it as a loop guard.
 pub(super) fn nat_gcinfo(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let kb = (vm.gc_count_bytes() as f64 / 1024.0).floor() as i64;
-    vm.nat_ret(fs, &[Value::Int(kb)])
+    vm.nat_ret1(fs, Value::Int(kb))
 }
 
 /// What PUC 5.1's `getfunc` finds for argument 1 of `getfenv`/`setfenv`.
@@ -147,7 +147,7 @@ pub(super) fn nat_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     let env_idx = env_upvalue(cl)
         .ok_or_else(|| raise_str(vm, "'setfenv' cannot change environment of given object"))?;
     vm.try_set_closure_env(cl, env_idx, env)?;
-    vm.nat_ret(fs, &[Value::Closure(cl)])
+    vm.nat_ret1(fs, Value::Closure(cl))
 }
 
 /// PUC 5.1 `getfenv(f|level)`: the env of the Lua function `f` (or of the
@@ -164,5 +164,5 @@ pub(super) fn nat_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
         },
         FenvTarget::C => Value::Table(vm.globals()),
     };
-    vm.nat_ret(fs, &[env])
+    vm.nat_ret1(fs, env)
 }

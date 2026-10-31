@@ -50,7 +50,7 @@ fn g_write(vm: &mut Vm, fs: u32, u: Gc<Userdata>, args: Args, first: u32) -> Res
         Some(e) => file_fail(vm, fs, None, &e),
         // 5.1 reports success as true; 5.2+ return the file
         None if v == LuaVersion::Lua51 => file_ok(vm, fs),
-        None => vm.nat_ret(fs, &[Value::Userdata(u)]),
+        None => vm.nat_ret1(fs, Value::Userdata(u)),
     }
 }
 
@@ -107,8 +107,8 @@ pub(super) fn f_seek(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     reset_errno(vm);
     match seek_stream(u, op, offset) {
         // ≤5.2 has one number type: `lua_pushnumber(ftell(f))`
-        Ok(pos) if vm.version() <= LuaVersion::Lua52 => vm.nat_ret(fs, &[Value::Float(pos as f64)]),
-        Ok(pos) => vm.nat_ret(fs, &[Value::Int(pos)]),
+        Ok(pos) if vm.version() <= LuaVersion::Lua52 => vm.nat_ret1(fs, Value::Float(pos as f64)),
+        Ok(pos) => vm.nat_ret1(fs, Value::Int(pos)),
         Err(e) => file_fail(vm, fs, None, &e),
     }
 }

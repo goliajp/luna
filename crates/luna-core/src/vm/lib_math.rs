@@ -64,7 +64,7 @@ fn m_abs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Value::Int(i) => Value::Int(i.wrapping_abs()),
         _ => Value::Float(argcheck::check_number(vm, a, 0)?.abs()),
     };
-    vm.nat_ret(fs, &[v])
+    vm.nat_ret1(fs, v)
 }
 
 /// `math.floor` / `math.ceil`: 5.3+ returns an integer when the result fits;
@@ -82,7 +82,7 @@ fn round_with(vm: &mut Vm, fs: u32, nargs: u32, op: fn(f64) -> f64) -> Result<u3
             }
         }
     };
-    vm.nat_ret(fs, &[v])
+    vm.nat_ret1(fs, v)
 }
 
 fn m_floor(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -99,7 +99,7 @@ macro_rules! float_fn {
             let x = argcheck::check_number(vm, Args::new(fs, nargs), 0)?;
             #[allow(clippy::redundant_closure_call)]
             let v = Value::Float(($op)(x));
-            vm.nat_ret(fs, &[v])
+            vm.nat_ret1(fs, v)
         }
     };
 }
@@ -125,7 +125,7 @@ fn m_deg(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         x * (180.0 / std::f64::consts::PI)
     };
-    vm.nat_ret(fs, &[Value::Float(r)])
+    vm.nat_ret1(fs, Value::Float(r))
 }
 
 float_fn!(m_rad, |x: f64| x * (std::f64::consts::PI / 180.0));
@@ -148,7 +148,7 @@ fn m_ldexp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         (m, argcheck::check_int(vm, a, 1)?)
     };
     let r = cerrno::ldexp_applied(m, ldexp(m, e.into()));
-    vm.nat_ret(fs, &[Value::Float(r)])
+    vm.nat_ret1(fs, Value::Float(r))
 }
 
 fn m_atan(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -160,19 +160,19 @@ fn m_atan(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         y.atan2(argcheck::opt_number(vm, a, 1, 1.0)?)
     };
-    vm.nat_ret(fs, &[Value::Float(r)])
+    vm.nat_ret1(fs, Value::Float(r))
 }
 
 fn m_atan2(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let (y, x) = two_numbers(vm, a, true)?;
-    vm.nat_ret(fs, &[Value::Float(y.atan2(x))])
+    vm.nat_ret1(fs, Value::Float(y.atan2(x)))
 }
 
 fn m_pow(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let (x, y) = two_numbers(vm, a, vm.version() == V::Lua51)?;
-    vm.nat_ret(fs, &[Value::Float(cerrno::pow(x, y))])
+    vm.nat_ret1(fs, Value::Float(cerrno::pow(x, y)))
 }
 
 /// Arguments 1 and 2 as numbers, checked in the order the compiler
@@ -207,7 +207,7 @@ fn m_log(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             lx / log(base)
         }
     };
-    vm.nat_ret(fs, &[Value::Float(r)])
+    vm.nat_ret1(fs, Value::Float(r))
 }
 
 fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -222,10 +222,10 @@ fn m_fmod(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             -1 => 0,
             _ => x % d,
         };
-        return vm.nat_ret(fs, &[Value::Int(v)]);
+        return vm.nat_ret1(fs, Value::Int(v));
     }
     let (x, y) = two_numbers(vm, a, true)?;
-    vm.nat_ret(fs, &[Value::Float(cerrno::fmod(x, y))])
+    vm.nat_ret1(fs, Value::Float(cerrno::fmod(x, y)))
 }
 
 fn m_modf(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -267,7 +267,7 @@ fn m_tointeger(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             Value::Nil
         }
     };
-    vm.nat_ret(fs, &[v])
+    vm.nat_ret1(fs, v)
 }
 
 fn m_type<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -277,14 +277,14 @@ fn m_type<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         Value::Float(_) => vm.api_push_string::<PRE>(b"float")?,
         _ => Value::Nil,
     };
-    vm.nat_ret(fs, &[v])
+    vm.nat_ret1(fs, v)
 }
 
 fn m_ult(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let x = argcheck::check_integer(vm, a, 0)?;
     let y = argcheck::check_integer(vm, a, 1)?;
-    vm.nat_ret(fs, &[Value::Bool((x as u64) < (y as u64))])
+    vm.nat_ret1(fs, Value::Bool((x as u64) < (y as u64)))
 }
 
 fn m_max(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

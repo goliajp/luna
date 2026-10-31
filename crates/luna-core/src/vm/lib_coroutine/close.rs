@@ -28,7 +28,7 @@ pub(crate) fn co_close(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
                 let e = death_value(vm, e);
                 vm.nat_ret(fs, &[Value::Bool(false), e])
             }
-            Ok(None) => vm.nat_ret(fs, &[Value::Bool(true)]),
+            Ok(None) => vm.nat_ret1(fs, Value::Bool(true)),
             Err(e) => {
                 let e = death_value(vm, e.0);
                 vm.nat_ret(fs, &[Value::Bool(false), e])

@@ -90,13 +90,13 @@ fn is_function(vm: &Vm, a: Args, i: u32) -> bool {
 
 fn d_getregistry(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     let r = vm.registry.map(Value::Table).unwrap_or(Value::Nil);
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 fn d_getmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = check_any(vm, Args::new(fs, nargs), 0)?;
     let mt = vm.metatable_of(v).map(Value::Table).unwrap_or(Value::Nil);
-    vm.nat_ret(fs, &[mt])
+    vm.nat_ret1(fs, mt)
 }
 
 fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -130,7 +130,7 @@ fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else {
         v
     };
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 fn d_getuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -140,7 +140,7 @@ fn d_getuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             Value::Userdata(u) if !a.is_none(0) => vm.host_uservalue(u, 1).unwrap_or(Value::Nil),
             _ => Value::Nil,
         };
-        return vm.nat_ret(fs, &[r]);
+        return vm.nat_ret1(fs, r);
     }
     // 5.4+: user value `n` of a full userdata and `true`, or nil alone when
     // it has no such value
@@ -153,7 +153,7 @@ fn d_getuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     };
     match found {
         Some(v) => vm.nat_ret(fs, &[v, Value::Bool(true)]),
-        None => vm.nat_ret(fs, &[Value::Nil]),
+        None => vm.nat_ret1(fs, Value::Nil),
     }
 }
 
@@ -188,9 +188,9 @@ fn d_setuservalue(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let set = usize::try_from(n).is_ok_and(|n| vm.host_set_uservalue(u, n, value));
     if !set {
         // `lua_setiuservalue` failed: no such user value
-        return vm.nat_ret(fs, &[Value::Nil]);
+        return vm.nat_ret1(fs, Value::Nil);
     }
-    vm.nat_ret(fs, &[Value::Userdata(u)])
+    vm.nat_ret1(fs, Value::Userdata(u))
 }
 
 /// PUC `db_debug`: read commands from stdin (in 250-byte `fgets` chunks),
@@ -263,7 +263,7 @@ fn run_debug_command(vm: &mut Vm, line: &[u8]) -> Result<(), Vec<u8>> {
 fn d_setcstacklimit(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     check_int(vm, Args::new(fs, nargs), 0)?;
     // PUC 5.4.9's `lua_setcstacklimit` is a stub that returns LUAI_MAXCCALLS
-    vm.nat_ret(fs, &[Value::Int(200)])
+    vm.nat_ret1(fs, Value::Int(200))
 }
 
 /// PUC 5.1 `debug.setfenv(o, env)`: replace the environment of a function,
@@ -308,7 +308,7 @@ fn d_setfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             ));
         }
     }
-    vm.nat_ret(fs, &[o])
+    vm.nat_ret1(fs, o)
 }
 
 /// PUC 5.1 `debug.getfenv(o)`: the environment of a function, thread or
@@ -331,5 +331,5 @@ fn d_getfenv(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         Value::Coro(_) | Value::Native(_) | Value::Userdata(_) => Value::Table(vm.globals()),
         _ => Value::Nil,
     };
-    vm.nat_ret(fs, &[env])
+    vm.nat_ret1(fs, env)
 }

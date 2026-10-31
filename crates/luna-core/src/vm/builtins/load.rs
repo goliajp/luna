@@ -256,7 +256,7 @@ fn loaded(
                 let env = a.get(vm, 3);
                 vm.upvalue_set_value(cl, 0, env);
             }
-            vm.nat_ret(a.fs, &[Value::Closure(cl)])
+            vm.nat_ret1(a.fs, Value::Closure(cl))
         }
         Err(e) => {
             // PUC formats the syntax error's source prefix via `luaO_chunkid`

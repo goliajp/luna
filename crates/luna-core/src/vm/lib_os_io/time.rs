@@ -140,7 +140,7 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     let a = Args::new(fs, nargs);
     if a.is_none_or_nil(vm, 0) {
         let v = time_value(vm, now());
-        return vm.nat_ret(fs, &[v]);
+        return vm.nat_ret1(fs, v);
     }
     let t = argcheck::check_table(vm, a, 0)?;
     vm.native_settop(1);
@@ -199,9 +199,9 @@ pub(super) fn os_time(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     match secs.filter(|&s| s != -1) {
         Some(s) => {
             let r = time_value(vm, s);
-            vm.nat_ret(fs, &[r])
+            vm.nat_ret1(fs, r)
         }
-        None if v <= LuaVersion::Lua52 => vm.nat_ret(fs, &[Value::Nil]),
+        None if v <= LuaVersion::Lua52 => vm.nat_ret1(fs, Value::Nil),
         None => Err(raise_str(
             vm,
             "time result cannot be represented in this installation",

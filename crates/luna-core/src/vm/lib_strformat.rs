@@ -187,7 +187,7 @@ fn format<const PRE: bool>(
         b.take().expect("a begun buffer").finish::<PRE>(vm, &out)?
     };
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[Value::Str(s)])
+    vm.nat_ret1(fs, Value::Str(s))
 }
 
 /// Whether the item whose specification starts at `i` is a `%f` that

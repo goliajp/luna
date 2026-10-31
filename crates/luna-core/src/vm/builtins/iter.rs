@@ -16,7 +16,7 @@ pub(super) fn nat_next(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     }
     match t.next(k) {
         Ok(Some((k, v))) => vm.nat_ret(fs, &[k, v]),
-        Ok(None) => vm.nat_ret(fs, &[Value::Nil]),
+        Ok(None) => vm.nat_ret1(fs, Value::Nil),
         Err(_) => Err(bad_key(vm, nargs)),
     }
 }
@@ -101,7 +101,7 @@ pub(crate) fn ipairs_iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     let held = [Value::Int(next_i); 2];
     let v = vm.index_value_holding(tv, Value::Int(next_i), &held[..extra])?;
     if v.is_nil() {
-        vm.nat_ret(fs, &[Value::Nil])
+        vm.nat_ret1(fs, Value::Nil)
     } else {
         vm.nat_ret(fs, &[Value::Int(next_i), v])
     }
@@ -121,7 +121,7 @@ fn ipairs_iter_raw(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     } else if vm.version() == LuaVersion::Lua51 {
         vm.nat_ret(fs, &[])
     } else {
-        vm.nat_ret(fs, &[Value::Nil])
+        vm.nat_ret1(fs, Value::Nil)
     }
 }
 

@@ -9,7 +9,7 @@ pub(crate) fn nat_tonumber(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     }
     if a.is_none_or_nil(vm, 1) {
         let out = std_tonumber(vm, a)?;
-        return vm.nat_ret(fs, &[out]);
+        return vm.nat_ret1(fs, out);
     }
     let out = if vm.version() == LuaVersion::Lua52 {
         // 5.2: the numeral may be given as a number; the base is a C int;
@@ -48,7 +48,7 @@ pub(crate) fn nat_tonumber(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
             None => Value::Nil,
         }
     };
-    vm.nat_ret(fs, &[out])
+    vm.nat_ret1(fs, out)
 }
 
 /// `tonumber(v)` with no base on 5.2+: a number as is, a convertible string
@@ -134,7 +134,7 @@ fn tonumber_51(vm: &mut Vm, a: Args) -> Result<u32, LuaError> {
             },
             _ => Value::Nil,
         };
-        return vm.nat_ret(a.fs, &[out]);
+        return vm.nat_ret1(a.fs, out);
     }
     let s = argcheck::check_string(vm, a, 0)?;
     if !(2..=36).contains(&base) {
@@ -144,7 +144,7 @@ fn tonumber_51(vm: &mut Vm, a: Args) -> Result<u32, LuaError> {
         Some(n) => Value::Float(n as f64),
         None => Value::Nil,
     };
-    vm.nat_ret(a.fs, &[out])
+    vm.nat_ret1(a.fs, out)
 }
 
 /// What 5.1's `tonumber(s, base)` accepts: C `strtoul` on the string as a C

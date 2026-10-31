@@ -76,7 +76,7 @@ pub(crate) fn s_pack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     }
     let r = vm.str_value(&out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 pub(crate) fn s_packsize(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -102,7 +102,7 @@ pub(crate) fn s_packsize(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             return Err(arg_error(vm, 1, "variable-length format"));
         }
     }
-    vm.nat_ret(fs, &[Value::Int(totalsize as i64)])
+    vm.nat_ret1(fs, Value::Int(totalsize as i64))
 }
 
 pub(crate) fn s_unpack(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {

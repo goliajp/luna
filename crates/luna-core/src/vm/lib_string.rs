@@ -45,7 +45,7 @@ fn start_pos(v: LuaVersion, pos: i64) -> i64 {
 
 fn s_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let s = argcheck::check_string(vm, Args::new(fs, nargs), 0)?;
-    vm.nat_ret(fs, &[Value::Int(s.len() as i64)])
+    vm.nat_ret1(fs, Value::Int(s.len() as i64))
 }
 
 fn s_upper<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -55,7 +55,7 @@ fn s_upper<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lua
     out.make_ascii_uppercase();
     let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 fn s_lower<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -65,7 +65,7 @@ fn s_lower<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, Lua
     out.make_ascii_lowercase();
     let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 fn s_reverse<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -75,7 +75,7 @@ fn s_reverse<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
     out.reverse();
     let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 /// The longest string the library builds (1 GiB). Past each dialect's own
@@ -109,7 +109,7 @@ fn s_rep<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
         } else {
             vm.api_push_string::<PRE>(b"")?
         };
-        return vm.nat_ret(fs, &[r]);
+        return vm.nat_ret1(fs, r);
     }
     let n = n as u128;
     let total = rep_size(vm, n, l, lsep)?;
@@ -140,7 +140,7 @@ fn s_rep<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     }
     let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 /// The size of `n` copies of `l` bytes with `lsep` between them, under
@@ -189,7 +189,7 @@ fn s_byte(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     }
     let bytes = &s.as_bytes()[(posi - 1) as usize..pose as usize];
     if let [b] = bytes {
-        return vm.nat_ret(fs, &[Value::Int(i64::from(*b))]);
+        return vm.nat_ret1(fs, Value::Int(i64::from(*b)));
     }
     argcheck::check_stack(vm, a, bytes.len() as i64, "string slice too long")?;
     let n = bytes.len();
@@ -229,7 +229,7 @@ fn s_char<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     }
     let r = vm.buffer_result::<PRE>(&out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }
 
 fn s_dump<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -263,5 +263,5 @@ fn s_dump<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         bytes
     };
     let r = vm.api_push_string::<PRE>(&bytes)?;
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }

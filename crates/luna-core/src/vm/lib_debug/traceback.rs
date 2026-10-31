@@ -23,11 +23,11 @@ pub(super) fn d_traceback(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
     if msg.is_none() && !a.is_none_or_nil(vm, arg) {
         // a message that is not a string is returned untouched
         let m = a.get(vm, arg);
-        return vm.nat_ret(fs, &[m]);
+        return vm.nat_ret1(fs, m);
     }
     let level = opt_integer(vm, a, arg + 1, default_level)? as i32 as i64;
     let s = vm.puc_traceback(co, msg.as_deref(), level)?;
-    vm.nat_ret(fs, &[Value::Str(s)])
+    vm.nat_ret1(fs, Value::Str(s))
 }
 
 /// PUC 5.1 `db_errorfb`, which works on the raw argument stack: a numeric
@@ -56,8 +56,8 @@ fn traceback_51(
     {
         // `return 1` hands back whatever is on top
         let top = *stack.last().expect("non-empty");
-        return vm.nat_ret(fs, &[top]);
+        return vm.nat_ret1(fs, top);
     }
     let r = vm.puc_errorfb(co, stack, level)?;
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }

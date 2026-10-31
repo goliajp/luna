@@ -175,9 +175,9 @@ pub(crate) fn nat_loadfile(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
                 let env = a.get(vm, 2);
                 vm.upvalue_set_value(cl, 0, env);
             }
-            vm.nat_ret(fs, &[Value::Closure(cl)])
+            vm.nat_ret1(fs, Value::Closure(cl))
         }
-        Ok(other) => vm.nat_ret(fs, &[other]),
+        Ok(other) => vm.nat_ret1(fs, other),
         Err(msg) => vm.nat_ret(fs, &[Value::Nil, msg]),
     }
 }

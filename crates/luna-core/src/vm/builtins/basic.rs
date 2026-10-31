@@ -5,7 +5,7 @@ use super::*;
 pub(super) fn nat_type<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let v = argcheck::check_any(vm, Args::new(fs, nargs), 0)?;
     let s = vm.api_push_string::<PRE>(v.type_name().as_bytes())?;
-    vm.nat_ret(fs, &[s])
+    vm.nat_ret1(fs, s)
 }
 
 pub(super) fn nat_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -105,7 +105,7 @@ pub(super) fn nat_rawget(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let t = argcheck::check_table(vm, a, 0)?;
     let k = argcheck::check_any(vm, a, 1)?;
     let v = t.get(k);
-    vm.nat_ret(fs, &[v])
+    vm.nat_ret1(fs, v)
 }
 
 pub(super) fn nat_rawset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -117,14 +117,14 @@ pub(super) fn nat_rawset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     // `lua_rawset` → `luaG_runerror`), raised while rawset runs, so it
     // carries no position
     vm.raw_set(t, k, v)?;
-    vm.nat_ret(fs, &[Value::Table(t)])
+    vm.nat_ret1(fs, Value::Table(t))
 }
 
 pub(super) fn nat_rawequal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let x = argcheck::check_any(vm, a, 0)?;
     let y = argcheck::check_any(vm, a, 1)?;
-    vm.nat_ret(fs, &[Value::Bool(x.raw_eq(y))])
+    vm.nat_ret1(fs, Value::Bool(x.raw_eq(y)))
 }
 
 pub(super) fn nat_rawlen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -134,7 +134,7 @@ pub(super) fn nat_rawlen(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         Value::Str(s) => s.len() as i64,
         _ => return Err(argcheck::arg_expected(vm, a, 0, "table or string")),
     };
-    vm.nat_ret(fs, &[Value::Int(n)])
+    vm.nat_ret1(fs, Value::Int(n))
 }
 
 pub(super) fn nat_setmetatable<const PRE: bool>(
@@ -165,7 +165,7 @@ pub(super) fn nat_setmetatable<const PRE: bool>(
     // register for finalization if the new metatable carries `__gc` (PUC marks
     // the object finalizable at setmetatable time)
     vm.check_finalizer(t)?;
-    vm.nat_ret(fs, &[Value::Table(t)])
+    vm.nat_ret1(fs, Value::Table(t))
 }
 
 pub(super) fn nat_getmetatable<const PRE: bool>(
@@ -179,10 +179,10 @@ pub(super) fn nat_getmetatable<const PRE: bool>(
     vm.metafield_check::<PRE>(v, b"__metatable")?;
     let protected = vm.get_mm(v, Mm::Metatable);
     if !protected.is_nil() {
-        return vm.nat_ret(fs, &[protected]);
+        return vm.nat_ret1(fs, protected);
     }
     let mt = vm.metatable_of(v).map(Value::Table).unwrap_or(Value::Nil);
-    vm.nat_ret(fs, &[mt])
+    vm.nat_ret1(fs, mt)
 }
 
 pub(super) fn nat_select(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -191,7 +191,7 @@ pub(super) fn nat_select(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         Value::Int(i) if vm.version() >= LuaVersion::Lua53 => i,
         // PUC tests only the first character: `select("#x", ...)` counts too.
         Value::Str(s) if s.as_bytes().first() == Some(&b'#') => {
-            return vm.nat_ret(fs, &[Value::Int(nargs as i64 - 1)]);
+            return vm.nat_ret1(fs, Value::Int(nargs as i64 - 1));
         }
         // ≤5.2 reads the index with `luaL_checkint`, a C int.
         _ if vm.version() <= LuaVersion::Lua52 => argcheck::check_int(vm, a, 0)? as i64,

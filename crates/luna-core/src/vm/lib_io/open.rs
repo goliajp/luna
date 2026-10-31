@@ -106,7 +106,7 @@ pub(super) fn io_open(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError>
     match open_file(vm.crt_text, &name, &mode) {
         Ok(o) => {
             let u = opened(vm, o, false)?;
-            vm.nat_ret(fs, &[Value::Userdata(u)])
+            vm.nat_ret1(fs, Value::Userdata(u))
         }
         Err(e) => failed_handle(vm, |vm| file_fail(vm, fs, Some(&name), &e)),
     }
@@ -140,7 +140,7 @@ pub(super) fn io_tmpfile(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaEr
         mode: msvc::TextMode::Ansi,
     };
     let u = opened(vm, o, false)?;
-    vm.nat_ret(fs, &[Value::Userdata(u)])
+    vm.nat_ret1(fs, Value::Userdata(u))
 }
 
 #[derive(Clone, Copy)]
@@ -200,7 +200,7 @@ fn g_iofile(vm: &mut Vm, fs: u32, nargs: u32, which: Io) -> Result<u32, LuaError
         set_default_file(vm, which, u)?;
     }
     let cur = default_file(vm, which).map_or(Value::Nil, Value::Userdata);
-    vm.nat_ret(fs, &[cur])
+    vm.nat_ret1(fs, cur)
 }
 
 /// `opencheck` (5.2+) / 5.1's `fileerror`: open or raise.

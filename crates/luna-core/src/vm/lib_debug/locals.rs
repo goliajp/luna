@@ -89,7 +89,7 @@ pub(super) fn d_getlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             Some(nm) => super::push_name(vm, src, nm.as_bytes())?,
             None => Value::Nil,
         };
-        return vm.nat_ret(fs, &[r]);
+        return vm.nat_ret1(fs, r);
     }
     let level = check_int(vm, a, arg)?;
     let level = stack_level(vm, co, level, arg + 1)?;
@@ -110,7 +110,7 @@ fn getlocal_result(
             let nm = super::push_name(vm, src, name.as_bytes())?;
             vm.nat_ret(fs, &[nm, val])
         }
-        None => vm.nat_ret(fs, &[Value::Nil]),
+        None => vm.nat_ret1(fs, Value::Nil),
     }
 }
 
@@ -164,5 +164,5 @@ pub(super) fn d_setlocal(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         Some(nm) => super::push_name(vm, src, nm.as_bytes())?,
         None => Value::Nil,
     };
-    vm.nat_ret(fs, &[r])
+    vm.nat_ret1(fs, r)
 }

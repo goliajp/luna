@@ -122,7 +122,7 @@ pub(super) fn t_remove(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
         pos += 1;
     }
     tab_seti_held(vm, tv, pos, Value::Nil, &[removed, Value::Nil])?;
-    vm.nat_ret(fs, &[removed])
+    vm.nat_ret1(fs, removed)
 }
 
 /// `table.unpack`, and 5.1's global `unpack` (`luaB_unpack`).

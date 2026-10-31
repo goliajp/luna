@@ -117,7 +117,7 @@ fn u_char<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
         let s = vm.pushfstring(b"%U", &[FmtArg::U(code as u32)])?;
         vm.api_check_after::<PRE>(Value::Str(s))?;
         let Some(b) = b.as_mut() else {
-            return vm.nat_ret(fs, &[Value::Str(s)]);
+            return vm.nat_ret1(fs, Value::Str(s));
         };
         vm.buf_push(&mut out, s.as_bytes())?;
         b.add_value(vm, &out, s)?;
@@ -125,7 +125,7 @@ fn u_char<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     let b = b.expect("several arguments, or none");
     let s = b.finish::<PRE>(vm, &out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[Value::Str(s)])
+    vm.nat_ret1(fs, Value::Str(s))
 }
 
 fn u_codepoint(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -195,7 +195,7 @@ fn u_len(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             None => return vm.nat_ret(fs, &[Value::Nil, Value::Int(i + 1)]),
         }
     }
-    vm.nat_ret(fs, &[Value::Int(n)])
+    vm.nat_ret1(fs, Value::Int(n))
 }
 
 fn u_offset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -246,11 +246,11 @@ fn u_offset(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         }
     }
     if n != 0 {
-        return vm.nat_ret(fs, &[Value::Nil]);
+        return vm.nat_ret1(fs, Value::Nil);
     }
     let start = Value::Int(posi + 1);
     if v < LuaVersion::Lua55 {
-        return vm.nat_ret(fs, &[start]);
+        return vm.nat_ret1(fs, start);
     }
     // 5.5 also returns where the character ends
     if at(bytes, posi as usize) & 0x80 != 0 {

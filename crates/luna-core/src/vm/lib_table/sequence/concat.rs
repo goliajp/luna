@@ -80,7 +80,7 @@ fn concat<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     }
     let s = b.finish::<PRE>(vm, &out)?;
     vm.recycle_buf(out);
-    vm.nat_ret(fs, &[Value::Str(s)])
+    vm.nat_ret1(fs, Value::Str(s))
 }
 
 fn concat_field(

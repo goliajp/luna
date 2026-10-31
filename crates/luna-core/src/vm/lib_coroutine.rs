@@ -38,7 +38,7 @@ fn check_body(vm: &mut Vm, a: Args) -> Result<Value, LuaError> {
 
 fn co_create(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let co = new_body_coro(vm, Args::new(fs, nargs))?;
-    vm.nat_ret(fs, &[Value::Coro(co)])
+    vm.nat_ret1(fs, Value::Coro(co))
 }
 
 /// The coroutine of `create`/`wrap` over argument 1: 5.1 makes the thread
@@ -239,7 +239,7 @@ fn co_status<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
     let co = check_co(vm, Args::new(fs, nargs))?;
     let s = vm.coro_status_str(co);
     let v = vm.api_push_string::<PRE>(s.as_bytes())?;
-    vm.nat_ret(fs, &[v])
+    vm.nat_ret1(fs, v)
 }
 
 fn co_running(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
@@ -249,7 +249,7 @@ fn co_running(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
     // handle and the is-main flag.
     if vm.version() <= LuaVersion::Lua51 {
         let v = if is_main { Value::Nil } else { thread };
-        return vm.nat_ret(fs, &[v]);
+        return vm.nat_ret1(fs, v);
     }
     vm.nat_ret(fs, &[thread, Value::Bool(is_main)])
 }
@@ -263,5 +263,5 @@ fn co_isyieldable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
         None
     };
     let y = vm.is_yieldable(co);
-    vm.nat_ret(fs, &[Value::Bool(y)])
+    vm.nat_ret1(fs, Value::Bool(y))
 }
