@@ -53,7 +53,7 @@ pub(crate) mod site {
 
 /// The strings found at each address, the newer first.
 #[derive(Default)]
-pub(crate) struct StrCache {
+pub(in crate::runtime::puc) struct StrCache {
     entries: Vec<(CStr, [Option<Gc<LuaStr>>; 2])>,
 }
 
@@ -103,7 +103,7 @@ impl Heap {
     /// PUC `luaS_new` of the C string at `at` holding `bytes`: from 5.3 a
     /// long string found in the cache at that address, else a new one,
     /// which the cache keeps there.
-    pub(in crate::runtime) fn intern_at(
+    pub(in crate::runtime::puc) fn intern_at(
         &mut self,
         at: CStr,
         bytes: &[u8],
@@ -124,7 +124,7 @@ impl Heap {
     /// `name` the Lua string whose characters it is, if any: that string
     /// itself where it is interned (5.1 interns every string), else a long
     /// string through the cache.
-    pub(in crate::runtime) fn chunk_name(
+    pub(in crate::runtime::puc) fn chunk_name(
         &mut self,
         chunkname: &[u8],
         name: Option<Gc<LuaStr>>,

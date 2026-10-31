@@ -125,7 +125,7 @@ pub(in crate::runtime::puc) fn reserved_words(d: Dialect) -> &'static [&'static 
 }
 
 /// The sizes of what `lua_newstate` allocates that luna has no object for.
-pub(crate) struct BootSizes {
+pub(in crate::runtime::puc) struct BootSizes {
     /// the global state with the main thread
     pub lg: usize,
     /// the main thread's stack slots

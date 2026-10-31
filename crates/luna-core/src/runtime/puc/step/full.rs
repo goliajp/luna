@@ -6,7 +6,7 @@ use super::*;
 use crate::runtime::puc::for_heap::ShrinkAt;
 
 /// The objects made since the last safe point (see `Heap::young_len`).
-pub(crate) type Young = (Option<usize>, bool);
+pub(in crate::runtime::puc) type Young = (Option<usize>, bool);
 
 /// A full collection, a marking in progress dropped first; `emergency`
 /// with the young objects for one an allocation runs. Returns the number

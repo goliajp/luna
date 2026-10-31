@@ -12,12 +12,12 @@ mod order;
 
 /// In a string's `sub` byte: the string sweep took it off the count; the
 /// object sweep frees it without counting.
-pub(crate) const SWEPT: u8 = 0x10;
+pub(in crate::runtime::puc) const SWEPT: u8 = 0x10;
 
 /// The dead strings of PUC's string table by bucket, the next one the
 /// string sweep reaches, and those taken off the object list before it.
 #[derive(Default)]
-pub(in crate::runtime) struct StrtSweep {
+pub(in crate::runtime::puc) struct StrtSweep {
     /// the dead strings found, with their buckets
     found: Vec<(u32, *mut GcHeader)>,
     /// `found` by bucket in the first `len` places; the buffer only grows,

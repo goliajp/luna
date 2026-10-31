@@ -6,30 +6,15 @@
 use super::*;
 
 impl Marker {
-    /// 5.2 and 5.3 count a string's or a userdata's size as the work of
-    /// marking it.
+    /// The model's work for marking the leaf `h` (5.2 and 5.3).
     ///
     /// # Safety
     /// `h` heads an allocated object.
     #[cold]
     #[inline(never)]
     pub(super) unsafe fn count_leaf(&mut self, h: *mut GcHeader) {
-        // SAFETY: the caller's contract; the tag names the type
-        unsafe {
-            self.leaf_bytes += match (*h).tag {
-                // a string of luna's own is no string of PUC's
-                ObjTag::Str if (*h).sub & UNCOUNTED != 0 => 0,
-                ObjTag::Str => (self.leaf_hdr + (*(h as *const LuaStr)).len() + 1) as i64,
-                // one standing for PUC's has PUC's size
-                ObjTag::Userdata => (*(h as *const Userdata)).puc_size as i64,
-                // 5.2: an open one stays gray, counting nothing
-                ObjTag::Upvalue => match (*(h as *const crate::runtime::function::Upvalue)).state {
-                    crate::runtime::function::UpvalState::Closed(_) => self.leaf_upval as i64,
-                    _ => 0,
-                },
-                _ => 0,
-            };
-        }
+        // SAFETY: the caller's contract
+        self.leaf_bytes += unsafe { self.rules.leaf_work(h) };
     }
 
     /// Whether PUC marks `h` with what it holds as soon as it marks it.
@@ -82,7 +67,7 @@ impl Marker {
                 if !is_white(f) {
                     return;
                 }
-                if self.leaf_hdr != 0 {
+                if self.rules.counts_leaf_work() {
                     self.count_leaf(n);
                 }
                 if let Some(s) = &mut self.sizer {
@@ -99,7 +84,7 @@ impl Marker {
     /// through the slow path, as `header` leaves it.
     pub(crate) fn mark_strings<'a>(&mut self, strs: impl Iterator<Item = &'a Gc<LuaStr>>) {
         let plain = !self.verify.active();
-        if !plain || self.leaf_hdr != 0 {
+        if !plain || self.rules.counts_leaf_work() {
             for &s in strs {
                 self.mark(s);
             }
@@ -115,7 +100,7 @@ impl Marker {
                         z.marked += z.size(h);
                     }
                     (*h).flags = (f & !WHITE_BITS) | BLACK | SLOW;
-                    (*h).cls &= !model::KEPT;
+                    model::string_held(&mut *h);
                 }
             }
         }

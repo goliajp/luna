@@ -1,5 +1,5 @@
-//! What the heap's marking asks of the model: which objects are luna's
-//! own, and the children of the model's records.
+//! What the heap's marking asks of the model: the work of marking a leaf,
+//! which objects are luna's own, and the children of the model's records.
 
 use super::*;
 use crate::runtime::function::NativeClosure;
@@ -49,6 +49,40 @@ impl Marker {
                         && matches!((*(h as *const Userdata)).payload, UserdataPayload::Empty)
                 }
                 _ => false,
+            }
+        }
+    }
+}
+
+impl HeapRules {
+    /// Whether marking a leaf counts work (5.2 and 5.3, `GCmemtrav`).
+    #[inline(always)]
+    pub(in crate::runtime) fn counts_leaf_work(&self) -> bool {
+        self.leaf_hdr != 0
+    }
+
+    /// The work of marking the leaf `h`: a string's size (PUC's
+    /// `sizelstring`), a userdata's PUC size, 5.2's closed upvalue; 0 for
+    /// anything of luna's own.
+    ///
+    /// # Safety
+    /// `h` heads an allocated object.
+    #[inline(always)]
+    pub(in crate::runtime) unsafe fn leaf_work(&self, h: *mut GcHeader) -> i64 {
+        // SAFETY: the caller's contract; the tag names the type
+        unsafe {
+            match (*h).tag {
+                // a string of luna's own is no string of PUC's
+                ObjTag::Str if (*h).sub & UNCOUNTED != 0 => 0,
+                ObjTag::Str => (self.leaf_hdr + (*(h as *const LuaStr)).len() + 1) as i64,
+                // one standing for PUC's has PUC's size
+                ObjTag::Userdata => (*(h as *const Userdata)).puc_size as i64,
+                // 5.2: an open one stays gray, counting nothing
+                ObjTag::Upvalue => match (*(h as *const crate::runtime::function::Upvalue)).state {
+                    crate::runtime::function::UpvalState::Closed(_) => self.leaf_upval as i64,
+                    _ => 0,
+                },
+                _ => 0,
             }
         }
     }

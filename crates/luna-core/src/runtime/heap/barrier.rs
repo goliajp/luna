@@ -66,7 +66,7 @@ impl Heap {
             self.count_marked(ch);
             if (*ch).tag == ObjTag::Str {
                 (*ch).flags = (*ch).with_slow((cf & !COLOR_BITS) | BLACK);
-                (*ch).cls &= !model::KEPT;
+                model::string_held(&mut *ch);
             } else {
                 (*ch).flags = (*ch).with_slow(cf & !WHITE_BITS);
                 self.push_gray(ch);

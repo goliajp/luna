@@ -284,7 +284,7 @@ impl Heap {
         let c = unsafe { g.as_mut() };
         c.init_upvals_ptr();
         if env {
-            c.hdr.sub |= crate::runtime::puc::ENV51;
+            c.hdr.sub |= crate::runtime::puc::for_heap::ENV51;
         }
         Ok(g)
     }

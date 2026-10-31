@@ -8,7 +8,7 @@ use crate::runtime::puc::records::parse::ParseFrame;
 /// How many parser frames were open at some point, to return to with
 /// [`Heap::restore_parse_frames`].
 #[must_use]
-pub(in crate::runtime) struct ParseMark(usize);
+pub(in crate::runtime::puc) struct ParseMark(usize);
 
 /// A parser frame open for a collection step (see [`Heap::open_parse_frame`]).
 #[must_use = "the frame stays open until the token goes back to `Heap::close_parse_frame`"]
@@ -21,7 +21,7 @@ pub(crate) struct LoadsHeld(bool);
 impl Heap {
     /// Mark the parser objects of the loads a collection step runs in the
     /// middle of: above their C functions' slots on PUC's stack.
-    pub(in crate::runtime) fn mark_load_slots(&self, m: &mut Marker) {
+    pub(in crate::runtime::puc) fn mark_load_slots(&self, m: &mut Marker) {
         let frames = std::mem::take(&mut m.lent.parse);
         for f in &frames {
             for &h in &f.slots {
@@ -34,7 +34,7 @@ impl Heap {
 
     /// How many stack slots the loads' parser objects take (see
     /// [`Heap::mark_load_slots`]).
-    pub(in crate::runtime) fn load_slots(&self) -> u32 {
+    pub(in crate::runtime::puc) fn load_slots(&self) -> u32 {
         self.puc
             .loads
             .parse
@@ -46,13 +46,13 @@ impl Heap {
     /// `frame` is the innermost load's view while a collection step runs
     /// in it, until the token goes back to [`Heap::close_parse_frame`].
     #[inline]
-    pub(in crate::runtime) fn open_parse_frame(&mut self, frame: ParseFrame) -> ParseOpen {
+    pub(in crate::runtime::puc) fn open_parse_frame(&mut self, frame: ParseFrame) -> ParseOpen {
         self.puc.loads.parse.push(frame);
         ParseOpen(())
     }
 
     #[inline]
-    pub(in crate::runtime) fn close_parse_frame(&mut self, _: ParseOpen) {
+    pub(in crate::runtime::puc) fn close_parse_frame(&mut self, _: ParseOpen) {
         self.puc.loads.parse.pop();
     }
 
@@ -70,77 +70,77 @@ impl Heap {
 
     /// The message of the load that just failed, made as PUC makes it.
     #[inline]
-    pub(in crate::runtime) fn set_load_msg(&mut self, m: Gc<LuaStr>) {
+    pub(in crate::runtime::puc) fn set_load_msg(&mut self, m: Gc<LuaStr>) {
         self.puc.loads.load_msg = Some(m);
     }
 
     /// The message [`Heap::set_load_msg`] left, if any, taken.
     #[inline]
-    pub(in crate::runtime) fn take_load_msg(&mut self) -> Option<Gc<LuaStr>> {
+    pub(in crate::runtime::puc) fn take_load_msg(&mut self) -> Option<Gc<LuaStr>> {
         self.puc.loads.load_msg.take()
     }
 
     /// The message [`Heap::set_load_msg`] left, if any.
     #[inline]
-    pub(in crate::runtime) fn load_msg(&self) -> Option<Gc<LuaStr>> {
+    pub(in crate::runtime::puc) fn load_msg(&self) -> Option<Gc<LuaStr>> {
         self.puc.loads.load_msg
     }
 
     /// The load about to run was checked for a collection already (or no
     /// more, `false`).
     #[inline]
-    pub(in crate::runtime) fn set_load_checked(&mut self, on: bool) {
+    pub(in crate::runtime::puc) fn set_load_checked(&mut self, on: bool) {
         self.puc.loads.load_checked = on;
     }
 
     /// Whether the load about to run was checked already; the mark taken.
     #[inline]
-    pub(in crate::runtime) fn take_load_checked(&mut self) -> bool {
+    pub(in crate::runtime::puc) fn take_load_checked(&mut self) -> bool {
         std::mem::take(&mut self.puc.loads.load_checked)
     }
 
     /// Whether the failed load's replay shrank the stack where
     /// `luaD_pcall` caught its error, now `on`.
     #[inline]
-    pub(in crate::runtime) fn load_caught(&mut self, on: bool) -> bool {
+    pub(in crate::runtime::puc) fn load_caught(&mut self, on: bool) -> bool {
         std::mem::replace(&mut self.puc.loads.load_caught, on)
     }
 
     /// A load that must not collect is running.
     #[inline]
-    pub(in crate::runtime) fn loads_held(&self) -> bool {
+    pub(in crate::runtime::puc) fn loads_held(&self) -> bool {
         self.puc.loads.load_holds
     }
 
     /// A load that must not collect starts, until the token is handed to
     /// [`Heap::release_loads`].
     #[inline]
-    pub(in crate::runtime) fn hold_loads(&mut self) -> LoadsHeld {
+    pub(in crate::runtime::puc) fn hold_loads(&mut self) -> LoadsHeld {
         LoadsHeld(std::mem::replace(&mut self.puc.loads.load_holds, true))
     }
 
     /// The load [`Heap::hold_loads`] started is over.
     #[inline]
-    pub(in crate::runtime) fn release_loads(&mut self, held: LoadsHeld) {
+    pub(in crate::runtime::puc) fn release_loads(&mut self, held: LoadsHeld) {
         self.puc.loads.load_holds = held.0;
     }
 
     /// 5.1's io library opening: its environments' records are on the
     /// stack (see `vm/opening/fenv51.rs`).
     #[inline]
-    pub(in crate::runtime) fn phantoms(&self) -> bool {
+    pub(in crate::runtime::puc) fn phantoms(&self) -> bool {
         self.puc.opening.phantoms
     }
 
     #[inline]
-    pub(in crate::runtime) fn set_phantoms(&mut self, on: bool) {
+    pub(in crate::runtime::puc) fn set_phantoms(&mut self, on: bool) {
         self.puc.opening.phantoms = on;
     }
 
     /// `s`, a string a library of PUC's keeps and luna's may not, kept
     /// alive (once, however often pinned).
     #[inline]
-    pub(in crate::runtime) fn pin(&mut self, s: Gc<LuaStr>) {
+    pub(in crate::runtime::puc) fn pin(&mut self, s: Gc<LuaStr>) {
         if !self
             .puc
             .records
@@ -154,13 +154,13 @@ impl Heap {
 
     /// Mark the strings [`Heap::pin`] keeps.
     #[inline]
-    pub(in crate::runtime) fn mark_pins(&self, m: &mut Marker) {
+    pub(in crate::runtime::puc) fn mark_pins(&self, m: &mut Marker) {
         m.mark_strings(self.puc.records.pins.iter());
     }
 
     /// Mark the message [`Heap::set_load_msg`] left.
     #[inline]
-    pub(in crate::runtime) fn mark_load_msg(&self, m: &mut Marker) {
+    pub(in crate::runtime::puc) fn mark_load_msg(&self, m: &mut Marker) {
         m.mark_strings(self.puc.loads.load_msg.iter());
     }
 }

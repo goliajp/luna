@@ -12,7 +12,7 @@ impl Heap {
 
 impl Env51 {
     /// How many of the records a sweep has not freed.
-    pub(in crate::runtime) fn live(&self) -> i64 {
+    pub(in crate::runtime::puc) fn live(&self) -> i64 {
         let live = |g: &Gen| (0..6).filter(|&k| !g.ph.with(k, |p| p.dead)).count() as i64;
         self.gens.iter().map(|g| live(g)).sum()
     }

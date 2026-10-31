@@ -23,7 +23,7 @@ impl Heap {
     /// allocated. For a table of PUC's luna has none for (a parser's,
     /// the registry PUC's state starts with): counted unless luna is
     /// building its own objects.
-    pub(in crate::runtime) fn acct_table_resize(
+    pub(in crate::runtime::puc) fn acct_table_resize(
         &mut self,
         old: (usize, usize),
         new: (usize, usize),
@@ -101,7 +101,7 @@ impl Heap {
     /// `t`, made while nothing was counted, is a table PUC's state starts
     /// with, which [`Heap::acct_boot`] counted in its place: counted from
     /// here on, as it grows and when it is freed.
-    pub(in crate::runtime) fn boot_table(
+    pub(in crate::runtime::puc) fn boot_table(
         t: Gc<crate::runtime::Table>,
     ) -> Gc<crate::runtime::Table> {
         // SAFETY: `t` is a live table; only its class byte is written
@@ -203,7 +203,7 @@ impl Heap {
     /// halved when a quarter of it is used (5.1: and it is past twice its
     /// minimum; 5.2: when less than half is), and 5.1's concatenation
     /// buffer halved past twice its minimum, 5.2's freed.
-    pub(in crate::runtime) fn acct_check_sizes(&mut self) {
+    pub(in crate::runtime::puc) fn acct_check_sizes(&mut self) {
         let d = self.puc.dialect;
         let (size, nuse) = (self.puc.records.strt_size, self.puc.records.strt_nuse);
         let shrink = match d {

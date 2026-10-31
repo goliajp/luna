@@ -212,14 +212,14 @@ impl Heap {
 
     /// Stop counting until the token is handed back.
     #[inline]
-    pub(in crate::runtime) fn counting_off(&mut self) -> CountingOff {
+    pub(in crate::runtime::puc) fn counting_off(&mut self) -> CountingOff {
         self.puc.count.silent += 1;
         CountingOff { back: false }
     }
 
     /// Count again what [`Heap::counting_off`] stopped.
     #[inline]
-    pub(in crate::runtime) fn counting_on(&mut self, mut off: CountingOff) {
+    pub(in crate::runtime::puc) fn counting_on(&mut self, mut off: CountingOff) {
         off.back = true;
         self.puc.count.silent -= 1;
     }
@@ -242,13 +242,13 @@ impl Heap {
     /// Count everything from here, also in the middle of what is not counted
     /// (an emergency collection): where it stood, to return to.
     #[inline]
-    pub(in crate::runtime) fn count_all(&mut self) -> CountingMark {
+    pub(in crate::runtime::puc) fn count_all(&mut self) -> CountingMark {
         CountingMark(std::mem::replace(&mut self.puc.count.silent, 0))
     }
 
     /// Back to where counting stood at `m`.
     #[inline]
-    pub(in crate::runtime) fn restore_counting(&mut self, m: CountingMark) {
+    pub(in crate::runtime::puc) fn restore_counting(&mut self, m: CountingMark) {
         self.puc.count.silent = m.0;
     }
 }

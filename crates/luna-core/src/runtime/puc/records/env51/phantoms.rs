@@ -5,7 +5,7 @@ use super::*;
 /// A `Gen`'s six records, in a block of their own that is reached only
 /// through the pointer kept here: the collector holds pointers to their
 /// headers, which a reference to the block taken later would invalidate.
-pub(crate) struct Phantoms(ptr::NonNull<Phantom>);
+pub(in crate::runtime::puc) struct Phantoms(ptr::NonNull<Phantom>);
 
 impl Phantoms {
     pub(super) fn new(ph: [Phantom; 6]) -> Phantoms {

@@ -138,7 +138,11 @@ impl Heap {
     /// marking, a black parent's white child is marked; in a sweep, a black
     /// parent not swept yet goes white instead (and nothing waits on a gray
     /// list for a cycle that has not started).
-    pub(in crate::runtime) fn parse_barrier(&mut self, parent: Gc<GcHeader>, child: Gc<GcHeader>) {
+    pub(in crate::runtime::puc) fn parse_barrier(
+        &mut self,
+        parent: Gc<GcHeader>,
+        child: Gc<GcHeader>,
+    ) {
         let (parent, child) = (parent.as_ptr(), child.as_ptr());
         // SAFETY: both are handles, so their objects are live; only flag
         // bytes are read and written
@@ -155,7 +159,7 @@ impl Heap {
     /// as PUC had it then, what luna's own prototype holds besides is
     /// marked too, without counting (PUC's barriers marked the rest as
     /// the parser added it).
-    pub(in crate::runtime) fn settle_parsed(&mut self, p: Gc<crate::runtime::Proto>) {
+    pub(in crate::runtime::puc) fn settle_parsed(&mut self, p: Gc<crate::runtime::Proto>) {
         let h = p.as_ptr() as *mut GcHeader;
         // SAFETY: a live prototype; only flag bytes are read and written
         unsafe {
@@ -185,7 +189,7 @@ impl Heap {
     /// The main closure `cl` of a load is built: when a step of this cycle
     /// traversed it as PUC had it (no upvalue yet), its upvalues are marked
     /// too.
-    pub(in crate::runtime) fn settle_closure(&mut self, cl: Gc<crate::runtime::LuaClosure>) {
+    pub(in crate::runtime::puc) fn settle_closure(&mut self, cl: Gc<crate::runtime::LuaClosure>) {
         for &uv in cl.upvals().iter() {
             self.barrier_new_upval(cl, uv);
         }

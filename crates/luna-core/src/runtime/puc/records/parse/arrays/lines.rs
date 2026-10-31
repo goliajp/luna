@@ -22,7 +22,7 @@ impl Heap {
     /// One instruction coded on `line` (`luaK_code`): the code array, then
     /// the line info (5.4+ `savelineinfo`, with its absolute entries).
     #[inline(always)]
-    pub(in crate::runtime) fn parser_code(&mut self, f: &mut FuncArrays, line: u32) {
+    pub(in crate::runtime::puc) fn parser_code(&mut self, f: &mut FuncArrays, line: u32) {
         self.parser_push(&mut f.code, ParserArray::Code);
         if matches!(self.puc.dialect, Dialect::L54 | Dialect::L55) {
             self.save_line(f, line);
@@ -32,7 +32,7 @@ impl Heap {
 
     /// The last instruction moved to `line` (5.4+ `luaK_fixline`: its line
     /// taken back and saved again).
-    pub(in crate::runtime) fn parser_fix(&mut self, f: &mut FuncArrays, line: u32) {
+    pub(in crate::runtime::puc) fn parser_fix(&mut self, f: &mut FuncArrays, line: u32) {
         if matches!(self.puc.dialect, Dialect::L54 | Dialect::L55) {
             f.unsave_line();
             self.save_line(f, line);
@@ -58,7 +58,7 @@ impl Heap {
 
     /// The last instruction taken back, with its line info (5.4+
     /// `removelastlineinfo`).
-    pub(in crate::runtime) fn parser_uncode(&mut self, f: &mut FuncArrays) {
+    pub(in crate::runtime::puc) fn parser_uncode(&mut self, f: &mut FuncArrays) {
         f.code.n -= 1;
         f.line.n -= 1;
         f.unsave_line();

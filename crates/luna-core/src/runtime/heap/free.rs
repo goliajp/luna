@@ -116,7 +116,7 @@ impl Heap {
         // SAFETY: the caller's contract; only the header is read
         unsafe {
             (*h).tag == ObjTag::Str
-                && (*h).sub & (EXTERNAL | puc::FIXED_EXT | model::SWEPT | UNCOUNTED) == 0
+                && (*h).sub & (EXTERNAL | model::STR_MODEL_BITS | UNCOUNTED) == 0
         }
     }
 

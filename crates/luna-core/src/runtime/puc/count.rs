@@ -40,7 +40,7 @@ impl Heap {
 
     /// A new object of `size` bytes.
     #[inline]
-    pub(in crate::runtime) fn acct_obj(&mut self, kind: PucKind, size: usize) {
+    pub(in crate::runtime::puc) fn acct_obj(&mut self, kind: PucKind, size: usize) {
         if !self.counting() {
             return;
         }
@@ -68,7 +68,7 @@ impl Heap {
     }
 
     /// An object made without counting is PUC's now: counted here.
-    pub(in crate::runtime) fn acct_promote_obj(
+    pub(in crate::runtime::puc) fn acct_promote_obj(
         &mut self,
         h: Gc<GcHeader>,
         kind: PucKind,
@@ -87,7 +87,7 @@ impl Heap {
 
     /// A block (an array, a buffer) going from `old` to `new` bytes; either may be 0.
     #[inline]
-    pub(in crate::runtime) fn acct_block(&mut self, old: usize, new: usize) {
+    pub(in crate::runtime::puc) fn acct_block(&mut self, old: usize, new: usize) {
         if !self.counting() {
             return;
         }
@@ -118,7 +118,7 @@ impl Heap {
 
 /// in a string's `sub` byte: a 5.5 external string over bytes PUC does not
 /// own (`LSTRFIX`), its header alone counted
-pub(crate) const FIXED_EXT: u8 = 0x20;
+pub(in crate::runtime::puc) const FIXED_EXT: u8 = 0x20;
 
 impl GcHeader {
     /// Whether this object is one PUC has not made (see [`Heap::acct_new`]).

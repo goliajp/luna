@@ -176,7 +176,7 @@ impl FuncArrays {
 impl Heap {
     /// What the parser's arrays' bytes depend on now.
     #[inline]
-    pub(in crate::runtime) fn parser_sizes(&self) -> ParserSizes {
+    pub(in crate::runtime::puc) fn parser_sizes(&self) -> ParserSizes {
         ParserSizes {
             d: self.puc.dialect,
             s: self.puc.sizes,
@@ -190,13 +190,13 @@ impl Heap {
     }
 
     /// The bytes of array `a` with room for `n` elements.
-    pub(in crate::runtime) fn parser_bytes(&self, a: ParserArray, n: usize) -> usize {
+    pub(in crate::runtime::puc) fn parser_bytes(&self, a: ParserArray, n: usize) -> usize {
         n * self.parser_elem(a)
     }
 
     /// One more element in `v`.
     #[inline(always)]
-    pub(in crate::runtime) fn parser_push(&mut self, v: &mut GrowVec, a: ParserArray) {
+    pub(in crate::runtime::puc) fn parser_push(&mut self, v: &mut GrowVec, a: ParserArray) {
         if v.n + 1 > v.cap {
             self.parser_grow(v, a);
         }
@@ -205,7 +205,12 @@ impl Heap {
 
     /// `v` grown to hold `n` (the descriptor arrays, which shrink and grow
     /// again).
-    pub(in crate::runtime) fn parser_reach(&mut self, v: &mut GrowVec, a: ParserArray, n: usize) {
+    pub(in crate::runtime::puc) fn parser_reach(
+        &mut self,
+        v: &mut GrowVec,
+        a: ParserArray,
+        n: usize,
+    ) {
         while v.cap < n {
             self.parser_grow(v, a);
         }
@@ -228,7 +233,7 @@ impl Heap {
     }
 
     /// `v` freed (`luaD_protectedparser` frees the descriptor arrays).
-    pub(in crate::runtime) fn parser_free(&mut self, v: GrowVec, a: ParserArray) {
+    pub(in crate::runtime::puc) fn parser_free(&mut self, v: GrowVec, a: ParserArray) {
         let b = self.parser_bytes(a, v.cap);
         self.acct_block(b, 0);
     }
@@ -241,7 +246,7 @@ impl Heap {
     }
 
     /// The function ends (`close_func`): each array trimmed to its count.
-    pub(in crate::runtime) fn parser_close(&mut self, f: &mut FuncArrays) {
+    pub(in crate::runtime::puc) fn parser_close(&mut self, f: &mut FuncArrays) {
         self.parser_trim(&mut f.code, ParserArray::Code);
         self.parser_trim(&mut f.line, ParserArray::LineInfo);
         self.parser_trim(&mut f.abs, ParserArray::AbsLines);
