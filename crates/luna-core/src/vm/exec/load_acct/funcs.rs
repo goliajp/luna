@@ -24,17 +24,7 @@ impl Vm {
             self.heap.acct_source(r.source);
             self.setinput(r)?;
         }
-        // the prototype luna made without counting
-        if let Some(&p) = r.opening.get(r.opened) {
-            let h = p.hdr();
-            self.heap.promote_obj(h, PucObj::Proto);
-            if r.rec.is_none() {
-                self.heap.set_parsing(p, true);
-                if !main && d != Dialect::L51 {
-                    self.proto_barrier(r, r.fs.len() - 1, h);
-                }
-            }
-        }
+        self.open_proto(r, main);
         if main && d != Dialect::L51 {
             self.heap.acct_source(r.source);
             self.setinput(r)?;
@@ -60,6 +50,21 @@ impl Vm {
             ..Fs::default()
         });
         Ok(())
+    }
+
+    /// The prototype luna made without counting, as PUC makes it: counted,
+    /// being parsed, and (a nested one past 5.1) behind its parent's barrier.
+    fn open_proto(&mut self, r: &mut Replay, main: bool) {
+        if let Some(&p) = r.opening.get(r.opened) {
+            let h = p.hdr();
+            self.heap.promote_obj(h, PucObj::Proto);
+            if r.rec.is_none() {
+                self.heap.set_parsing(p, true);
+                if !main && r.d != Dialect::L51 {
+                    self.proto_barrier(r, r.fs.len() - 1, h);
+                }
+            }
+        }
     }
 
     /// `luaX_setinput`: 5.2 makes the name `_ENV` (and keeps it for
@@ -96,21 +101,7 @@ impl Vm {
         }
         r.closed += 1;
         if matches!(d, Dialect::L51 | Dialect::L52) && !r.fs.is_empty() {
-            // `anchor_token`; 5.2's function table is on the stack still
-            let toks = &r.scanned.strings;
-            let at = toks.partition_point(|&(t, ..)| i64::from(t) < tok);
-            if let Some(&(t, text, kind)) = toks.get(at)
-                && i64::from(t) == tok
-                && kind != ScanKind::Reserved
-            {
-                r.closing_tab =
-                    f.h.as_ref()
-                        .and_then(PTab::tab_hdr)
-                        .filter(|_| d == Dialect::L52);
-                let anchored = self.replay_scan_text(r, text, kind);
-                r.closing_tab = None;
-                anchored?;
-            }
+            self.anchor_token(r, tok, f.h.as_ref())?;
         }
         if d == Dialect::L52 {
             self.replay_close_longs(r, f.table_id(), closed);
@@ -134,6 +125,28 @@ impl Vm {
         // 5.2 on, `close_func` checks for a collection at its end
         if d != Dialect::L51 {
             self.load_checkpoint(r, None)?;
+        }
+        Ok(())
+    }
+
+    /// 5.1's and 5.2's `anchor_token` as a nested function closes at token
+    /// `tok`; 5.2's function table, `h`, is on the stack still.
+    fn anchor_token(
+        &mut self,
+        r: &mut Replay,
+        tok: i64,
+        h: Option<&PTab>,
+    ) -> Result<(), SyntaxError> {
+        let toks = &r.scanned.strings;
+        let at = toks.partition_point(|&(t, ..)| i64::from(t) < tok);
+        if let Some(&(t, text, kind)) = toks.get(at)
+            && i64::from(t) == tok
+            && kind != ScanKind::Reserved
+        {
+            r.closing_tab = h.and_then(PTab::tab_hdr).filter(|_| r.d == Dialect::L52);
+            let anchored = self.replay_scan_text(r, text, kind);
+            r.closing_tab = None;
+            anchored?;
         }
         Ok(())
     }
