@@ -82,14 +82,12 @@ impl Heap {
         self.puc.records.udsize = bytes;
     }
 
-    /// 5.3: thread `h` comes up in this cycle's propagation; true the
+    /// 5.3: thread `co` comes up in this cycle's propagation; true the
     /// first time, when PUC's traversal shrinks its stack.
-    pub(in crate::runtime) fn puc_shrinks_now(&mut self, h: *mut GcHeader) -> bool {
-        if self.puc.records.shrunk.contains(&h) {
-            return false;
-        }
-        self.puc.records.shrunk.push(h);
-        true
+    #[inline]
+    pub(in crate::runtime) fn puc_shrinks_now(&self, co: Gc<crate::runtime::Coro>) -> bool {
+        let now = self.puc.records.cycle;
+        co.shrunk_in.replace(now) != now
     }
 
     /// 5.2: the sweep kept thread `h`, which `sweepthread` shrinks.

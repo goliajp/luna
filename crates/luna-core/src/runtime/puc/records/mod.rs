@@ -37,9 +37,11 @@ pub(in crate::runtime::puc) struct Records {
     pub(in crate::runtime::puc) gbuff: fmt::Gbuff,
     /// 5.1: what the last atomic step found to finalize (`udsize`)
     pub(in crate::runtime::puc) udsize: i64,
-    /// 5.3: the threads this cycle's propagation has shrunk; 5.2: the ones
-    /// the sweep kept, for the VM to shrink
+    /// 5.2: the threads the sweep kept, for the VM to shrink (5.3 marks
+    /// its own on the thread, `Coro::shrunk_in`)
     pub(in crate::runtime::puc) shrunk: Vec<*mut GcHeader>,
+    /// the collection cycles begun: the current one's number
+    pub(in crate::runtime::puc) cycle: u64,
 }
 
 impl Records {
@@ -58,6 +60,7 @@ impl Records {
             gbuff: fmt::Gbuff::default(),
             udsize: 0,
             shrunk: Vec::new(),
+            cycle: 0,
         }
     }
 }

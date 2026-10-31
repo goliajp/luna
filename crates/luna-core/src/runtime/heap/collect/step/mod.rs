@@ -157,13 +157,15 @@ impl Heap {
             let coro = unsafe { (*h).tag } == ObjTag::Coro;
             if coro
                 && self.puc_rules().shrink_at == crate::runtime::puc::for_heap::ShrinkAt::Traverse
-                && self.puc_shrinks_now(h)
             {
-                m.push_gray(h);
                 // SAFETY: `h` came off the gray stack, so it heads an
                 // allocated object, and it is a coroutine
-                out = Propagated::Shrink(unsafe { Gc::from_ptr_unchecked(h.cast()) });
-                break;
+                let co = unsafe { Gc::from_ptr_unchecked(h.cast()) };
+                if self.puc_shrinks_now(co) {
+                    m.push_gray(h);
+                    out = Propagated::Shrink(co);
+                    break;
+                }
             }
             m.leaf_bytes = 0;
             // SAFETY: `h` came off the gray stack, which holds headers of

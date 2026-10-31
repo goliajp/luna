@@ -50,6 +50,7 @@ const ATOMICSTEP: i64 = -2;
 fn restart<H: StepHost + ?Sized>(h: &mut H) {
     // no thread shrunk yet this cycle
     h.heap().puc.records.shrunk.clear();
+    h.heap().puc.records.cycle += 1;
     gc_count_marked(h);
     let mut m = h.heap().gc_begin_propagate();
     h.mark_roots_restart(&mut m);
