@@ -93,7 +93,7 @@ impl Heap {
     /// 5.2: the sweep kept thread `h`, which `sweepthread` shrinks.
     #[inline]
     pub(in crate::runtime::puc) fn puc_swept_thread(&mut self, h: *mut GcHeader) {
-        self.puc.records.shrunk.push(h);
+        self.puc.records.swept_52.push(h);
     }
 
     /// The uncounted object `h` stands for PUC's objects `objs`, freed with
