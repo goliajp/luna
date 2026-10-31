@@ -16,6 +16,11 @@ use crate::runtime::Gc;
 use crate::runtime::LuaClosure;
 use crate::runtime::function::Proto;
 
+/// `Vm::jit_gc_due`'s op: the one before the pc compiled code resumes at.
+pub const JIT_GC_PREV: u32 = u32::MAX;
+/// `Vm::jit_gc_due`'s op: the call that entered the frame it resumes in.
+pub const JIT_GC_CALL: u32 = u32::MAX - 1;
+
 /// Native entry-point produced by `try_compile_int_chunk` for a chunk
 /// with zero params. Returns the chunk's `Return1` value as i64;
 /// `Return0` chunks return 0 (the caller knows by inspecting
