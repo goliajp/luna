@@ -2,6 +2,7 @@
 //! read, given the chunks each reader asks room for and fills.
 
 use super::*;
+use crate::vm::exec::LibScope;
 use crate::vm::puc_buffer::PucBuffer;
 
 /// The string of `bytes`, read in `chunks`: each `(room, got)` a
@@ -17,16 +18,17 @@ pub(crate) fn buffered(
     if bytes.len() > crate::runtime::string::MAX_LEN {
         return Err(posix_error(ENOMEM).into());
     }
-    vm.lib_scope(|vm| buffered_in(vm, bytes, chunks, nl))
+    vm.lib_scope(|vm, sc| buffered_in(vm, sc, bytes, chunks, nl))
 }
 
 fn buffered_in(
     vm: &mut Vm,
+    sc: &LibScope,
     bytes: &[u8],
     chunks: &[(usize, usize)],
     nl: bool,
 ) -> Result<Value, RdErr> {
-    let mut b = PucBuffer::new(vm);
+    let mut b = PucBuffer::new(vm, sc);
     let mut at = 0;
     for &(room, got) in chunks {
         b.prep(vm, &bytes[..at], room)?;

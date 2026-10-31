@@ -48,7 +48,7 @@ pub(super) fn d_getinfo(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
         Some(check_int(vm, a, arg)?)
     };
     // what `lua_getinfo` pushes is held until the table is made
-    match vm.lib_scope(|vm| info_value(vm, a, co, level, subject, &options))? {
+    match vm.lib_scope(|vm, _| info_value(vm, a, co, level, subject, &options))? {
         Some(r) => vm.nat_ret1(fs, r),
         None => Err(arg_error(vm, arg + 2, "invalid option")),
     }

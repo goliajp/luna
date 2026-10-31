@@ -10,6 +10,7 @@ use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
 use crate::vm::builtins::{arg_error, raise_str};
 use crate::vm::error::LuaError;
+use crate::vm::exec::LibScope;
 use crate::vm::exec::Vm;
 mod codes;
 pub(crate) use codes::*;
@@ -91,16 +92,21 @@ fn bounds(v: LuaVersion, old: &'static str, new: &'static str) -> &'static str {
 
 fn u_char<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // the buffer's strings are let go on an error
-    vm.lib_scope(|vm| u_char_buffered::<PRE>(vm, fs, nargs))
+    vm.lib_scope(|vm, sc| u_char_buffered::<PRE>(vm, sc, fs, nargs))
 }
 
-fn u_char_buffered<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn u_char_buffered<const PRE: bool>(
+    vm: &mut Vm,
+    sc: &LibScope,
+    fs: u32,
+    nargs: u32,
+) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     // with several arguments the buffer's slot counts for an error
     let buf = if nargs != 1 { vm.buffer_slot(0) } else { 0 };
     let mut out = vm.new_buf();
-    let mut b = (nargs != 1).then(|| crate::vm::puc_buffer::PucBuffer::new(vm));
+    let mut b = (nargs != 1).then(|| crate::vm::puc_buffer::PucBuffer::new(vm, sc));
     for i in 0..nargs {
         let code = match argcheck::check_integer(vm, a, i) {
             Ok(code) => code,

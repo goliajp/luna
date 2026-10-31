@@ -11,6 +11,7 @@ use crate::runtime::puc::api::FmtArg;
 use crate::runtime::{Coro, Gc, LuaStr, Value};
 use crate::version::LuaVersion;
 use crate::vm::error::LuaError;
+use crate::vm::exec::LibScope;
 use crate::vm::exec::Vm;
 use crate::vm::puc_buffer::PucBuffer;
 
@@ -44,7 +45,8 @@ impl Vm {
         stack: Vec<Value>,
         level: i64,
     ) -> Result<Value, LuaError> {
-        let (r, v) = self.lib_scope_at(|vm, base| {
+        let (r, v) = self.lib_scope(|vm, sc| {
+            let base = sc.base();
             vm.lib_roots.extend_from_slice(&stack);
             let r = vm.errorfb_pieces(co, stack.is_empty(), level, base);
             (r, vm.lib_roots.get(base).copied())
@@ -157,9 +159,10 @@ impl Vm {
     ) -> Result<Gc<LuaStr>, LuaError> {
         let ars = self.traceback_ars(co, level);
         if self.version() >= LuaVersion::Lua54 {
-            return self.lib_scope(|vm| vm.traceback_buffer(msg, ars));
+            return self.lib_scope(|vm, sc| vm.traceback_buffer(sc, msg, ars));
         }
-        let (r, v) = self.lib_scope_at(|vm, base| {
+        let (r, v) = self.lib_scope(|vm, sc| {
+            let base = sc.base();
             let r = vm.traceback_pieces(msg, ars, base);
             (r, vm.lib_roots.get(base).copied())
         });
@@ -206,11 +209,12 @@ impl Vm {
     /// (and checked for) before the buffer takes it.
     fn traceback_buffer(
         &mut self,
+        sc: &LibScope,
         msg: Option<&[u8]>,
         ars: Vec<(TbLine, Option<Ar>)>,
     ) -> Result<Gc<LuaStr>, LuaError> {
         let mut out = Vec::new();
-        let mut b = PucBuffer::new(self);
+        let mut b = PucBuffer::new(self, sc);
         if let Some(m) = msg {
             out.extend_from_slice(m);
             b.add(self, &out, m.len())?;

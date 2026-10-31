@@ -39,7 +39,7 @@ impl Vm {
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         // the chunk's name is on the C function's stack meanwhile
-        self.lib_scope(|vm| {
+        self.lib_scope(|vm, _| {
             vm.lib_roots.extend(name.map(Value::Str));
             vm.load_named_rooted(src, chunkname, name)
         })

@@ -127,7 +127,7 @@ fn g_read_formats(
 ) -> Result<ReadOut, LuaError> {
     // the values read stay on the C function's stack while the next is
     // read, which may collect
-    vm.lib_scope(|vm| read_formats(vm, u, fmts, argno0, top))
+    vm.lib_scope(|vm, _| read_formats(vm, u, fmts, argno0, top))
 }
 
 fn read_formats(

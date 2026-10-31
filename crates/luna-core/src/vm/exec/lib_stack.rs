@@ -10,18 +10,23 @@ use super::*;
 #[derive(Default)]
 pub(crate) struct LibStack {
     vals: Vec<Value>,
-    /// debug builds: the scopes open, which a buffer is made inside
-    #[cfg(debug_assertions)]
-    scopes: u32,
+}
+
+/// A [`Vm::lib_scope`] open, which only it makes: a buffer is made inside
+/// one ([`crate::vm::puc_buffer::PucBuffer::new`]).
+pub(crate) struct LibScope {
+    base: usize,
+}
+
+impl LibScope {
+    /// Where what the scope's function pushes starts.
+    #[inline]
+    pub(crate) fn base(&self) -> usize {
+        self.base
+    }
 }
 
 impl LibStack {
-    /// Debug builds: whether some [`Vm::lib_scope`] is open.
-    #[cfg(debug_assertions)]
-    pub(crate) fn in_scope(&self) -> bool {
-        self.scopes > 0
-    }
-
     /// Back to height `at` (`lua_settop`): what was pushed above it is let
     /// go.
     #[inline]
@@ -108,7 +113,7 @@ impl Vm {
     /// Run `f` with `vals` held as roots, let go after.
     #[inline]
     pub(crate) fn rooted<R>(&mut self, vals: &[Value], f: impl FnOnce(&mut Vm) -> R) -> R {
-        self.lib_scope(|vm| {
+        self.lib_scope(|vm, _| {
             vm.lib_roots.extend_from_slice(vals);
             f(vm)
         })
@@ -116,26 +121,15 @@ impl Vm {
 
     /// Runs `f`; what it leaves on the stack is let go when it returns,
     /// by an error too, as an error takes PUC's C stack down to the
-    /// protected call.
+    /// protected call. `f` is handed the scope, which tells where what it
+    /// pushes starts.
     #[inline]
-    pub(crate) fn lib_scope<R>(&mut self, f: impl FnOnce(&mut Vm) -> R) -> R {
-        self.lib_scope_at(|vm, _| f(vm))
-    }
-
-    /// [`Vm::lib_scope`], `f` told where what it pushes starts.
-    #[inline]
-    pub(crate) fn lib_scope_at<R>(&mut self, f: impl FnOnce(&mut Vm, usize) -> R) -> R {
-        let at = self.lib_roots.len();
-        #[cfg(debug_assertions)]
-        {
-            self.lib_roots.scopes += 1;
-        }
-        let r = f(self, at);
-        self.lib_roots.pop_to(at);
-        #[cfg(debug_assertions)]
-        {
-            self.lib_roots.scopes -= 1;
-        }
+    pub(crate) fn lib_scope<R>(&mut self, f: impl FnOnce(&mut Vm, &LibScope) -> R) -> R {
+        let sc = LibScope {
+            base: self.lib_roots.len(),
+        };
+        let r = f(self, &sc);
+        self.lib_roots.pop_to(sc.base);
         r
     }
 }

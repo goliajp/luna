@@ -9,7 +9,7 @@ impl Vm {
     /// `pushfuncname` of 5.2 to 5.5: the string, made with what PUC makes
     /// on the way, each checked for as PUC checks.
     pub(super) fn puc_funcname(&mut self, ar: &Ar) -> Result<Gc<LuaStr>, LuaError> {
-        let (r, s) = self.lib_scope(|vm| {
+        let (r, s) = self.lib_scope(|vm, _| {
             let r = vm.funcname_pushed(ar);
             (r, vm.lib_roots.last().copied())
         });
@@ -61,7 +61,8 @@ impl Vm {
         let name = match path.inner {
             None => path.outer,
             Some(inner) => {
-                let (r, s) = self.lib_scope_at(|vm, base| {
+                let (r, s) = self.lib_scope(|vm, sc| {
+                    let base = sc.base();
                     vm.lib_roots.push(Value::Str(path.outer));
                     let r = vm.api_push(|h| h.try_intern(b".")).and_then(|()| {
                         vm.lib_roots.push(Value::Str(inner));

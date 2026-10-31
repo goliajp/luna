@@ -177,7 +177,7 @@ impl Vm {
         // (`formatvarinfo`), then `typeerror`'s message
         use crate::runtime::puc::api::FmtArg;
         let tn = self.obj_typename(gc);
-        let v = self.lib_scope(|vm| {
+        let v = self.lib_scope(|vm, _| {
             let extra = vm.pushfstring(
                 b" (%s '%s')",
                 &[FmtArg::S(b"metamethod"), FmtArg::S(b"__gc")],

@@ -1,13 +1,14 @@
 //! `os.date` and its `strftime` conversions.
 
 use super::*;
+use crate::vm::exec::LibScope;
 
 pub(super) fn os_date<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     // 5.1's buffer keeps its strings on the stack: an error lets them go
-    vm.lib_scope(|vm| date::<PRE>(vm, fs, nargs))
+    vm.lib_scope(|vm, sc| date::<PRE>(vm, sc, fs, nargs))
 }
 
-fn date<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn date<const PRE: bool>(vm: &mut Vm, sc: &LibScope, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     let fmt_arg = argcheck::opt_string(vm, a, 0)?;
@@ -49,7 +50,7 @@ fn date<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
         return vm.nat_ret1(fs, Value::Table(table));
     }
     let mut out = vm.new_buf();
-    let mut b = crate::vm::puc_buffer::PucBuffer::new(vm);
+    let mut b = crate::vm::puc_buffer::PucBuffer::new(vm, sc);
     // one conversion's text, short whatever the format
     let mut item = Vec::new();
     let mut i = 0;

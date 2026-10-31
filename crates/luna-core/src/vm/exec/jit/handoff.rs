@@ -83,7 +83,7 @@ impl Vm {
             .max(top);
         // the levels' values are held nowhere else until they are on the
         // stack: rooted across what may collect in an emergency
-        self.lib_scope(|vm| {
+        self.lib_scope(|vm, _| {
             for f in &levels {
                 vm.lib_roots.extend_from_slice(&f.vals);
             }

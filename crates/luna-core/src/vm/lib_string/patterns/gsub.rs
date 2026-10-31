@@ -5,6 +5,7 @@ use crate::runtime::mem::LVec;
 use crate::vm::puc_buffer::PucBuffer;
 
 mod template;
+use crate::vm::exec::LibScope;
 use template::add_s;
 
 pub(crate) fn s_gsub<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
@@ -13,12 +14,12 @@ pub(crate) fn s_gsub<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Resul
     frame.push(Value::Nil)?;
     vm.sort_scratch.push(frame)?;
     // 5.1's buffer keeps its strings on the stack: an error lets them go
-    let r = vm.lib_scope(|vm| gsub::<PRE>(vm, fs, nargs));
+    let r = vm.lib_scope(|vm, sc| gsub::<PRE>(vm, sc, fs, nargs));
     vm.sort_scratch.pop();
     r
 }
 
-fn gsub<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+fn gsub<const PRE: bool>(vm: &mut Vm, sc: &LibScope, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     let (s, p, repl, max_s, template) = gsub_args(vm, a)?;
@@ -26,7 +27,7 @@ fn gsub<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     let (anchor, body) = pattern::anchor_split(pattern_bytes(v, p.as_bytes()));
     let mut ms = MatchState::new(src, body, flavor(v));
     let mut out = vm.new_buf();
-    let mut b = PucBuffer::new(vm);
+    let mut b = PucBuffer::new(vm, sc);
     let mut pos = 0usize;
     let mut n: i128 = 0;
     let mut last: Option<usize> = None;

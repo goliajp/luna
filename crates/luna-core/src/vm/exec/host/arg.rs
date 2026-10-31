@@ -10,7 +10,8 @@ impl Vm {
     /// `argv[script]`, the script's arguments count up from 1 and what
     /// comes before it down from -1.
     pub(crate) fn host_set_arg(&mut self, argv: &[Vec<u8>], script: usize) -> Result<(), LuaError> {
-        let t = self.lib_scope(|vm| with_rules!(vm, P => vm.host_arg_table::<P>(argv, script)))?;
+        let t =
+            self.lib_scope(|vm, _| with_rules!(vm, P => vm.host_arg_table::<P>(argv, script)))?;
         self.set_global("arg", Value::Table(t))
     }
 

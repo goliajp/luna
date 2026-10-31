@@ -18,7 +18,7 @@ use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::api::PucObj;
 use crate::runtime::{Gc, LuaStr, Userdata, Value};
 use crate::vm::error::LuaError;
-use crate::vm::exec::Vm;
+use crate::vm::exec::{LibScope, Vm};
 
 mod finish;
 mod stack51;
@@ -44,12 +44,10 @@ pub(crate) struct PucBuffer {
 }
 
 impl PucBuffer {
-    /// `luaL_buffinit`, inside a [`Vm::lib_scope`]: an error out of the
-    /// function using the buffer lets its strings go there.
+    /// `luaL_buffinit`, inside the [`Vm::lib_scope`] `_sc`: an error out
+    /// of the function using the buffer lets its strings go there.
     #[inline]
-    pub(crate) fn new(vm: &mut Vm) -> PucBuffer {
-        #[cfg(debug_assertions)]
-        debug_assert!(vm.lib_roots.in_scope(), "a buffer outside a lib scope");
+    pub(crate) fn new(vm: &mut Vm, _sc: &LibScope) -> PucBuffer {
         PucBuffer::init(vm)
     }
 
@@ -90,8 +88,8 @@ impl PucBuffer {
     }
 
     /// `luaL_buffinitsize(sz)` (5.2+)
-    pub(crate) fn with_size(vm: &mut Vm, sz: usize) -> Result<PucBuffer, LuaError> {
-        let mut b = PucBuffer::new(vm);
+    pub(crate) fn with_size(vm: &mut Vm, sc: &LibScope, sz: usize) -> Result<PucBuffer, LuaError> {
+        let mut b = PucBuffer::new(vm, sc);
         b.prep(vm, &[], sz)?;
         Ok(b)
     }
@@ -284,10 +282,10 @@ impl Vm {
     /// [`Vm::buffer_result`] past the first block.
     #[inline(never)]
     fn buffer_result_long<const PRE: bool>(&mut self, out: &[u8]) -> Result<Value, LuaError> {
-        self.lib_scope(|vm| {
+        self.lib_scope(|vm, sc| {
             let mut b = match vm.heap.dialect() {
-                Dialect::L51 => PucBuffer::new(vm),
-                _ => PucBuffer::with_size(vm, out.len())?,
+                Dialect::L51 => PucBuffer::new(vm, sc),
+                _ => PucBuffer::with_size(vm, sc, out.len())?,
             };
             match vm.heap.dialect() {
                 Dialect::L51 => b.add(vm, out, out.len())?,
