@@ -2,8 +2,9 @@
 //! code reaches: the heap's methods defined in these files, the collector's
 //! steps the VM drives (`step.rs`, run on the VM as their `StepHost`), and
 //! the types their arguments and results name, re-exported below, with
-//! those types' own methods. The model's other modules are visible to the
-//! runtime alone, so the compiler refuses any other way in.
+//! those types' own methods, and the marker's `keep` (`mark.rs`). The
+//! model's other modules are visible to the runtime alone, so the compiler
+//! refuses any other way in.
 
 mod collector;
 mod count;
@@ -14,6 +15,7 @@ mod env51;
 mod ghost;
 mod load_session;
 mod loads;
+mod mark;
 mod open_upvals;
 mod opening;
 mod parse;
