@@ -218,8 +218,11 @@ impl Table {
         let backwards = self.dialect() <= Dialect::L53;
         for j in 0..old_nodes_len {
             let i = if backwards { old_nodes_len - 1 - j } else { j };
-            // SAFETY: `i` is inside the old hash part, still allocated
-            let n = unsafe { *old_nodes.add(i) };
+            // SAFETY: `i` is inside the old hash part, still allocated and
+            // apart from the new one. Read in place: a copy of the node is
+            // made a field at a time and its value then reloaded whole,
+            // which waits on those stores
+            let n = unsafe { &*old_nodes.add(i) };
             if !n.val.is_nil() {
                 self.reinsert(n.key(), n.val, n.khash);
                 if n.neg_zero() {
