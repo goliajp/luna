@@ -510,7 +510,9 @@ jobs:
   # handing its operands to one helper (the spill, reload and
   # update-in-place helpers removed, root lists linked in place) to 1799,
   # and a collection step run in place in a trace (the helper reads the
-  # trace's registers as the exit leaves them) to 1800.
+  # trace's registers as the exit leaves them) to 1800, and a native's
+  # results stored as a tag byte and a payload word through a safe
+  # function (one block) to 1801.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -525,7 +527,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=1800
+          ceiling=1801
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then
