@@ -19,24 +19,9 @@ use crate::vm::isa::{MAX_SC, MIN_SC, Op};
 
 #[cfg(any(debug_assertions, feature = "gc-trace", feature = "gc-verify"))]
 mod check;
-
-/// Debug, gc-trace and gc-verify builds check what the encoder emitted for
-/// `p` against [`Layout::width`]; the product build does nothing.
-#[inline(always)]
-pub(super) fn hook_encoded(p: &Proto, d: Dialect, body: &super::asm::Body) {
-    #[cfg(any(debug_assertions, feature = "gc-trace", feature = "gc-verify"))]
-    check::check(p, d, body);
-    let _ = (p, d, body);
-}
-
-/// Debug, gc-trace and gc-verify builds check that the encoder adds no
-/// constant to code luna compiled; the product build does nothing.
-#[inline(always)]
-pub(crate) fn hook_compiled(proto: &Proto, version: LuaVersion) {
-    #[cfg(any(debug_assertions, feature = "gc-trace", feature = "gc-verify"))]
-    check::check_compiled(proto, version);
-    let _ = (proto, version);
-}
+mod hooks;
+pub(crate) use hooks::hook_compiled;
+pub(super) use hooks::hook_encoded;
 
 /// A 5.4 / 5.5 key the fast field ops take: a string PUC 5.3+ interns.
 pub(super) fn short_key(consts: &[Value], k: u32) -> bool {

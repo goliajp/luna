@@ -142,6 +142,15 @@ jobs:
           LUNA_DIFF_PUC_REQUIRE_ALL: "1"
         run: 'cargo test --release -p luna-core --test it -- --nocapture diff_puc::'
 
+      - name: 'cargo test --release -p luna-core --features gc-verify --test it -- diff_puc::'
+        # The corpus again in a gc-verify build: there the PUC instruction
+        # counts the load's accounting works out without encoding are
+        # checked against what the encoder writes, so the two cannot
+        # drift apart unseen.
+        env:
+          LUNA_DIFF_PUC_REQUIRE_ALL: "1"
+        run: 'cargo test --release -p luna-core --features gc-verify --test it -- diff_puc::'
+
       - name: 'cargo test --release -p luna-jit --test it -- puc_bytecode_jit::'
         # The same bytecode corpus on a JIT-equipped Vm, compared with
         # luna's interpreter on the same chunks.
