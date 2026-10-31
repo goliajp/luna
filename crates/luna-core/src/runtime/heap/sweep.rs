@@ -254,6 +254,6 @@ impl Heap {
         self.puc_sweep_ends();
         self.sweep_prev = ptr::null_mut();
         self.phase = GcPhase::Pause;
-        self.mem_ctx().gc_cycle_ended(self.puc_bytes());
+        self.mem_ctx().gc_cycle_ended(self.bytes());
     }
 }

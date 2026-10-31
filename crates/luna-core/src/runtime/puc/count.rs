@@ -111,12 +111,6 @@ impl Heap {
 pub(in crate::runtime::puc) const FIXED_EXT: u8 = 0x20;
 
 impl GcHeader {
-    /// Whether this object is one PUC has not made (see [`Heap::acct_new`]).
-    #[inline(always)]
-    pub(crate) fn is_uncounted(&self) -> bool {
-        self.sub & UNCOUNTED != 0
-    }
-
     /// Marks this object as one PUC has (not) made; only the per-type byte
     /// is written, which no type but a table uses otherwise.
     #[inline]
