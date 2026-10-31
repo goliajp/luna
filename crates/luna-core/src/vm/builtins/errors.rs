@@ -163,8 +163,9 @@ pub(crate) fn lual_where(vm: &mut Vm, pos: Option<(Vec<u8>, i64)>) -> Result<Gc<
 
 /// `lua_concat(L, 2)` of `a` and `b` (strings, or a number before 5.3).
 pub(crate) fn concat2(vm: &mut Vm, a: Value, b: Value) -> Result<Value, LuaError> {
-    let mut st = vec![a, b];
-    vm.concat_pieces(&mut st, 2)?;
+    let mut st = [a, b];
+    let mut left = 2;
+    vm.concat_pieces(&mut st, &mut left)?;
     Ok(st[0])
 }
 

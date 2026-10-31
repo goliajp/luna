@@ -91,11 +91,12 @@ impl Heap {
             rest = &rest[(e + 2).min(rest.len())..];
         }
         st.push(Value::Str(self.try_intern(rest)?));
-        if d == Dialect::L51 {
-            let total = st.len();
-            self.puc_concat(&mut st, total)?;
-        } else if n > 0 {
-            self.puc_concat(&mut st, n + 1)?;
+        let total = if d == Dialect::L51 { st.len() } else { n + 1 };
+        if total > 1 {
+            let base = st.len() - total;
+            let mut top = total;
+            self.puc_concat(&mut st[base..], &mut top)?;
+            st.truncate(base + top);
         }
         match st.last() {
             Some(Value::Str(s)) => Ok(*s),
