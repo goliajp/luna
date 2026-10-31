@@ -171,12 +171,13 @@ pub struct Heap {
     /// over) a catchable "memory cap exceeded"; one allocation can pass it.
     mem_cap: Option<usize>,
     /// Persistent gray queue of objects grayed by write barriers, outside `propagate` so barriers
-    /// skip the Option; `gc_step_propagate` and `gc_finish_atomic` drain it.
+    /// skip the Option; the collector's propagation and atomic steps drain it.
     gray: mark::GrayStack,
     /// objects a back barrier sent to gray (PUC `grayagain`)
     grayagain: mark::GrayStack,
-    /// Incremental traversal state. `Some` between `gc_start_propagate` and
-    /// `gc_finish_atomic` (and inline within `mark_all`); `None` otherwise.
+    /// Incremental traversal state. `Some` from the start of a cycle's
+    /// propagation to the end of its atomic step (and inline within
+    /// `mark_all`); `None` otherwise.
     propagate: Option<PropagateState>,
     /// Freed tables (at most 4096) that new tables reuse, listed outside
     /// the allocation context: a sweep allocates nothing, as PUC's.

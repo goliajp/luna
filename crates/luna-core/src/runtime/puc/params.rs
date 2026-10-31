@@ -147,13 +147,8 @@ fn code_param(p: u32) -> u8 {
     if p < 0x10 {
         return p as u8;
     }
-    let log = ceil_log2(p + 1) - 5;
+    let log = crate::runtime::table::sizes::ceil_log2(u64::from(p + 1)) as u32 - 5;
     (((p >> log) - 0x10) | ((log + 1) << 4)) as u8
-}
-
-/// `luaO_ceillog2`.
-fn ceil_log2(x: u32) -> u32 {
-    32 - (x - 1).leading_zeros()
 }
 
 /// `luaO_applyparam` (5.5): `p` (a floating-point byte) times `x`.

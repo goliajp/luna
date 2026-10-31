@@ -14,7 +14,13 @@ macro_rules! by_rules {
 }
 
 /// `e` with `P` the rule of the VM `vm`, where code built for one rule is
-/// reached from code that is not.
+/// reached from code that is not. Those are the places no table of PUC's
+/// functions leads to, which so carry no rule of their own: the VM's own
+/// entries (`tostring`, the names it pushes, its C API calls, the
+/// script's `arg`), and helpers several library functions share (an I/O
+/// result, a buffer's string, an error message, a traceback, an option's
+/// check), whose callers are built both ways or neither. Giving each of
+/// them the parameter would build two copies of every path through them.
 macro_rules! with_rules {
     ($vm:expr, $p:ident => $e:expr) => {
         if $vm.heap.rules().api_checks_before() {
