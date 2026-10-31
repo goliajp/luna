@@ -304,14 +304,11 @@ pub mod tag {
     pub const LIGHTUSERDATA: u8 = 10;
 }
 
-#[path = "value_raw_tags.rs"]
 pub(crate) mod raw;
 
 pub(crate) use raw::RawVal;
 
-#[path = "value_raw.rs"]
 mod raw_impl;
 
 #[cfg(test)]
-#[path = "value_tests.rs"]
 mod tests;

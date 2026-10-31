@@ -35,7 +35,6 @@ macro_rules! table_ops {
 }
 
 #[cfg(test)]
-#[path = "coverage_tests.rs"]
 mod tests;
 
 /// Every opcode with an arm, from the table.

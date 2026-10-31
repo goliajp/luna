@@ -19,19 +19,13 @@ use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::{LuaError, Vm};
 
-#[path = "luna/args.rs"]
 mod args;
-#[path = "luna/counters.rs"]
 mod counters;
-#[path = "luna/interp.rs"]
 mod interp;
 #[cfg(feature = "repl-line-editor")]
-#[path = "luna/line_editor.rs"]
 mod line_editor;
-#[path = "luna/new_vm.rs"]
 mod new_vm;
 use new_vm::new_vm;
-#[path = "luna/repl.rs"]
 mod repl;
 
 const HELP: &str = "\

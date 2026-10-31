@@ -2,7 +2,6 @@
 
 use super::*;
 
-#[path = "interp/msgh.rs"]
 mod msgh;
 use luna_core::__private::{VmCApiLoad, VmHostInternals};
 use msgh::msghandler;

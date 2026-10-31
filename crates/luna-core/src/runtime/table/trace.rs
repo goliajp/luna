@@ -184,5 +184,4 @@ impl Table {
 }
 
 #[cfg(test)]
-#[path = "table_trace_tests.rs"]
 mod tests;

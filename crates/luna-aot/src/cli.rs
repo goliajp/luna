@@ -57,7 +57,7 @@ pub struct CompileArgs {
     pub target: Option<String>,
 
     /// Lua dialect. Defaults to 5.5 (matches the `luna` runner at
-    /// `crates/luna-jit/src/bin/luna.rs`).
+    /// `crates/luna-jit/src/bin/luna/main.rs`).
     #[arg(long = "dialect", default_value = "lua55")]
     pub dialect: DialectArg,
 

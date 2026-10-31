@@ -12,7 +12,6 @@ use super::*;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{MemFlagsData, SigRef, Signature};
 
-#[path = "lir_primitives_cases.rs"]
 mod cases;
 use cases::{Case, emit};
 
