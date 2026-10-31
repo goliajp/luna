@@ -2,6 +2,26 @@
 
 use super::*;
 
+/// Where the 5.4 specification starting at `i` ends: past its flags,
+/// width and precision bytes, at its conversion.
+#[inline]
+pub(super) fn spec_end(fmt: &[u8], i: usize) -> usize {
+    let mut p = i;
+    while fmt.get(p).is_some_and(|&c| spec_char(c)) {
+        p += 1;
+    }
+    p
+}
+
+/// Whether `c` may come before a 5.4 specification's conversion: a flag,
+/// a digit or the `.` (`L_FMTFLAGSX`, then `getformat`'s digits).
+#[inline(always)]
+fn spec_char(c: u8) -> bool {
+    // digits first: a width or a precision is what a specification
+    // mostly holds
+    c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'#' | b' ' | b'.')
+}
+
 /// 5.4+ `checkformat`: only `flags`, then (unless the width starts with
 /// '0') two width digits and, where allowed, '.' and two precision digits.
 fn checkformat(vm: &mut Vm, form: &[u8], flags: &[u8], precision: bool) -> Result<(), LuaError> {
