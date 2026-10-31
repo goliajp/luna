@@ -24,17 +24,16 @@ mod pause;
 mod tests;
 pub(super) use atomic::atomic;
 use d51::*;
+pub(in crate::runtime::puc) use d52::strt_resize_in_sweep;
 use d52::*;
-pub(crate) use d52::{
-    enter_generational_52, full_cycle_52, leave_generational_52, strt_resize_in_sweep,
-};
 use d53::*;
 use d54::*;
 use d55::*;
 pub(crate) use full::full_collect;
 pub(crate) use host::{CiCount, StepHost};
 pub(crate) use mode::change_mode;
-pub(crate) use pause::{gc_full_pause, gc_full_repause, gc_leave_generational, gc_minor_debt};
+pub(crate) use pause::{gc_full_pause, gc_full_repause};
+pub(in crate::runtime::puc) use pause::{gc_leave_generational, gc_minor_debt};
 
 /// 5.5 `singlestep`'s results that end `incstep`'s loop.
 const STEP2PAUSE: i64 = -3;
@@ -235,13 +234,13 @@ pub(super) fn puc_step_forced<H: StepHost + ?Sized>(h: &mut H) -> Result<(), Lua
 }
 
 /// The threads as the collector is about to find them.
-pub(crate) fn gc_hold_threads<H: StepHost + ?Sized>(h: &mut H) {
+pub(super) fn gc_hold_threads<H: StepHost + ?Sized>(h: &mut H) {
     h.heap().puc.pace.run = Some(h.running());
 }
 
 /// A marking starts from the roots: 5.5's `GCmarked` counts from 0
 /// what it marks (`restartcollection`).
-pub(crate) fn gc_count_marked<H: StepHost + ?Sized>(h: &mut H) {
+pub(super) fn gc_count_marked<H: StepHost + ?Sized>(h: &mut H) {
     let count = h.heap().puc.dialect == Dialect::L55;
     h.heap().puc.pace.count_marked = count;
     if count {

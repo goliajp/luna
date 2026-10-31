@@ -53,7 +53,7 @@ pub(crate) fn gc_full_repause<H: StepHost + ?Sized>(h: &mut H) {
 /// Generational mode entered (`entergen`): the debt before the first
 /// minor collection (`setminordebt`), 5.4 a share of the count, 5.5
 /// of what was marked.
-pub(crate) fn gc_minor_debt<H: StepHost + ?Sized>(h: &mut H) {
+pub(in crate::runtime::puc) fn gc_minor_debt<H: StepHost + ?Sized>(h: &mut H) {
     let d = h.heap().puc.dialect;
     let bytes = h.heap().bytes();
     let debt = match d {
@@ -74,7 +74,7 @@ pub(crate) fn gc_minor_debt<H: StepHost + ?Sized>(h: &mut H) {
 
 /// Back to incremental mode: 5.4 waits for its next cycle (`enterinc`);
 /// 5.5 sweeps first, a step's size away (`minor2inc`).
-pub(crate) fn gc_leave_generational<H: StepHost + ?Sized>(h: &mut H) {
+pub(in crate::runtime::puc) fn gc_leave_generational<H: StepHost + ?Sized>(h: &mut H) {
     if h.heap().puc.dialect != Dialect::L55 || !h.heap().gc_phase_is_pause() {
         return;
     }
