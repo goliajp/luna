@@ -13,7 +13,7 @@ impl Heap {
     /// memory error message, which the heap made before it knew the
     /// dialect, is counted where PUC makes it.
     pub(in crate::runtime::puc) fn acct_boot(&mut self) -> Result<(), crate::runtime::mem::Oom> {
-        use crate::runtime::puc::boot::counts::{boot_sizes, reserved_words, tm_names};
+        use crate::runtime::puc::boot::counts::boot_sizes;
         let d = self.puc.dialect;
         let b = boot_sizes(d);
         let s = self.puc.sizes;
@@ -43,8 +43,22 @@ impl Heap {
         if d >= Dialect::L53 {
             self.acct_string(memerr);
         }
-        // PUC fixes these (`luaC_fix`, 5.1 `luaS_fix`): never collected,
-        // nor marked
+        self.boot_fixed_names(d)?;
+        if d <= Dialect::L52 {
+            self.acct_string(memerr);
+            self.strt_settle();
+        }
+        if d == Dialect::L51 {
+            self.puc.pace.set_threshold(4 * self.puc.count.bytes as i64);
+        }
+        Ok(())
+    }
+
+    /// The names PUC fixes as its state starts (`luaC_fix`, 5.1
+    /// `luaS_fix`), never collected nor marked: the tag-method names, 5.3's
+    /// `_ENV` on, the reserved words.
+    fn boot_fixed_names(&mut self, d: Dialect) -> Result<(), crate::runtime::mem::Oom> {
+        use crate::runtime::puc::boot::counts::{reserved_words, tm_names};
         for name in tm_names(d) {
             let s = self.try_intern(name.as_bytes())?;
             self.fix_string(s);
@@ -58,13 +72,6 @@ impl Heap {
             self.fix_string(s);
             let k = reserved_words(Dialect::L55).iter().position(|x| x == w);
             self.puc.records.reserved[k.expect("a reserved word")] = Some(s);
-        }
-        if d <= Dialect::L52 {
-            self.acct_string(memerr);
-            self.strt_settle();
-        }
-        if d == Dialect::L51 {
-            self.puc.pace.set_threshold(4 * self.puc.count.bytes as i64);
         }
         Ok(())
     }
