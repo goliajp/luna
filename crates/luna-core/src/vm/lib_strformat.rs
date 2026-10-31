@@ -184,10 +184,22 @@ fn format<const PRE: bool>(
     let s = if lim != 0 {
         PucBuffer::finish_first::<PRE>(vm, &out)?
     } else {
-        b.take().expect("a begun buffer").finish::<PRE>(vm, &out)?
+        finish_begun::<PRE>(vm, b, &out)?
     };
     vm.recycle_buf(out);
     vm.nat_ret1(fs, Value::Str(s))
+}
+
+/// The result of a format that outgrew the buffer's first block: out of
+/// line, as the formats that fit it are the common ones.
+#[cold]
+#[inline(never)]
+fn finish_begun<const PRE: bool>(
+    vm: &mut Vm,
+    b: &mut Option<PucBuffer>,
+    out: &[u8],
+) -> Result<crate::runtime::Gc<crate::runtime::LuaStr>, LuaError> {
+    b.take().expect("a begun buffer").finish::<PRE>(vm, out)
 }
 
 /// Whether the item whose specification starts at `i` is a `%f` that
