@@ -27,7 +27,8 @@ pub(in crate::runtime::puc) struct Records {
     pub(in crate::runtime::puc) env51_box: Option<Box<env51::Env51>>,
     /// 5.1 / 5.2: the dead open upvalues the sweep has not reached
     pub(in crate::runtime::puc) open_dead: open_upvals::OpenDead,
-    /// strings PUC's libraries keep and luna's may not: kept alive
+    /// strings PUC never collects and luna does not keep otherwise (5.2's
+    /// `_ENV` the scanner fixes): kept alive
     pub(in crate::runtime::puc) pins: Vec<Gc<crate::runtime::LuaStr>>,
     /// the reserved words `luaX_init` made and fixed, by their number among
     /// all dialects' (`boot::counts::reserved_words` of 5.5)

@@ -219,3 +219,27 @@ impl Heap {
         }
     }
 }
+
+impl Heap {
+    /// `s`, a string PUC never collects (5.2's scanner `luaS_fix`es its
+    /// `_ENV`) and luna does not keep otherwise: kept alive (once, however
+    /// often pinned).
+    #[inline]
+    pub(crate) fn pin(&mut self, s: Gc<LuaStr>) {
+        if !self
+            .puc
+            .records
+            .pins
+            .iter()
+            .any(|p| p.as_ptr() == s.as_ptr())
+        {
+            self.puc.records.pins.push(s);
+        }
+    }
+
+    /// Mark the strings [`Heap::pin`] keeps.
+    #[inline]
+    pub(crate) fn mark_pins(&self, m: &mut Marker) {
+        m.mark_strings(self.puc.records.pins.iter());
+    }
+}
