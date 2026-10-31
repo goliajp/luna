@@ -145,6 +145,10 @@ macro_rules! fast_arm_helper_macros {
                         cold_path();
                         if tl == tag::FLOAT && tr == tag::FLOAT {
                             Some(raw_flt(pl) $d op raw_flt(pr))
+                        } else if DBL && is_num_tag(tl) && is_num_tag(tr) {
+                            // 5.1/5.2 keep an integer only where it is a
+                            // double's exact value: compared as doubles
+                            Some(raw_num(pl, tl) $d op raw_num(pr, tr))
                         } else {
                             None
                         }
