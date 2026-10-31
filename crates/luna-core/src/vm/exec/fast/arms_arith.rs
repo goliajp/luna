@@ -25,10 +25,11 @@ macro_rules! fast_arith_arms {
                 arith_rr!(Mul, int(a, b) => Some(if DBL { dbl::mul(a, b) } else { Value::Int(a.wrapping_mul(b)) }), float(a, b) => Some(Value::Float(a * b)))
             }};
         }
-        // a zero divisor takes the slow path for its error
+        // an integer zero divisor takes the slow path for its error; so do
+        // floats from 5.3 on, whose remainder differs by dialect
         macro_rules! op_mod {
             () => {{
-                arith_rr!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { int_mod_or_zero_div(a, b).map(Value::Int) }, float(a, b) => { let _ = (a, b); None })
+                arith_rr!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { int_mod_or_zero_div(a, b).map(Value::Int) }, float(a, b) => if DBL { Some(Value::Float(crate::numeric::nummod_floor(a, b))) } else { let _ = (a, b); None })
             }};
         }
         macro_rules! op_i_div {
@@ -91,10 +92,10 @@ macro_rules! fast_arith_arms {
                 arith_rk!(Mul, int(a, b) => Some(if DBL { dbl::mul(a, b) } else { Value::Int(a.wrapping_mul(b)) }), float(a, b) => Some(Value::Float(a * b)))
             }};
         }
-        // a zero divisor takes the slow path for its error
+        // as `op_mod`
         macro_rules! op_mod_k {
             () => {{
-                arith_rk_ordered!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { int_mod_or_zero_div(a, b).map(Value::Int) }, float(a, b) => { let _ = (a, b); None })
+                arith_rk_ordered!(Mod, int(a, b) => if DBL { Some(dbl::rem(a, b)) } else { int_mod_or_zero_div(a, b).map(Value::Int) }, float(a, b) => if DBL { Some(Value::Float(crate::numeric::nummod_floor(a, b))) } else { let _ = (a, b); None })
             }};
         }
         macro_rules! op_i_div_k {
