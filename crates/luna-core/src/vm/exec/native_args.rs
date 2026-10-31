@@ -85,8 +85,9 @@ impl Vm {
         if self.stack.len() < need {
             self.grow_stack_holding(need, vals)?;
         }
-        for (i, &v) in vals.iter().enumerate() {
-            self.stack[func_slot as usize + i] = v;
+        // in pieces: the caller has just made the values (see `nat_ret1`)
+        for (i, v) in vals.iter().enumerate() {
+            Value::set_split(&mut self.stack[func_slot as usize + i], v);
         }
         Ok(vals.len() as u32)
     }
