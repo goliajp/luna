@@ -101,17 +101,6 @@ const _: () = assert!(std::mem::align_of::<Vm>() <= 8 && std::mem::align_of::<Gl
 /// record and the Vm's own block on `lua_close`. From the first state on,
 /// luna's standard output goes through the C library's `stdout`, as PUC's
 /// does. Strings hash with `seed`, or with a seed of the state's own.
-/// The state's Vm, allocating through `mem`, which counts the two blocks
-/// `new_state` took for the state besides; hashing with `seed` when given.
-fn state_vm(v: LuaVersion, mem: MemOwner, seed: Option<u32>) -> Option<Vm> {
-    mem.ctx()
-        .add_external(std::mem::size_of::<Global>() + std::mem::size_of::<Vm>());
-    match seed {
-        Some(s) => Vm::try_new_minimal_with_mem_and_seed(v, mem, s),
-        None => Vm::try_new_minimal_with_mem(v, mem),
-    }
-}
-
 fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: Option<u32>) -> *mut LuaState {
     // PUC passes the kind of object as the old size of a new block: 5.1
     // passes 0, later versions LUA_TTHREAD for the main block
@@ -197,6 +186,17 @@ fn new_state(v: LuaVersion, alloc: LuaAlloc, ud: *mut c_void, seed: Option<u32>)
             }
             std::ptr::null_mut()
         }
+    }
+}
+
+/// The state's Vm, allocating through `mem`, which counts the two blocks
+/// `new_state` took for the state besides; hashing with `seed` when given.
+fn state_vm(v: LuaVersion, mem: MemOwner, seed: Option<u32>) -> Option<Vm> {
+    mem.ctx()
+        .add_external(std::mem::size_of::<Global>() + std::mem::size_of::<Vm>());
+    match seed {
+        Some(s) => Vm::try_new_minimal_with_mem_and_seed(v, mem, s),
+        None => Vm::try_new_minimal_with_mem(v, mem),
     }
 }
 
