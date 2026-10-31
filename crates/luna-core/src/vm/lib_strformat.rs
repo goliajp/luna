@@ -16,7 +16,7 @@ mod item51;
 mod item54;
 mod quoted;
 use item51::item51;
-use item54::{item54, spec_end};
+use item54::{item54, spec_end, spec_too_long};
 pub(crate) use quoted::*;
 
 /// PUC `MAX_FORMAT`: a 5.4+ specification plus '%', a length modifier
@@ -37,11 +37,15 @@ pub(crate) enum Added {
     Value(crate::runtime::Gc<crate::runtime::LuaStr>),
 }
 
+/// 5.1's and 5.2's `MAX_ITEM`: a constant where `PRE` builds need no
+/// version to know it.
+const MAX_ITEM_51_52: usize = 512;
+
 /// PUC `MAX_ITEM`, the room `str_format` asks for before an item (5.1
 /// formats into a C array instead).
 fn max_item(v: LuaVersion) -> usize {
     match v {
-        LuaVersion::Lua51 | LuaVersion::Lua52 => 512,
+        LuaVersion::Lua51 | LuaVersion::Lua52 => MAX_ITEM_51_52,
         LuaVersion::Lua53 => 120 + 308,
         _ => 120,
     }
@@ -108,7 +112,7 @@ fn format<const PRE: bool>(
     }
     // the room asked for before each item (5.2 on; a constant for `PRE`),
     // and whether a `%f` asks for more (5.4 on)
-    let room = if PRE { 512 } else { max_item(v) };
+    let room = if PRE { MAX_ITEM_51_52 } else { max_item(v) };
     let room_f = !PRE && v >= LuaVersion::Lua54;
     let mut arg = 0u32;
     let mut i = 0;
@@ -150,7 +154,7 @@ fn format<const PRE: bool>(
             // at `p`), and ask for more for a `%f` once it is read (an
             // over-long one is refused first, by the item)
             let p = spec_end(fmt, i);
-            if byte_at(fmt, p) == b'f' && p - i + 1 < MAX_FORMAT - 10 {
+            if byte_at(fmt, p) == b'f' && !spec_too_long(i, p) {
                 let m = 110 + 308;
                 tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
             }

@@ -22,6 +22,13 @@ fn spec_char(c: u8) -> bool {
     c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'#' | b' ' | b'.')
 }
 
+/// Whether the specification at `start..p` is too long for 5.4's
+/// `getformat` ("invalid format (too long)").
+#[inline(always)]
+pub(super) fn spec_too_long(start: usize, p: usize) -> bool {
+    p - start + 1 >= MAX_FORMAT - 10
+}
+
 /// 5.4+ `checkformat`: only `flags`, then (unless the width starts with
 /// '0') two width digits and, where allowed, '.' and two precision digits.
 fn checkformat(vm: &mut Vm, form: &[u8], flags: &[u8], precision: bool) -> Result<(), LuaError> {
@@ -70,7 +77,7 @@ pub(super) fn item54<const PRE: bool>(
     vm.buf_reserve(out, cfmt::ITEM_MAX)?;
     // getformat: flags, width and precision bytes ('0' counted as a flag),
     // up to `p` (`spec_end`), then the conversion
-    if p - start + 1 >= MAX_FORMAT - 10 {
+    if spec_too_long(start, p) {
         return Err(raise_str(vm, "invalid format (too long)"));
     }
     let conv = byte_at(fmt, p);
