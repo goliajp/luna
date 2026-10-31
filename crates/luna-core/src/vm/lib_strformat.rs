@@ -144,17 +144,19 @@ fn format<const PRE: bool>(
         if arg >= nargs {
             return Err(no_value(vm, out.len(), arg));
         }
-        // 5.4 on ask for more for a `%f` once its specification is read
-        // (an over-long one is refused first, by the item)
-        if room_f && f_conv(fmt, i) {
+        // 5.4 on read the specification once (`getformat`'s bytes end at
+        // `p`), and ask for more for a `%f` once it is read (an over-long
+        // one is refused first, by the item)
+        let p = if room_f { spec_end(fmt, i) } else { i };
+        if room_f && byte_at(fmt, p) == b'f' && p - i + 1 < MAX_FORMAT - 10 {
             let m = 110 + 308;
             tell!(out.len() + m, out.len(), |b| b.prep(vm, &out, m)?);
         }
         let before = out.len();
         let mut added = Added::Sized;
         // `PRE` is 5.1 and 5.2: their build has no 5.4 item to carry
-        let item = if !PRE && v >= LuaVersion::Lua54 {
-            item54::<PRE>(vm, a, arg, fmt, i, &mut out, &mut added)
+        let item = if room_f {
+            item54::<PRE>(vm, a, arg, fmt, (i, p), &mut out, &mut added)
         } else {
             item51::<PRE>(vm, v, a, arg, fmt, i, &mut out, &mut added)
         };
@@ -216,15 +218,15 @@ fn finish_begun<const PRE: bool>(
     b.take().expect("a begun buffer").finish::<PRE>(vm, out)
 }
 
-/// Whether the item whose specification starts at `i` is a `%f` that
-/// 5.4's `getformat` takes (not too long).
+/// Where the 5.4 specification starting at `i` ends: past its flags,
+/// width and precision bytes, at its conversion.
 #[inline]
-fn f_conv(fmt: &[u8], i: usize) -> bool {
+fn spec_end(fmt: &[u8], i: usize) -> usize {
     let mut p = i;
     while fmt.get(p).is_some_and(|&c| spec_char(c)) {
         p += 1;
     }
-    byte_at(fmt, p) == b'f' && p - i + 1 < MAX_FORMAT - 10
+    p
 }
 
 /// Whether `c` may come before a 5.4 specification's conversion: a flag,
