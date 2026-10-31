@@ -100,8 +100,8 @@ pub(super) fn concat_piece_into(
         // SAFETY: the string is an operand of the running instruction, in a
         // register, so it outlives the borrow
         Value::Str(s) => Some(unsafe { s.as_bytes_unbounded() }),
-        Value::Int(x) => Some(text.set(&numeric::num_to_string(Num::Int(x)))),
-        Value::Float(x) => Some(text.set(&numeric::num_to_string_for(Num::Float(x), float_fmt))),
+        Value::Int(x) => Some(text.int(x)),
+        Value::Float(x) => Some(text.float(x, float_fmt)),
         _ => None,
     }
 }
