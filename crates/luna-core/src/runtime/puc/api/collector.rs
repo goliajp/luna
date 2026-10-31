@@ -154,26 +154,6 @@ impl Heap {
         }
     }
 
-    /// The light function the opening made as function `id`.
-    pub(crate) fn light(&self, id: usize) -> Option<Gc<crate::runtime::NativeClosure>> {
-        self.puc.opening.lights.get(id).copied().flatten()
-    }
-
-    /// Function `id` of the opening's `count` is the light function `g`:
-    /// one value however often pushed.
-    pub(crate) fn set_light(
-        &mut self,
-        id: usize,
-        count: usize,
-        g: Gc<crate::runtime::NativeClosure>,
-    ) {
-        let l = &mut self.puc.opening.lights;
-        if l.len() <= id {
-            l.resize(count.max(id + 1), None);
-        }
-        l[id] = Some(g);
-    }
-
     /// Whether the count has reached the point a step falls due at: the
     /// comparison compiled code makes with the words of [`Heap::due_words`].
     #[inline]
