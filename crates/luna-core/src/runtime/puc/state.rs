@@ -3,7 +3,7 @@
 use super::*;
 
 /// PUC's structures luna has no object for, as far as the count goes.
-pub(crate) struct PucModel {
+pub(in crate::runtime) struct PucModel {
     /// PUC's `totalbytes` and when the next step is due
     pub(super) count: Count,
     /// the dialect PUC's sizes, pace and steps are those of
@@ -173,57 +173,7 @@ impl Default for PucModel {
     }
 }
 
-/// Counting stopped once (luna builds objects PUC made elsewhere, or not
-/// at all), until [`Heap::counting_on`] takes the token back. Only
-/// [`Heap::counting_off`] makes one. A token dropped any other way is
-/// reported as the load tokens are (see `load_session`), unless
-/// [`CountingOff::abandon`] says counting stays off for good.
-#[must_use = "counting stays off until the token goes back to `Heap::counting_on`"]
-pub(crate) struct CountingOff {
-    back: bool,
-}
-
-impl CountingOff {
-    /// Counting stays off: the heap goes with it.
-    pub(crate) fn abandon(mut self) {
-        self.back = true;
-    }
-}
-
-impl Drop for CountingOff {
-    fn drop(&mut self) {
-        if !self.back {
-            super::load_session::unpaired("counting turned off");
-        }
-    }
-}
-
-/// How far counting was off at some point, for a caller to return
-/// to it whatever happened since (a load unwound by running out of memory).
-#[must_use]
-pub(crate) struct CountingMark(u32);
-
 impl Heap {
-    /// Whether what is made now is counted.
-    #[inline]
-    pub(in crate::runtime) fn counting(&self) -> bool {
-        self.puc.count.silent == 0
-    }
-
-    /// Stop counting until the token is handed back.
-    #[inline]
-    pub(in crate::runtime::puc) fn counting_off(&mut self) -> CountingOff {
-        self.puc.count.silent += 1;
-        CountingOff { back: false }
-    }
-
-    /// Count again what [`Heap::counting_off`] stopped.
-    #[inline]
-    pub(in crate::runtime::puc) fn counting_on(&mut self, mut off: CountingOff) {
-        off.back = true;
-        self.puc.count.silent -= 1;
-    }
-
     /// Run `f` with counting off.
     #[inline]
     pub(in crate::runtime) fn uncounted<R>(&mut self, f: impl FnOnce(&mut Heap) -> R) -> R {
@@ -231,24 +181,5 @@ impl Heap {
         let r = f(self);
         self.counting_on(off);
         r
-    }
-
-    /// Where counting stands now, to return to with [`Heap::restore_counting`].
-    #[inline]
-    pub(in crate::runtime::puc) fn counting_mark(&self) -> CountingMark {
-        CountingMark(self.puc.count.silent)
-    }
-
-    /// Count everything from here, also in the middle of what is not counted
-    /// (an emergency collection): where it stood, to return to.
-    #[inline]
-    pub(in crate::runtime::puc) fn count_all(&mut self) -> CountingMark {
-        CountingMark(std::mem::replace(&mut self.puc.count.silent, 0))
-    }
-
-    /// Back to where counting stood at `m`.
-    #[inline]
-    pub(in crate::runtime::puc) fn restore_counting(&mut self, m: CountingMark) {
-        self.puc.count.silent = m.0;
     }
 }

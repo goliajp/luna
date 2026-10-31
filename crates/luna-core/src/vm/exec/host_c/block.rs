@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::runtime::mem::{BlockKind, LAny, LVec, Oom};
-use crate::runtime::puc::api::PucCount;
 use crate::runtime::userdata::UserdataPayload;
 use std::alloc::Layout;
 
@@ -97,7 +96,7 @@ impl Vm {
         // counts them
         let puc = self
             .heap
-            .puc_size(crate::runtime::puc::PucObj::udata(nuv, size));
+            .puc_size(crate::runtime::puc::api::PucObj::udata(nuv, size));
         self.heap.try_new_userdata_sized(payload, true, puc)
     }
 

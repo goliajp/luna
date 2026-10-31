@@ -1,7 +1,6 @@
 //! `FILE*` handles: creation, argument checks, closing and the metamethods.
 
 use super::*;
-use crate::runtime::puc::api::{PucCollector, PucCount};
 
 /// A file handle made as PUC's `newprefile` makes it: the userdata
 /// (`lua_newuserdata`, which checks for a collection: `checked` makes the
@@ -15,15 +14,14 @@ pub(super) fn new_file(
 ) -> Result<Gc<Userdata>, LuaError> {
     // PUC's handle: 5.1 a `FILE *`, later a `luaL_Stream` (the file and
     // its close function), from 5.4 with no user value
-    let size = vm.heap.puc_size(crate::runtime::puc::PucObj::Stream);
+    let size = vm.heap.puc_size(crate::runtime::puc::api::PucObj::Stream);
     with_rules!(vm, P => vm.api_check_before::<P>())?;
     let u = vm.lib_userdata(UserdataPayload::File(fh), writable, size)?;
     // a stream the collector frees writes out what it buffered
     vm.heap.on_userdata_freed(write_out_freed);
     // 5.1: the environment of the io function that opens it
     if vm.version() == LuaVersion::Lua51 {
-        vm.heap
-            .set_env51(u.hdr(), crate::runtime::puc::records::env51::ENV_IO);
+        vm.heap.set_env51(u.hdr(), crate::runtime::puc::api::ENV_IO);
     }
     checked(vm, u)?;
     // SAFETY: `u` was allocated above and is held by the caller's check;

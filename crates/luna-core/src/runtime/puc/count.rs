@@ -12,7 +12,7 @@ use crate::runtime::puc::size::PucSizes;
 
 /// What a counted allocation is, for PUC's tag of it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum PucKind {
+pub(in crate::runtime) enum PucKind {
     ShortStr,
     LongStr,
     Table,
@@ -83,16 +83,6 @@ impl Heap {
             }
             self.acct_obj(kind, size);
         }
-    }
-
-    /// A block (an array, a buffer) going from `old` to `new` bytes; either may be 0.
-    #[inline]
-    pub(in crate::runtime::puc) fn acct_block(&mut self, old: usize, new: usize) {
-        if !self.counting() {
-            return;
-        }
-        self.hook_block(old, new);
-        self.puc.count.bytes = self.puc.count.bytes + new - old;
     }
 
     /// A block of an object PUC counts going from `old` to `new` bytes (a

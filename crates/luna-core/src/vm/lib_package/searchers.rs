@@ -5,9 +5,9 @@ use super::*;
 /// `loaderror` / `checkload` for a module file that failed to load.
 pub(super) fn load_error(vm: &mut Vm, name: &[u8], file: &[u8], msg: &[u8]) -> LuaError {
     let args = [
-        crate::runtime::puc::fmt::FmtArg::S(c_str(name)),
-        crate::runtime::puc::fmt::FmtArg::S(file),
-        crate::runtime::puc::fmt::FmtArg::S(msg),
+        crate::runtime::puc::api::FmtArg::S(c_str(name)),
+        crate::runtime::puc::api::FmtArg::S(file),
+        crate::runtime::puc::api::FmtArg::S(msg),
     ];
     let fmt = b"error loading module '%s' from file '%s':\n\t%s";
     crate::vm::builtins::raise_lib(vm, fmt, &args, 3)
@@ -38,7 +38,7 @@ pub(super) fn searcher_preload(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, 
         } else {
             b"\n\tno field package.preload['%s']"
         };
-        let args = [crate::runtime::puc::fmt::FmtArg::S(c_str(name.as_bytes()))];
+        let args = [crate::runtime::puc::api::FmtArg::S(c_str(name.as_bytes()))];
         let m = with_rules!(vm, P => vm.api_pushfstring::<P>(1, fmt, &args))?;
         return vm.nat_ret1(fs, Value::Str(m));
     }
@@ -77,7 +77,7 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
                 unreachable!("a string")
             };
             vm.lib_roots.extend([f, fname]);
-            let at = crate::runtime::puc::records::strcache::CStr::In(fstr.as_ptr() as *const _, 0);
+            let at = crate::runtime::puc::api::CStr::In(fstr.as_ptr() as *const _, 0);
             let pushed = with_rules!(vm, P => vm.api_push_string_at::<P>(at, &file));
             vm.lib_roots.pop_n(2);
             let pushed = pushed?;

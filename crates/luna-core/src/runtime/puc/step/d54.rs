@@ -35,7 +35,9 @@ pub(super) fn step_54<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
     Ok(())
 }
 
-pub(super) fn singlestep_54<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, LuaError> {
+pub(in crate::runtime::puc) fn singlestep_54<H: StepHost + ?Sized>(
+    h: &mut H,
+) -> Result<i64, LuaError> {
     Ok(match h.heap().puc.pace.state() {
         St::Pause => {
             restart(h);

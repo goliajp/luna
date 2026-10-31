@@ -228,7 +228,7 @@ fn add_replacement<const PRE: bool>(
         other => {
             let tn = other.type_name();
             vm.native_push(buf + 1);
-            let args = [crate::runtime::puc::fmt::FmtArg::S(tn.as_bytes())];
+            let args = [crate::runtime::puc::api::FmtArg::S(tn.as_bytes())];
             let fmt = b"invalid replacement value (a %s)";
             return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
         }

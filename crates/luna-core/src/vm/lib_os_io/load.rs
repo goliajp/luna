@@ -41,7 +41,7 @@ pub(crate) fn load_path(
     // checks for a collection; the name stays on the stack while it loads
     vm.lib_scope(|vm| {
         let made = with_rules!(vm, P => vm.api_pushing::<P>(|vm| match name {
-            Some(n) => vm.pushfstring(b"@%s", &[crate::runtime::puc::fmt::FmtArg::S(n)]),
+            Some(n) => vm.pushfstring(b"@%s", &[crate::runtime::puc::api::FmtArg::S(n)]),
             None => vm.alloc_str(&chunkname),
         }));
         match made {
@@ -128,7 +128,7 @@ fn load_named_chunk(
         && !mode.contains(if binary { &b'b' } else { &b't' })
     {
         let kind: &[u8] = if binary { b"binary" } else { b"text" };
-        use crate::runtime::puc::fmt::FmtArg;
+        use crate::runtime::puc::api::FmtArg;
         if let Err(e) = vm.parser_anchor_55() {
             return Err(e.0);
         }

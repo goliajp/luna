@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::runtime::mem::{LVec, Oom, catch_load_oom, outside_load};
-use crate::runtime::puc::api::PucLoads;
 
 mod compile;
 mod kinds;

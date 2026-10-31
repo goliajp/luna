@@ -2,7 +2,6 @@
 //! stack shrunk to it.
 
 use super::*;
-use crate::runtime::puc::api::PucCount;
 use crate::vm::callstack::NativeAct;
 use crate::vm::exec::stack::size as stack_size;
 
@@ -44,7 +43,7 @@ pub(in crate::vm::exec) struct ThreadSizes {
     pub(in crate::vm::exec) frames51: u32,
     pub(in crate::vm::exec) ci: u32,
     /// whose blocks they are
-    pub(in crate::vm::exec) thread: crate::runtime::puc::Thread,
+    pub(in crate::vm::exec) thread: crate::runtime::puc::api::Thread,
 }
 
 /// Where a thread is shrunk: PUC's collector visiting it, or
@@ -217,7 +216,7 @@ impl Vm {
                 stack: m.stack_size,
                 frames51: m.frame_size,
                 ci: m.ci_alloc,
-                thread: crate::runtime::puc::Thread::Main,
+                thread: crate::runtime::puc::api::Thread::Main,
             };
             shrink_thread(&mut self.heap, v, at, inuse, n, n - m.host_conts, &mut sz);
             (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);
@@ -262,7 +261,7 @@ impl Vm {
             stack: m.stack_size,
             frames51: m.frame_size,
             ci: m.ci_alloc,
-            thread: crate::runtime::puc::Thread::Coro(co),
+            thread: crate::runtime::puc::api::Thread::Coro(co),
         };
         shrink_thread(&mut self.heap, v, at, inuse, n, n - 1, &mut sz);
         (m.stack_size, m.frame_size, m.ci_alloc) = (sz.stack, sz.frames51, sz.ci);

@@ -65,8 +65,8 @@ fn getnumlimit(vm: &mut Vm, fmt: &[u8], pos: &mut usize, df: u64) -> Result<u64,
         let shown = sz as u32 as i32;
         let fmt = b"integral size (%d) out of limits [1,%d]";
         let args = [
-            crate::runtime::puc::fmt::FmtArg::D(i64::from(shown)),
-            crate::runtime::puc::fmt::FmtArg::D(MAXINTSIZE as i64),
+            crate::runtime::puc::api::FmtArg::D(i64::from(shown)),
+            crate::runtime::puc::api::FmtArg::D(MAXINTSIZE as i64),
         ];
         return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 2));
     }
@@ -116,7 +116,7 @@ fn getoption(
             (KOption::Nop, 0)
         }
         _ => {
-            let args = [crate::runtime::puc::fmt::FmtArg::C(opt)];
+            let args = [crate::runtime::puc::api::FmtArg::C(opt)];
             let fmt = b"invalid format option '%c'";
             return Err(crate::vm::builtins::raise_lib(vm, fmt, &args, 1));
         }

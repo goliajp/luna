@@ -1,7 +1,6 @@
 //! 5.1-only base functions: `newproxy`, `gcinfo`, `setfenv`, `getfenv`.
 
 use super::*;
-use crate::runtime::puc::api::PucCount;
 
 /// PUC 5.1 `newproxy([false | true | proxy])`: an empty userdata, with no
 /// metatable, a fresh one, or the metatable of another proxy. Only a
@@ -21,7 +20,9 @@ pub(super) fn nat_newproxy<const PRE: bool>(
     // `lua_newuserdata(L, 0)` comes first, kept on the stack; it and
     // `lua_newtable` check for a collection before they allocate
     vm.api_check_before::<PRE>()?;
-    let size = vm.heap.puc_size(crate::runtime::puc::PucObj::udata(1, 0));
+    let size = vm
+        .heap
+        .puc_size(crate::runtime::puc::api::PucObj::udata(1, 0));
     let u = vm.lib_userdata(UserdataPayload::Empty, false, size)?;
     vm.native_push(1);
     vm.lib_roots.push(Value::Userdata(u));
@@ -103,7 +104,7 @@ fn fenv_target(vm: &mut Vm, a: Args, level_optional: bool) -> Result<FenvTarget,
         Some(DbgKind::Tail) => Err(crate::vm::builtins::raise_lib(
             vm,
             b"no function environment for tail call at level %d",
-            &[crate::runtime::puc::fmt::FmtArg::D(level as i64)],
+            &[crate::runtime::puc::api::FmtArg::D(level as i64)],
             1,
         )),
         None => Err(arg_error(vm, 1, "invalid level")),

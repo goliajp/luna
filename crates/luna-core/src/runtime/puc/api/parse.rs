@@ -2,203 +2,221 @@
 //! counted where PUC makes them.
 
 use super::super::*;
-use crate::runtime::heap::Heap;
-use crate::runtime::mem::Oom;
-use crate::runtime::puc::defer::DeferMark;
-use crate::runtime::puc::records::parse::LoadTab;
-use crate::runtime::puc::records::parse::{FuncArrays, GrowVec, ParserArray, ParserSizes};
+use crate::runtime::dialect::Dialect;
+use crate::runtime::mem::{LVec, Oom};
+use crate::runtime::puc::records::parse::*;
 
-/// The replay of PUC's parser: the arrays and tables it makes, set aside and
-/// counted where PUC makes them.
-pub(crate) trait PucParse {
+impl Heap {
+    /// A new empty parser table (PUC `luaH_new`), counted.
+    pub(crate) fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom> {
+        let mut hdr = GcHeader::new(ObjTag::Ghost);
+        (hdr.sub, hdr.cls) = (LOADTAB, 0);
+        hdr.set_flags(0);
+        let refs = LVec::new(self.mem());
+        let t = self.try_adopt(LoadTab {
+            hdr,
+            asize: 0,
+            nodes: 0,
+            counted: self.counting(),
+            refs,
+        })?;
+        self.acct_obj(PucKind::Table, self.puc.sizes.table);
+        Ok(t)
+    }
+
     /// `luaC_objbarrier` from the main closure `cl` to its new upvalue
     /// `uv`: an upvalue is marked with what it holds at once, never gray.
-    fn barrier_new_upval(
+    pub(crate) fn barrier_new_upval(
         &mut self,
         cl: Gc<crate::runtime::LuaClosure>,
         uv: Gc<crate::runtime::function::Upvalue>,
-    );
-    /// A new empty parser table (PUC `luaH_new`), counted.
-    fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom>;
+    ) {
+        let (c, u) = (cl.header(), uv.header());
+        // SAFETY: both are live objects of this heap; only flag bytes are
+        // read and written
+        unsafe {
+            if !is_black((*c).flags()) || !is_white((*u).flags()) {
+                return;
+            }
+            // in a sweep the closure goes white instead (`luaC_barrier`)
+            if self.phase() != GcPhase::Propagate {
+                (*c).paint(self.white());
+                return;
+            }
+            if self.puc.pace.count_marked && self.phase() == GcPhase::Propagate {
+                self.count_marked(u);
+            }
+            (*u).paint(BLACK);
+        }
+        if let crate::runtime::function::UpvalState::Closed(v) = uv.state {
+            self.barrier_forward(uv, v);
+        }
+    }
+
+    /// What the parser's arrays' bytes depend on now.
+    #[inline]
+    pub(crate) fn parser_sizes(&self) -> ParserSizes {
+        ParserSizes {
+            d: self.puc.dialect,
+            s: self.puc.sizes,
+        }
+    }
+
+    /// The bytes of array `a` with room for `n` elements.
+    pub(crate) fn parser_bytes(&self, a: ParserArray, n: usize) -> usize {
+        n * self.parser_elem(a)
+    }
+
+    /// One more element in `v`.
+    #[inline(always)]
+    pub(crate) fn parser_push(&mut self, v: &mut GrowVec, a: ParserArray) {
+        if v.n + 1 > v.cap {
+            self.parser_grow(v, a);
+        }
+        v.n += 1;
+    }
+
+    /// `v` grown to hold `n` (the descriptor arrays, which shrink and grow
+    /// again).
+    pub(crate) fn parser_reach(&mut self, v: &mut GrowVec, a: ParserArray, n: usize) {
+        while v.cap < n {
+            self.parser_grow(v, a);
+        }
+        v.n = n;
+    }
+
+    /// `v` freed (`luaD_protectedparser` frees the descriptor arrays).
+    pub(crate) fn parser_free(&mut self, v: GrowVec, a: ParserArray) {
+        let b = self.parser_bytes(a, v.cap);
+        self.acct_block(b, 0);
+    }
+
+    /// The function ends (`close_func`): each array trimmed to its count.
+    pub(crate) fn parser_close(&mut self, f: &mut FuncArrays) {
+        self.parser_trim(&mut f.code, ParserArray::Code);
+        self.parser_trim(&mut f.line, ParserArray::LineInfo);
+        self.parser_trim(&mut f.abs, ParserArray::AbsLines);
+        self.parser_trim(&mut f.k, ParserArray::Consts);
+        self.parser_trim(&mut f.p, ParserArray::Protos);
+        self.parser_trim(&mut f.loc, ParserArray::LocVars);
+        self.parser_trim(&mut f.up, ParserArray::Upvals);
+    }
+
+    /// One instruction coded on `line` (`luaK_code`): the code array, then
+    /// the line info (5.4+ `savelineinfo`, with its absolute entries).
+    #[inline(always)]
+    pub(crate) fn parser_code(&mut self, f: &mut FuncArrays, line: u32) {
+        self.parser_push(&mut f.code, ParserArray::Code);
+        if matches!(self.puc.dialect, Dialect::L54 | Dialect::L55) {
+            self.save_line(f, line);
+        }
+        self.parser_push(&mut f.line, ParserArray::LineInfo);
+    }
+
+    /// The last instruction moved to `line` (5.4+ `luaK_fixline`: its line
+    /// taken back and saved again).
+    pub(crate) fn parser_fix(&mut self, f: &mut FuncArrays, line: u32) {
+        if matches!(self.puc.dialect, Dialect::L54 | Dialect::L55) {
+            f.unsave_line();
+            self.save_line(f, line);
+        }
+    }
+
+    /// The last instruction taken back, with its line info (5.4+
+    /// `removelastlineinfo`).
+    pub(crate) fn parser_uncode(&mut self, f: &mut FuncArrays) {
+        f.code.n -= 1;
+        f.line.n -= 1;
+        f.unsave_line();
+    }
+
     /// PUC's `luaC_barrier` as the parser puts `child` in `parent`: while
     /// marking, a black parent's white child is marked; in a sweep, a black
     /// parent not swept yet goes white instead (and nothing waits on a gray
     /// list for a cycle that has not started).
-    fn parse_barrier(&mut self, parent: Gc<GcHeader>, child: Gc<GcHeader>);
-    /// The bytes of array `a` with room for `n` elements.
-    fn parser_bytes(&self, a: ParserArray, n: usize) -> usize;
-    /// The function ends (`close_func`): each array trimmed to its count.
-    fn parser_close(&mut self, f: &mut FuncArrays);
-    /// One instruction on `line` (`luaK_code`): the code array, then the
-    /// line info (5.4+ `savelineinfo`, with its absolute entries).
-    fn parser_code(&mut self, f: &mut FuncArrays, line: u32);
-    /// `v` freed (`luaD_protectedparser` frees the descriptor arrays).
-    fn parser_free(&mut self, v: GrowVec, a: ParserArray);
-    /// The last instruction moved to `line` (`luaK_fixline`).
-    fn parser_fix(&mut self, f: &mut FuncArrays, line: u32);
-    /// One more element in `v`.
-    fn parser_push(&mut self, v: &mut GrowVec, a: ParserArray);
-    /// `v` grown to hold `n` (the descriptor arrays, which shrink and grow
-    /// again).
-    fn parser_reach(&mut self, v: &mut GrowVec, a: ParserArray, n: usize);
-    /// What the parser's arrays' bytes depend on now.
-    fn parser_sizes(&self) -> ParserSizes;
-    /// The last instruction taken back, with its line info (5.4+
-    /// `removelastlineinfo`).
-    fn parser_uncode(&mut self, f: &mut FuncArrays);
-    /// A load calls its reader: what is counted from now on is set aside,
-    /// with the objects made meanwhile, until [`Heap::reader_call_ends`]
-    /// with the returned mark.
-    fn reader_call_begins(&mut self) -> DeferMark;
-    /// The reader returned: what it counted since `mark` is taken out of
-    /// the count, the objects it made kept aside.
-    fn reader_call_ends(&mut self, mark: DeferMark) -> Deferred;
-    /// A load with a reader begins: where the counts set aside and the
-    /// objects stand now, for [`Heap::reader_load_ends`].
-    fn reader_load_begins(&self) -> (isize, usize);
-    /// A load that began at `mark` ends: what its reader's calls counted
-    /// and no replay counted again is counted now, and the objects they
-    /// made go on the list.
-    fn reader_load_ends(&mut self, ends: (isize, usize));
-    /// The replay reaches where PUC's parser called the reader: what the
-    /// call counted is counted now, its objects listed.
-    fn replay_reader_call(&mut self, d: Deferred);
-    /// The main closure `cl` of a load is built: when a step of this cycle
-    /// traversed it as PUC had it (no upvalue yet), its upvalues are marked
-    /// too.
-    fn settle_closure(&mut self, cl: Gc<crate::runtime::LuaClosure>);
+    pub(crate) fn parse_barrier(&mut self, parent: Gc<GcHeader>, child: Gc<GcHeader>) {
+        let (parent, child) = (parent.as_ptr(), child.as_ptr());
+        // SAFETY: both are handles, so their objects are live; only flag
+        // bytes are read and written
+        unsafe {
+            if self.phase() == GcPhase::Propagate {
+                self.barrier_forward_obj(parent, child);
+            } else if is_black((*parent).flags()) {
+                (*parent).paint(self.white());
+            }
+        }
+    }
+
     /// The prototype `p` is built: when a step of this cycle traversed it
     /// as PUC had it then, what luna's own prototype holds besides is
     /// marked too, without counting (PUC's barriers marked the rest as
     /// the parser added it).
-    fn settle_parsed(&mut self, p: Gc<crate::runtime::Proto>);
+    pub(crate) fn settle_parsed(&mut self, p: Gc<crate::runtime::Proto>) {
+        let h = p.as_ptr() as *mut GcHeader;
+        // SAFETY: a live prototype; only flag bytes are read and written
+        unsafe {
+            if self.phase() != GcPhase::Propagate || !is_black((*h).flags()) {
+                return;
+            }
+            let strs = p.consts.iter().filter_map(|k| match k {
+                Value::Str(s) => Some(*s),
+                _ => None,
+            });
+            let names = p.puc_names.borrow();
+            for s in strs.chain(names.iter().copied()).chain([p.source]) {
+                let sh = s.as_ptr() as *mut GcHeader;
+                let f = (*sh).flags();
+                if is_white(f) {
+                    (*sh).paint(BLACK);
+                }
+            }
+            for &c in p.protos.iter() {
+                self.barrier_forward_obj(h, c.as_ptr() as *mut GcHeader);
+            }
+        }
+    }
+
+    /// The main closure `cl` of a load is built: when a step of this cycle
+    /// traversed it as PUC had it (no upvalue yet), its upvalues are marked
+    /// too.
+    pub(crate) fn settle_closure(&mut self, cl: Gc<crate::runtime::LuaClosure>) {
+        for &uv in cl.upvals().iter() {
+            self.barrier_new_upval(cl, uv);
+        }
+    }
+
     /// luna's name `bytes`, which PUC makes only where the program first
     /// uses it (`made_later`), and makes again after its sweep freed it:
     /// from 5.3 on, whose sweep goes over strings in the list's order, made
     /// set aside, among the first objects set aside (which no load's
     /// setting aside reaches), so that PUC making it puts it at the list's
     /// head, as PUC's is. See [`Heap::name_aside_again`].
-    fn try_intern_name(
-        &mut self,
-        bytes: &[u8],
-        made_later: bool,
-    ) -> Result<Gc<crate::runtime::LuaStr>, crate::runtime::mem::Oom>;
-    /// The object of `g` is one the parser is building (`on`), or no more:
-    /// PUC's parser has not finished it, so a cycle marks it as PUC does.
-    fn set_parsing<T: GcObject>(&mut self, g: Gc<T>, on: bool);
-}
-
-impl PucParse for Heap {
-    #[inline(always)]
-    fn barrier_new_upval(
-        &mut self,
-        cl: Gc<crate::runtime::LuaClosure>,
-        uv: Gc<crate::runtime::function::Upvalue>,
-    ) {
-        Heap::barrier_new_upval(self, cl, uv)
-    }
-
-    #[inline(always)]
-    fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom> {
-        Heap::new_load_tab(self)
-    }
-
-    #[inline(always)]
-    fn parse_barrier(&mut self, parent: Gc<GcHeader>, child: Gc<GcHeader>) {
-        Heap::parse_barrier(self, parent, child)
-    }
-
-    #[inline(always)]
-    fn parser_bytes(&self, a: ParserArray, n: usize) -> usize {
-        Heap::parser_bytes(self, a, n)
-    }
-
-    #[inline(always)]
-    fn parser_close(&mut self, f: &mut FuncArrays) {
-        Heap::parser_close(self, f)
-    }
-
-    #[inline(always)]
-    fn parser_code(&mut self, f: &mut FuncArrays, line: u32) {
-        Heap::parser_code(self, f, line)
-    }
-
-    #[inline(always)]
-    fn parser_fix(&mut self, f: &mut FuncArrays, line: u32) {
-        Heap::parser_fix(self, f, line)
-    }
-
-    #[inline(always)]
-    fn parser_free(&mut self, v: GrowVec, a: ParserArray) {
-        Heap::parser_free(self, v, a)
-    }
-
-    #[inline(always)]
-    fn parser_push(&mut self, v: &mut GrowVec, a: ParserArray) {
-        Heap::parser_push(self, v, a)
-    }
-
-    #[inline(always)]
-    fn parser_reach(&mut self, v: &mut GrowVec, a: ParserArray, n: usize) {
-        Heap::parser_reach(self, v, a, n)
-    }
-
-    #[inline(always)]
-    fn parser_sizes(&self) -> ParserSizes {
-        Heap::parser_sizes(self)
-    }
-
-    #[inline(always)]
-    fn parser_uncode(&mut self, f: &mut FuncArrays) {
-        Heap::parser_uncode(self, f)
-    }
-
-    #[inline(always)]
-    fn reader_call_begins(&mut self) -> DeferMark {
-        Heap::reader_call_begins(self)
-    }
-
-    #[inline(always)]
-    fn reader_call_ends(&mut self, mark: DeferMark) -> Deferred {
-        Heap::reader_call_ends(self, mark)
-    }
-
-    #[inline(always)]
-    fn reader_load_begins(&self) -> (isize, usize) {
-        Heap::reader_load_begins(self)
-    }
-
-    #[inline(always)]
-    fn reader_load_ends(&mut self, ends: (isize, usize)) {
-        Heap::reader_load_ends(self, ends)
-    }
-
-    #[inline(always)]
-    fn replay_reader_call(&mut self, d: Deferred) {
-        Heap::replay_reader_call(self, d)
-    }
-
-    #[inline(always)]
-    fn settle_closure(&mut self, cl: Gc<crate::runtime::LuaClosure>) {
-        Heap::settle_closure(self, cl)
-    }
-
-    #[inline(always)]
-    fn settle_parsed(&mut self, p: Gc<crate::runtime::Proto>) {
-        Heap::settle_parsed(self, p)
-    }
-
-    #[inline(always)]
-    fn try_intern_name(
+    pub(crate) fn try_intern_name(
         &mut self,
         bytes: &[u8],
         made_later: bool,
     ) -> Result<Gc<crate::runtime::LuaStr>, crate::runtime::mem::Oom> {
-        Heap::try_intern_name(self, bytes, made_later)
+        if !made_later || self.puc.rules.sweeps_string_table {
+            return self.try_intern(bytes);
+        }
+        let a = self.set_loads_aside(true);
+        let s = self.try_intern(bytes);
+        self.loads_aside_back(a);
+        self.puc.loads.names_aside = self.puc.loads.unborn.len();
+        s
     }
 
-    #[inline]
-    fn set_parsing<T: GcObject>(&mut self, g: Gc<T>, on: bool) {
-        crate::runtime::puc::records::parse::set_parsing(g, on);
+    /// The object of `g` is one the parser is building (`on`), or no more:
+    /// PUC's parser has not finished it, so a cycle marks it as PUC does.
+    pub(crate) fn set_parsing<T: GcObject>(&mut self, g: Gc<T>, on: bool) {
+        let h = g.header();
+        // SAFETY: a handle's object is allocated; only its class byte is written
+        unsafe {
+            if on {
+                (*h).cls |= PARSING;
+            } else {
+                (*h).cls &= !PARSING;
+            }
+        }
     }
 }

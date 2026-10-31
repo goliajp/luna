@@ -15,24 +15,6 @@ impl Heap {
         crate::runtime::puc::work::hash_bytes(&self.puc.sizes, self.puc.dialect, h)
     }
 
-    /// A table's parts going from `old_a` array slots and `old_h` nodes to
-    /// `new_a` and `new_h`, as PUC's `luaH_resize` allocates and frees them:
-    /// up to 5.3 a growing array first, then the new nodes, a shrinking
-    /// array, the old nodes; from 5.4 the new nodes, the array, the old
-    /// nodes. A part of no nodes is PUC's shared dummy node, never
-    /// allocated. For a table of PUC's luna has none for (a parser's,
-    /// the registry PUC's state starts with): counted unless luna is
-    /// building its own objects.
-    pub(in crate::runtime::puc) fn acct_table_resize(
-        &mut self,
-        old: (usize, usize),
-        new: (usize, usize),
-    ) {
-        if self.counting() {
-            self.table_parts(old, new, Heap::acct_block);
-        }
-    }
-
     /// [`Heap::acct_table_resize`] of a counted table of luna's: counted
     /// as the table is, whatever luna builds meanwhile (see
     /// [`Heap::acct_part`]).
@@ -44,7 +26,7 @@ impl Heap {
         self.table_parts(old, new, Heap::acct_part);
     }
 
-    fn table_parts(
+    pub(in crate::runtime::puc) fn table_parts(
         &mut self,
         (old_a, old_h): (usize, usize),
         (new_a, new_h): (usize, usize),
@@ -96,17 +78,6 @@ impl Heap {
         } else {
             self.acct_obj(PucKind::Table, self.puc.sizes.table);
         }
-    }
-
-    /// `t`, made while nothing was counted, is a table PUC's state starts
-    /// with, which [`Heap::acct_boot`] counted in its place: counted from
-    /// here on, as it grows and when it is freed.
-    pub(in crate::runtime::puc) fn boot_table(
-        t: Gc<crate::runtime::Table>,
-    ) -> Gc<crate::runtime::Table> {
-        // SAFETY: `t` is a live table; only its class byte is written
-        unsafe { (*t.header()).cls &= !super::UNLISTED };
-        t
     }
 
     /// Whether `t` is one of luna's own tables, which nothing counts.

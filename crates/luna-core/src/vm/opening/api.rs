@@ -2,7 +2,6 @@
 //! allocates, and where it checks for a collection.
 
 use super::run::{Ix, Opener};
-use crate::runtime::puc::api::PucCollector;
 use crate::runtime::{Builtin, Gc, NativeClosure, Table, Value};
 use crate::version::LuaVersion;
 use crate::vm::error::LuaError;

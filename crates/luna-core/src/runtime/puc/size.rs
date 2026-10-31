@@ -11,7 +11,7 @@ use crate::runtime::dialect::Dialect;
 
 /// The structure sizes of one dialect on one pointer width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PucSizes {
+pub(in crate::runtime) struct PucSizes {
     /// `TValue`: an array slot, a constant, a stack slot
     pub tvalue: usize,
     /// a hash node

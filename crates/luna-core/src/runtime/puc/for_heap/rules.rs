@@ -9,7 +9,7 @@ use crate::runtime::puc::size::PucSizes;
 
 /// Where PUC shrinks a thread's stack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ShrinkAt {
+pub(in crate::runtime) enum ShrinkAt {
     /// 5.1, 5.4, 5.5: as the atomic step traverses it
     Atomic,
     /// 5.3: as the propagation traverses it, once a cycle
@@ -58,20 +58,20 @@ pub(in crate::runtime) struct HeapRules {
     /// what 5.2 counts for each closed upvalue a traversal marks
     pub(in crate::runtime::puc) leaf_upval: usize,
     /// where a thread's stack shrinks
-    pub(crate) shrink_at: ShrinkAt,
+    pub(in crate::runtime) shrink_at: ShrinkAt,
     /// the objects to be finalized are marked as a cycle starts; 5.1 marks
     /// them in its atomic step
-    pub(crate) tobefnz_at_restart: bool,
+    pub(in crate::runtime) tobefnz_at_restart: bool,
     /// the atomic step's traversal of a thread counts its `CallInfo`s;
     /// 5.2's does not
-    pub(crate) atomic_counts_ci: bool,
+    pub(in crate::runtime) atomic_counts_ci: bool,
     /// 5.2 and 5.3 count the work of what the roots other than the threads
     /// reach in the atomic step; the threads, gray again, are traversed
     /// uncounted
-    pub(crate) roots_counted_apart: bool,
+    pub(in crate::runtime) roots_counted_apart: bool,
     /// 5.1 treats its pause as marking: a full collection from it first
     /// ends a sweep, with `checkSizes`
-    pub(crate) full_from_pause_sweeps: bool,
+    pub(in crate::runtime) full_from_pause_sweeps: bool,
     /// the atomic step counts the work of what the barriers sent gray
     /// again (`grayagain`); 5.2 and 5.3 do not
     pub(in crate::runtime) atomic_counts_again: bool,
@@ -79,7 +79,7 @@ pub(in crate::runtime) struct HeapRules {
     /// the program turned gray since marking ran out of gray objects
     /// (`singlestep`'s `propagateall` before `atomic`); 5.4 on count it in
     /// `atomic`, 5.1 and 5.2 run `atomic` as marking runs out
-    pub(crate) gray_left_uncounted: bool,
+    pub(in crate::runtime) gray_left_uncounted: bool,
     /// what the atomic step's `entersweep` sweeps: 5.1 nothing, 5.3 one
     /// object, the others to the first object kept
     pub(in crate::runtime) enter_sweep: Option<(usize, bool)>,

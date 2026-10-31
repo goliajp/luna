@@ -7,7 +7,6 @@ use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::size::PucSizes;
 
 mod switches;
-pub(crate) use switches::FinalizerStop;
 
 /// PUC's collector states. Their numbers in each version's `lgc.h` are
 /// [`St::number`].
@@ -45,22 +44,22 @@ pub(in crate::runtime::puc) struct Pace {
     /// (the count plus `GCdebt`)
     base: i64,
     /// 5.1 `estimate`, 5.2 to 5.4 `GCestimate`, 5.5 `GCmarked`
-    pub(crate) estimate: i64,
+    pub(in crate::runtime) estimate: i64,
     /// 5.2 `GCmemtrav`: the memory the cycle has traversed
-    pub(crate) trav: i64,
+    pub(in crate::runtime) trav: i64,
     /// 5.1 `gcdept`
-    pub(crate) dept: i64,
+    pub(in crate::runtime) dept: i64,
     /// 5.2 and 5.3 `sweepstrgc` (5.1 too): the string table's buckets swept
-    pub(crate) strt_swept: i64,
+    pub(in crate::runtime) strt_swept: i64,
     /// what is left of a sweep over one of PUC's lists luna keeps on its
     /// one list (the objects with finalizers, those to be finalized)
-    pub(crate) fin_left: Option<i64>,
+    pub(in crate::runtime) fin_left: Option<i64>,
     /// 5.5: markings count what they mark (`GCmarked`)
-    pub(crate) count_marked: bool,
+    pub(in crate::runtime) count_marked: bool,
     /// the threads the VM holds, as the step under way found them
-    pub(crate) run: Option<crate::runtime::heap::Running>,
+    pub(in crate::runtime) run: Option<crate::runtime::heap::Running>,
     /// 5.3 `gcfinnum`: how many finalizers the next batch runs
-    pub(crate) fin_num: u32,
+    pub(in crate::runtime) fin_num: u32,
 }
 
 /// 5.1 `GCSTEPSIZE`

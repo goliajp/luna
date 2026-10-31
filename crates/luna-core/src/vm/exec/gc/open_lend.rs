@@ -3,8 +3,7 @@
 //! at, as they live in the VM.
 
 use super::*;
-use crate::runtime::puc::api::PucCollector;
-use crate::runtime::puc::records::open_upvals::OpenLend;
+use crate::runtime::puc::api::OpenLend;
 
 impl Vm {
     /// The open lists the VM holds, handed to the collector for the end of

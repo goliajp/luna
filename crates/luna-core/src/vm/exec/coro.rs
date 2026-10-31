@@ -1,7 +1,6 @@
 //! Coroutine bookkeeping: status queries, other threads' slots, closing.
 
 use super::*;
-use crate::runtime::puc::api::PucCount;
 
 impl Vm {
     pub(crate) fn new_coro(&mut self, body: Value) -> Gc<Coro> {
@@ -193,7 +192,7 @@ impl Vm {
         // function slot and (5.4) the error, if any; 5.5's `resetCI` sets
         // the top before the error is put; the `CallInfo`s stay
         let size = 21 + u32::from(err && self.version < LuaVersion::Lua55);
-        let co = crate::runtime::puc::Thread::Coro(co);
+        let co = crate::runtime::puc::api::Thread::Coro(co);
         self.heap.acct_stack(co, closed.stack_size, size);
         m.stack_size = size;
         m.ci_alloc = closed.ci_alloc;

@@ -1,7 +1,6 @@
 //! `luaG_typeerror`: the message naming an operand of the wrong type.
 
 use super::*;
-use crate::runtime::puc::api::PucText;
 
 impl Vm {
     pub(crate) fn type_err(&mut self, what: &str, v: Value) -> LuaError {
@@ -24,7 +23,7 @@ impl Vm {
         extra: &str,
         conv: u32,
     ) -> LuaError {
-        use crate::runtime::puc::fmt::FmtArg::S;
+        use crate::runtime::puc::api::FmtArg::S;
         let named = split_varinfo(extra);
         if self.version() > LuaVersion::Lua52 {
             if let Some((kind, name)) = named {

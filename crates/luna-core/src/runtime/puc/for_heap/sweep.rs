@@ -7,7 +7,7 @@ use crate::runtime::dialect::Dialect;
 use crate::runtime::userdata::UserdataPayload;
 
 /// What the sweep does with a dead object.
-pub(crate) enum Fate {
+pub(in crate::runtime) enum Fate {
     /// freed, with the PUC objects swept after it (counted)
     Free(i64),
     /// kept: PUC keeps it, or one of its records needs it

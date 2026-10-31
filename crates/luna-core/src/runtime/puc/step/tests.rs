@@ -2,6 +2,7 @@
 //! (5.2), and what 5.3's leaves out.
 
 use super::*;
+use crate::runtime::puc::api::full_collect;
 use crate::version::LuaVersion;
 use crate::vm::Vm;
 

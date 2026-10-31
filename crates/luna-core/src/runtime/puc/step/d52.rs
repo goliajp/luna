@@ -84,7 +84,7 @@ pub(in crate::runtime::puc) fn full_cycle_52<H: StepHost + ?Sized>(
 /// marking as its steps run it, for the estimate, with the young objects
 /// (see `Heap::young_len`); then the sweep, which shrinks no stack and
 /// resizes nothing (`KGC_EMERGENCY`).
-pub(super) fn emergency_cycle_52<H: StepHost + ?Sized>(h: &mut H, young: Young) {
+pub(in crate::runtime::puc) fn emergency_cycle_52<H: StepHost + ?Sized>(h: &mut H, young: Young) {
     mark_52(h, Some(young));
     estimate_52(h);
     h.heap().gc_finish_sweep();
@@ -152,7 +152,7 @@ pub(in crate::runtime::puc) fn leave_generational_52<H: StepHost + ?Sized>(h: &m
     }
 }
 
-pub(super) fn singlestep_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
+pub(in crate::runtime::puc) fn singlestep_52<H: StepHost + ?Sized>(h: &mut H) -> i64 {
     let s = h.heap().puc.sizes;
     let (max, cost) = (sweepmax_52(&s), sweepcost_52(&s));
     match h.heap().puc.pace.state() {

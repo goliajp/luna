@@ -39,7 +39,7 @@ fn int_text(vm: &mut Vm, fs: u32, i: i64) -> Result<Value, LuaError> {
     let bytes = crate::numeric::write_i64_dec(i, &mut buf);
     let s = if vm.version() == LuaVersion::Lua53 {
         // `lua_pushfstring(L, "%I")`, made of pieces
-        let f = [crate::runtime::puc::fmt::FmtArg::I(i)];
+        let f = [crate::runtime::puc::api::FmtArg::I(i)];
         Value::Str(vm.pushfstring(b"%I", &f)?)
     } else {
         vm.str_value(bytes)?

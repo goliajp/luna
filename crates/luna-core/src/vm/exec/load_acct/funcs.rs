@@ -2,8 +2,7 @@
 //! table, and the arrays trimmed when it ends.
 
 use super::*;
-use crate::runtime::puc::PucObj;
-use crate::runtime::puc::api::{PucCount, PucLoads, PucParse};
+use crate::runtime::puc::api::PucObj;
 
 impl Vm {
     /// A function opens: the main one in `luaY_parser`, a nested one in

@@ -1,7 +1,7 @@
 //! `debug.getinfo`: option checking and the result table.
 
 use super::{check_int, getthread, is_function, set_field, set_str, set_str_at};
-use crate::runtime::puc::records::strcache::{CStr, site};
+use crate::runtime::puc::api::{CStr, site};
 use crate::runtime::{Coro, Gc, Table, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{Args, opt_string, to_num};
@@ -69,7 +69,7 @@ fn info_value(
     let (ar, activelines) = match level {
         None => {
             // `lua_pushfstring(L, ">%s", options)`, which stays pushed
-            let fmt = crate::runtime::puc::fmt::FmtArg::S(options);
+            let fmt = crate::runtime::puc::api::FmtArg::S(options);
             with_rules!(vm, P => vm.api_pushing::<P>(|vm| vm.pushfstring(b">%s", &[fmt])))?;
             let ar = vm.function_ar(subject);
             let lines = lines_if(vm, want_lines, subject)?;

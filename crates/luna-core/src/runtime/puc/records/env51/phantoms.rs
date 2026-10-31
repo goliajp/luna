@@ -20,12 +20,16 @@ impl Phantoms {
     }
 
     /// Record `k`'s header, at its start.
-    pub(super) fn hdr(&self, k: usize) -> *mut GcHeader {
+    pub(in crate::runtime::puc) fn hdr(&self, k: usize) -> *mut GcHeader {
         self.at(k).cast()
     }
 
     /// `f` on record `k`.
-    pub(super) fn with<R>(&self, k: usize, f: impl FnOnce(&mut Phantom) -> R) -> R {
+    pub(in crate::runtime::puc) fn with<R>(
+        &self,
+        k: usize,
+        f: impl FnOnce(&mut Phantom) -> R,
+    ) -> R {
         // SAFETY: the block lives while `self` does and every record in it
         // is initialised; the reference lasts for `f` alone, and only the
         // collector's pointers reach the block besides this one

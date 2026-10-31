@@ -1,7 +1,6 @@
 //! Loads whose text a reader hands over piece by piece.
 
 use super::*;
-use crate::runtime::puc::api::{PucCount, PucLoads, PucParse, PucText};
 
 impl Vm {
     /// Start loading a text chunk that a reader hands over piece by piece
@@ -82,7 +81,7 @@ impl Vm {
         parsed: ParsedText,
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
-        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::api::Deferred)>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         let r = self.load_parsed_counted(parsed, chunkname, name, splices);
         self.release_huge_scratch();
@@ -94,7 +93,7 @@ impl Vm {
         parsed: ParsedText,
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
-        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::api::Deferred)>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         self.heap.set_load_checked(false);
         let counted = match &parsed.0 {
@@ -207,7 +206,7 @@ impl Vm {
         src: &[u8],
         chunkname: &[u8],
         name: Option<Gc<crate::runtime::LuaStr>>,
-        splices: Vec<(u32, crate::runtime::puc::Deferred)>,
+        splices: Vec<(u32, crate::runtime::puc::api::Deferred)>,
     ) -> SyntaxError {
         let (v, depth) = (self.version, self.g.nccalls);
         let span = self.heap.load_begins();

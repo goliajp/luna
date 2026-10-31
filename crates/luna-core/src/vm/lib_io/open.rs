@@ -176,7 +176,7 @@ pub(super) fn get_io_file(vm: &mut Vm, which: Io) -> Result<Gc<Userdata>, LuaErr
     Err(crate::vm::builtins::raise_lib(
         vm,
         fmt,
-        &[crate::runtime::puc::fmt::FmtArg::S(what.as_bytes())],
+        &[crate::runtime::puc::api::FmtArg::S(what.as_bytes())],
         1,
     ))
 }
@@ -212,7 +212,7 @@ pub(super) fn open_checked(
     match open_file(vm.crt_text, name, mode) {
         Ok(o) => Ok(opened(vm, o, false)?),
         Err(e) => failed_handle(vm, |vm| {
-            use crate::runtime::puc::fmt::FmtArg;
+            use crate::runtime::puc::api::FmtArg;
             note_failure(&e);
             let err = strerror(&e);
             let args = [FmtArg::S(c_str(name)), FmtArg::S(err.as_bytes())];

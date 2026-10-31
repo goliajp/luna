@@ -62,7 +62,7 @@ pub(in crate::runtime::puc) unsafe fn objsize(s: &PucSizes, d: Dialect, h: *mut 
 
 /// How many of `n`'s upvalues PUC's function has (the first ones).
 #[inline(always)]
-pub(crate) fn native_puc_upvals(n: &NativeClosure) -> usize {
+pub(in crate::runtime) fn native_puc_upvals(n: &NativeClosure) -> usize {
     match n.hdr.sub & !UNCOUNTED {
         0 => n.upvals.len(),
         k => k as usize - 1,

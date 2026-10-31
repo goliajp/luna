@@ -5,9 +5,8 @@
 
 use super::*;
 use crate::runtime::LuaStr;
-use crate::runtime::puc::PucObj;
-use crate::runtime::puc::api::{PucCount, PucText};
-use crate::runtime::puc::fmt::FmtArg;
+use crate::runtime::puc::api::FmtArg;
+use crate::runtime::puc::api::PucObj;
 
 impl Vm {
     /// PUC's `L->top` where an allocation is asked for: the running

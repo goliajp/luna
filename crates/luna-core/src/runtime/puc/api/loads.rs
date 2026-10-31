@@ -2,193 +2,166 @@
 //! its message, and the readers it calls.
 
 use super::super::*;
-use crate::runtime::heap::Heap;
-use crate::runtime::puc::load_session::{Building, LoadSpan, LoadUnwind};
-use crate::runtime::puc::loads::{LoadsHeld, ParseOpen};
 use crate::runtime::puc::records::parse::ParseFrame;
 
-/// A load as the model sees it: its span, the objects built ahead of PUC,
-/// its message, and the readers it calls.
-pub(crate) trait PucLoads {
-    /// luna builds a load's objects now, before PUC's parser makes them:
-    /// nothing is counted, and with `aside` (a counted load) the objects
-    /// are set aside until the replay reaches where PUC makes each.
-    fn build_load(&mut self, aside: bool) -> Building;
-    fn close_parse_frame(&mut self, _a1: ParseOpen);
-    /// A load that must not collect starts, until the token is handed to
-    /// [`Heap::release_loads`].
-    fn hold_loads(&mut self) -> LoadsHeld;
-    /// A load begins.
-    fn load_begins(&self) -> LoadSpan;
-    /// The building `b` started is done: counting as it was.
-    fn load_built(&mut self, b: Building);
-    /// Whether the failed load's replay shrank the stack where
-    /// `luaD_pcall` caught its error, now `on`.
-    fn load_caught(&mut self, on: bool) -> bool;
-    /// The load of `s` ends: what it set aside that PUC did not make (luna's
-    /// own, or the garbage of a load that failed) goes on the list.
-    fn load_ends(&mut self, s: LoadSpan);
-    /// The message [`Heap::set_load_msg`] left, if any.
-    fn load_msg(&self) -> Option<Gc<LuaStr>>;
-    /// How many stack slots the loads' parser objects take (see
-    /// [`Heap::mark_load_slots`]).
-    fn load_slots(&self) -> u32;
-    /// Where loads stand now, for [`Heap::unwind_load`].
-    fn load_unwind_point(&self) -> LoadUnwind;
-    /// A load that must not collect is running.
-    fn loads_held(&self) -> bool;
-    /// Mark the message [`Heap::set_load_msg`] left.
-    fn mark_load_msg(&self, m: &mut Marker);
-    /// Mark the parser objects of the loads a collection step runs in the
-    /// middle of: above their C functions' slots on PUC's stack.
-    fn mark_load_slots(&self, m: &mut Marker);
-    /// Mark the strings [`Heap::pin`] keeps.
-    fn mark_pins(&self, m: &mut Marker);
-    /// `frame` is the innermost load's view while a collection step runs
-    /// in it, until the token goes back to [`Heap::close_parse_frame`].
-    fn open_parse_frame(&mut self, frame: ParseFrame) -> ParseOpen;
-    /// 5.1's io library opening: its environments' records are on the
-    /// stack (see `vm/opening/fenv51.rs`).
-    fn phantoms(&self) -> bool;
-    /// `s`, a string a library of PUC's keeps and luna's may not, kept
-    /// alive (once, however often pinned).
-    fn pin(&mut self, s: Gc<LuaStr>);
-    /// The load [`Heap::hold_loads`] started is over.
-    fn release_loads(&mut self, held: LoadsHeld);
-    /// The load about to run was checked for a collection already (or no
-    /// more, `false`).
-    fn set_load_checked(&mut self, on: bool);
-    /// The message of the load that just failed, made as PUC makes it.
-    fn set_load_msg(&mut self, m: Gc<LuaStr>);
-    fn set_phantoms(&mut self, on: bool);
-    /// Whether the load about to run was checked already; the mark taken.
-    fn take_load_checked(&mut self) -> bool;
-    /// The message [`Heap::set_load_msg`] left, if any, taken.
-    fn take_load_msg(&mut self) -> Option<Gc<LuaStr>>;
-    /// A memory error unwound a load past its tokens: counting, the parser
-    /// frames and the setting aside back to `u`, and what it set aside on
-    /// the list.
-    fn unwind_load(&mut self, u: LoadUnwind);
+/// How many parser frames were open at some point, to return to with
+/// [`Heap::restore_parse_frames`].
+#[must_use]
+pub(in crate::runtime::puc) struct ParseMark(usize);
+
+/// A parser frame open for a collection step (see [`Heap::open_parse_frame`]).
+#[must_use = "the frame stays open until the token goes back to `Heap::close_parse_frame`"]
+pub(crate) struct ParseOpen(());
+
+/// A load that must not collect, running (see [`Heap::hold_loads`]).
+#[must_use = "loads stay held until the token goes back to `Heap::release_loads`"]
+pub(crate) struct LoadsHeld(bool);
+
+impl Heap {
+    /// Where the parser frames stand now.
+    #[inline]
+    pub(in crate::runtime::puc) fn parse_mark(&self) -> ParseMark {
+        ParseMark(self.puc.loads.parse.len())
+    }
+
+    /// Back to the frames at `m` (a load unwound by running out of memory).
+    #[inline]
+    pub(in crate::runtime::puc) fn restore_parse_frames(&mut self, m: ParseMark) {
+        self.puc.loads.parse.truncate(m.0);
+    }
 }
 
-impl PucLoads for Heap {
-    #[inline(always)]
-    fn build_load(&mut self, aside: bool) -> Building {
-        Heap::build_load(self, aside)
+impl Heap {
+    /// Mark the parser objects of the loads a collection step runs in the
+    /// middle of: above their C functions' slots on PUC's stack.
+    pub(crate) fn mark_load_slots(&self, m: &mut Marker) {
+        let frames = std::mem::take(&mut m.lent.parse);
+        for f in &frames {
+            for &h in &f.slots {
+                // SAFETY: a parser object is allocated while its load runs
+                unsafe { m.header(h) };
+            }
+        }
+        m.lent.parse = frames;
     }
 
-    #[inline(always)]
-    fn close_parse_frame(&mut self, _a1: ParseOpen) {
-        Heap::close_parse_frame(self, _a1)
+    /// How many stack slots the loads' parser objects take (see
+    /// [`Heap::mark_load_slots`]).
+    pub(crate) fn load_slots(&self) -> u32 {
+        self.puc
+            .loads
+            .parse
+            .iter()
+            .map(|f| f.slots.len() as u32)
+            .sum()
     }
 
-    #[inline(always)]
-    fn hold_loads(&mut self) -> LoadsHeld {
-        Heap::hold_loads(self)
+    /// `frame` is the innermost load's view while a collection step runs
+    /// in it, until the token goes back to [`Heap::close_parse_frame`].
+    #[inline]
+    pub(crate) fn open_parse_frame(&mut self, frame: ParseFrame) -> ParseOpen {
+        self.puc.loads.parse.push(frame);
+        ParseOpen(())
     }
 
-    #[inline(always)]
-    fn load_begins(&self) -> LoadSpan {
-        Heap::load_begins(self)
+    #[inline]
+    pub(crate) fn close_parse_frame(&mut self, _: ParseOpen) {
+        self.puc.loads.parse.pop();
     }
 
-    #[inline(always)]
-    fn load_built(&mut self, b: Building) {
-        Heap::load_built(self, b)
+    /// The message of the load that just failed, made as PUC makes it.
+    #[inline]
+    pub(crate) fn set_load_msg(&mut self, m: Gc<LuaStr>) {
+        self.puc.loads.load_msg = Some(m);
     }
 
-    #[inline(always)]
-    fn load_caught(&mut self, on: bool) -> bool {
-        Heap::load_caught(self, on)
+    /// The message [`Heap::set_load_msg`] left, if any, taken.
+    #[inline]
+    pub(crate) fn take_load_msg(&mut self) -> Option<Gc<LuaStr>> {
+        self.puc.loads.load_msg.take()
     }
 
-    #[inline(always)]
-    fn load_ends(&mut self, s: LoadSpan) {
-        Heap::load_ends(self, s)
+    /// The message [`Heap::set_load_msg`] left, if any.
+    #[inline]
+    pub(crate) fn load_msg(&self) -> Option<Gc<LuaStr>> {
+        self.puc.loads.load_msg
     }
 
-    #[inline(always)]
-    fn load_msg(&self) -> Option<Gc<LuaStr>> {
-        Heap::load_msg(self)
+    /// The load about to run was checked for a collection already (or no
+    /// more, `false`).
+    #[inline]
+    pub(crate) fn set_load_checked(&mut self, on: bool) {
+        self.puc.loads.load_checked = on;
     }
 
-    #[inline(always)]
-    fn load_slots(&self) -> u32 {
-        Heap::load_slots(self)
+    /// Whether the load about to run was checked already; the mark taken.
+    #[inline]
+    pub(crate) fn take_load_checked(&mut self) -> bool {
+        std::mem::take(&mut self.puc.loads.load_checked)
     }
 
-    #[inline(always)]
-    fn load_unwind_point(&self) -> LoadUnwind {
-        Heap::load_unwind_point(self)
+    /// Whether the failed load's replay shrank the stack where
+    /// `luaD_pcall` caught its error, now `on`.
+    #[inline]
+    pub(crate) fn load_caught(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.puc.loads.load_caught, on)
     }
 
-    #[inline(always)]
-    fn loads_held(&self) -> bool {
-        Heap::loads_held(self)
+    /// A load that must not collect is running.
+    #[inline]
+    pub(crate) fn loads_held(&self) -> bool {
+        self.puc.loads.load_holds
     }
 
-    #[inline(always)]
-    fn mark_load_msg(&self, m: &mut Marker) {
-        Heap::mark_load_msg(self, m)
+    /// A load that must not collect starts, until the token is handed to
+    /// [`Heap::release_loads`].
+    #[inline]
+    pub(crate) fn hold_loads(&mut self) -> LoadsHeld {
+        LoadsHeld(std::mem::replace(&mut self.puc.loads.load_holds, true))
     }
 
-    #[inline(always)]
-    fn mark_load_slots(&self, m: &mut Marker) {
-        Heap::mark_load_slots(self, m)
+    /// The load [`Heap::hold_loads`] started is over.
+    #[inline]
+    pub(crate) fn release_loads(&mut self, held: LoadsHeld) {
+        self.puc.loads.load_holds = held.0;
     }
 
-    #[inline(always)]
-    fn mark_pins(&self, m: &mut Marker) {
-        Heap::mark_pins(self, m)
+    /// 5.1's io library opening: its environments' records are on the
+    /// stack (see `vm/opening/fenv51.rs`).
+    #[inline]
+    pub(crate) fn phantoms(&self) -> bool {
+        self.puc.opening.phantoms
     }
 
-    #[inline(always)]
-    fn open_parse_frame(&mut self, frame: ParseFrame) -> ParseOpen {
-        Heap::open_parse_frame(self, frame)
+    #[inline]
+    pub(crate) fn set_phantoms(&mut self, on: bool) {
+        self.puc.opening.phantoms = on;
     }
 
-    #[inline(always)]
-    fn phantoms(&self) -> bool {
-        Heap::phantoms(self)
+    /// `s`, a string a library of PUC's keeps and luna's may not, kept
+    /// alive (once, however often pinned).
+    #[inline]
+    pub(crate) fn pin(&mut self, s: Gc<LuaStr>) {
+        if !self
+            .puc
+            .records
+            .pins
+            .iter()
+            .any(|p| p.as_ptr() == s.as_ptr())
+        {
+            self.puc.records.pins.push(s);
+        }
     }
 
-    #[inline(always)]
-    fn pin(&mut self, s: Gc<LuaStr>) {
-        Heap::pin(self, s)
+    /// Mark the strings [`Heap::pin`] keeps.
+    #[inline]
+    pub(crate) fn mark_pins(&self, m: &mut Marker) {
+        m.mark_strings(self.puc.records.pins.iter());
     }
 
-    #[inline(always)]
-    fn release_loads(&mut self, held: LoadsHeld) {
-        Heap::release_loads(self, held)
-    }
-
-    #[inline(always)]
-    fn set_load_checked(&mut self, on: bool) {
-        Heap::set_load_checked(self, on)
-    }
-
-    #[inline(always)]
-    fn set_load_msg(&mut self, m: Gc<LuaStr>) {
-        Heap::set_load_msg(self, m)
-    }
-
-    #[inline(always)]
-    fn set_phantoms(&mut self, on: bool) {
-        Heap::set_phantoms(self, on)
-    }
-
-    #[inline(always)]
-    fn take_load_checked(&mut self) -> bool {
-        Heap::take_load_checked(self)
-    }
-
-    #[inline(always)]
-    fn take_load_msg(&mut self) -> Option<Gc<LuaStr>> {
-        Heap::take_load_msg(self)
-    }
-
-    #[inline(always)]
-    fn unwind_load(&mut self, u: LoadUnwind) {
-        Heap::unwind_load(self, u)
+    /// Mark the message [`Heap::set_load_msg`] left.
+    #[inline]
+    pub(crate) fn mark_load_msg(&self, m: &mut Marker) {
+        m.mark_strings(self.puc.loads.load_msg.iter());
     }
 }

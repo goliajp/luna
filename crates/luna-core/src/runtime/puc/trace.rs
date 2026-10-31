@@ -54,7 +54,7 @@ impl St {
 
 /// The accounting trace's line for a step, as PUC's `luaC_step` logs it
 /// (`g` before, `G` after).
-pub(crate) fn trace_step<H: StepHost + ?Sized>(h: &mut H, after: bool) {
+pub(in crate::runtime) fn trace_step<H: StepHost + ?Sized>(h: &mut H, after: bool) {
     let d = h.heap().puc.dialect;
     let c = if after { 'G' } else { 'g' };
     let bytes = h.heap().bytes();
@@ -77,7 +77,7 @@ pub(crate) fn trace_step<H: StepHost + ?Sized>(h: &mut H, after: bool) {
 }
 
 /// The end of a full collection in the trace: 5.5 with its `GCmarked`.
-pub(crate) fn trace_full_end<H: StepHost + ?Sized>(h: &mut H) {
+pub(in crate::runtime) fn trace_full_end<H: StepHost + ?Sized>(h: &mut H) {
     if h.heap().puc.dialect == Dialect::L55 {
         let marked = h.heap().puc.pace.estimate;
         h.heap().hooks.trace.line(format_args!("x {marked}"));
@@ -86,10 +86,4 @@ pub(crate) fn trace_full_end<H: StepHost + ?Sized>(h: &mut H) {
     }
 }
 
-impl Heap {
-    /// gc-trace: the count moved by `delta` where the instrumented PUC's
-    /// allocation function refused a growth.
-    pub(in crate::runtime::puc) fn adjust_count(&mut self, delta: i64) {
-        self.puc.count.bytes = (self.puc.count.bytes as i64 + delta) as usize;
-    }
-}
+impl Heap {}

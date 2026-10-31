@@ -60,7 +60,9 @@ pub(super) fn atomic_51<H: StepHost + ?Sized>(h: &mut H) {
     h.heap().puc.pace.strt_swept = 0;
 }
 
-pub(super) fn singlestep_51<H: StepHost + ?Sized>(h: &mut H) -> Result<i64, LuaError> {
+pub(in crate::runtime::puc) fn singlestep_51<H: StepHost + ?Sized>(
+    h: &mut H,
+) -> Result<i64, LuaError> {
     Ok(match h.heap().puc.pace.state() {
         St::Pause => {
             restart(h);

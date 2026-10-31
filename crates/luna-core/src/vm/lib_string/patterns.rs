@@ -3,7 +3,6 @@
 
 use super::{posrelat, start_pos};
 use crate::pattern::{self, CapValue, Flavor, MatchState, PatError};
-use crate::runtime::puc::api::PucCount;
 use crate::runtime::{Gc, LuaStr, Value};
 use crate::version::LuaVersion;
 use crate::vm::argcheck::{self, Args};
@@ -32,7 +31,7 @@ fn pattern_bytes(v: LuaVersion, p: &[u8]) -> &[u8] {
 fn pat_err(vm: &mut Vm, e: PatError) -> LuaError {
     // PUC's formats: each '%' shown is a `%%`, and the capture index is
     // `"invalid capture index %%%d"`
-    use crate::runtime::puc::fmt::FmtArg;
+    use crate::runtime::puc::api::FmtArg;
     let conv = e.0.matches('%').count() + usize::from(e.0.starts_with("invalid capture index %"));
     if let Some(n) =
         e.0.strip_prefix("invalid capture index %")
@@ -230,7 +229,7 @@ pub(super) fn s_gmatch<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Res
     // `GMatchState` userdata: the userdata, its check for a collection,
     // then the closure (`lua_pushcclosure`) and its check
     let it = if vm.version() >= LuaVersion::Lua53 {
-        use crate::runtime::puc::PucObj;
+        use crate::runtime::puc::api::PucObj;
         let objs = [PucObj::GMatchState, PucObj::CClosure(3)];
         vm.heap.new_obj(objs[0]);
         vm.api_check_after_rooted::<PRE>()?;

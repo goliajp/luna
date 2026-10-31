@@ -76,7 +76,7 @@ fn date<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
                 let buf = vm.buffer_slot(out.len() + room);
                 vm.native_push(buf);
                 let fmt = b"invalid conversion specifier '%%%s'";
-                let conv = [crate::runtime::puc::fmt::FmtArg::S(lib_io::c_str(rest))];
+                let conv = [crate::runtime::puc::api::FmtArg::S(lib_io::c_str(rest))];
                 return Err(match argcheck::pushed_extra(vm, 2, fmt, &conv) {
                     Ok(m) => arg_error(vm, 1, &m),
                     Err(e) => e,

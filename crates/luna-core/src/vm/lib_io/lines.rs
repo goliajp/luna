@@ -1,7 +1,6 @@
 //! Line iterators: `io.lines` and `file:lines`.
 
 use super::*;
-use crate::runtime::puc::api::PucCollector;
 
 /// Most read formats a line iterator may carry: 5.2 `LUA_MINSTACK - 3`,
 /// 5.3+ `MAXARGLINE`. The argument number in the error is the limit's own
@@ -70,8 +69,7 @@ pub(super) fn io_lines(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError
     if let Value::Native(n) = it
         && vm.version() == LuaVersion::Lua51
     {
-        vm.heap
-            .set_env51(n.hdr(), crate::runtime::puc::records::env51::ENV_IO);
+        vm.heap.set_env51(n.hdr(), crate::runtime::puc::api::ENV_IO);
     }
     // 5.4+ return the file as the generic for's closing value
     if toclose && vm.version() >= LuaVersion::Lua54 {
@@ -129,6 +127,6 @@ fn readline_error(vm: &mut Vm, e: &std::io::Error) -> LuaError {
         1
     });
     let msg = strerror(e);
-    let args = [crate::runtime::puc::fmt::FmtArg::S(msg.as_bytes())];
+    let args = [crate::runtime::puc::api::FmtArg::S(msg.as_bytes())];
     crate::vm::builtins::raise_lib(vm, b"%s", &args, 1)
 }

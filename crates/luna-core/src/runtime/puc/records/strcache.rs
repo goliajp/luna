@@ -13,8 +13,6 @@
 //! same at the same C call depth), or one fixed for the process.
 
 use super::*;
-use crate::runtime::dialect::Dialect;
-use crate::runtime::mem::Oom;
 
 /// Where a C string PUC hands to `luaS_new` lives.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,7 +57,7 @@ pub(in crate::runtime::puc) struct StrCache {
 
 impl StrCache {
     /// The string at `at` with the characters `bytes`, if the cache has it.
-    fn find(&self, at: CStr, bytes: &[u8]) -> Option<Gc<LuaStr>> {
+    pub(in crate::runtime::puc) fn find(&self, at: CStr, bytes: &[u8]) -> Option<Gc<LuaStr>> {
         let (_, slots) = self.entries.iter().find(|(k, _)| *k == at)?;
         slots
             .iter()
@@ -69,7 +67,7 @@ impl StrCache {
     }
 
     /// `s`, made for `at`, goes in front of what `at` had.
-    fn put(&mut self, at: CStr, s: Gc<LuaStr>) {
+    pub(in crate::runtime::puc) fn put(&mut self, at: CStr, s: Gc<LuaStr>) {
         match self.entries.iter_mut().find(|(k, _)| *k == at) {
             Some((_, slots)) => *slots = [Some(s), slots[0]],
             None => self.entries.push((at, [Some(s), None])),
@@ -99,41 +97,4 @@ impl StrCache {
     }
 }
 
-impl Heap {
-    /// PUC `luaS_new` of the C string at `at` holding `bytes`: from 5.3 a
-    /// long string found in the cache at that address, else a new one,
-    /// which the cache keeps there.
-    pub(in crate::runtime::puc) fn intern_at(
-        &mut self,
-        at: CStr,
-        bytes: &[u8],
-    ) -> Result<Gc<LuaStr>, Oom> {
-        let cached = matches!(self.puc.dialect, Dialect::L53 | Dialect::L54 | Dialect::L55)
-            && bytes.len() > string::MAX_SHORT_LEN;
-        if let Some(s) = self.puc.records.strcache.find(at, bytes).filter(|_| cached) {
-            return Ok(s);
-        }
-        let s = self.try_intern(bytes)?;
-        if cached {
-            self.puc.records.strcache.put(at, s);
-        }
-        Ok(s)
-    }
-
-    /// The parser's string of a chunk's name (`luaY_parser`'s `luaS_new`),
-    /// `name` the Lua string whose characters it is, if any: that string
-    /// itself where it is interned (5.1 interns every string), else a long
-    /// string through the cache.
-    pub(in crate::runtime::puc) fn chunk_name(
-        &mut self,
-        chunkname: &[u8],
-        name: Option<Gc<LuaStr>>,
-    ) -> Result<Gc<LuaStr>, Oom> {
-        let long = chunkname.len() > string::MAX_SHORT_LEN && self.puc.dialect != Dialect::L51;
-        match name {
-            Some(n) if !long => Ok(n),
-            Some(n) => self.intern_at(CStr::In(n.as_ptr() as *const GcHeader, 0), chunkname),
-            None => self.try_intern(chunkname),
-        }
-    }
-}
+impl Heap {}

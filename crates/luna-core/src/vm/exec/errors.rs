@@ -3,8 +3,7 @@
 
 use super::*;
 use crate::runtime::ErrorStatus;
-use crate::runtime::puc::api::PucText;
-use crate::runtime::puc::fmt::FmtArg;
+use crate::runtime::puc::api::FmtArg;
 mod position;
 mod type_err;
 mod varinfo;
@@ -286,7 +285,7 @@ impl Vm {
     /// PUC `luaG_ordererror`: "two X values" when the operand types match,
     /// "X with Y" otherwise (`objtypename`).
     pub(super) fn order_error(&mut self, l: Value, r: Value) -> LuaError {
-        use crate::runtime::puc::fmt::FmtArg::S;
+        use crate::runtime::puc::api::FmtArg::S;
         let (t1, t2) = (self.obj_typename(l), self.obj_typename(r));
         let (t1, t2) = (t1.as_bytes(), t2.as_bytes());
         if t1 == t2 {

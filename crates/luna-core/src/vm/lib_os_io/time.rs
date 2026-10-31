@@ -67,7 +67,7 @@ fn getfield_pushed(
 
 /// `luaL_error(L, fmt, key)` for a field of the date table.
 fn field_error(vm: &mut Vm, fmt: &str, key: &str) -> LuaError {
-    let args = [crate::runtime::puc::fmt::FmtArg::S(key.as_bytes())];
+    let args = [crate::runtime::puc::api::FmtArg::S(key.as_bytes())];
     crate::vm::builtins::raise_lib(vm, fmt.as_bytes(), &args, 1)
 }
 

@@ -4,7 +4,6 @@
 //! `totalbytes`.
 
 use super::*;
-use crate::runtime::puc::api::PucCount;
 
 impl Vm {
     /// The `CallInfo`s the running thread uses besides its base one: its
@@ -96,8 +95,8 @@ impl Vm {
     }
 
     /// The running thread, as the heap counts its blocks.
-    pub(crate) fn running_blocks(&self) -> crate::runtime::puc::Thread {
-        use crate::runtime::puc::Thread;
+    pub(crate) fn running_blocks(&self) -> crate::runtime::puc::api::Thread {
+        use crate::runtime::puc::api::Thread;
         self.current.map_or(Thread::Main, Thread::Coro)
     }
 

@@ -48,7 +48,7 @@ fn push_name(
     src: Option<Gc<crate::runtime::LuaStr>>,
     name: &[u8],
 ) -> Result<Value, LuaError> {
-    use crate::runtime::puc::records::strcache::{CStr, site};
+    use crate::runtime::puc::api::{CStr, site};
     match src {
         Some(s) => with_rules!(vm, P => vm.api_push_string_at::<P>(
             CStr::Named(s.as_ptr() as *const _, site::name_hash(name)),
@@ -63,7 +63,7 @@ fn set_str_at(
     vm: &mut Vm,
     t: Gc<Table>,
     k: &str,
-    at: crate::runtime::puc::records::strcache::CStr,
+    at: crate::runtime::puc::api::CStr,
     bytes: &[u8],
 ) -> Result<(), LuaError> {
     let v = with_rules!(vm, P => vm.api_push_string_at::<P>(at, bytes))?;

@@ -15,7 +15,7 @@
 //!   string
 
 use crate::runtime::dialect::Dialect;
-use crate::runtime::puc::PucObj;
+use crate::runtime::puc::api::PucObj;
 use crate::runtime::{Gc, LuaStr, Userdata, Value};
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;

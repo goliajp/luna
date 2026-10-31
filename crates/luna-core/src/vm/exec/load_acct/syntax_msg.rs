@@ -6,8 +6,7 @@
 
 use super::*;
 use crate::frontend::error::NearKind;
-use crate::runtime::puc::api::{PucLoads, PucText};
-use crate::runtime::puc::fmt::FmtArg;
+use crate::runtime::puc::api::FmtArg;
 use crate::version::LuaVersion;
 
 /// The messages PUC's parser formats with arguments, by dialect, besides

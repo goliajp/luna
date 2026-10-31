@@ -1,7 +1,6 @@
 //! The replay of one scanner string or one parser event.
 
 use super::*;
-use crate::runtime::puc::api::PucParse;
 
 impl Vm {
     /// One event of the log, logged at token `tok`.

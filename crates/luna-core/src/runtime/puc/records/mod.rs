@@ -3,10 +3,10 @@
 
 use super::*;
 
-pub(crate) mod env51;
+pub(in crate::runtime) mod env51;
 pub(in crate::runtime::puc) mod ghost;
 pub(crate) use ghost::{Ghost, GhostRef};
-pub(crate) mod open_upvals;
-pub(crate) mod parse;
-pub(crate) mod strcache;
-pub(crate) mod strt;
+pub(in crate::runtime) mod open_upvals;
+pub(in crate::runtime) mod parse;
+pub(in crate::runtime) mod strcache;
+pub(in crate::runtime) mod strt;

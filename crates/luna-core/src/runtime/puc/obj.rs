@@ -4,8 +4,6 @@
 
 use super::*;
 use crate::runtime::dialect::Dialect;
-use crate::runtime::mem::Oom;
-use records::GhostRef;
 
 /// One allocation of PUC's, by what it is.
 #[derive(Clone, Copy, Debug)]
@@ -121,41 +119,4 @@ impl PucObj {
     }
 }
 
-impl Heap {
-    /// A new object `o`.
-    #[inline(always)]
-    pub(in crate::runtime::puc) fn new_obj(&mut self, o: PucObj) {
-        self.acct_obj(o.kind(), self.puc_size(o));
-    }
-
-    /// `o`, made without counting, is PUC's now: counted here.
-    #[inline(always)]
-    pub(in crate::runtime::puc) fn promote_obj(&mut self, h: Gc<GcHeader>, o: PucObj) {
-        self.acct_promote_obj(h, o.kind(), self.puc_size(o));
-    }
-
-    /// An object `o` PUC makes and luna does not: counted now, freed by the
-    /// next sweep.
-    pub(in crate::runtime::puc) fn ghost_obj(&mut self, o: PucObj) -> Result<(), Oom> {
-        self.acct_ghost(o.kind(), self.puc_size(o))
-    }
-
-    /// An object `o` PUC makes and luna does not (yet), as
-    /// [`Heap::ghost_obj`]: where its record is.
-    pub(in crate::runtime::puc) fn ghost_obj_ref(&mut self, o: PucObj) -> Result<GhostRef, Oom> {
-        self.acct_ghost_ref(o.kind(), self.puc_size(o))
-    }
-
-    /// `cl`, a main closure made without counting, is PUC's now: counted
-    /// here, without 5.1's environment among its upvalues.
-    pub(in crate::runtime::puc) fn promote_main_closure(&mut self, cl: Gc<LuaClosure>) {
-        let size = self.closure_size(&cl.proto, cl.upvals().len());
-        self.acct_promote_obj(cl.hdr(), PucKind::LuaClosure, size);
-    }
-
-    /// The bytes PUC allocates for `o` in this dialect.
-    #[inline]
-    pub(in crate::runtime) fn puc_size(&self, o: PucObj) -> usize {
-        o.bytes(self.puc.dialect, &self.puc.sizes)
-    }
-}
+impl Heap {}

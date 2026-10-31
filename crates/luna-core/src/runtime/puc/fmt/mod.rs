@@ -6,7 +6,7 @@
 //! buffer on the C stack, making a string of it each time it fills; 5.5
 //! grows a block for what does not fit and makes one string at the end.
 
-use crate::numeric::{self, FloatFmt, Num};
+use crate::numeric::{FloatFmt, Num};
 use crate::runtime::dialect::Dialect;
 use crate::runtime::heap::{Gc, Heap};
 use crate::runtime::mem::Oom;
@@ -33,11 +33,11 @@ pub(crate) enum FmtArg<'a> {
 
 mod concat;
 mod gbuff;
-pub(crate) use gbuff::Gbuff;
+pub(in crate::runtime) use gbuff::Gbuff;
 mod vfs;
 
 impl Heap {
-    fn float_fmt(&self) -> FloatFmt {
+    pub(in crate::runtime::puc) fn float_fmt(&self) -> FloatFmt {
         match self.puc.dialect {
             Dialect::L51 | Dialect::L52 => FloatFmt::Legacy14,
             Dialect::L53 | Dialect::L54 => FloatFmt::G14,
@@ -45,32 +45,12 @@ impl Heap {
         }
     }
 
-    /// The text of a number as PUC writes it (`lua_number2str`,
-    /// `tostringbuff`); 5.1 and 5.2 have no integers.
-    pub(in crate::runtime::puc) fn number_text(&self, n: Num) -> String {
-        let n = match (self.puc.dialect, n) {
-            (Dialect::L51 | Dialect::L52, Num::Int(i)) => Num::Float(i as f64),
-            (_, n) => n,
-        };
-        numeric::num_to_string_for(n, self.float_fmt())
-    }
-
-    /// The string of `fmt` with each directive replaced by the next of
-    /// `args`, made as PUC's `lua_pushfstring` makes it.
-    pub(in crate::runtime::puc) fn pushfstring(
+    /// 5.1 to 5.3: every piece a string (or a number), joined at the end.
+    pub(in crate::runtime::puc) fn pushfstring_pieces(
         &mut self,
         fmt: &[u8],
         args: &[FmtArg<'_>],
     ) -> Result<Gc<LuaStr>, Oom> {
-        match self.puc.dialect {
-            Dialect::L54 => self.pushfstring_54(fmt, args),
-            Dialect::L55 => self.pushfstring_55(fmt, args),
-            _ => self.pushfstring_pieces(fmt, args),
-        }
-    }
-
-    /// 5.1 to 5.3: every piece a string (or a number), joined at the end.
-    fn pushfstring_pieces(&mut self, fmt: &[u8], args: &[FmtArg<'_>]) -> Result<Gc<LuaStr>, Oom> {
         let d = self.puc.dialect;
         let mut st: Vec<Value> = Vec::new();
         if d == Dialect::L51 {

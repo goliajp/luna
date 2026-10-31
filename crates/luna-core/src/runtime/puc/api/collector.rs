@@ -2,251 +2,191 @@
 //! records its marking and sweep keep (5.1's environments, open upvalues).
 
 use super::super::*;
-use crate::runtime::Coro;
-use crate::runtime::function::Upvalue;
-use crate::runtime::heap::Heap;
-use crate::runtime::puc::pace::FinalizerStop;
-use crate::runtime::puc::records::open_upvals::OpenLend;
+use crate::runtime::dialect::Dialect;
 use crate::runtime::puc::step::CiCount;
 
-/// Driving PUC's collector: its parameters and pace, its steps, and the
-/// records its marking and sweep keep (5.1's environments, open upvalues).
-pub(crate) trait PucCollector {
+/// How the collector ran before a finalizer (see
+/// [`Heap::finalizer_runs`]).
+#[must_use = "the collector stays stopped until the token goes back to `Heap::finalizer_returned`"]
+pub(crate) struct FinalizerStop {
+    stopped: bool,
+    fin_stop: bool,
+    threshold: i64,
+}
+
+impl Heap {
+    /// 5.1's `GCTM` runs a finalizer: under a threshold of twice the
+    /// count. The threshold it had, for [`Heap::fin51_threshold_back`].
+    #[inline]
+    pub(in crate::runtime::puc) fn fin51_threshold(&mut self) -> i64 {
+        let saved = self.puc.pace.threshold();
+        self.puc.pace.set_threshold(2 * self.puc.count.bytes as i64);
+        saved
+    }
+
+    /// The finalizer returned: the threshold it ran under is `saved` again.
+    #[inline]
+    pub(in crate::runtime::puc) fn fin51_threshold_back(&mut self, saved: i64) {
+        self.puc.pace.set_threshold(saved);
+    }
+}
+
+impl Heap {
     /// What a memory cap is held against: the bytes the allocation context
     /// has handed out, when it counts them (a host function or a policy),
     /// else PUC's count ([`Heap::bytes`]).
-    fn cap_bytes(&self) -> usize;
-    /// Thread `owner` closes its upvalues from `slot` up: the dead ones
-    /// among them are freed now.
-    fn close_dead_open(&mut self, thread: Option<Gc<Coro>>, slot: u32);
-    /// Whether an allocation that failed may run an emergency collection:
-    /// never in 5.1; in 5.2 only while the collector runs (`gcrunning`);
-    /// from 5.3 on, always.
-    fn emergency_allowed(&self) -> bool;
-    /// Where the latest records are on PUC's list: E1 and `io_fclose`
-    /// after the io library's first function, E2 and `io_noclose` before
-    /// its last, E3 and `io_pclose` before them (the standard files they
-    /// were made after are at the list's end).
-    fn env51_anchors(&mut self, first: *mut GcHeader, last: *mut GcHeader);
-    /// Record `k` made now (the opening counted it): current white and
-    /// live; its header, which names it on the stack. E1 made again
-    /// starts the records of another opening.
-    fn env51_born(&mut self, k: usize) -> *mut GcHeader;
-    /// The default input (0) or output (1) in the latest E1's array.
-    fn env51_io(&self, i: usize) -> Option<Gc<Userdata>>;
-    /// The package table, the loaders' environment.
-    fn env51_package(&mut self, t: Gc<Table>);
-    /// Which record `h` heads, if one does.
-    fn env51_record_index(&self, h: *mut GcHeader) -> Option<usize>;
-    /// The latest E1's array entry `i` set to `u`, with the barrier of
-    /// `lua_rawseti` into E1.
-    fn env51_set_io(&mut self, i: usize, u: Gc<Userdata>);
-    /// `lua_setfield` of `key` and the record `v` (a closure) into the
-    /// record `t`, one of the io library's tables: 5.1's `luaC_barriert`.
-    /// Both must be records of this heap's.
-    fn env51_set_key(&mut self, t: *mut GcHeader, key: Gc<LuaStr>, v: *mut GcHeader);
-    /// The finalizer returned, `ok` or raising: the collector runs as
-    /// before it; a 5.1 error leaves the threshold it ran under.
-    fn finalizer_returned(&mut self, stop: FinalizerStop, ok: bool);
+    pub(crate) fn cap_bytes(&self) -> usize {
+        self.mem_ctx().in_use().unwrap_or(self.puc.count.bytes)
+    }
+
+    /// [`Heap::gc_due`] once `more` bytes more are counted.
+    #[inline]
+    pub(crate) fn gc_due_after(&self, more: usize) -> bool {
+        self.puc_due_after(more) && !self.no_gc() && !self.no_auto()
+    }
+
+    /// `collectgarbage("stop"/"restart")`: suspend or resume auto-GC.
+    pub(crate) fn gc_is_stopped(&self) -> bool {
+        self.puc.stopped
+    }
+
+    /// `collectgarbage("stop")` / `"restart"`. A restart makes a step due
+    /// at once (5.1 `GCthreshold = totalbytes`, later `luaE_setdebt(g, 0)`).
+    pub(crate) fn gc_set_stopped(&mut self, stopped: bool) {
+        self.puc.stopped = stopped;
+        if !stopped {
+            self.puc_restart_due();
+        }
+        self.refresh_gc_limit();
+    }
+
+    /// The count at which the next step falls due, from the pace. 5.1
+    /// stops the collector with an unreachable threshold; the later
+    /// dialects still step then, to put the debt back.
+    pub(crate) fn refresh_gc_limit(&mut self) {
+        self.puc_set_limit(self.puc.stopped && self.puc_rules().stop_unreachable);
+    }
+
     /// A finalizer is about to run (`GCTM`): the collector stops as PUC's
     /// does, 5.1 under a threshold twice the count, 5.2 and 5.3 not
     /// running, 5.4 and 5.5 stopped for the finalizer (`GCSTPGC`). What
     /// [`Heap::finalizer_returned`] puts back.
-    fn finalizer_runs(&mut self) -> FinalizerStop;
-    /// There may be objects to be finalized (PUC `gcfinnum = 1`).
-    fn finalizers_due(&mut self);
+    pub(crate) fn finalizer_runs(&mut self) -> FinalizerStop {
+        let stop = FinalizerStop {
+            stopped: self.puc.stopped,
+            fin_stop: self.puc.fin_stop,
+            threshold: match self.puc.dialect {
+                Dialect::L51 => self.fin51_threshold(),
+                _ => 0,
+            },
+        };
+        match self.puc.dialect {
+            Dialect::L51 => {}
+            Dialect::L52 | Dialect::L53 => self.puc.stopped = true,
+            _ => self.puc.fin_stop = true,
+        }
+        self.refresh_gc_limit();
+        stop
+    }
+
+    /// The finalizer returned, `ok` or raising: the collector runs as
+    /// before it; a 5.1 error leaves the threshold it ran under.
+    pub(crate) fn finalizer_returned(&mut self, stop: FinalizerStop, ok: bool) {
+        match self.puc.dialect {
+            Dialect::L51 => {
+                if ok {
+                    self.fin51_threshold_back(stop.threshold);
+                    self.puc.stopped = stop.stopped;
+                }
+            }
+            Dialect::L52 | Dialect::L53 => self.puc.stopped = stop.stopped,
+            _ => self.puc.fin_stop = stop.fin_stop,
+        }
+        self.refresh_gc_limit();
+    }
+
+    /// Whether an allocation that failed may run an emergency collection:
+    /// never in 5.1; in 5.2 only while the collector runs (`gcrunning`);
+    /// from 5.3 on, always.
+    pub(crate) fn emergency_allowed(&self) -> bool {
+        match self.puc.dialect {
+            Dialect::L51 => false,
+            Dialect::L52 => !self.puc.stopped,
+            _ => true,
+        }
+    }
+
     /// 5.2's full collection calls the pending finalizers first; the
     /// others clear the running stack's dead slots.
-    fn full_calls_pending_first(&self) -> bool;
-    /// [`Heap::gc_due`] once `more` bytes more are counted.
-    fn gc_due_after(&self, more: usize) -> bool;
-    /// `collectgarbage("stop"/"restart")`: suspend or resume auto-GC.
-    fn gc_is_stopped(&self) -> bool;
+    pub(crate) fn full_calls_pending_first(&self) -> bool {
+        self.puc.dialect == Dialect::L52
+    }
+
     /// `collectgarbage`'s pacing parameters.
-    fn gc_params(&self) -> &GcParams;
-    fn gc_params_mut(&mut self) -> &mut GcParams;
-    /// `collectgarbage("stop")` / `"restart"`. A restart makes a step due
-    /// at once (5.1 `GCthreshold = totalbytes`, later `luaE_setdebt(g, 0)`).
-    fn gc_set_stopped(&mut self, stopped: bool);
-    /// Whether some dead open upvalue waits for the sweep.
-    fn has_dead_open(&self) -> bool;
-    /// The VM's lists of open upvalues, lent to the collection under way.
-    fn lend_open_upvals(&mut self, lend: OpenLend);
-    /// The light function the opening made as function `id`.
-    fn light(&self, id: usize) -> Option<Gc<crate::runtime::NativeClosure>>;
+    #[inline]
+    pub(crate) fn gc_params(&self) -> &GcParams {
+        &self.puc.params
+    }
+
+    #[inline]
+    pub(crate) fn gc_params_mut(&mut self) -> &mut GcParams {
+        &mut self.puc.params
+    }
+
+    /// There may be objects to be finalized (PUC `gcfinnum = 1`).
+    #[inline]
+    pub(crate) fn finalizers_due(&mut self) {
+        self.puc.pace.fin_num = 1;
+    }
+
     /// Whether the standalone interpreter restarts the collector in
     /// generational mode before it runs anything (5.4 on `lua.c`).
-    fn lua_c_starts_generational(&self) -> bool;
-    /// Whether this dialect's collector keeps open upvalues on threads.
-    fn open_on_threads(&self) -> bool;
+    pub(crate) fn lua_c_starts_generational(&self) -> bool {
+        self.puc.dialect >= Dialect::L54
+    }
+
     /// Which `CallInfo`s PUC's traversal of a thread counts.
-    fn puc_ci_count(&self) -> CiCount;
-    /// The count at which the next step falls due, from the pace. 5.1
-    /// stops the collector with an unreachable threshold; the later
-    /// dialects still step then, to put the debt back.
-    fn refresh_gc_limit(&mut self);
-    /// The dead open upvalue of `owner`'s `slot`, which a new closure takes
-    /// back before the sweep frees it (PUC `luaF_findupval`).
-    fn revive_open(&mut self, thread: Option<Gc<Coro>>, slot: u32) -> Option<Gc<Upvalue>>;
-    /// The object behind `h`, a native or a userdata, has environment
-    /// `env`: one of the io library's is the latest opening's.
-    fn set_env51(&mut self, h: Gc<GcHeader>, env: u8);
+    pub(crate) fn puc_ci_count(&self) -> CiCount {
+        match self.puc.dialect {
+            Dialect::L51 => CiCount::Array51,
+            Dialect::L52 => CiCount::InUse,
+            _ => CiCount::Allocated,
+        }
+    }
+
+    /// The light function the opening made as function `id`.
+    pub(crate) fn light(&self, id: usize) -> Option<Gc<crate::runtime::NativeClosure>> {
+        self.puc.opening.lights.get(id).copied().flatten()
+    }
+
     /// Function `id` of the opening's `count` is the light function `g`:
     /// one value however often pushed.
-    fn set_light(&mut self, id: usize, count: usize, g: Gc<crate::runtime::NativeClosure>);
-    /// The lists handed over (see [`Heap::lend_open_upvals`]), back to the
-    /// VM.
-    fn take_open_lend(&mut self) -> Option<OpenLend>;
-}
-
-impl PucCollector for Heap {
-    #[inline(always)]
-    fn cap_bytes(&self) -> usize {
-        Heap::cap_bytes(self)
+    pub(crate) fn set_light(
+        &mut self,
+        id: usize,
+        count: usize,
+        g: Gc<crate::runtime::NativeClosure>,
+    ) {
+        let l = &mut self.puc.opening.lights;
+        if l.len() <= id {
+            l.resize(count.max(id + 1), None);
+        }
+        l[id] = Some(g);
     }
 
-    #[inline(always)]
-    fn close_dead_open(&mut self, thread: Option<Gc<Coro>>, slot: u32) {
-        Heap::close_dead_open(self, thread, slot)
+    /// Whether the count has reached the point a step falls due at: the
+    /// comparison compiled code makes with the words of [`Heap::due_words`].
+    #[inline]
+    pub(crate) fn due_reached(&self) -> bool {
+        self.puc_due_after(0)
     }
 
-    #[inline(always)]
-    fn emergency_allowed(&self) -> bool {
-        Heap::emergency_allowed(self)
-    }
-
-    #[inline(always)]
-    fn env51_anchors(&mut self, first: *mut GcHeader, last: *mut GcHeader) {
-        Heap::env51_anchors(self, first, last)
-    }
-
-    #[inline(always)]
-    fn env51_born(&mut self, k: usize) -> *mut GcHeader {
-        Heap::env51_born(self, k)
-    }
-
-    #[inline(always)]
-    fn env51_io(&self, i: usize) -> Option<Gc<Userdata>> {
-        Heap::env51_io(self, i)
-    }
-
-    #[inline(always)]
-    fn env51_package(&mut self, t: Gc<Table>) {
-        Heap::env51_package(self, t)
-    }
-
-    #[inline(always)]
-    fn env51_record_index(&self, h: *mut GcHeader) -> Option<usize> {
-        Heap::env51_record_index(self, h)
-    }
-
-    #[inline(always)]
-    fn env51_set_io(&mut self, i: usize, u: Gc<Userdata>) {
-        Heap::env51_set_io(self, i, u)
-    }
-
-    #[inline(always)]
-    fn env51_set_key(&mut self, t: *mut GcHeader, key: Gc<LuaStr>, v: *mut GcHeader) {
-        Heap::env51_set_key(self, t, key, v)
-    }
-
-    #[inline(always)]
-    fn finalizer_returned(&mut self, stop: FinalizerStop, ok: bool) {
-        Heap::finalizer_returned(self, stop, ok)
-    }
-
-    #[inline(always)]
-    fn finalizer_runs(&mut self) -> FinalizerStop {
-        Heap::finalizer_runs(self)
-    }
-
-    #[inline(always)]
-    fn finalizers_due(&mut self) {
-        Heap::finalizers_due(self)
-    }
-
-    #[inline(always)]
-    fn full_calls_pending_first(&self) -> bool {
-        Heap::full_calls_pending_first(self)
-    }
-
-    #[inline(always)]
-    fn gc_due_after(&self, more: usize) -> bool {
-        Heap::gc_due_after(self, more)
-    }
-
-    #[inline(always)]
-    fn gc_is_stopped(&self) -> bool {
-        Heap::gc_is_stopped(self)
-    }
-
-    #[inline(always)]
-    fn gc_params(&self) -> &GcParams {
-        Heap::gc_params(self)
-    }
-
-    #[inline(always)]
-    fn gc_params_mut(&mut self) -> &mut GcParams {
-        Heap::gc_params_mut(self)
-    }
-
-    #[inline(always)]
-    fn gc_set_stopped(&mut self, stopped: bool) {
-        Heap::gc_set_stopped(self, stopped)
-    }
-
-    #[inline(always)]
-    fn has_dead_open(&self) -> bool {
-        Heap::has_dead_open(self)
-    }
-
-    #[inline(always)]
-    fn lend_open_upvals(&mut self, lend: OpenLend) {
-        Heap::lend_open_upvals(self, lend)
-    }
-
-    #[inline(always)]
-    fn light(&self, id: usize) -> Option<Gc<crate::runtime::NativeClosure>> {
-        Heap::light(self, id)
-    }
-
-    #[inline(always)]
-    fn lua_c_starts_generational(&self) -> bool {
-        Heap::lua_c_starts_generational(self)
-    }
-
-    #[inline(always)]
-    fn open_on_threads(&self) -> bool {
-        Heap::open_on_threads(self)
-    }
-
-    #[inline(always)]
-    fn puc_ci_count(&self) -> CiCount {
-        Heap::puc_ci_count(self)
-    }
-
-    #[inline(always)]
-    fn refresh_gc_limit(&mut self) {
-        Heap::refresh_gc_limit(self)
-    }
-
-    #[inline(always)]
-    fn revive_open(&mut self, thread: Option<Gc<Coro>>, slot: u32) -> Option<Gc<Upvalue>> {
-        Heap::revive_open(self, thread, slot)
-    }
-
-    #[inline(always)]
-    fn set_env51(&mut self, h: Gc<GcHeader>, env: u8) {
-        Heap::set_env51(self, h, env)
-    }
-
-    #[inline(always)]
-    fn set_light(&mut self, id: usize, count: usize, g: Gc<crate::runtime::NativeClosure>) {
-        Heap::set_light(self, id, count, g)
-    }
-
-    #[inline(always)]
-    fn take_open_lend(&mut self) -> Option<OpenLend> {
-        Heap::take_open_lend(self)
+    /// The two words a safe point compares, `bytes` and `gc_limit`
+    /// [`GC_LIMIT_OFFSET`] bytes after it, for compiled code to compare
+    /// itself: no step is due while `bytes < gc_limit`.
+    ///
+    /// [`GC_LIMIT_OFFSET`]: crate::runtime::puc::GC_LIMIT_OFFSET
+    pub(crate) fn due_words(&self) -> *const usize {
+        std::ptr::from_ref(&self.puc.count).cast()
     }
 }

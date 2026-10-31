@@ -7,8 +7,7 @@
 use super::Ar;
 use super::levels::tail_ar;
 use super::traceback::{TbLine, traceback_plan};
-use crate::runtime::puc::api::PucText;
-use crate::runtime::puc::fmt::FmtArg;
+use crate::runtime::puc::api::FmtArg;
 use crate::runtime::{Coro, Gc, LuaStr, Value};
 use crate::version::LuaVersion;
 use crate::vm::error::LuaError;

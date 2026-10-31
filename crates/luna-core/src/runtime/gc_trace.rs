@@ -264,7 +264,7 @@ fn callers() -> String {
 
 /// The tag PUC passes its allocation function for a new object of `kind`
 /// (5.1 passes none).
-pub(crate) fn puc_tag(
+pub(in crate::runtime) fn puc_tag(
     kind: crate::runtime::puc::PucKind,
     d: crate::runtime::dialect::Dialect,
 ) -> usize {

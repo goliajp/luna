@@ -3,7 +3,6 @@
 //! then garbage that the collector finalizes before freeing it.
 
 use crate::runtime::dialect::Dialect;
-use crate::runtime::puc::api::PucCount;
 use crate::runtime::userdata::UserdataPayload;
 use crate::runtime::{Gc, LuaStr, Table, Userdata, Value};
 use crate::version::LuaVersion;
@@ -29,7 +28,7 @@ impl Vm {
     /// for boxes (made the first time), registered for finalization, in
     /// stack slot `slot` (the buffer's).
     pub(crate) fn new_box(&mut self, slot: Option<u32>) -> Result<Gc<Userdata>, LuaError> {
-        let size = self.heap.puc_size(crate::runtime::puc::PucObj::Box);
+        let size = self.heap.puc_size(crate::runtime::puc::api::PucObj::Box);
         let u = self.lib_userdata(UserdataPayload::Empty, false, size)?;
         // on the stack of the running native until the buffer is done
         let at = self.running_natives.len() as u32;

@@ -2,54 +2,6 @@
 
 use super::*;
 
-/// A full collection ended (`luaC_fullgc`): the cycle at its pause,
-/// the estimate what is left (5.5: what was marked), and the debt
-/// `setpause` sets.
-pub(crate) fn gc_full_pause<H: StepHost + ?Sized>(h: &mut H) {
-    let d = h.heap().puc.dialect;
-    let bytes = h.heap().bytes() as i64;
-    let p = &mut h.heap().puc.pace;
-    p.enter(St::Pause);
-    p.fin_left = None;
-    if d == Dialect::L51 {
-        p.dept = 0;
-    }
-    // 5.2 keeps what the cycle traversed
-    if !matches!(d, Dialect::L52 | Dialect::L55) {
-        p.estimate = bytes;
-    }
-    gc_full_repause(h);
-}
-
-/// The pause a full collection sets (`setpause`, 5.1 `setthreshold`)
-/// from the estimate it left, with the count as it is now: after the
-/// finalizers it called but 5.2's.
-pub(crate) fn gc_full_repause<H: StepHost + ?Sized>(h: &mut H) {
-    let d = h.heap().puc.dialect;
-    let bytes = h.heap().bytes();
-    let heap = h.heap();
-    let pause = heap.puc.params.get(Param::Pause);
-    let params = &heap.puc.params;
-    let p = &mut heap.puc.pace;
-    match d {
-        Dialect::L51 => p.set_threshold(threshold_51(p.estimate, pause)),
-        Dialect::L55 => {
-            let threshold = params.apply(Param::Pause, p.estimate);
-            p.set_debt(d, bytes, pause_debt_55(bytes, threshold));
-        }
-        _ => {
-            // 5.2's pause is from the count, its estimate what was traversed
-            let e = if d == Dialect::L52 {
-                bytes as i64
-            } else {
-                p.estimate
-            };
-            p.set_debt(d, bytes, pause_debt(d, bytes, e, pause));
-        }
-    }
-    h.heap().refresh_gc_limit();
-}
-
 /// Generational mode entered (`entergen`): the debt before the first
 /// minor collection (`setminordebt`), 5.4 a share of the count, 5.5
 /// of what was marked.

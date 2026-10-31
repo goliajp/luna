@@ -21,9 +21,9 @@ pub(crate) use table::{PKey, PTab};
 pub(in crate::runtime) use unborn::LoadsAside;
 
 /// In a record's `sub` byte: a parser table.
-const LOADTAB: u8 = 0x20;
+pub(in crate::runtime::puc) const LOADTAB: u8 = 0x20;
 /// In a prototype's or a closure's `cls`: the parser is building it.
-pub(crate) const PARSING: u8 = 0x20;
+pub(in crate::runtime) const PARSING: u8 = 0x20;
 /// In a string's `cls`: only a load in progress holds it, which PUC has
 /// not made it for yet. PUC frees it; luna keeps it, uncounted.
 pub(in crate::runtime::puc) const KEPT: u8 = 0x20;
@@ -39,12 +39,12 @@ pub(in crate::runtime::puc) fn kept_bit(tag: ObjTag) -> u8 {
 /// sizes and the objects among its keys and values.
 #[repr(C)]
 pub(crate) struct LoadTab {
-    pub(crate) hdr: GcHeader,
-    asize: u32,
-    nodes: u32,
+    pub(in crate::runtime) hdr: GcHeader,
+    pub(in crate::runtime::puc) asize: u32,
+    pub(in crate::runtime::puc) nodes: u32,
     /// made while counting, so counted as it grows and when it is freed
-    counted: bool,
-    pub(super) refs: LVec<*mut GcHeader>,
+    pub(in crate::runtime::puc) counted: bool,
+    pub(in crate::runtime::puc) refs: LVec<*mut GcHeader>,
 }
 
 /// A prototype being built, as PUC's holds it so far: the strings among
@@ -96,23 +96,6 @@ pub(in crate::runtime::puc) unsafe fn load_tab_size(
 }
 
 impl Heap {
-    /// A new empty parser table (PUC `luaH_new`), counted.
-    pub(in crate::runtime::puc) fn new_load_tab(&mut self) -> Result<Gc<LoadTab>, Oom> {
-        let mut hdr = GcHeader::new(ObjTag::Ghost);
-        (hdr.sub, hdr.cls) = (LOADTAB, 0);
-        hdr.set_flags(0);
-        let refs = LVec::new(self.mem());
-        let t = self.try_adopt(LoadTab {
-            hdr,
-            asize: 0,
-            nodes: 0,
-            counted: self.counting(),
-            refs,
-        })?;
-        self.acct_obj(PucKind::Table, self.puc.sizes.table);
-        Ok(t)
-    }
-
     /// The parser table `t` resized to `a` array slots and `h` nodes (PUC
     /// `luaH_resize`).
     pub(in crate::runtime::puc) fn load_tab_resize(&mut self, t: Gc<LoadTab>, a: usize, h: usize) {
@@ -197,19 +180,6 @@ impl Heap {
     }
 }
 
-/// Mark the object of `g` as one the parser is building, or no more.
-pub(in crate::runtime::puc) fn set_parsing<T: GcObject>(g: Gc<T>, on: bool) {
-    let h = g.header();
-    // SAFETY: a handle's object is allocated; only its class byte is written
-    unsafe {
-        if on {
-            (*h).cls |= PARSING;
-        } else {
-            (*h).cls &= !PARSING;
-        }
-    }
-}
-
 impl Heap {
     /// A dead object a sweep reached: when it is a string only a load held
     /// ([`KEPT`]), it is freed in the count, as PUC frees it, and kept
@@ -243,33 +213,4 @@ impl Heap {
     }
 }
 
-impl Heap {
-    /// `luaC_objbarrier` from the main closure `cl` to its new upvalue
-    /// `uv`: an upvalue is marked with what it holds at once, never gray.
-    pub(in crate::runtime::puc) fn barrier_new_upval(
-        &mut self,
-        cl: Gc<crate::runtime::LuaClosure>,
-        uv: Gc<crate::runtime::function::Upvalue>,
-    ) {
-        let (c, u) = (cl.header(), uv.header());
-        // SAFETY: both are live objects of this heap; only flag bytes are
-        // read and written
-        unsafe {
-            if !is_black((*c).flags()) || !is_white((*u).flags()) {
-                return;
-            }
-            // in a sweep the closure goes white instead (`luaC_barrier`)
-            if self.phase() != GcPhase::Propagate {
-                (*c).paint(self.white());
-                return;
-            }
-            if self.puc.pace.count_marked && self.phase() == GcPhase::Propagate {
-                self.count_marked(u);
-            }
-            (*u).paint(BLACK);
-        }
-        if let crate::runtime::function::UpvalState::Closed(v) = uv.state {
-            self.barrier_forward(uv, v);
-        }
-    }
-}
+impl Heap {}
