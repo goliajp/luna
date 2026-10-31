@@ -48,7 +48,7 @@ fn reached<E: Emit>(lw: &mut Lower<E>) -> Value {
         types::I64,
         MemFlagsData::new(),
         w,
-        luna_core::jit::JIT_GC_LIMIT_OFFSET,
+        luna_core::__private::JIT_GC_LIMIT_OFFSET,
     );
     lw.bcx
         .ins()
@@ -91,7 +91,7 @@ fn call_gc_step<E: Emit>(lw: &mut Lower<E>, check: u32, exit: Value) -> Value {
 /// exits make objects the step would have to see), and not ahead of time.
 fn steps_in_place<E: Emit>(lw: &Lower<E>, pl: &Plan<'_>, i: usize, check: u32) -> bool {
     let after = i + 1;
-    check != luna_core::jit::JIT_GC_CALL
+    check != luna_core::__private::JIT_GC_CALL
         && !pl.opts.aot
         && pl.record.side_trace_parent.is_none()
         && pl.downrec_idx_opt.is_none()
@@ -272,7 +272,7 @@ pub(super) fn gc_quiet_before<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usiz
 /// it finds none).
 pub(super) fn call_gc_check<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, i: usize) {
     if !lw.gc_quiet {
-        gc_due_exit_as(lw, pl, i, 0, luna_core::jit::JIT_GC_CALL);
+        gc_due_exit_as(lw, pl, i, 0, luna_core::__private::JIT_GC_CALL);
         lw.gc_quiet = true;
     }
 }
