@@ -269,7 +269,7 @@ impl<'a> ThreadStack<'a> {
 
 /// Is `f` the protected call `Vm::call_value_with_handler` makes?
 fn is_host_call(f: Value) -> bool {
-    use crate::vm::exec::native_call::NativeKind;
+    use crate::vm::exec::native::call::NativeKind;
     matches!(f, Value::Native(nc) if matches!(nc.kind, NativeKind::HostXpcall | NativeKind::HostPcall))
 }
 

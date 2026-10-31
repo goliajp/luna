@@ -21,7 +21,7 @@ pub use crate::vm::exec::host_c::debug::{HostAr, HostHookFn, HostLevel};
 pub use crate::vm::exec::host_c::libs::HostOpenError;
 pub use crate::vm::exec::host_c::load::HostLoadError;
 pub use crate::vm::exec::host_c::values::{HOST_OP_BNOT, HOST_OP_UNM};
-pub use crate::vm::exec::jit_levels::JitLimits;
+pub use crate::vm::exec::jit::levels::JitLimits;
 pub use crate::vm::exec::load::text::{ParsedText, TextLoad};
 pub use crate::vm::jit_state::{JitCounters, JitState};
 

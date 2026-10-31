@@ -368,7 +368,7 @@ pub struct NativeClosure {
     pub is_async: bool,
     /// Which natives the call path runs itself, from `builtin`; a call
     /// tests this one byte.
-    pub(crate) kind: crate::vm::exec::native_call::NativeKind,
+    pub(crate) kind: crate::vm::exec::native::call::NativeKind,
     /// Which library function this is, given when it was created.
     pub builtin: crate::runtime::Builtin,
 }

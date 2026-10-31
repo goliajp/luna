@@ -10,7 +10,7 @@ use crate::runtime::value::tag;
 /// gc-verify builds keep every read and write on the probed path.
 const PROBED_ONLY: bool = crate::runtime::gc_hooks::VERIFY;
 use super::set::{table_raw_set_at, table_set_existing_at};
-use fast_arith::{raw_gc, raw_int, raw_tag};
+use crate::vm::exec::fast::arith_ops::{raw_gc, raw_int, raw_tag};
 
 /// Raw `tb[*pk]`, the key read in place (strings by pointer, integers in
 /// the array part, others out of line), copied straight to `dst` (PUC

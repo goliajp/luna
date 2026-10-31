@@ -82,9 +82,9 @@ impl Vm {
     pub(crate) fn sweep_main_52(&mut self) {
         if self.current.is_none() {
             let inuse = self.stack_in_use();
-            self.shrink_running(crate::vm::exec::stack_inuse::Shrink::Collector, inuse);
+            self.shrink_running(crate::vm::exec::stack::inuse::Shrink::Collector, inuse);
         } else {
-            self.collector_shrinks_main(crate::vm::exec::stack_inuse::Shrink::Collector);
+            self.collector_shrinks_main(crate::vm::exec::stack::inuse::Shrink::Collector);
         }
     }
 
@@ -162,11 +162,11 @@ impl Vm {
         let running = self.current.or(self.main_coro);
         if running.is_some_and(|c| c.ptr_eq(co)) {
             let inuse = self.stack_in_use();
-            self.shrink_running(super::stack_inuse::Shrink::Collector, inuse);
+            self.shrink_running(crate::vm::exec::stack::inuse::Shrink::Collector, inuse);
         } else if self.main_ctx.is_some() && self.main_coro.is_some_and(|c| c.ptr_eq(co)) {
-            self.collector_shrinks_main(crate::vm::exec::stack_inuse::Shrink::Collector);
+            self.collector_shrinks_main(crate::vm::exec::stack::inuse::Shrink::Collector);
         } else {
-            self.collector_shrinks_coro(co, crate::vm::exec::stack_inuse::Shrink::Collector);
+            self.collector_shrinks_coro(co, crate::vm::exec::stack::inuse::Shrink::Collector);
         }
     }
 

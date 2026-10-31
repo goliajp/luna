@@ -21,7 +21,7 @@ macro_rules! fast_loop_a64_arms {
         // not with them), and anything else to `Vm::for_loop`. The limit at
         // offset `$d lim` is only read, and its tag not tested: whatever
         // changes it outside the loop's own code unseals the step (see
-        // `num_words::unseal`), whose whole first word is tested.
+        // `num::words::unseal`), whose whole first word is tested.
         #[cfg(all(target_arch = "aarch64", not(miri)))]
         macro_rules! float_first {
             ($d ra:ident, $d lim:expr, $d step:expr) => {{

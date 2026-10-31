@@ -5,7 +5,7 @@
 use super::*;
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
-use fast_arith::{raw_gc, raw_tag};
+use crate::vm::exec::fast::arith_ops::{raw_gc, raw_tag};
 
 /// Where [`Vm::index_op_miss`] finds a read's operands.
 pub(in super::super) const MISS_BY_OP: u8 = 0;
@@ -207,8 +207,8 @@ impl Vm {
         key: Gc<crate::runtime::string::LuaStr>,
         dst: u32,
     ) -> Result<(), LuaError> {
-        use super::fast_arith::{raw_gc, raw_tag};
         use crate::runtime::value::tag;
+        use crate::vm::exec::fast::arith_ops::{raw_gc, raw_tag};
         // the object's tag and payload are read on their own: the register
         // was usually just written, and a whole-value read of it would wait
         // for that store to reach the cache

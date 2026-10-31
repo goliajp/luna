@@ -177,7 +177,7 @@ impl Vm {
     /// `luaE_resetthread` of `co`, closed (`closed`: its context swapped
     /// back out; `err`: closing it raised, or it died of an error): dead,
     /// its stacks emptied, the stack's size as PUC leaves it.
-    fn reset_closed_coro(&mut self, co: Gc<Coro>, closed: &super::coro_ctx::SavedCtx, err: bool) {
+    fn reset_closed_coro(&mut self, co: Gc<Coro>, closed: &super::coro::ctx::SavedCtx, err: bool) {
         // SAFETY: `co` is still held by the caller, and its context was swapped back out above (`take_ctx`), so `m` is the only reference into it while it is cleared
         let m = unsafe { co.as_mut() };
         m.status = CoroStatus::Dead;
@@ -296,3 +296,5 @@ impl Vm {
         }
     }
 }
+pub(in crate::vm::exec) mod ctx;
+pub(in crate::vm::exec) mod resume;

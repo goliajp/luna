@@ -283,3 +283,4 @@ impl Vm {
         }
     }
 }
+pub(in crate::vm::exec) mod retry;

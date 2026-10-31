@@ -3,7 +3,7 @@
 use super::*;
 use crate::runtime::string::LuaStr;
 use crate::runtime::value::tag;
-use fast_arith::{raw_gc, raw_int, raw_tag};
+use crate::vm::exec::fast::arith_ops::{raw_gc, raw_int, raw_tag};
 
 /// Overwrite `tb[*pk]` with `*pv` when the key is present with a non-nil
 /// value (PUC `luaV_fastset`); `false`, having done nothing, otherwise.

@@ -99,7 +99,7 @@ macro_rules! fast_loop_arms {
         // tests its index (or variable) tag and its step's whole first word
         // and not the limit's tag: the step only reads the limit, and
         // whatever changes it outside the loop's own code unseals the step
-        // (see `num_words::unseal`). Elsewhere the three tags.
+        // (see `num::words::unseal`). Elsewhere the three tags.
         // `$d tag` reads the first register's tag: the test of the other
         // kind reads it again (`raw_tag_again`), so that both reads stay
         // compares against memory

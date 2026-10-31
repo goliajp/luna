@@ -226,7 +226,7 @@ impl Vm {
     /// [`Vm::box_close_room`] for the call made at `level + 2` with
     /// `pushed` values.
     fn box_close_room_at(&mut self, level: u32, pushed: u32) -> Result<(), LuaError> {
-        let min = crate::vm::exec::stack_size::MIN_STACK;
+        let min = crate::vm::exec::stack::size::MIN_STACK;
         self.check_lua_stack(level + 2 + pushed, min, true)
     }
 }

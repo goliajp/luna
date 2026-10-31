@@ -148,7 +148,7 @@ fn read_formats(
         });
     }
     // room for all the results and the auxiliary library's buffer
-    let n = fmts.len() as i64 + i64::from(crate::vm::exec::stack_size::MIN_STACK);
+    let n = fmts.len() as i64 + i64::from(crate::vm::exec::stack::size::MIN_STACK);
     crate::vm::argcheck::check_stack_at(vm, top, n, "too many arguments")?;
     let mut out = Vec::with_capacity(fmts.len());
     for (i, &f) in fmts.iter().enumerate() {

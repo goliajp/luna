@@ -290,3 +290,6 @@ impl Vm {
         native_call!(self, nc, func_slot, nargs, nresults, tail_ccmt, chain)
     }
 }
+pub(in crate::vm::exec) mod fast;
+pub(in crate::vm::exec) mod info;
+pub(in crate::vm::exec) mod limits;
