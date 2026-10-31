@@ -174,11 +174,10 @@ impl Vm {
         let scanned = r.scanned;
         let mut next = Scanning::default();
         let mut due = i64::MIN;
+        // only the events from the cut's token on are weighed against it
+        let from = cut.map_or(i64::MAX, |c| c.events);
         for &Rec { tok, at, ev } in log {
-            if let Some(c) = cut
-                && tok >= c.events
-                && !(c.ended && tok == c.events && c.takes(at, ev, marks))
-            {
+            if tok >= from && cut.is_some_and(|c| c.stops(tok, at, ev, marks)) {
                 break;
             }
             if crate::runtime::gc_hooks::TRACE {
