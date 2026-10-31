@@ -6,6 +6,7 @@ use super::*;
 mod allow;
 mod hookf;
 mod protected;
+pub(in crate::vm::exec) mod run;
 mod rust_hook;
 pub(crate) use hookf::hook_table_key;
 
@@ -332,4 +333,3 @@ impl Vm {
 /// The resume point of a coroutine a hook suspended: no call waits for the
 /// resume's values.
 pub(crate) const HOOK_YIELD_SLOT: u32 = u32::MAX;
-pub(in crate::vm::exec) mod run;
