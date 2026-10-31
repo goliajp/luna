@@ -8,6 +8,9 @@ use crate::runtime::heap::{Gc, GcHeader, Marker};
 use crate::runtime::table::Table;
 use crate::runtime::value::Value;
 
+mod marker;
+pub use marker::UserdataMarker;
+
 /// Type of the per-host trace adapter stored in [`UserdataPayload::Host`].
 /// Captured at `create_userdata::<T>` time as a monomorphic
 /// `trace_fn_for::<T>` whose body calls `T::trace` on the downcast
@@ -16,7 +19,8 @@ use crate::runtime::value::Value;
 /// `fn` items are inherently `Send + Sync` and `Copy`, so this type
 /// imposes no auto-trait constraints on `Userdata`; `feature = "send"`
 /// layers atop without changing the signature.
-pub(crate) type HostTraceFn = fn(&crate::runtime::mem::LAny, &mut crate::vm::UserdataMarker<'_>);
+pub(crate) type HostTraceFn =
+    fn(&crate::runtime::mem::LAny, &mut crate::runtime::userdata::UserdataMarker<'_>);
 
 /// A Lua userdata object — a GC-managed handle wrapping a host-side payload
 /// (an io file handle, a `newproxy` identity token, or an embedder-supplied
@@ -182,7 +186,7 @@ impl Userdata {
             ..
         } = &self.payload
         {
-            let mut um = crate::vm::UserdataMarker::__new_internal(m);
+            let mut um = crate::runtime::userdata::UserdataMarker::__new_internal(m);
             trace_fn(data, &mut um);
         }
     }

@@ -52,7 +52,7 @@ impl Marker {
                     ..
                 } = &u.payload
                 {
-                    let mut um = crate::vm::UserdataMarker::__new_internal(self);
+                    let mut um = crate::runtime::userdata::UserdataMarker::__new_internal(self);
                     trace_fn(data, &mut um);
                 }
                 let Value::Userdata(next) = u.user_value else {

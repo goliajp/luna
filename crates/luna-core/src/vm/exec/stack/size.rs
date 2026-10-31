@@ -21,8 +21,7 @@ pub(crate) const ERROR_STACK: u32 = MAX_STACK + 200;
 const EXTRA: u32 = 5;
 /// PUC `BASIC_STACK_SIZE` (`2 * LUA_MINSTACK`).
 pub(crate) const BASIC: u32 = 40;
-/// PUC `LUA_MINSTACK`.
-pub(crate) const MIN_STACK: u32 = 20;
+pub(crate) use crate::runtime::call_frame::MIN_STACK;
 /// PUC 5.1 `LUAI_MAXCSTACK`: what `lua_checkstack` grants a C function.
 pub(crate) const MAX_C_STACK_51: u32 = 8000;
 
