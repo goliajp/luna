@@ -143,21 +143,28 @@ pub(super) fn float_to_string(f: f64, fmt: FloatFmt) -> String {
     if f.is_infinite() {
         return if f < 0.0 { "-inf" } else { "inf" }.to_string();
     }
-    let mut s = match integral_digits(f, fmt) {
-        Some(s) => s,
-        None => float_digits(f, fmt),
-    };
+    let mut buf = [0u8; 20];
+    if let Some(d) = integral_digits(f, fmt, &mut buf) {
+        let mut s = String::with_capacity(d.len() + 2);
+        s.extend(d.iter().map(|&c| char::from(c)));
+        if fmt != FloatFmt::Legacy14 {
+            s.push_str(".0");
+        }
+        return s;
+    }
+    let mut s = float_digits(f, fmt);
     if s.bytes().all(|c| c.is_ascii_digit() || c == b'-') && fmt != FloatFmt::Legacy14 {
         s.push_str(".0");
     }
     s
 }
 
-/// The `%.14g` (`%.15g` in 5.5) text of an integral `f` whose digits all
-/// fit the precision, which is the integer's: written without the float
-/// formatter. None for any other `f`, and for `-0.0` (printed `-0`).
+/// The `%.14g` (`%.15g` in 5.5) digits of an integral `f` whose digits all
+/// fit the precision, which are the integer's: written into `buf` without
+/// the float formatter. None for any other `f`, and for `-0.0` (printed
+/// `-0`). NaN and the infinities fail the first test.
 #[inline]
-fn integral_digits(f: f64, fmt: FloatFmt) -> Option<String> {
+fn integral_digits(f: f64, fmt: FloatFmt, buf: &mut [u8; 20]) -> Option<&[u8]> {
     let limit = match fmt {
         FloatFmt::TwoStage55 => 1e15,
         FloatFmt::Legacy14 | FloatFmt::G14 => 1e14,
@@ -165,9 +172,7 @@ fn integral_digits(f: f64, fmt: FloatFmt) -> Option<String> {
     if f.trunc() != f || f.abs() >= limit || (f == 0.0 && f.is_sign_negative()) {
         return None;
     }
-    let mut buf = [0u8; 20];
-    let d = write_i64_dec(f as i64, &mut buf);
-    Some(d.iter().map(|&c| char::from(c)).collect())
+    Some(write_i64_dec(f as i64, buf))
 }
 
 pub(super) fn float_digits(f: f64, fmt: FloatFmt) -> String {
@@ -207,10 +212,39 @@ impl NumText {
     /// Keep `s` (a number's rendering, which is shorter than the buffer)
     /// and give its bytes.
     pub(crate) fn set(&mut self, s: &str) -> &[u8] {
+        self.set_bytes(s.as_bytes())
+    }
+
+    fn set_bytes(&mut self, s: &[u8]) -> &[u8] {
         let n = s.len().min(self.buf.len());
-        self.buf[..n].copy_from_slice(&s.as_bytes()[..n]);
+        self.buf[..n].copy_from_slice(&s[..n]);
         self.len = n;
         &self.buf[..n]
+    }
+
+    /// The text of the integer `i`, written in place.
+    pub(crate) fn int(&mut self, i: i64) -> &[u8] {
+        let mut digits = [0u8; 20];
+        let d = write_i64_dec(i, &mut digits);
+        self.set_bytes(d)
+    }
+
+    /// The text of the float `f` in the dialect's flavor: an integral
+    /// value's written in place, any other through [`float_to_string`].
+    pub(crate) fn float(&mut self, f: f64, fmt: FloatFmt) -> &[u8] {
+        let mut digits = [0u8; 20];
+        let Some(d) = integral_digits(f, fmt, &mut digits) else {
+            return self.set(&float_to_string(f, fmt));
+        };
+        let n = d.len();
+        self.buf[..n].copy_from_slice(d);
+        self.len = if fmt == FloatFmt::Legacy14 {
+            n
+        } else {
+            self.buf[n..n + 2].copy_from_slice(b".0");
+            n + 2
+        };
+        &self.buf[..self.len]
     }
 }
 
