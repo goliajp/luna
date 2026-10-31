@@ -86,7 +86,7 @@ impl Heap {
     /// first time, when PUC's traversal shrinks its stack.
     #[inline]
     pub(in crate::runtime) fn puc_shrinks_now(&self, co: Gc<crate::runtime::Coro>) -> bool {
-        let now = self.puc.records.cycle;
+        let now = self.puc.cycle;
         co.shrunk_in.replace(now) != now
     }
 
