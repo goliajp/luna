@@ -126,18 +126,27 @@ impl Vm {
     }
 
     /// [`Vm::push_native`] for the fast loop's native calls, with no
-    /// second room test.
+    /// second room test. Takes the fields rather than a built `NativeAct`:
+    /// one built before the branch has to sit in memory for the cold path,
+    /// and copying it into the chain then reads back, in two 16-byte loads,
+    /// what was just stored field by field, which stalls on every call.
     #[inline(always)]
     pub(crate) fn push_native_fast(
         &mut self,
-        act: crate::vm::callstack::NativeAct,
+        nc: Gc<crate::runtime::NativeClosure>,
+        func_slot: u32,
+        nargs: u32,
+        ccmt: u8,
     ) -> Result<(), LuaError> {
-        if self.frames.len() as i32 >= self.g.ci_hint {
-            return self.push_native_counted(act);
+        use crate::vm::callstack::NativeAct;
+        let depth = self.frames.len();
+        if depth as i32 >= self.g.ci_hint {
+            return self.push_native_counted(NativeAct::new(nc, func_slot, nargs, depth, ccmt));
         }
         if self.running_natives.len() == self.running_natives.capacity() {
             self.native_room()?;
         }
+        let act = NativeAct::new(nc, func_slot, nargs, depth, ccmt);
         // SAFETY: there is room: there was, or `native_room` made it
         unsafe { self.running_natives.push_in_room(act) };
         self.note_native_level();

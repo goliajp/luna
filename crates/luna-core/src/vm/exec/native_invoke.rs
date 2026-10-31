@@ -161,13 +161,7 @@ impl Vm {
         // the caller's registers sit below `func_slot`; the native's own
         // arguments stay rooted too (see `begin_call`)
         self.gc_top = func_slot + nargs + 1;
-        self.push_native_fast(crate::vm::callstack::NativeAct::new(
-            nc,
-            func_slot,
-            nargs,
-            self.frames.len(),
-            ccmt,
-        ))?;
+        self.push_native_fast(nc, func_slot, nargs, ccmt)?;
         // only 5.2 checks here
         if PRE {
             self.precall_checkpoint(func_slot + 1 + nargs)?;
