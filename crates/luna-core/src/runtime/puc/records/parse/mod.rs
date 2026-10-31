@@ -130,7 +130,8 @@ impl Heap {
 
     /// `obj`'s key in the parser table `t` set to nil: a dead key, which
     /// a traversal does not mark.
-    pub(in crate::runtime::puc) fn load_tab_unref(&mut self, t: Gc<LoadTab>, obj: *mut GcHeader) {
+    pub(in crate::runtime::puc) fn load_tab_unref(&mut self, t: Gc<LoadTab>, obj: Gc<GcHeader>) {
+        let obj = obj.as_ptr();
         // SAFETY: `t` is a handle, so the parser table is live, and nothing
         // else borrows it
         let refs = unsafe { &mut t.as_mut().refs };
