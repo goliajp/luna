@@ -4,7 +4,6 @@
 use super::*;
 use crate::runtime::puc::PucObj;
 use crate::runtime::puc::api::{PucCount, PucLoads, PucParse};
-use crate::runtime::puc::records::parse::set_parsing;
 
 impl Vm {
     /// A function opens: the main one in `luaY_parser`, a nested one in
@@ -31,7 +30,7 @@ impl Vm {
             let h = p.hdr();
             self.heap.promote_obj(h, PucObj::Proto);
             if r.rec.is_none() {
-                set_parsing(p, true);
+                self.heap.set_parsing(p, true);
                 if !main && d != Dialect::L51 {
                     self.proto_barrier(r, r.fs.len() - 1, h);
                 }
@@ -88,7 +87,7 @@ impl Vm {
         r.kstr.truncate(f.kbase);
         let closed = r.opening.get(f.shape).copied();
         if let Some(p) = closed {
-            set_parsing(p, false);
+            self.heap.set_parsing(p, false);
             self.heap.settle_parsed(p);
         }
         self.heap.parser_close(&mut f.a);

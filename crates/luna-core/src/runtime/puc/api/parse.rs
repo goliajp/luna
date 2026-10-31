@@ -83,6 +83,9 @@ pub(crate) trait PucParse {
         bytes: &[u8],
         made_later: bool,
     ) -> Result<Gc<crate::runtime::LuaStr>, crate::runtime::mem::Oom>;
+    /// The object of `g` is one the parser is building (`on`), or no more:
+    /// PUC's parser has not finished it, so a cycle marks it as PUC does.
+    fn set_parsing<T: GcObject>(&mut self, g: Gc<T>, on: bool);
 }
 
 impl PucParse for Heap {
@@ -192,5 +195,10 @@ impl PucParse for Heap {
         made_later: bool,
     ) -> Result<Gc<crate::runtime::LuaStr>, crate::runtime::mem::Oom> {
         Heap::try_intern_name(self, bytes, made_later)
+    }
+
+    #[inline]
+    fn set_parsing<T: GcObject>(&mut self, g: Gc<T>, on: bool) {
+        crate::runtime::puc::records::parse::set_parsing(g, on);
     }
 }

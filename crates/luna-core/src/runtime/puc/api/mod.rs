@@ -1,7 +1,9 @@
-//! The model as the VM sees it. Code outside the runtime reaches the PUC
-//! model only through these traits, which the heap implements; every other
-//! entry of `puc` is visible to the runtime alone, so the compiler keeps
-//! the VM to what is listed here.
+//! The model as the VM sees it: these traits, which the heap implements,
+//! and besides them the collector's steps the VM drives (`step`'s
+//! `pub(crate)` functions, run on the VM as their `StepHost`), the records
+//! the VM builds for PUC's objects it has none of (`records`), and the
+//! string formats and chunk translators (`fmt`, `lower`). Every other entry
+//! of `puc` is visible to the runtime alone.
 
 mod collector;
 mod count;

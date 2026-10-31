@@ -121,7 +121,7 @@ impl Vm {
         }
         r.cl = Some(cl);
         if r.rec.is_none() && r.d != Dialect::L51 {
-            crate::runtime::puc::records::parse::set_parsing(cl, true);
+            self.heap.set_parsing(cl, true);
         }
         match r.d {
             Dialect::L51 => {}
