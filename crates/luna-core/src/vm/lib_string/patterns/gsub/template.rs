@@ -43,14 +43,10 @@ pub(super) fn add_s<const PRE: bool>(
                 // `push_onecapture`, then (5.3) `luaL_tolstring` of it: the
                 // capture is on PUC's stack meanwhile
                 let v = cap_value::<PRE>(vm, src, c)?;
-                let r = vm.rooted(&[v], |vm| add_capture::<PRE>(vm, v, (out, b)));
-                r?;
+                vm.rooted(&[v], |vm| add_capture::<PRE>(vm, v, (out, b)))?;
             }
-            b'%' => {
-                vm.buf_push(out, b"%")?;
-                b.add_chars(vm, out, 1)?;
-            }
-            d if lenient => {
+            // 5.1 takes any other character as it is
+            _ if d == b'%' || lenient => {
                 vm.buf_push(out, &[d])?;
                 b.add_chars(vm, out, 1)?;
             }
