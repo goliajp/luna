@@ -12,7 +12,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         use luna_jit_helpers::{SELF_HANDED, SELF_NOT_STARTED};
         let builder = self.builder;
         let i64t = self.i64_type;
-        let flag = self.ctx_word(1, "call_flag")?;
+        let flag = self.ctx_word(luna_jit_helpers::SelfCtx::FLAG, "call_flag")?;
         let set = builder
             .build_int_compare(
                 inkwell::IntPredicate::NE,
@@ -125,7 +125,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         let args = [pc.into(), base.into(), regs.into(), n.into()];
         self.builder.build_call(record, &args, "handoff").ok()?;
         if self.self_calls {
-            let flag_at = self.ctx_addr(1, "flag_at")?;
+            let flag_at = self.ctx_addr(luna_jit_helpers::SelfCtx::FLAG, "flag_at")?;
             let handed = i64t.const_int(luna_jit_helpers::SELF_HANDED as u64, false);
             self.builder.build_store(flag_at, handed).ok()?;
         }

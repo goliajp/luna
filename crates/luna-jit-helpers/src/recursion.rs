@@ -31,11 +31,34 @@ pub const SELF_CALL_RET_FLOAT: i64 = 2;
 /// See [`SELF_CALL_RET_NONE`].
 pub const SELF_CALL_RET_TABLE: i64 = 3;
 
-/// Words of a self-call context: the stack address below which a self
-/// call goes to the interpreter, the flag a level returning early sets
-/// ([`SELF_FAILED`], [`SELF_HANDED`], [`SELF_NOT_STARTED`]), the base from
-/// which a level calls [`luna_jit_self_level`], and the base of level 0.
-pub const SELF_CTX_WORDS: usize = 4;
+/// A self-call context, which compiled code addresses by the offsets
+/// below.
+#[repr(C)]
+pub struct SelfCtx {
+    /// The stack address below which a self call goes to the interpreter
+    /// (0 when the thread's stack bounds are not known).
+    pub stack_limit: i64,
+    /// The flag a level returning early sets: [`SELF_FAILED`],
+    /// [`SELF_HANDED`] or [`SELF_NOT_STARTED`]; 0 while the calls go on.
+    pub flag: i64,
+    /// The base from which a level calls [`luna_jit_self_level`].
+    pub level_base: i64,
+    /// The base of level 0.
+    pub base0: i64,
+}
+
+impl SelfCtx {
+    /// Its size in bytes, for the stack slot an entry reserves.
+    pub const SIZE: u32 = std::mem::size_of::<Self>() as u32;
+    /// Byte offset of [`SelfCtx::stack_limit`].
+    pub const STACK_LIMIT: i32 = std::mem::offset_of!(Self, stack_limit) as i32;
+    /// Byte offset of [`SelfCtx::flag`].
+    pub const FLAG: i32 = std::mem::offset_of!(Self, flag) as i32;
+    /// Byte offset of [`SelfCtx::level_base`].
+    pub const LEVEL_BASE: i32 = std::mem::offset_of!(Self, level_base) as i32;
+    /// Byte offset of [`SelfCtx::base0`].
+    pub const BASE0: i32 = std::mem::offset_of!(Self, base0) as i32;
+}
 
 /// What [`luna_jit_self_level`] needs to know about the call, packed
 /// into the constant compiled code passes it: the argument count, which
@@ -66,24 +89,25 @@ pub const SELF_LEVEL_TAIL: i64 = 1 << 40;
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread
-/// opened with the running closure; `ctx` points to [`SELF_CTX_WORDS`]
-/// writable words.
+/// opened with the running closure; `ctx` points to a writable
+/// [`SelfCtx`].
 // SAFETY: no other item in the link is named `luna_jit_enter_ctx`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_enter_ctx(ctx: *mut i64) {
+pub unsafe extern "C" fn luna_jit_enter_ctx(ctx: *mut SelfCtx) {
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
     let base = vm.jit().levels_slot;
     let lim = vm.jit_limits(cl, base);
-    // SAFETY: `ctx` points to SELF_CTX_WORDS writable words (# Safety)
-    unsafe {
-        *ctx = luna_core::__private::native_stack::jit_limit() as i64;
-        *ctx.add(1) = 0;
-        *ctx.add(2) = i64::from(lim.base);
-        *ctx.add(3) = i64::from(base);
-    }
+    let fill = SelfCtx {
+        stack_limit: luna_core::__private::native_stack::jit_limit() as i64,
+        flag: 0,
+        level_base: i64::from(lim.base),
+        base0: i64::from(base),
+    };
+    // SAFETY: `ctx` points to a writable SelfCtx (# Safety)
+    unsafe { ctx.write(fill) };
 }
 
 /// Count level `depth` of the running closure's self recursion, its frame
@@ -95,13 +119,13 @@ pub unsafe extern "C" fn luna_jit_enter_ctx(ctx: *mut i64) {
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread
-/// opened with the running closure; `ctx` points to [`SELF_CTX_WORDS`]
-/// writable words.
+/// opened with the running closure; `ctx` points to a writable
+/// [`SelfCtx`].
 // SAFETY: no other item in the link is named `luna_jit_self_level`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_self_level(
-    ctx: *mut i64,
+    ctx: *mut SelfCtx,
     desc: i64,
     base: i64,
     depth: i64,
@@ -123,17 +147,16 @@ pub unsafe extern "C" fn luna_jit_self_level(
             }
         }
     };
-    // SAFETY: `ctx` points to SELF_CTX_WORDS writable words (# Safety)
-    unsafe {
-        match r {
-            Ok(lim) => {
-                *ctx.add(2) = i64::from(lim.base);
-                0
-            }
-            Err(flag) => {
-                *ctx.add(1) = flag;
-                1
-            }
+    // SAFETY: `ctx` points to a writable SelfCtx (# Safety)
+    let ctx = unsafe { &mut *ctx };
+    match r {
+        Ok(lim) => {
+            ctx.level_base = i64::from(lim.base);
+            0
+        }
+        Err(flag) => {
+            ctx.flag = flag;
+            1
         }
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use luna_jit_helpers::SelfCtx;
 
 /// What a chunk's entry verifies before running the body.
 pub(super) struct EntryChecks {
@@ -97,7 +98,7 @@ pub(super) fn define_checked_entry<M: Module>(
             })
             .ok()?;
         let fill_ref = module.declare_func_in_func(fill_id, bcx.func);
-        let bytes = 8 * luna_jit_helpers::SELF_CTX_WORDS as u32;
+        let bytes = SelfCtx::SIZE;
         let slot =
             bcx.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, bytes, 3));
         let ctx_addr = bcx.ins().stack_addr(types::I64, slot, 0);
@@ -110,9 +111,12 @@ pub(super) fn define_checked_entry<M: Module>(
     let mut args = args;
     if let Some(ctx_addr) = saved_pinned.map(|_| bcx.ins().get_pinned_reg(types::I64)) {
         // level 0: the base the call was made at, depth 0
-        let base = bcx
-            .ins()
-            .load(types::I64, MemFlagsData::trusted(), ctx_addr, 24);
+        let base = bcx.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            ctx_addr,
+            SelfCtx::BASE0,
+        );
         args.push(base);
         args.push(bcx.ins().iconst(types::I64, 0));
     }
@@ -206,7 +210,9 @@ fn define_stub<M: Module>(
     let args: Vec<Value> = bcx.block_params(entry).to_vec();
     let flags = MemFlagsData::trusted();
     let ctx_addr = bcx.ins().get_pinned_reg(types::I64);
-    let limit = bcx.ins().load(types::I64, flags, ctx_addr, 0);
+    let limit = bcx
+        .ins()
+        .load(types::I64, flags, ctx_addr, SelfCtx::STACK_LIMIT);
     let sp = bcx.ins().get_stack_pointer(types::I64);
     let go_slow = bcx.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
     bcx.ins().brif(go_slow, slow, &[], fast, &[]);
@@ -222,7 +228,7 @@ fn define_stub<M: Module>(
     let not_started = bcx
         .ins()
         .iconst(types::I64, luna_jit_helpers::SELF_NOT_STARTED);
-    bcx.ins().store(flags, not_started, ctx_addr, 8);
+    bcx.ins().store(flags, not_started, ctx_addr, SelfCtx::FLAG);
     let zero = bcx.ins().iconst(types::I64, 0);
     bcx.ins().return_(&[zero]);
 
@@ -256,7 +262,9 @@ pub(super) fn count_level<M: Module>(
         .ok()?;
     let flags = MemFlagsData::trusted();
     let ctx_addr = bcx.ins().get_pinned_reg(types::I64);
-    let base_limit = bcx.ins().load(types::I64, flags, ctx_addr, 16);
+    let base_limit = bcx
+        .ins()
+        .load(types::I64, flags, ctx_addr, SelfCtx::LEVEL_BASE);
     let cross = bcx
         .ins()
         .icmp(IntCC::SignedGreaterThanOrEqual, base, base_limit);
