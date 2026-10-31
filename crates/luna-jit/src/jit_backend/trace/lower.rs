@@ -21,6 +21,7 @@ mod ops;
 mod plan;
 mod prologue;
 mod readonly;
+mod state;
 mod step_guard;
 mod sunk_sites;
 mod tail;
@@ -46,95 +47,11 @@ use ops::*;
 use plan::*;
 use prologue::*;
 use readonly::*;
+use state::Lower;
 use step_guard::*;
 use sunk_sites::*;
 use tail::*;
 use tfor_tail::*;
-
-/// The trace function under construction and everything the emit pass
-/// tracks while lowering it.
-struct Lower<E: Emit> {
-    bcx: E,
-    h: Helpers,
-    reg_state: Value,
-    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
-    global_side_trace_box: Box<TCellPtr>,
-    regs_full: Vec<Variable>,
-    tforcall_tag_var: Variable,
-    tforcall_val_tag_var: Variable,
-    precheck: Option<Block>,
-    /// The block before the loop head that tests the tables
-    /// `ro_invariant` names (see `readonly`).
-    ro_precheck: Option<Block>,
-    /// The block before the loop head that checks a 5.3 loop's step sign.
-    step_precheck: Option<Block>,
-    body_loop: Block,
-    head_kinds: Vec<RegKind>,
-    defined_aot_data: std::collections::HashSet<DataId>,
-    escape: EscapeAnalysis,
-    flush_ctx: Option<FlushCtx>,
-    virt_vars: Vec<Option<Vec<Variable>>>,
-    virt_kinds: Vec<Option<Vec<RegKind>>>,
-    sunk_alloc_seen: u32,
-    materialize_emit_count: u32,
-    closure_seen: u32,
-    stored: Vec<Option<Value>>,
-    /// Commit register writes to reg_state only where something reads it
-    /// (`commit.rs`), keeping values in machine registers across the back
-    /// edge: for the optimizing tiers, whose register allocators make use
-    /// of that; the baseline tier's would spill.
-    at_exits: bool,
-    /// With `at_exits`, per register: the value reg_state holds for it at
-    /// the loop head whichever way the head is reached (`None`: the body
-    /// writes the register and the back edge does not store it).
-    head_stored: Vec<Option<Value>>,
-    current_kinds: Vec<RegKind>,
-    dispatchable: bool,
-    dispatch_off_reason: Option<&'static str>,
-    per_exit_kinds: ExitKinds,
-    per_exit_inline_vec: Vec<(
-        u32,
-        u32,
-        Vec<RegKind>,
-        TArc<[FrameMaterializeInfo]>,
-        Box<TCellPtr>,
-    )>,
-    call_chain: Vec<FrameMaterializeInfo>,
-    upval_cache: std::collections::HashMap<u32, Variable>,
-    /// Per upvalue index, the checked typed read: its variable, out slot,
-    /// check result and type.
-    upval_checked:
-        std::collections::HashMap<u32, (Variable, cranelift_codegen::ir::StackSlot, Value, u8)>,
-    /// The upvalues whose checked read has been guarded.
-    upval_check_done: Vec<u32>,
-    head_closure_var: Option<Variable>,
-    known_int: Vec<Option<i64>>,
-    /// The registers holding a string constant loaded earlier in the same
-    /// pass: a table access by such a key may use the slot the recording
-    /// found it in.
-    const_str: Vec<bool>,
-    /// The window slots the virtual registers of the op being lowered
-    /// stand in, with the kinds the slots had (see `enter_virt`): an exit
-    /// taken inside the op snapshots those kinds, not the virtual ones.
-    virt_held: Vec<(usize, RegKind)>,
-    /// Blocks the other way of a comparison jumps to, by the recorded op
-    /// it rejoins at, with the registers the skipped ops write.
-    alt_joins: std::collections::HashMap<usize, (Block, Vec<u32>)>,
-    /// The head-frame registers whose table is tested before the loop head
-    /// instead of at each store (see `readonly`).
-    ro_invariant: Vec<bool>,
-    /// The table values tested since the last op that may have run host
-    /// code.
-    ro_checked: Vec<Value>,
-    /// The iteration count the back edge keeps for tiering up, and the
-    /// count to leave at.
-    tier_count: Option<(Box<TCellU32>, u32)>,
-    /// The count's address, read on entry by a trace that may check (`gc_due`).
-    due_words: Option<Value>,
-    /// Every way to the op being lowered passed a check for a collection
-    /// with nothing that may allocate since (see `gc_due`).
-    gc_quiet: bool,
-}
 
 /// `always_codegen = false` leaves the function undefined in `module`
 /// when [`trace_is_enterable`] says nothing will run it; `float_only` as
