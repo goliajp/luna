@@ -104,8 +104,9 @@ unsafe fn table_get_cold(tb: &Table, key: Value, dst: *mut Value, plain: bool) -
     if v.is_nil() && !plain {
         return false;
     }
+    // in pieces: `get` has just written `v` so (see `Value::copy_raw`)
     // SAFETY: the caller's contract
-    unsafe { dst.write(v) };
+    unsafe { Value::copy_raw(dst, &v) };
     true
 }
 
