@@ -13,6 +13,9 @@ pub(in crate::runtime) struct PucModel {
     /// 5.4 and 5.5: a finalizer is running, which no step may interrupt
     /// (PUC `GCSTPGC`)
     pub(super) fin_stop: bool,
+    /// the collection cycle under way, counted from 1 (wrapping: a thread
+    /// would have to sit out 2^32 cycles to be taken as shrunk in this one)
+    pub(super) cycle: u32,
     /// the rules the heap follows in `dialect`
     pub(super) rules: super::for_heap::HeapRules,
     /// `collectgarbage`'s pacing parameters
@@ -44,6 +47,7 @@ impl Default for PucModel {
             dialect: d,
             stopped: false,
             fin_stop: false,
+            cycle: 1,
             params: super::GcParams::new(crate::version::LuaVersion::Lua55),
             sizes: super::size::PucSizes::of(d),
             rules: super::for_heap::HeapRules::of(d, &super::size::PucSizes::of(d)),

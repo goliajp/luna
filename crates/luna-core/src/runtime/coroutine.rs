@@ -90,7 +90,7 @@ pub struct Coro {
     /// 5.3: the collection cycle whose propagation last shrank the
     /// thread's stack (PUC's traversal shrinks it the first time it comes
     /// up in a cycle); 0 before any
-    pub(crate) shrunk_in: std::cell::Cell<u64>,
+    pub(crate) shrunk_in: std::cell::Cell<u32>,
     /// Saved `Vm::stack_size`: PUC's size of the thread's stack, 0 for a
     /// thread that has not run.
     pub stack_size: u32,
