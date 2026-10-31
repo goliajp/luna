@@ -37,15 +37,7 @@ pub(crate) struct X64 {
     frame: u32,
 }
 
-/// System V on Unix, Win64 on Windows.
-#[cfg(not(windows))]
-use abi_sysv as abi;
-#[cfg(windows)]
-use abi_win64 as abi;
-#[cfg(not(windows))]
-mod abi_sysv;
-#[cfg(windows)]
-mod abi_win64;
+mod abi;
 
 impl Masm for X64 {
     const SP: u8 = RSP;
