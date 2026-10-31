@@ -23,10 +23,17 @@ impl Heap {
 
     /// Which record `h` heads, if one does.
     pub(crate) fn env51_record_index(&self, h: *mut GcHeader) -> Option<usize> {
+        self.env51_record(h).map(|(k, _)| k)
+    }
+
+    /// The record `h` heads, if one does: its number and the records' own
+    /// pointer to it, which `h` (maybe a light userdata's address) only
+    /// names.
+    fn env51_record(&self, h: *mut GcHeader) -> Option<(usize, *mut GcHeader)> {
         let e = self.puc.records.env51_box.as_deref()?;
         e.gens
             .iter()
-            .find_map(|g| (0..6).position(|k| g.ph.hdr(k) == h))
+            .find_map(|g| (0..6).map(|k| (k, g.ph.hdr(k))).find(|&(_, r)| r == h))
     }
 
     /// The package table, the loaders' environment.
@@ -96,16 +103,16 @@ impl Heap {
     /// record `t`, one of the io library's tables: 5.1's `luaC_barriert`.
     /// Both must be records of this heap's.
     pub(crate) fn env51_set_key(&mut self, t: *mut GcHeader, key: Gc<LuaStr>, v: *mut GcHeader) {
-        assert!(
-            self.env51_record_index(t).is_some() && self.env51_record_index(v).is_some(),
-            "a store between records of the opening"
-        );
+        let (Some((_, tr)), Some((_, vr))) = (self.env51_record(t), self.env51_record(v)) else {
+            panic!("a store between records of the opening");
+        };
         self.env51_records().close = key.as_ptr() as *mut GcHeader;
-        // SAFETY: both head records, which live as long as the heap, and
+        // SAFETY: the records' own pointers (the arguments are only compared
+        // with them), boxed in the records, which live as long as the heap;
         // only flags are read
         unsafe {
-            if is_white((*v).flags()) {
-                self.barrier_back_obj(t);
+            if is_white((*vr).flags()) {
+                self.barrier_back_obj(tr);
             }
         }
     }
