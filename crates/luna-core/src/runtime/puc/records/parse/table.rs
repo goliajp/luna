@@ -139,11 +139,6 @@ impl PTab {
     }
 
     /// PUC's table, unless nothing is counted.
-    pub(crate) fn tab(&self) -> Option<*mut GcHeader> {
-        self.tab.map(|t| t.header())
-    }
-
-    /// [`PTab::tab`] as a handle.
     pub(crate) fn tab_hdr(&self) -> Option<Gc<GcHeader>> {
         self.tab.map(|t| t.hdr())
     }
@@ -177,9 +172,9 @@ impl PTab {
     }
 
     /// `k` set to nil: the key goes, its node stays taken.
-    pub(crate) fn remove(&mut self, heap: &mut Heap, k: PKey, obj: *mut GcHeader) {
+    pub(crate) fn remove(&mut self, heap: &mut Heap, k: PKey, obj: Option<Gc<GcHeader>>) {
         if let Some(t) = self.tab {
-            heap.load_tab_unref(t, obj);
+            heap.load_tab_unref(t, obj.map_or(std::ptr::null_mut(), |o| o.as_ptr()));
         }
         if self.keys.remove(&k) {
             if let Some(i) = k.index() {
@@ -257,7 +252,7 @@ mod tests {
                 p.insert(heap, d, PKey::of(k), None).expect("insert");
             } else {
                 t.set(heap, k, Value::Nil).expect("clear");
-                p.remove(heap, PKey::of(k), std::ptr::null_mut());
+                p.remove(heap, PKey::of(k), None);
             }
             let (a, n) = t.part_sizes();
             assert_eq!(

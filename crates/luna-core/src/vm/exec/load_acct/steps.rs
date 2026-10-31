@@ -62,7 +62,7 @@ impl Vm {
     /// grown so far.
     fn parse_frame(&self, r: &Replay, temp: Option<Gc<crate::runtime::LuaStr>>) -> ParseFrame {
         let cl = r.cl.map_or(std::ptr::null_mut(), hdr);
-        let tab = |t: &Option<PTab>| t.as_ref().and_then(PTab::tab);
+        let tab = |t: &Option<PTab>| t.as_ref().and_then(PTab::tab_hdr).map(|g| g.as_ptr());
         let mut slots = Vec::with_capacity(2 * r.fs.len() + 3);
         match r.d {
             Dialect::L51 => {
@@ -74,7 +74,7 @@ impl Vm {
             Dialect::L52 => {
                 slots.push(cl);
                 slots.extend(r.fs.iter().filter_map(|f| tab(&f.h)));
-                slots.extend(r.closing_tab);
+                slots.extend(r.closing_tab.map(|g| g.as_ptr()));
             }
             Dialect::L53 | Dialect::L54 => {
                 slots.push(cl);

@@ -124,7 +124,7 @@ pub(super) struct Replay<'s> {
     pub(super) cl: Option<Gc<LuaClosure>>,
     /// 5.2: the table of the function closing, while it anchors the token
     /// read last in the enclosing function's (still on the stack)
-    pub(super) closing_tab: Option<*mut crate::runtime::heap::GcHeader>,
+    pub(super) closing_tab: Option<crate::runtime::heap::Gc<crate::runtime::heap::GcHeader>>,
     /// the strings among the constants of the functions open, each one's
     /// after those of the function it is nested in
     pub(super) kstr: Vec<Gc<crate::runtime::LuaStr>>,

@@ -105,7 +105,7 @@ impl Vm {
             {
                 r.closing_tab =
                     f.h.as_ref()
-                        .and_then(PTab::tab)
+                        .and_then(PTab::tab_hdr)
                         .filter(|_| d == Dialect::L52);
                 let anchored = self.replay_scan_text(r, text, kind);
                 r.closing_tab = None;
@@ -127,8 +127,7 @@ impl Vm {
         if d == Dialect::L55
             && let (Some(h), Some(k)) = (r.h.as_mut(), f.h.as_ref())
         {
-            let tab = k.tab().unwrap_or(std::ptr::null_mut());
-            h.remove(&mut self.heap, PKey::Tab(k.id), tab);
+            h.remove(&mut self.heap, PKey::Tab(k.id), k.tab_hdr());
             let (h, k) = (h.id, k.id);
             r.note(h, PVal::Tab(k), None);
         }
