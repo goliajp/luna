@@ -11,7 +11,7 @@
 //! resumed), and when an error drops the frame.
 
 use super::*;
-use crate::vm::callstack::NativeAct;
+use crate::runtime::function::NativeAct;
 
 mod alloc;
 mod below;

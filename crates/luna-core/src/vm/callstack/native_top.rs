@@ -13,7 +13,7 @@ use crate::version::LuaVersion;
 use crate::vm::error::LuaError;
 use crate::vm::exec::Vm;
 
-use super::NativeAct;
+use crate::runtime::function::NativeAct;
 
 impl Vm {
     /// The running native's `L->top`, if a native is what runs.

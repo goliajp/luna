@@ -7,6 +7,10 @@ use crate::runtime::value::Value;
 
 mod conts;
 pub use conts::*;
+mod dead_stack;
+pub(crate) use dead_stack::DeadStack;
+mod native_act;
+pub(crate) use native_act::NativeAct;
 
 /// An activation record on a thread's call stack. Pure data (closure handle +
 /// stack offsets), so it lives in `runtime` where the GC can trace a suspended

@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn step_51<H: StepHost + ?Sized>(h: &mut H) -> Result<(), LuaError> {
+pub(super) fn step_51<H: StepHost + ?Sized>(h: &mut H) -> Result<(), H::Error> {
     let mut lim = step_limit_51(h.heap().puc.params.get(Param::StepMul));
     let bytes = h.heap().bytes() as i64;
     let p = &mut h.heap().puc.pace;
@@ -62,7 +62,7 @@ pub(super) fn atomic_51<H: StepHost + ?Sized>(h: &mut H) {
 
 pub(in crate::runtime::puc) fn singlestep_51<H: StepHost + ?Sized>(
     h: &mut H,
-) -> Result<i64, LuaError> {
+) -> Result<i64, H::Error> {
     Ok(match h.heap().puc.pace.state() {
         St::Pause => {
             restart(h);

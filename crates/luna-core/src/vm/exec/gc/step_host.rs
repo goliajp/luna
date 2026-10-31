@@ -7,6 +7,8 @@ use crate::runtime::heap::{Marker, Propagated, Running};
 use crate::runtime::puc::api::{CiCount, StepHost};
 
 impl StepHost for Vm {
+    type Error = LuaError;
+
     #[inline]
     fn heap(&mut self) -> &mut crate::runtime::Heap {
         &mut self.heap

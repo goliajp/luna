@@ -2,7 +2,7 @@
 //! stack shrunk to it.
 
 use super::*;
-use crate::vm::callstack::NativeAct;
+use crate::runtime::function::NativeAct;
 use crate::vm::exec::stack::size as stack_size;
 
 /// PUC's `ci->top` of a thread's bottom `CallInfo`, in luna's numbering:

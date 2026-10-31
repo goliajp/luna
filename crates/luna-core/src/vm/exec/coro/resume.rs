@@ -169,7 +169,7 @@ impl Vm {
         if !host_cont {
             // the yield is a level of its own while its return hook runs
             if let Some(nc) = yielder {
-                self.push_native(crate::vm::callstack::NativeAct::new(
+                self.push_native(crate::runtime::function::NativeAct::new(
                     nc,
                     fslot,
                     0,

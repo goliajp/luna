@@ -221,7 +221,7 @@ impl Vm {
         let Value::Native(nc) = self.stack[func_slot as usize] else {
             unreachable!("pcall/xpcall dispatch sits on a native")
         };
-        self.push_native(crate::vm::callstack::NativeAct::new(
+        self.push_native(crate::runtime::function::NativeAct::new(
             nc,
             func_slot,
             nargs,

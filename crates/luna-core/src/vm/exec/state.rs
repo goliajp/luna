@@ -73,7 +73,7 @@ pub struct Vm {
     /// names the running function (`pushglobalfuncname`), and the debug
     /// interface places each among the Lua activations by where it sits
     /// on the value and frame stacks, as PUC's CallInfo chain (`callstack`).
-    pub(crate) running_natives: LVec<crate::vm::callstack::NativeAct>,
+    pub(crate) running_natives: LVec<crate::runtime::function::NativeAct>,
     /// JIT sidecar. Always present (never `Option`); inert
     /// when `chunk_compiler` / `trace_compiler` are
     /// `crate::jit::NullJitBackend`. See `crate::vm::jit_state`.
@@ -118,7 +118,7 @@ pub struct Vm {
     pub(crate) error_traceback: Option<Vec<Vec<u8>>>,
     /// The frames and running natives of a coroutine an error is killing,
     /// taken where the error was raised: PUC's dead thread keeps its stack
-    pub(crate) dead_snapshot: Option<crate::vm::callstack::DeadStack>,
+    pub(crate) dead_snapshot: Option<crate::runtime::function::DeadStack>,
 
     /// `(source_name, line)` of the most recent error. Set by the dispatcher /
     /// lexer / parser; cleared when a new call_value enters cleanly.

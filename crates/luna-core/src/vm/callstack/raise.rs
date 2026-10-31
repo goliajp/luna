@@ -7,7 +7,7 @@ use crate::runtime::mem::LVec;
 use crate::version::LuaVersion;
 use crate::vm::exec::Vm;
 
-use super::NativeAct;
+use crate::runtime::function::NativeAct;
 
 /// A native that raised the error in flight, and where it ran.
 #[derive(Clone, Copy)]
