@@ -27,7 +27,7 @@ pub(in crate::runtime) struct PucModel {
     /// the loads under way, as the model sees them
     pub(super) loads: Loads,
     /// what the opening of the standard libraries made
-    pub(super) opening: Opening,
+    pub(super) opening: super::api::Opening,
 }
 
 /// PUC's count. A safe point compares `bytes` with `gc_limit`, side by
@@ -111,16 +111,6 @@ pub(in crate::runtime::puc) struct Loads {
     pub(in crate::runtime::puc) set_aside: isize,
 }
 
-/// What the opening of the standard libraries made.
-pub(in crate::runtime::puc) struct Opening {
-    /// 5.1's io library opening: records of its environments are on the
-    /// stack (see `vm/opening/fenv51.rs`)
-    pub(in crate::runtime::puc) phantoms: bool,
-    /// the library functions made as PUC's light C functions, by their
-    /// number in the opening's tables: one value however often pushed
-    pub(in crate::runtime::puc) lights: Vec<Option<Gc<crate::runtime::NativeClosure>>>,
-}
-
 impl Default for PucModel {
     fn default() -> PucModel {
         let d = crate::runtime::dialect::Dialect::L55;
@@ -165,10 +155,7 @@ impl Default for PucModel {
                 names_aside: 0,
                 set_aside: 0,
             },
-            opening: Opening {
-                phantoms: false,
-                lights: Vec::new(),
-            },
+            opening: super::api::Opening::default(),
         }
     }
 }

@@ -126,18 +126,6 @@ impl Heap {
         self.puc.loads.load_holds = held.0;
     }
 
-    /// 5.1's io library opening: its environments' records are on the
-    /// stack (see `vm/opening/fenv51.rs`).
-    #[inline]
-    pub(crate) fn phantoms(&self) -> bool {
-        self.puc.opening.phantoms
-    }
-
-    #[inline]
-    pub(crate) fn set_phantoms(&mut self, on: bool) {
-        self.puc.opening.phantoms = on;
-    }
-
     /// `s`, a string a library of PUC's keeps and luna's may not, kept
     /// alive (once, however often pinned).
     #[inline]

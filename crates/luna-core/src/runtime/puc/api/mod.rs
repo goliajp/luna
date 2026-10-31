@@ -15,6 +15,7 @@ mod ghost;
 mod load_session;
 mod loads;
 mod open_upvals;
+mod opening;
 mod parse;
 mod step;
 mod text;
@@ -22,6 +23,7 @@ mod text;
 pub(crate) use count::{CountingMark, CountingOff};
 pub(crate) use defer::Deferred;
 use load_session::unpaired;
+pub(in crate::runtime::puc) use opening::Opening;
 pub(crate) use step::{
     change_mode, full_collect, gc_finish_finalizers, gc_full_pause, gc_full_repause, gc_lua_step,
     gc_steps_to_pause, lua_step_skipped, puc_step,
