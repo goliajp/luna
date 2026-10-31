@@ -122,8 +122,8 @@ pub(crate) fn token_at(
     record(src, v, depth, Some(ix), lenient).ok()?.found
 }
 
-mod marks_scan;
 mod scan_buf;
+mod token_notes;
 use scan_buf::{ScanKind, ScanText, Scanned};
 /// What the load's replay needs of the scanner's record.
 pub(crate) mod scan {

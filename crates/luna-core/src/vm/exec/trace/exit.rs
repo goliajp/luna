@@ -5,6 +5,9 @@
 use super::*;
 use crate::jit::trace::CompiledTrace;
 
+pub(in crate::vm::exec) mod decode;
+pub(in crate::vm::exec) mod inner;
+
 impl Vm {
     /// The trace `ct` entered at `pc` returned `continuation_pc`; one that
     /// left after an allocation with a step due checks for a collection.

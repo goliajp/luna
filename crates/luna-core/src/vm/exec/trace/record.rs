@@ -5,6 +5,7 @@
 use super::*;
 
 mod self_link;
+pub(in crate::vm::exec) mod slots;
 
 impl Vm {
     /// Record `inst` (at `pc` of `cl`, frame `base`) into the active trace,

@@ -308,7 +308,5 @@ pub(crate) mod raw;
 
 pub(crate) use raw::RawVal;
 
-mod raw_impl;
-
 #[cfg(test)]
 mod tests;

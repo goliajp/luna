@@ -5,6 +5,8 @@
 
 use super::*;
 
+mod encode;
+
 /// The tag of `nil`.
 pub const NIL: u8 = 0;
 /// The tag of `false`.

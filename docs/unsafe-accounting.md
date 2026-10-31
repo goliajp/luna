@@ -535,7 +535,7 @@ A native's results go to the stack as a tag byte and a payload word
 (`Value::copy_raw`) through a safe function taking two references: a
 result just made sits in memory as those two stores, and a 16-byte copy
 of it waits for them to reach the cache on every call (1 in
-`runtime/value_raw.rs`). 1801.
+`runtime/value/raw/encode.rs`). 1801.
 
 The work of marking a leaf is read through a handle: the model's
 `leaf_work` is a safe function taking the object's `Gc` (one block for

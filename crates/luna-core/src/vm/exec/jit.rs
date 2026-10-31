@@ -8,5 +8,4 @@ pub(in crate::vm::exec) mod call;
 pub(in crate::vm::exec) mod handoff;
 pub(crate) mod levels;
 pub(in crate::vm::exec) mod rt;
-pub(in crate::vm::exec) mod rt_strbuf;
 pub(in crate::vm::exec) mod tforcall;
