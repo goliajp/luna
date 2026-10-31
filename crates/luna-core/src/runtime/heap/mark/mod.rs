@@ -3,33 +3,11 @@
 use super::*;
 
 mod at;
+mod gray;
 mod notes;
-
-/// The gray stack, outside the allocation context: PUC links gray
-/// objects through themselves, so marking allocates nothing a host
-/// allocator or memory policy could see or refuse.
-#[derive(Default)]
-pub(crate) struct GrayStack(Vec<*mut GcHeader>);
-
-impl GrayStack {
-    pub(super) fn push(&mut self, h: *mut GcHeader) -> Result<(), ()> {
-        self.0.try_reserve(1).map_err(drop)?;
-        self.0.push(h);
-        Ok(())
-    }
-
-    pub(super) fn pop(&mut self) -> Option<*mut GcHeader> {
-        self.0.pop()
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub(super) fn take(&mut self) -> GrayStack {
-        std::mem::take(self)
-    }
-}
+mod weak;
+pub(crate) use gray::GrayStack;
+pub(super) use weak::{survived_mark, weak_key_alive};
 
 /// Mark accumulator: gray stack plus entry points for Values and bare
 /// object headers (Protos/Upvalues are not first-class Values).
@@ -273,30 +251,5 @@ impl Marker {
                 false
             }
         }
-    }
-}
-
-/// Whether a value is "alive" for ephemeron key purposes: non-collectable
-/// values and strings are always alive (strings are never weakly cleared);
-/// a collectable object is alive only once marked (gray or black).
-pub(super) fn weak_key_alive(v: Value) -> bool {
-    let h = match v {
-        Value::Table(t) => t.as_ptr() as *mut GcHeader,
-        Value::Closure(c) => c.as_ptr() as *mut GcHeader,
-        Value::Native(n) => n.as_ptr() as *mut GcHeader,
-        Value::Coro(c) => c.as_ptr() as *mut GcHeader,
-        Value::Userdata(u) => u.as_ptr() as *mut GcHeader,
-        _ => return true, // strings, numbers, booleans: never weak-collected
-    };
-    // SAFETY: `v` is a key of a weak table being marked; the sweep that could free its object has not run, and only the flag byte is read
-    unsafe { !is_white((*h).flags) }
-}
-
-/// Whether the object of `v` survived the marking just finished (a value
-/// that is no object did): marked, or never collected (fixed).
-pub(super) fn survived_mark(v: Value) -> bool {
-    match v {
-        Value::Str(s) => !is_white(s.hdr.flags),
-        v => weak_key_alive(v),
     }
 }
