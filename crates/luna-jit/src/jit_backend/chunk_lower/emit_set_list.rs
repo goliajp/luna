@@ -237,7 +237,7 @@ fn set_list_fits(
         let fits = bcx.ins().band(room, empty);
         if elems.iter().any(|&(tag, _)| tag == RAW_TAG_TABLE) {
             // a black table takes the write barrier, on the slow path
-            use luna_core::runtime::table::jit_layout::{TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK};
+            use luna_core::__private::{TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK};
             let flags = bcx.ins().uload8(
                 types::I64,
                 MemFlagsData::trusted(),

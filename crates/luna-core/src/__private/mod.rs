@@ -11,6 +11,7 @@
 mod capi;
 mod fields;
 mod free;
+mod layout;
 mod panic_watch;
 mod runtime;
 mod types;
@@ -23,6 +24,7 @@ pub use capi::state::VmCApiState;
 pub use capi::values::VmCApiValues;
 pub use fields::{CoroHostInternals, ProtoTraceInternals, TRACE_HEADS_NONE, VmJitState};
 pub use free::*;
+pub use layout::{STR_LEN_OFFSET, TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK};
 pub use panic_watch::{panic_free, panics_in};
 pub use runtime::*;
 pub use types::*;
