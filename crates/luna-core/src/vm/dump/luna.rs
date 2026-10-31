@@ -122,6 +122,20 @@ fn read_count(r: &mut Reader, min_size: usize) -> Result<usize, Bad> {
     r.count(u64::from(n), min_size)
 }
 
+/// A prototype's source. PUC `LoadFunction`: an empty one means the
+/// parent's, as the dumper writes nothing when a prototype shares it.
+fn r_source(
+    r: &mut Reader,
+    heap: &mut Heap,
+    parent_source: Option<Gc<crate::runtime::LuaStr>>,
+) -> Result<Gc<crate::runtime::LuaStr>, Bad> {
+    let raw = r.bytes()?;
+    Ok(match parent_source {
+        Some(s) if raw.is_empty() => s,
+        _ => heap.try_intern(raw)?,
+    })
+}
+
 fn r_proto(
     r: &mut Reader,
     heap: &mut Heap,
@@ -133,18 +147,7 @@ fn r_proto(
     let max_stack = r.u8()?;
     let line_defined = r.u32()?;
     let last_line_defined = r.u32()?;
-    // PUC `LoadFunction`: an empty source means "inherit parent's", because
-    // the dumper writes nothing when this proto shares the parent's source.
-    let raw = r.bytes()?;
-    let source = if raw.is_empty() {
-        match parent_source {
-            Some(s) => s,
-            None => heap.try_intern(b"")?,
-        }
-    } else {
-        heap.try_intern(raw)?
-    };
-
+    let source = r_source(r, heap, parent_source)?;
     // each count sizes an allocation; `count` refuses one the remaining
     // bytes cannot hold (the minimum size of an element) as a truncation
     let n = read_count(r, 4)?;
@@ -201,11 +204,7 @@ fn r_proto(
     // loaded vararg proto conservatively reports no pseudo — `(vararg table)`
     // would be returned by `lua_getlocal` only on protos compiled here.
     crate::runtime::function_close::mark_closing_returns(&mut code, &protos);
-    let env_upval_idx = upvals
-        .iter()
-        .take(u8::MAX as usize)
-        .position(|u| &*u.name == "_ENV")
-        .map_or(u8::MAX, |i| i as u8);
+    let env_upval_idx = crate::runtime::debug_info::env_upval_index(&upvals);
     Ok(heap.try_adopt_proto(Proto {
         hdr: GcHeader::new(ObjTag::Proto),
         code: heap.try_block_of(code.into_iter())?,

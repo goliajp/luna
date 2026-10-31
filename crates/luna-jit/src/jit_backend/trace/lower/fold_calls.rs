@@ -11,15 +11,16 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
     oc: &OpCx<'_>,
     fold: &TraceMathFold,
 ) -> Option<()> {
-    let RuntimeHelpers {
-        str_sub_id,
-        str_sub_checked_id,
-        ..
-    } = lw.h.rt;
     // where the C API checks for a collection before the string is made
     // (5.1, 5.2) the check comes first; code for no dialect in particular
     // does not fold the call
     let checks_before = pl.rules()?.api_checks_before();
+    let rt = &lw.h.rt;
+    let sub_id = if checks_before {
+        rt.str_sub_checked_id
+    } else {
+        rt.str_sub_id
+    };
     let Plan { record, .. } = *pl;
     let off = oc.off;
     let regs: &[Variable] = oc.regs;
@@ -38,16 +39,11 @@ pub(super) fn emit_str_sub_fold<E: Emit>(
         n
     };
     let from = pos(lw, a + 2);
-    let to = if fold.nargs == 3 {
-        pos(lw, a + 3)
-    } else {
-        lw.bcx.ins().iconst(types::I64, -1)
+    let to = match fold.nargs {
+        3 => pos(lw, a + 3),
+        _ => lw.bcx.ins().iconst(types::I64, -1),
     };
-    let sub_ref = lw.bcx.import_func(if checks_before {
-        str_sub_checked_id
-    } else {
-        str_sub_id
-    });
+    let sub_ref = lw.bcx.import_func(sub_id);
     let call = lw.bcx.ins().call(sub_ref, &[s, from, to]);
     let r = lw.bcx.inst_results(call)[0];
     // a string the helper could not make (0, a deopt parked), or one 5.1

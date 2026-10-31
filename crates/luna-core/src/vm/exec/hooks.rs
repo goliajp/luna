@@ -6,6 +6,7 @@ use super::*;
 mod allow;
 mod hookf;
 mod protected;
+mod rust_hook;
 pub(crate) use hookf::hook_table_key;
 
 /// Per-thread debug hook state (PUC `lua_State` hook/hookmask/basehookcount/
@@ -156,31 +157,10 @@ impl Vm {
             self.hook_ftransfer = 0;
             self.hook_ntransfer = 0;
         }
-        // Rust hook fires first (no Vm reentrancy via call_value;
-        // synchronous fn pointer call). Both Rust and Lua hooks may be
-        // installed; both observe each event.
+        // the Rust hook first, then the Lua or C one: both may be installed,
+        // and both observe each event
         if let Some(rh) = self.hook.rust_func {
-            let evt = match event {
-                b"call" => Some(RustHookEvent::Call),
-                b"return" => Some(RustHookEvent::Return),
-                b"tail call" | b"tail return" => Some(RustHookEvent::TailCall),
-                b"line" => Some(RustHookEvent::Line(line.unwrap_or(0).max(0) as u32)),
-                b"count" => Some(RustHookEvent::Count),
-                _ => None,
-            };
-            if let Some(evt) = evt {
-                let was_in_hook = self.in_hook;
-                self.in_hook = true;
-                // PUC `luaD_hook` roots the whole running frame while a hook
-                // runs: a register written after the last safe point may sit
-                // above `gc_top`, and the hook may collect
-                let gc_top = self.gc_top;
-                self.gc_top = gc_top.max(self.stack.len() as u32);
-                rh(self, evt);
-                self.gc_top = gc_top;
-                self.in_hook = was_in_hook;
-                self.trap = true;
-            }
+            self.run_rust_hook(rh, event, line);
         }
         let Some(hook) = self.hook.func else {
             return Ok(());

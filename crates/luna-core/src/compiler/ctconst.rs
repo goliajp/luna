@@ -122,23 +122,34 @@ fn value(
         }
     };
     for &(op, rhs) in ops.iter().rev() {
-        v = match op {
-            // a constant left operand that decides the outcome emits no
-            // jump, leaving the right operand as the result
-            BinOp::And if v.truthy() => value(ast, rhs, named, compiled)?,
-            BinOp::Or if !v.truthy() => value(ast, rhs, named, compiled)?,
-            BinOp::And | BinOp::Or => return None,
-            op => {
-                let arith = Arith::of(op)?;
-                let r = value(ast, rhs, named, compiled)?;
-                if let (Some(a), Some(b)) = (v.num(), r.num()) {
-                    super::fold::note_fold(ast, op, a, (rhs, b), LuaVersion::Lua54);
-                }
-                fold(arith, &v, &r, false)?
-            }
-        };
+        v = apply(ast, v, (op, rhs), named, compiled)?;
     }
     Some(v)
+}
+
+/// The constant `v op rhs`, if it is one.
+fn apply(
+    ast: &Chunk,
+    v: CtConst,
+    (op, rhs): (BinOp, ExprId),
+    named: &mut dyn FnMut(&Name) -> Option<CtConst>,
+    compiled: bool,
+) -> Option<CtConst> {
+    match op {
+        // a constant left operand that decides the outcome emits no jump,
+        // leaving the right operand as the result
+        BinOp::And if v.truthy() => value(ast, rhs, named, compiled),
+        BinOp::Or if !v.truthy() => value(ast, rhs, named, compiled),
+        BinOp::And | BinOp::Or => None,
+        op => {
+            let arith = Arith::of(op)?;
+            let r = value(ast, rhs, named, compiled)?;
+            if let (Some(a), Some(b)) = (v.num(), r.num()) {
+                super::fold::note_fold(ast, op, a, (rhs, b), LuaVersion::Lua54);
+            }
+            fold(arith, &v, &r, false)
+        }
+    }
 }
 
 /// [`value`] of an expression that is not a binary operator.

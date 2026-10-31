@@ -11,7 +11,22 @@ pub(super) enum IndexOpen {
 }
 
 impl<'a> Compiler<'a> {
+    /// A unary operator's code, its operand's first: PUC codes both in
+    /// full, so the pinned line is lifted meanwhile ([`Self::unpin`]).
     pub(super) fn unop(
+        &mut self,
+        id: ExprId,
+        op: UnOp,
+        operand: ExprId,
+        line: u32,
+    ) -> Result<Exp, SyntaxError> {
+        let saved = self.unpin();
+        let e = self.unop_code(id, op, operand, line);
+        self.force_line = saved;
+        e
+    }
+
+    fn unop_code(
         &mut self,
         id: ExprId,
         op: UnOp,

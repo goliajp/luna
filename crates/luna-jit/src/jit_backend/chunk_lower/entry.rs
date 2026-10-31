@@ -109,16 +109,8 @@ pub(super) fn define_checked_entry<M: Module>(
     }
     let callee_ref = module.declare_func_in_func(callee, bcx.func);
     let mut args = args;
-    if let Some(ctx_addr) = saved_pinned.map(|_| bcx.ins().get_pinned_reg(types::I64)) {
-        // level 0: the base the call was made at, depth 0
-        let base = bcx.ins().load(
-            types::I64,
-            MemFlagsData::trusted(),
-            ctx_addr,
-            SelfCtx::BASE0,
-        );
-        args.push(base);
-        args.push(bcx.ins().iconst(types::I64, 0));
+    if saved_pinned.is_some() {
+        self_level0(&mut bcx, &mut args);
     }
     let call = bcx.ins().call(callee_ref, &args);
     let r = bcx.inst_results(call)[0];
@@ -140,6 +132,21 @@ pub(super) fn define_checked_entry<M: Module>(
     chunk_share::note(module, ctx, entry_id);
     module.clear_context(ctx);
     Some(entry_id)
+}
+
+/// A self-calling callee's level 0, after its arguments: the base the
+/// call was made at (read from the context the pinned register holds) and
+/// depth 0.
+fn self_level0(bcx: &mut FunctionBuilder, args: &mut Vec<Value>) {
+    let ctx_addr = bcx.ins().get_pinned_reg(types::I64);
+    let base = bcx.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        ctx_addr,
+        SelfCtx::BASE0,
+    );
+    args.push(base);
+    args.push(bcx.ins().iconst(types::I64, 0));
 }
 
 /// The bail block's handoff: the arguments, each with its tag, stored for

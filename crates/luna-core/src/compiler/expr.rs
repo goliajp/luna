@@ -152,7 +152,7 @@ impl<'a> Compiler<'a> {
     /// the scanner reads past it (a call, an operator's operand with the
     /// operator, which `luaK_prefix` moves to its own line); what to put
     /// back.
-    fn unpin(&mut self) -> Option<u32> {
+    pub(super) fn unpin(&mut self) -> Option<u32> {
         if self.version == LuaVersion::Lua51 {
             self.force_line
         } else {
@@ -200,10 +200,7 @@ impl<'a> Compiler<'a> {
             }
             Expr::UnOp { op, operand, line } => {
                 let (op, operand, line) = (*op, *operand, *line);
-                let saved = self.unpin();
-                let e = self.unop(id, op, operand, line);
-                self.force_line = saved;
-                e
+                self.unop(id, op, operand, line)
             }
             Expr::BinOp { lhs, rhs, line, .. } => {
                 let (lhs, rhs, line) = (*lhs, *rhs, *line);

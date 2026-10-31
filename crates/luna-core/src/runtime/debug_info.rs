@@ -17,6 +17,16 @@ pub struct UpvalDesc {
     pub read_only: bool,
 }
 
+/// The upvalue named `_ENV` among the first 255 of `upvals`, or `u8::MAX`
+/// (a prototype's `env_upval_idx`).
+pub(crate) fn env_upval_index(upvals: &[UpvalDesc]) -> u8 {
+    upvals
+        .iter()
+        .take(u8::MAX as usize)
+        .position(|u| &*u.name == "_ENV")
+        .map_or(u8::MAX, |i| i as u8)
+}
+
 /// Debug record for a local variable: its name and the pc range over which it
 /// occupies register `reg`. Used to name registers in error messages and
 /// debug.getinfo (PUC LocVar).

@@ -116,12 +116,7 @@ impl<'s> Parser<'s> {
         // (which already enters). Keeping the entry out lets errors.lua's
         // `testrep("(")` (paren-only nesting) hit the same 200-level wall as
         // `{`/`,` nesting.
-        // PUC 5.2–5.3 `suffixedexp` captured the line of the *primary*
-        // expression once and pinned every chained call/method to it
-        // (`a\n(...)` → error reports on `a`'s line); 5.1's `funcargs` and
-        // 5.4 on take the line of the token the arguments open with. errors.lua's `lineerror` covers both:
-        //   - 5.3:  `lineerror([[a\n(\n23)]], 1)` — expects `a`'s line
-        //   - 5.4+: `lineerror([[a\n(...)\n23)]], 2)` — expects `(`'s line
+        // a call's line: see `call_line`
         let (primary_line, first) = (self.tok.line, self.tok_ix);
         let mut e = self.primary_expr()?;
         loop {
@@ -143,11 +138,7 @@ impl<'s> Parser<'s> {
                 Token::Colon => {
                     self.advance()?;
                     let method = self.expect_name()?;
-                    let line = if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
-                        primary_line
-                    } else {
-                        self.tok.line
-                    };
+                    let line = self.call_line(primary_line);
                     let args = self.call_args()?;
                     let call = Expr::MethodCall {
                         obj: e,
@@ -158,11 +149,7 @@ impl<'s> Parser<'s> {
                     e = self.push_expr(call, first);
                 }
                 Token::LParen | Token::Str(_) | Token::LBrace => {
-                    let line = if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
-                        primary_line
-                    } else {
-                        self.tok.line
-                    };
+                    let line = self.call_line(primary_line);
                     let args = self.call_args()?;
                     let call = Expr::Call {
                         func: e,
@@ -175,5 +162,21 @@ impl<'s> Parser<'s> {
             }
         }
         Ok(e)
+    }
+
+    /// The line a call reports, the arguments' first token current.
+    /// PUC 5.2–5.3 `suffixedexp` captured the line of the *primary*
+    /// expression once and pinned every chained call/method to it
+    /// (`a\n(...)` → error reports on `a`'s line); 5.1's `funcargs` and 5.4
+    /// on take the line of the token the arguments open with. errors.lua's
+    /// `lineerror` covers both:
+    ///   - 5.3:  `lineerror([[a\n(\n23)]], 1)` — expects `a`'s line
+    ///   - 5.4+: `lineerror([[a\n(...)\n23)]], 2)` — expects `(`'s line
+    fn call_line(&self, primary_line: u32) -> u32 {
+        if matches!(self.version, LuaVersion::Lua52 | LuaVersion::Lua53) {
+            primary_line
+        } else {
+            self.tok.line
+        }
     }
 }

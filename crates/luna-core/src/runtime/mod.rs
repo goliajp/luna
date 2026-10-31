@@ -34,7 +34,7 @@ pub(crate) mod gc_verify_probe {
     }
 }
 mod call_frame;
-mod debug_info;
+pub(crate) mod debug_info;
 mod fnv;
 pub mod function;
 pub(crate) mod function_close;
