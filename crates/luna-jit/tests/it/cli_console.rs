@@ -24,6 +24,11 @@ use windows_sys::Win32::System::Threading::{
 };
 
 /// The console's size.
+#[cfg(feature = "repl-line-editor")]
+mod escapes;
+#[cfg(feature = "repl-line-editor")]
+pub(crate) use escapes::strip_escapes;
+
 const WIDTH: usize = 120;
 const HEIGHT: usize = 30;
 
@@ -296,37 +301,4 @@ impl Drop for Console {
             let _ = std::fs::write(std::path::Path::new(&dir).join(name), &*bytes);
         }
     }
-}
-
-/// `s` without its CSI and OSC sequences.
-#[cfg(feature = "repl-line-editor")]
-pub(crate) fn strip_escapes(s: &str) -> String {
-    let mut out = String::new();
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\x1b' {
-            out.push(c);
-            continue;
-        }
-        match chars.next() {
-            Some('[') => {
-                // parameters and intermediates up to the final byte
-                for c in chars.by_ref() {
-                    if ('\x40'..='\x7e').contains(&c) {
-                        break;
-                    }
-                }
-            }
-            Some(']') => {
-                // up to BEL or ST
-                while let Some(c) = chars.next() {
-                    if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out
 }
