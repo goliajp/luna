@@ -6,7 +6,7 @@ use super::*;
 
 mod closure;
 
-use crate::__private::{JIT_GC_CALL, JIT_GC_PREV};
+use crate::jit::abi::{JIT_GC_CALL, JIT_GC_PREV};
 
 impl Vm {
     #[inline(never)]
