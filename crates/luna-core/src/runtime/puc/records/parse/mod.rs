@@ -213,5 +213,3 @@ impl Heap {
         true
     }
 }
-
-impl Heap {}

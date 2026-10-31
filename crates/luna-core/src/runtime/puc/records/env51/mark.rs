@@ -82,5 +82,3 @@ impl Marker {
         }
     }
 }
-
-impl Heap {}

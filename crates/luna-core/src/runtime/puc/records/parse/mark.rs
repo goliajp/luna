@@ -135,7 +135,3 @@ impl Marker {
         self.mark(s);
     }
 }
-
-impl Heap {}
-
-impl Heap {}
