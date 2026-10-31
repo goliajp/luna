@@ -17,6 +17,15 @@ pub(crate) fn buffered(
     if bytes.len() > crate::runtime::string::MAX_LEN {
         return Err(posix_error(ENOMEM).into());
     }
+    vm.lib_scope(|vm| buffered_in(vm, bytes, chunks, nl))
+}
+
+fn buffered_in(
+    vm: &mut Vm,
+    bytes: &[u8],
+    chunks: &[(usize, usize)],
+    nl: bool,
+) -> Result<Value, RdErr> {
     let mut b = PucBuffer::new(vm);
     let mut at = 0;
     for &(room, got) in chunks {

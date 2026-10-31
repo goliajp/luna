@@ -38,14 +38,13 @@ pub(super) fn search(
     sep: &[u8],
     dirsep: &[u8],
 ) -> Result<Result<Found, Gc<LuaStr>>, LuaError> {
-    let base = vm.lib_roots.mark();
-    let r = if vm.version() >= LuaVersion::Lua54 {
-        search_54(vm, name, path, sep, dirsep)
-    } else {
-        search_51(vm, name, path, sep, dirsep)
-    };
-    vm.lib_roots.release(base);
-    r
+    vm.lib_scope(|vm| {
+        if vm.version() >= LuaVersion::Lua54 {
+            search_54(vm, name, path, sep, dirsep)
+        } else {
+            search_51(vm, name, path, sep, dirsep)
+        }
+    })
 }
 
 /// 5.4 on: the names in one buffer, the message made only when none is

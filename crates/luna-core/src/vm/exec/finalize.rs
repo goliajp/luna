@@ -178,23 +178,20 @@ impl Vm {
         // (`formatvarinfo`), then `typeerror`'s message
         use crate::runtime::puc::fmt::FmtArg;
         let tn = self.obj_typename(gc);
-        let base = self.lib_roots.mark();
-        let v = self
-            .pushfstring(
+        let v = self.lib_scope(|vm| {
+            let extra = vm.pushfstring(
                 b" (%s '%s')",
                 &[FmtArg::S(b"metamethod"), FmtArg::S(b"__gc")],
-            )
-            .and_then(|extra| {
-                // on the stack while the message is made
-                self.lib_roots.push(Value::Str(extra));
-                let args = [
-                    FmtArg::S(b"call"),
-                    FmtArg::S(tn.as_bytes()),
-                    FmtArg::S(extra.as_bytes()),
-                ];
-                self.pushfstring(b"attempt to %s a %s value%s", &args)
-            });
-        self.lib_roots.release(base);
+            )?;
+            // on the stack while the message is made
+            vm.lib_roots.push(Value::Str(extra));
+            let args = [
+                FmtArg::S(b"call"),
+                FmtArg::S(tn.as_bytes()),
+                FmtArg::S(extra.as_bytes()),
+            ];
+            vm.pushfstring(b"attempt to %s a %s value%s", &args)
+        });
         let v = v.map_or_else(|e| e.0, Value::Str);
         // `luaD_pcall` shrinks the stack it caught the error on
         self.shrink_caught_error();

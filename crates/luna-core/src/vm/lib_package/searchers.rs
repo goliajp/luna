@@ -62,10 +62,9 @@ pub(super) fn searcher_lua(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaE
     let fname = super::path::found_string(vm, &found)?;
     // `luaL_loadfilex`, a C function the searcher calls (no level of its
     // own), the name found on the stack meanwhile
-    let base = vm.lib_roots.mark();
-    vm.lib_roots.push(fname);
-    let r = crate::vm::lib_os_io::load_path(vm, Some(&file), None);
-    vm.lib_roots.release(base);
+    let r = vm.rooted(&[fname], |vm| {
+        crate::vm::lib_os_io::load_path(vm, Some(&file), None)
+    });
     match r {
         Ok(f @ Value::Closure(_)) => {
             // 5.1's loader gets only the name; 5.2+ also the file name,

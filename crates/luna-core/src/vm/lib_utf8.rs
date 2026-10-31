@@ -90,6 +90,11 @@ fn bounds(v: LuaVersion, old: &'static str, new: &'static str) -> &'static str {
 }
 
 fn u_char<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    // the buffer's strings are let go on an error
+    vm.lib_scope(|vm| u_char_buffered::<PRE>(vm, fs, nargs))
+}
+
+fn u_char_buffered<const PRE: bool>(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let a = Args::new(fs, nargs);
     let v = vm.version();
     // with several arguments the buffer's slot counts for an error

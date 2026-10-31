@@ -32,7 +32,7 @@ impl PucBuffer {
 
     /// 5.1 `adjuststack`
     pub(super) fn adjust_51(&mut self, vm: &mut Vm) -> Result<(), LuaError> {
-        let lvl = vm.lib_roots.len() - self.base.at();
+        let lvl = vm.lib_roots.len() - self.base;
         if lvl <= 1 {
             return Ok(());
         }

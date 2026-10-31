@@ -40,11 +40,10 @@ impl Vm {
         name: Option<Gc<crate::runtime::LuaStr>>,
     ) -> Result<Gc<LuaClosure>, SyntaxError> {
         // the chunk's name is on the C function's stack meanwhile
-        let base = self.lib_roots.mark();
-        self.lib_roots.extend(name.map(Value::Str));
-        let r = self.load_named_rooted(src, chunkname, name);
-        self.lib_roots.release(base);
-        r
+        self.lib_scope(|vm| {
+            vm.lib_roots.extend(name.map(Value::Str));
+            vm.load_named_rooted(src, chunkname, name)
+        })
     }
 
     /// The load fails with `e`, an error a collection check inside it

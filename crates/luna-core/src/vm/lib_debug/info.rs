@@ -171,14 +171,11 @@ fn info_table(
 ) -> Result<Gc<Table>, LuaError> {
     // the table, and what goes in it, made as the API calls PUC's C
     // function makes do, checking for a collection: kept rooted meanwhile
-    let base = vm.lib_roots.mark();
-    vm.lib_roots.push(activelines);
     // the function described: off the stack when 5.1–5.3 popped it ('>'),
     // where PUC's `lua_getinfo` pushes it again for 'f'
-    vm.lib_roots.push(ar.func);
-    let r = info_fields(vm, options, ar, activelines);
-    vm.lib_roots.release(base);
-    r
+    vm.rooted(&[activelines, ar.func], |vm| {
+        info_fields(vm, options, ar, activelines)
+    })
 }
 
 fn info_fields(

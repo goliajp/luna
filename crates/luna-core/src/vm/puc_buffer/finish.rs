@@ -14,7 +14,7 @@ impl PucBuffer {
         match self.d {
             // every byte still in the C buffer: `emptybuffer` pushes them as
             // the one string, which `lua_concat(L, 1)` leaves as it is
-            Dialect::L51 if self.n > 0 && vm.lib_roots.len() == self.base.at() => {
+            Dialect::L51 if self.n > 0 && vm.lib_roots.len() == self.base => {
                 vm.api_check_before::<true>()?;
                 vm.alloc_str(&out[self.start..self.start + self.n])
             }
@@ -54,14 +54,14 @@ impl PucBuffer {
     /// joined into one, left where the first of them was.
     fn join_51(&mut self, vm: &mut Vm, out: &[u8]) -> Result<Gc<LuaStr>, LuaError> {
         self.empty_51(vm, out)?;
-        let n = vm.lib_roots.len() - self.base.at();
+        let n = vm.lib_roots.len() - self.base;
         if n == 0 {
             return vm.alloc_str(b"");
         }
         if n >= 2 {
             self.concat_51(vm, n)?;
         }
-        match vm.lib_roots[self.base.at()] {
+        match vm.lib_roots[self.base] {
             Value::Str(s) => Ok(s),
             _ => unreachable!("the buffer's strings"),
         }
@@ -70,7 +70,7 @@ impl PucBuffer {
     /// The buffer given up on an error: 5.1's strings on the stack go.
     #[cold]
     pub(crate) fn abandon(self, vm: &mut Vm) {
-        vm.lib_roots.release(self.base);
+        vm.lib_roots.pop_to(self.base);
     }
 
     #[cold]
@@ -84,7 +84,7 @@ impl PucBuffer {
             Dialect::L51 => {
                 let r = self.join_51(vm, out);
                 // an error lets the strings go too
-                vm.lib_roots.release(self.base);
+                vm.lib_roots.pop_to(self.base);
                 r
             }
             Dialect::L55 if self.boxed => {
