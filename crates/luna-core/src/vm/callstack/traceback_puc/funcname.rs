@@ -10,10 +10,10 @@ impl Vm {
     /// `pushfuncname` of 5.2 to 5.5: the string, made with what PUC makes
     /// on the way, each checked for as PUC checks.
     pub(super) fn puc_funcname(&mut self, ar: &Ar) -> Result<Gc<LuaStr>, LuaError> {
-        let base = self.lib_roots.mark();
-        let r = self.funcname_pushed(ar);
-        let s = self.lib_roots.last().copied();
-        self.lib_roots.release(base);
+        let (r, s) = self.lib_scope(|vm| {
+            let r = vm.funcname_pushed(ar);
+            (r, vm.lib_roots.last().copied())
+        });
         r?;
         match s {
             Some(Value::Str(s)) => Ok(s),
@@ -62,14 +62,14 @@ impl Vm {
         let name = match path.inner {
             None => path.outer,
             Some(inner) => {
-                let base = self.lib_roots.mark();
-                self.lib_roots.push(Value::Str(path.outer));
-                let r = self.api_push(|h| h.try_intern(b".")).and_then(|()| {
-                    self.lib_roots.push(Value::Str(inner));
-                    self.api_concat(base.at())
+                let (r, s) = self.lib_scope_at(|vm, base| {
+                    vm.lib_roots.push(Value::Str(path.outer));
+                    let r = vm.api_push(|h| h.try_intern(b".")).and_then(|()| {
+                        vm.lib_roots.push(Value::Str(inner));
+                        vm.api_concat(base)
+                    });
+                    (r, vm.lib_roots.get(base).copied())
                 });
-                let s = self.lib_roots.get(base.at()).copied();
-                self.lib_roots.release(base);
                 r?;
                 match s {
                     Some(Value::Str(s)) => s,

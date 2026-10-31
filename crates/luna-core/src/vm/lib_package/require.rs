@@ -120,12 +120,11 @@ fn not_found(
     let Value::Str(n) = name else {
         unreachable!("require passes the name as a string");
     };
-    let at = vm.lib_roots.mark();
-    vm.lib_roots.extend(made.map(Value::Str));
-    let args = [FmtArg::S(c_str(n.as_bytes())), FmtArg::S(msg)];
-    let e = crate::vm::builtins::raise_lib(vm, b"module '%s' not found:%s", &args, 2);
-    vm.lib_roots.release(at);
-    e
+    vm.lib_scope(|vm| {
+        vm.lib_roots.extend(made.map(Value::Str));
+        let args = [FmtArg::S(c_str(n.as_bytes())), FmtArg::S(msg)];
+        crate::vm::builtins::raise_lib(vm, b"module '%s' not found:%s", &args, 2)
+    })
 }
 
 /// A searcher's message `first` (rooted by the caller) added to the
@@ -199,7 +198,8 @@ pub(super) fn ll_require(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
     if v >= LuaVersion::Lua52 {
         vm.native_pop(1);
     }
-    let (loader, data) = find_loader(vm, pkg, name)?;
+    // the message's buffer is let go on an error
+    let (loader, data) = vm.lib_scope(|vm| find_loader(vm, pkg, name))?;
     // the loader is called where it sits: 5.4+ keep the buffer and the
     // loader data below it
     if v >= LuaVersion::Lua54 {

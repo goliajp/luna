@@ -45,11 +45,11 @@ impl Vm {
         stack: Vec<Value>,
         level: i64,
     ) -> Result<Value, LuaError> {
-        let base = self.lib_roots.mark();
-        self.lib_roots.extend_from_slice(&stack);
-        let r = self.errorfb_pieces(co, stack.is_empty(), level, base.at());
-        let v = self.lib_roots.get(base.at()).copied();
-        self.lib_roots.release(base);
+        let (r, v) = self.lib_scope_at(|vm, base| {
+            vm.lib_roots.extend_from_slice(&stack);
+            let r = vm.errorfb_pieces(co, stack.is_empty(), level, base);
+            (r, vm.lib_roots.get(base).copied())
+        });
         r.map(|()| v.unwrap_or(Value::Nil))
     }
 
@@ -158,12 +158,12 @@ impl Vm {
     ) -> Result<Gc<LuaStr>, LuaError> {
         let ars = self.traceback_ars(co, level);
         if self.version() >= LuaVersion::Lua54 {
-            return self.traceback_buffer(msg, ars);
+            return self.lib_scope(|vm| vm.traceback_buffer(msg, ars));
         }
-        let base = self.lib_roots.mark();
-        let r = self.traceback_pieces(msg, ars, base.at());
-        let v = self.lib_roots.get(base.at()).copied();
-        self.lib_roots.release(base);
+        let (r, v) = self.lib_scope_at(|vm, base| {
+            let r = vm.traceback_pieces(msg, ars, base);
+            (r, vm.lib_roots.get(base).copied())
+        });
         r?;
         match v {
             Some(Value::Str(s)) => Ok(s),

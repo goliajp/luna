@@ -38,14 +38,26 @@ pub(crate) struct PucBuffer {
     slot: Option<u32>,
     /// 5.1: where the C buffer's bytes start in the content
     start: usize,
-    /// 5.1: where this buffer's strings start in `Vm::lib_roots`
-    base: crate::vm::exec::LibMark,
+    /// 5.1: where this buffer's strings start in `Vm::lib_roots`, inside
+    /// the [`Vm::lib_scope`] it is made in
+    base: usize,
 }
 
 impl PucBuffer {
-    /// `luaL_buffinit`
+    /// `luaL_buffinit`, inside a [`Vm::lib_scope`]: an error out of the
+    /// function using the buffer lets its strings go there.
     #[inline]
     pub(crate) fn new(vm: &mut Vm) -> PucBuffer {
+        #[cfg(debug_assertions)]
+        debug_assert!(vm.lib_roots.in_scope(), "a buffer outside a lib scope");
+        PucBuffer::init(vm)
+    }
+
+    /// [`PucBuffer::new`] for `string.format`, which gives the buffer up
+    /// itself on an error ([`PucBuffer::abandon`]) rather than pay for a
+    /// scope on every call.
+    #[inline]
+    fn init(vm: &mut Vm) -> PucBuffer {
         PucBuffer {
             d: vm.heap.dialect(),
             size: Vm::lual_buffersize(vm.version()),
@@ -54,16 +66,16 @@ impl PucBuffer {
             ubox: None,
             slot: vm.native_top(),
             start: 0,
-            base: vm.lib_roots.mark(),
+            base: vm.lib_roots.len(),
         }
     }
 
     /// [`PucBuffer::new`] in code built for the rule `PRE` (see
     /// `vm/rules.rs`): 5.1 and 5.2 make no box, so need no slot for one.
     #[inline]
-    pub(crate) fn new_by<const PRE: bool>(vm: &mut Vm) -> PucBuffer {
+    fn new_by<const PRE: bool>(vm: &mut Vm) -> PucBuffer {
         if !PRE {
-            return PucBuffer::new(vm);
+            return PucBuffer::init(vm);
         }
         PucBuffer {
             d: vm.heap.dialect(),
@@ -73,7 +85,7 @@ impl PucBuffer {
             ubox: None,
             slot: None,
             start: 0,
-            base: vm.lib_roots.mark(),
+            base: vm.lib_roots.len(),
         }
     }
 
@@ -232,15 +244,15 @@ impl PucBuffer {
     ) -> Result<(), LuaError> {
         let vl = s.len();
         // the value is on the stack while the buffer makes room
-        let at = vm.lib_roots.mark();
+        let at = vm.lib_roots.len();
         vm.lib_roots.push(Value::Str(s));
         if self.d != Dialect::L51 {
             let r = self.add(vm, out, vl);
-            vm.lib_roots.release(at);
+            vm.lib_roots.pop_to(at);
             return r;
         }
         if vl <= self.size - self.n {
-            vm.lib_roots.release(at);
+            vm.lib_roots.pop_to(at);
             self.n += vl;
             return Ok(());
         }
@@ -248,7 +260,7 @@ impl PucBuffer {
         // below it (`lua_insert`)
         let end = out.len() - vl;
         if self.empty_51(vm, &out[..end])? {
-            vm.lib_roots.swap(at.at(), at.at() + 1);
+            vm.lib_roots.swap(at, at + 1);
         }
         self.start = out.len();
         self.adjust_51(vm)

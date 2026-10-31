@@ -48,7 +48,6 @@ pub(crate) use jit::levels::JitLimits;
 pub(crate) use jit::rt::TraceGhosts;
 pub(crate) use jit::rt_strbuf::AccumLast;
 mod lib_stack;
-pub(crate) use lib_stack::LibMark;
 mod lifecycle;
 mod limits;
 pub(crate) mod load;
