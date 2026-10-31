@@ -95,13 +95,27 @@ pub(super) fn next_piece(
     name: &[u8],
 ) -> Result<Option<Vec<u8>>, Value> {
     let reserved = ReaderSlot::reserved(vm);
+    let v = call_reader(vm, reader, rs, phase, name)?;
+    let bytes = piece_bytes(vm, v)?;
+    keep_piece(vm, rs, phase, reserved, v)?;
+    Ok(bytes.filter(|b| !b.is_empty()))
+}
+
+/// The reader called above the parser's slots, where the debug library
+/// finds the parser's objects (made if it looks): its first result.
+fn call_reader(
+    vm: &mut Vm,
+    reader: Value,
+    rs: &ReaderSlot,
+    phase: Phase,
+    name: &[u8],
+) -> Result<Value, Value> {
     let held = rs.base + rs.nils;
     let parser = ReaderSlot::parser_slots(vm, phase);
     // 5.5's last result is popped here
     vm.native_settop_nil(held + parser).map_err(|e| e.0)?;
     let top = vm.native_top().unwrap_or(vm.top);
     argcheck::check_stack_at(vm, top, 2, "too many nested functions").map_err(|e| e.0)?;
-    // where the debug library finds the parser's objects, made if it looks
     let (src, open, undumping, shown) = match phase {
         Phase::Start => (&[][..], None, std::ptr::null(), std::ptr::null_mut()),
         Phase::Text(n, src) => (src, Some(n), std::ptr::null(), std::ptr::null_mut()),
@@ -125,35 +139,42 @@ pub(super) fn next_piece(
     if parser > 0 {
         vm.drop_reader_layer();
     }
-    let r = r.map_err(|e| e.0)?;
-    let v = r.first().copied().unwrap_or(Value::Nil);
-    let bytes = match v {
-        Value::Nil => None,
-        v => match argcheck::to_str_bytes(vm, v) {
-            Some(b) => Some(b),
-            None => {
-                // `luaL_error`, positioned at load's caller; the running
-                // message handler runs on it, a memory error passes it by
-                let oom = vm.heap.mem_ctx().oom_raised();
-                let e = crate::vm::builtins::errors::raise_str(
-                    vm,
-                    "reader function must return a string",
-                )
-                .0;
-                if vm.heap.mem_ctx().oom_raised() != oom {
-                    return Err(e);
-                }
-                return Err(vm.load_error_handled(e));
-            }
-        },
-    };
-    // `lua_tolstring` turns a number into a string where it is kept
+    Ok(r.map_err(|e| e.0)?.first().copied().unwrap_or(Value::Nil))
+}
+
+/// The bytes of the reader's result `v`: none for nil, else a string's
+/// or a number's, or `luaL_error`, positioned at load's caller (the
+/// running message handler runs on it, a memory error passes it by).
+fn piece_bytes(vm: &mut Vm, v: Value) -> Result<Option<Vec<u8>>, Value> {
+    if matches!(v, Value::Nil) {
+        return Ok(None);
+    }
+    if let Some(b) = argcheck::to_str_bytes(vm, v) {
+        return Ok(Some(b));
+    }
+    let oom = vm.heap.mem_ctx().oom_raised();
+    let e = crate::vm::builtins::errors::raise_str(vm, "reader function must return a string").0;
+    if vm.heap.mem_ctx().oom_raised() != oom {
+        return Err(e);
+    }
+    Err(vm.load_error_handled(e))
+}
+
+/// The reader's result `v` left on the stack by each dialect's rule:
+/// `lua_tolstring` turns a number into a string where it is kept; 5.2 to
+/// 5.4 pop a nil, 5.1 leaves it.
+fn keep_piece(
+    vm: &mut Vm,
+    rs: &mut ReaderSlot,
+    phase: Phase,
+    reserved: Option<u32>,
+    v: Value,
+) -> Result<(), Value> {
     let kept = match v {
         Value::Int(_) | Value::Float(_) => Value::Str(vm.number_string(v).map_err(|e| e.0)?),
         v => v,
     };
     let held = match (reserved, v) {
-        // 5.2 to 5.4 pop a nil, 5.1 leaves it
         (Some(_), Value::Nil) if vm.version() >= LuaVersion::Lua52 => Ok(()),
         (Some(_), Value::Nil) => {
             if matches!(phase, Phase::Start) {
@@ -167,6 +188,5 @@ pub(super) fn next_piece(
         }
         (None, _) => vm.native_push_vals(&[kept]),
     };
-    held.map_err(|e| e.0)?;
-    Ok(bytes.filter(|b| !b.is_empty()))
+    held.map_err(|e| e.0)
 }
