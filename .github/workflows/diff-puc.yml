@@ -142,18 +142,97 @@ jobs:
           LUNA_DIFF_PUC_REQUIRE_ALL: "1"
         run: 'cargo test --release -p luna-core --test it -- --nocapture diff_puc::'
 
-      - name: 'cargo test --release -p luna-core --features gc-verify --test it -- diff_puc::'
-        # The corpus again in a gc-verify build: there the PUC instruction
-        # counts the load's accounting works out without encoding are
-        # checked against what the encoder writes, so the two cannot
-        # drift apart unseen.
-        env:
-          LUNA_DIFF_PUC_REQUIRE_ALL: "1"
-        run: 'cargo test --release -p luna-core --features gc-verify --test it -- diff_puc::'
-
       - name: 'cargo test --release -p luna-jit --test it -- puc_bytecode_jit::'
         # The same bytecode corpus on a JIT-equipped Vm, compared with
         # luna's interpreter on the same chunks.
         env:
           LUNA_DIFF_PUC_REQUIRE_ALL: "1"
         run: 'cargo test --release -p luna-jit --test it -- --nocapture puc_bytecode_jit::'
+
+  diff-puc-gc-verify:
+    name: luna-vs-PUC corpus under gc-verify (${{ matrix.os }})
+    # beside the byte-diff job, not after it: the corpus in a gc-verify
+    # build, where the PUC instruction counts the load's accounting works
+    # out without encoding are checked against what the encoder writes, so
+    # the two cannot drift apart unseen
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # PUC's floating-point results depend on how the C compiler builds
+        # it for the architecture (x87 fprem inlined for fmod on x86,
+        # fused multiply-subtract on aarch64), so both are diffed
+        os: [ubuntu-latest, ubuntu-26.04-arm]
+    timeout-minutes: 30
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # scheduled runs start on the default branch (master, the last
+          # release); test the code that is about to ship instead
+          ref: ${{ github.event_name == 'schedule' && 'develop' || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore PUC builds
+        # The interpreters only change when a pinned version does, so the
+        # built tree is cached per version set and runner architecture.
+        # Bump the key's versions together with the list below.
+        id: puc-cache
+        uses: actions/cache@v6
+        with:
+          path: /tmp/puc-multi
+          key: puc-${{ runner.os }}-${{ runner.arch }}-5.1.5-5.2.4-5.3.6-5.4.9-5.5.1-v1
+
+      - name: Build PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.9 / 5.5.1
+        # Always from the lua.org source releases: an apt package would
+        # make the differential basis depend on whatever the runner image
+        # ships. `make posix` (≤5.4) and `make linux` (5.5) avoid the
+        # readline dependency; the harness feeds stdin.
+        if: steps.puc-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential
+          mkdir -p /tmp/puc-multi && cd /tmp/puc-multi
+          for v in 5.1.5 5.2.4 5.3.6 5.4.9; do
+            curl -fsSL "https://www.lua.org/ftp/lua-$v.tar.gz" | tar -xz
+            ( cd "lua-$v" && make posix > /dev/null )
+          done
+          curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua-5.5.1.tar.gz
+          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  lua-5.5.1.tar.gz" | sha256sum -c -
+          tar -xzf lua-5.5.1.tar.gz && rm lua-5.5.1.tar.gz
+          ( cd lua-5.5.1 && make linux > /dev/null )
+
+      - name: Point the harness at the PUC builds
+        run: |
+          P=/tmp/puc-multi
+          for v in 5.1.5 5.2.4 5.3.6 5.4.9 5.5.1; do
+            d=$(echo "$v" | cut -d. -f1-2 | tr -d .)
+            echo "PUC_LUA_$d=$P/lua-$v/src/lua" >> "$GITHUB_ENV"
+            echo "PUC_LUAC_$d=$P/lua-$v/src/luac" >> "$GITHUB_ENV"
+          done
+          echo "PUC_LUA=$P/lua-5.5.1/src/lua" >> "$GITHUB_ENV"
+
+      - name: Assert the PUC versions
+        # The pins are exact. A patch release changes the ground truth,
+        # so moving one is a deliberate edit here (and of the cache key),
+        # never a side effect of a download or a stale cache.
+        run: |
+          set -euo pipefail
+          for v in 5.1.5 5.2.4 5.3.6 5.4.9 5.5.1; do
+            for bin in lua luac; do
+              GOT=$(/tmp/puc-multi/lua-$v/src/$bin -v 2>&1)
+              case "$GOT" in
+                *"Lua $v"*) echo "PUC pin OK ($bin $v): $GOT" ;;
+                *) echo "::error::expected Lua $v from $bin, got: $GOT"; exit 1 ;;
+              esac
+            done
+          done
+
+      - name: 'cargo test --release -p luna-core --features gc-verify --test it -- diff_puc::'
+        env:
+          LUNA_DIFF_PUC_REQUIRE_ALL: "1"
+        run: 'cargo test --release -p luna-core --features gc-verify --test it -- diff_puc::'
