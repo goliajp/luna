@@ -156,7 +156,9 @@ impl Drop for LlvmJitStorage {
     }
 }
 
-impl JitStorage for LlvmJitStorage {
+// SAFETY: `clear_cache` drops cache entries only; the engines, and the code
+// they map, stay until the storage drops
+unsafe impl JitStorage for LlvmJitStorage {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

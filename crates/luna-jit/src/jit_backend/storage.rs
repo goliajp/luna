@@ -86,7 +86,9 @@ impl CraneliftJitStorage {
     }
 }
 
-impl JitStorage for CraneliftJitStorage {
+// SAFETY: `clear_cache` drops cache entries only; the modules and code pages
+// that hold the code stay until `release_code` or the storage drops
+unsafe impl JitStorage for CraneliftJitStorage {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

@@ -100,6 +100,10 @@ optimization.
   code prototypes and traces still held. `JitStorage::clear_cache` (a
   provided method) forgets the code a storage keeps for reuse and leaves
   that code mapped; `luna_jit::jit::cache_clear` calls it.
+- `JitStorage` is an `unsafe trait`: a storage is written
+  `unsafe impl JitStorage for MyStorage`, and vouches that `clear_cache`,
+  which the Vm calls from safe code, leaves every piece of code it handed
+  out mapped.
 
 - `package.path` defaults to PUC's default outside Windows too
   (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in
