@@ -11,6 +11,7 @@
 mod any;
 mod arena;
 mod boxed;
+mod budget;
 mod ctx;
 mod kind;
 mod map;
