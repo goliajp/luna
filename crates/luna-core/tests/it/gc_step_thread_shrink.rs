@@ -100,10 +100,16 @@ fn stepping_a_cycle_that_shrinks_coroutine_stacks_keeps_them_and_frees_as_a_full
         full.eval(CHECK).expect("the coroutines finish");
 
         // PUC 5.2.4 and 5.3.6 run on the same script end the stepped cycle
-        // 16 bytes above the full one (lx64, three runs each, every one so)
+        // this many bytes above the full one (lx64, three runs each, every
+        // one so; -m32 builds for 32-bit)
+        let above = match (v, cfg!(target_pointer_width = "64")) {
+            (_, true) => 16.0,
+            (LuaVersion::Lua52, false) => 8.0,
+            _ => 12.0,
+        };
         assert_eq!(
             (count(&stepped_count) - count(&full_count)) * 1024.0,
-            16.0,
+            above,
             "{v:?}: in use after the stepped cycle against the full one"
         );
     }
