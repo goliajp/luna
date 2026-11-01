@@ -100,12 +100,13 @@ fn stepping_a_cycle_that_shrinks_coroutine_stacks_keeps_them_and_frees_as_a_full
         full.eval(CHECK).expect("the coroutines finish");
 
         // PUC 5.2.4 and 5.3.6 run on the same script end the stepped cycle
-        // this many bytes above the full one (lx64, three runs each, every
-        // one so; -m32 builds for 32-bit)
+        // this many bytes above the full one (x86_64 Linux, three runs each,
+        // every one so; -m32 builds for 32-bit)
         let above = match (v, cfg!(target_pointer_width = "64")) {
             (_, true) => 16.0,
             (LuaVersion::Lua52, false) => 8.0,
-            _ => 12.0,
+            (LuaVersion::Lua53, false) => 12.0,
+            _ => unreachable!("the test runs 5.2 and 5.3"),
         };
         assert_eq!(
             (count(&stepped_count) - count(&full_count)) * 1024.0,
@@ -128,7 +129,8 @@ fn coroutines_resumed_between_the_steps_of_a_shrinking_cycle_keep_their_values()
                 local ok, a, b = coroutine.resume(cos[i])
                 assert(ok and a == i and b == tostring(i), i)
               end
-            until collectgarbage("step", 0) and i >= 200
+            until collectgarbage("step", 0)
+            -- the ones the cycle did not reach, after it
             for j = i + 1, 200 do
               local ok, a = coroutine.resume(cos[j])
               assert(ok and a == j, j)
