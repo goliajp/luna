@@ -180,7 +180,7 @@ impl Meta {
         let tier_up = self
             .tier_at
             .filter(|_| !tiered)
-            .map(|at| super::tier_source::tier_up(Box::new(TCellU32::new(0)), at, calls_at));
+            .map(|at| Box::new(TierUp::new(Box::new(TCellU32::new(0)), at, calls_at)));
         CompiledTraceParts {
             head_pc: self.head_pc,
             entry: placeholder_trace_fn,

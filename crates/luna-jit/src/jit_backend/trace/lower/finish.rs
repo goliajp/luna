@@ -1,4 +1,3 @@
-use super::super::tier_source::tier_up;
 use super::*;
 use luna_core::__private::classify_exit_tags;
 
@@ -326,8 +325,9 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         // `1` for single-CMP-fallback DownRec; `>= 2` for the
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
-        tier_up: tier_count
-            .map(|(count, at)| tier_up(count, at, record.head_proto.call_hot_count())),
+        tier_up: tier_count.map(|(count, at)| {
+            Box::new(TierUp::new(count, at, record.head_proto.call_hot_count()))
+        }),
     }
 }
 

@@ -200,5 +200,5 @@ pub(crate) fn tier_up_trace(
     storage: &mut dyn luna_core::__private::JitStorage,
     ct: &CompiledTrace,
 ) -> Option<TraceFn> {
-    share::tier_up(storage, ct)
+    super::tier_source::tier_up(storage, ct)
 }
