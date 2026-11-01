@@ -118,7 +118,15 @@ impl Vm {
     /// concat at register `a` of the trace's head frame, its operands
     /// stored from `ops` first. A metamethod frame `concat_run` pushed is
     /// unwound, and the interpreter redoes the op.
-    pub(crate) fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]], reload: u64) -> i64 {
+    ///
+    /// # Safety
+    /// As [`crate::__private::VmJitFrames::jit_concat_regs`]'s.
+    pub(crate) unsafe fn jit_concat_regs(
+        &mut self,
+        a: u32,
+        ops: &mut [[i64; 2]],
+        reload: u64,
+    ) -> i64 {
         if self.jit.pending_err.is_some() {
             return 0;
         }
@@ -134,8 +142,8 @@ impl Vm {
         for (slot, op) in regs.iter_mut().zip(ops.iter()) {
             let tag = u8::try_from(op[0]).unwrap_or_else(|_| slot.unpack().0);
             let raw = crate::runtime::value::RawVal { zero: op[1] as u64 };
-            // SAFETY: the trace passes each register's own tag and payload, or
-            // a payload of the type the slot holds now with no tag
+            // SAFETY: each register's own tag and payload, or a payload of
+            // the type the slot holds now with no tag (# Safety)
             *slot = unsafe { Value::pack(tag, raw) };
         }
         self.top = at + n as u32;
