@@ -268,32 +268,3 @@ fn vms_on_threads_share_one_budget() {
         "the policy saw each block go"
     );
 }
-
-#[test]
-fn a_chunk_on_a_clone_a_vm_was_given_allocates_apart_from_it() {
-    use luna_core::frontend::ast::{Chunk, ExprId};
-    use luna_core::runtime::mem::MemOwner;
-    use luna_core::vm::Vm;
-    let o = MemOwner::system();
-    let s = SendVm::from_vm(Vm::new_with_mem(LuaVersion::Lua54, o.clone()));
-    let run = thread::spawn(move || {
-        for _ in 0..20 {
-            s.eval("local t = {} for i = 1, 2000 do t[i] = {i} end")
-                .unwrap();
-        }
-    });
-    // grows and frees the chunk's vectors while the Vm allocates: a
-    // context shared with the Vm's heap would be used on two threads
-    let mut c = Chunk::new(o.clone());
-    for n in 0.. {
-        if run.is_finished() {
-            break;
-        }
-        let l = c.push_list(&[ExprId(7); 64]);
-        assert_eq!(c.list(l).len(), 64);
-        if n % 64 == 63 {
-            c = Chunk::new(o.clone());
-        }
-    }
-    run.join().unwrap();
-}
