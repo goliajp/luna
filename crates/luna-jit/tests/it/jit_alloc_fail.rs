@@ -8,8 +8,8 @@
 //! runs (an `enter_jit` window is open), so every refusal lands in a
 //! helper; the interpreter's allocations go through.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
 use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
 use luna_jit::jit_backend::__jit_tls_ptrs;
@@ -29,8 +29,8 @@ struct Refuse {
     kind: Option<BlockKind>,
     from: usize,
     once: bool,
-    seen: Rc<Cell<usize>>,
-    refused: Rc<Cell<usize>>,
+    seen: Arc<AtomicUsize>,
+    refused: Arc<AtomicUsize>,
 }
 
 impl Refuse {
@@ -39,8 +39,8 @@ impl Refuse {
             kind,
             from,
             once,
-            seen: Rc::new(Cell::new(0)),
-            refused: Rc::new(Cell::new(0)),
+            seen: Arc::new(AtomicUsize::new(0)),
+            refused: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -50,15 +50,15 @@ impl MemoryPolicy for Refuse {
         if !in_compiled_code() || self.kind.is_some_and(|k| k != kind) {
             return true;
         }
-        let n = self.seen.get() + 1;
-        self.seen.set(n);
+        let n = self.seen.load(Relaxed) + 1;
+        self.seen.store(n, Relaxed);
         let refuse = if self.once {
             n == self.from
         } else {
             n >= self.from
         };
         if refuse {
-            self.refused.set(self.refused.get() + 1);
+            self.refused.fetch_add(1, Relaxed);
         }
         !refuse
     }
@@ -119,7 +119,7 @@ fn compiled_growths(v: LuaVersion, src: &str, kind: Option<BlockKind>) -> usize 
     let seen = p.seen.clone();
     let mut vm = vm_with(v, Some(p), true);
     result(&mut vm, src);
-    seen.get()
+    seen.load(Relaxed)
 }
 
 /// Up to `max` of the growths `1..=n` a run made, short of the last few,
@@ -152,7 +152,7 @@ fn a_trace_that_cannot_allocate_leaves_and_the_interpreter_allocates() {
                     let refused = p.refused.clone();
                     let mut vm = vm_with(v, Some(p), true);
                     assert_eq!(result(&mut vm, src), want, "{v:?} {kind:?} #{k}: {src}");
-                    assert_eq!(refused.get(), 1, "{v:?} {kind:?} #{k}: {src}");
+                    assert_eq!(refused.load(Relaxed), 1, "{v:?} {kind:?} #{k}: {src}");
                 }
             }
         }
@@ -181,12 +181,12 @@ fn a_folded_string_sub_that_cannot_allocate_leaves_the_trace() {
         let all = Refuse::new(Some(BlockKind::Str), usize::MAX, true);
         let seen = all.seen.clone();
         traced(v, all);
-        for k in spread(seen.get(), 12) {
+        for k in spread(seen.load(Relaxed), 12) {
             let p = Refuse::new(Some(BlockKind::Str), k, true);
             let refused = p.refused.clone();
             let (r, dispatched) = traced(v, p);
             assert_eq!(r, want, "{v:?} #{k}");
-            assert_eq!(refused.get(), 1, "{v:?} #{k}");
+            assert_eq!(refused.load(Relaxed), 1, "{v:?} #{k}");
             assert!(dispatched > 0, "{v:?} #{k}: no trace ran");
             swept += 1;
         }
@@ -234,7 +234,7 @@ fn a_method_jit_call_that_cannot_allocate_runs_in_the_interpreter() {
                     matches!(inner.jit_state(), JitProtoState::Compiled { .. }),
                     "{v:?}: not compiled: {src}"
                 );
-                seen.get()
+                seen.load(Relaxed)
             };
             assert!(count > 0, "{v:?}: compiled code allocated nothing: {src}");
             for k in spread(count, 12) {
@@ -251,14 +251,14 @@ fn a_method_jit_call_that_cannot_allocate_runs_in_the_interpreter() {
 /// A policy refusing every growth from the `n`th after it is armed,
 /// wherever it is made.
 struct After {
-    armed: Rc<Cell<bool>>,
+    armed: Arc<AtomicBool>,
     seen: usize,
     n: usize,
 }
 
 impl MemoryPolicy for After {
     fn allow(&mut self, _old: usize, _new: usize, _kind: BlockKind, _in_use: usize) -> bool {
-        if !self.armed.get() {
+        if !self.armed.load(Relaxed) {
             return true;
         }
         self.seen += 1;
@@ -276,7 +276,7 @@ fn running_out_with_the_jit_on_is_a_memory_error() {
             let want = interpreted(v, src);
             let mut n = 1;
             loop {
-                let armed = Rc::new(Cell::new(false));
+                let armed = Arc::new(AtomicBool::new(false));
                 let policy = After {
                     armed: armed.clone(),
                     seen: 0,
@@ -286,9 +286,9 @@ fn running_out_with_the_jit_on_is_a_memory_error() {
                 luna_jit::install_default_jit(&mut vm);
                 vm.set_trace_hot_threshold(1);
                 vm.set_call_hot_threshold(1);
-                armed.set(true);
+                armed.store(true, Relaxed);
                 let r = result(&mut vm, src);
-                armed.set(false);
+                armed.store(false, Relaxed);
                 if r == want {
                     break;
                 }
