@@ -3,25 +3,23 @@
 use super::*;
 
 impl Vm {
-    /// Number of traces that have closed cleanly (looped back to the
-    /// head PC) since this Vm was constructed. Cumulative; used by
-    /// tests + tuning.
+    /// Traces that closed cleanly (looped back to the head PC) since the Vm was made.
     pub fn trace_closed_count(&self) -> u64 {
         self.jit.counters.closed
     }
 
-    /// Number of traces that have aborted (exceeded MAX_TRACE_LEN or
-    /// hit an un-recordable op).
+    /// Traces that aborted (exceeded MAX_TRACE_LEN or hit an un-recordable op).
     pub fn trace_aborted_count(&self) -> u64 {
         self.jit.counters.aborted
     }
 
-    /// Number of compiled traces whose close shape
-    /// is `TraceEnd::InlineAbort` (depth>0 boundary). Such traces
-    /// pin `dispatchable=false` because the dispatcher can't
-    /// resume at a depth>0 PC without the matching CallFrames.
-    /// The frame-materialisation helper could synthesise those, but
-    /// the InlineAbort emit path isn't wired up to it.
+    /// Trace heads no longer recorded: their recordings failed or aborted too often.
+    pub fn trace_blacklisted_count(&self) -> u64 {
+        self.jit.counters.blacklisted
+    }
+
+    /// Compiled traces closed at a `TraceEnd::InlineAbort` (depth>0) boundary. They are not
+    /// dispatchable: the dispatcher cannot resume at a depth>0 PC without the CallFrames.
     pub fn trace_inline_abort_count(&self) -> u64 {
         self.jit.counters.inline_abort
     }

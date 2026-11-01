@@ -191,25 +191,21 @@ fn print_version(v: LuaVersion) {
 }
 
 fn print_profile(vm: &Vm) {
-    // Pull JIT counters from the JitState sidecar (A2).
+    let c = &vm.jit().counters;
     eprintln!("---");
     eprintln!("profile (trace JIT counters):");
-    eprintln!("  trace_closed_count: {}", vm.jit().counters.closed);
-    eprintln!("  trace_compiled_count: {}", vm.jit().counters.compiled);
-    eprintln!(
-        "  trace_compile_failed_count: {}",
-        vm.jit().counters.compile_failed
-    );
-    eprintln!("  trace_dispatched_count: {}", vm.jit().counters.dispatched);
-    eprintln!("  trace_deopt_count: {}", vm.jit().counters.deopt);
-    eprintln!(
-        "  trace_side_trace_started_count: {}",
-        vm.jit().counters.side_trace_started
-    );
-    eprintln!(
-        "  trace_side_trace_compiled_count: {}",
-        vm.jit().counters.side_trace_compiled
-    );
+    for (k, n) in [
+        ("closed", c.closed),
+        ("blacklisted", c.blacklisted),
+        ("compiled", c.compiled),
+        ("compile_failed", c.compile_failed),
+        ("dispatched", c.dispatched),
+        ("deopt", c.deopt),
+        ("side_trace_started", c.side_trace_started),
+        ("side_trace_compiled", c.side_trace_compiled),
+    ] {
+        eprintln!("  trace_{k}_count: {n}");
+    }
 }
 
 /// `lua.c`'s `pmain`, after the options: true when everything ran.

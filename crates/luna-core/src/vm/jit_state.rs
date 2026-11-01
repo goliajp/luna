@@ -181,9 +181,8 @@ impl JitState {
     pub const STITCH_DEPTH_DEFAULT: u32 = 32;
 }
 
-/// Diagnostic counters and probe lists. All fields here are
-/// diagnostic-only — they never affect dispatch correctness, and
-/// can be cleared/snapshotted as a unit by tests.
+/// Diagnostic counters and probe lists: they never affect dispatch, and
+/// tests clear or snapshot them as a unit.
 #[derive(Default)]
 pub struct JitCounters {
     /// Number of traces that have closed cleanly.
@@ -192,11 +191,12 @@ pub struct JitCounters {
     pub tiered_up: u64,
     /// Functions the method JIT compiled.
     pub method_compiled: u64,
-    /// Functions whose method JIT code was replaced by code a backend
-    /// compiled in the background (see `Proto::jit_next`).
+    /// Functions whose method JIT code a backend replaced in the background (`Proto::jit_next`).
     pub method_replaced: u64,
     /// Number of traces that have aborted.
     pub aborted: u64,
+    /// Trace heads no longer recorded: their recordings failed or aborted too often.
+    pub blacklisted: u64,
     /// Compiled traces that closed at a `TraceEnd::InlineAbort` exit.
     pub inline_abort: u64,
     /// Count of closed traces the lowerer compiled.
@@ -239,14 +239,10 @@ pub struct JitCounters {
     pub sunk_alloc: u64,
     /// Tally of materialise-helper emit sites.
     pub materialize_emit: u64,
-    /// Number of compiled
-    /// traces whose `CompiledTrace.per_exit_inline.len() > 0` (depth>0
-    /// inlined cmp side-exits were emitted). Probed via
-    /// `Vm::trace_per_exit_inline_compiled_count`. Together with
-    /// `per_exit_inline_dispatchable`, lets a diag distinguish
-    /// "recorder + lowerer can produce inline side-exits" from
-    /// "compiled trace is dispatchable enough to exercise the AOT
-    /// inline-chain reloc + deploy-resolver path".
+    /// Compiled traces with depth>0 inlined cmp side-exits (`per_exit_inline` not empty).
+    /// With `per_exit_inline_dispatchable`, it tells "the recorder and lowerer can produce
+    /// inline side-exits" from "a trace is dispatchable enough to exercise the AOT
+    /// inline-chain reloc and deploy-resolver path".
     pub per_exit_inline_compiled: u64,
     /// Subset of
     /// `per_exit_inline_compiled` that ALSO has `dispatchable == true`.

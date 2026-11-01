@@ -2,16 +2,13 @@
 //! failure blacklist.
 
 use super::*;
+use crate::vm::jit_state::JitCounters;
 
-// The deploy-side resolver in `luna-runtime-helpers` walks the binary's
-// trace-meta section after `vm.load`, resolves each entry's
-// `(proto_hash, head_pc, fn_ptr)` triple against the loaded chunk's
-// proto tree, and pushes a `CompiledTrace` onto the matching Proto's
-// `traces` Vec via [`Vm::install_aot_trace`] below. The existing
-// trace-dispatch loop (`cl.proto.traces.borrow().iter()
-// .find(|t| t.head_pc == pc && t.dispatchable)`) then fires the AOT
-// mcode without further plumbing — same code path the runtime JIT
-// uses.
+// The deploy-side resolver in `luna-runtime-helpers` walks the binary's trace-meta section after
+// `vm.load`, resolves each entry's `(proto_hash, head_pc, fn_ptr)` triple against the loaded
+// chunk's proto tree, and pushes a `CompiledTrace` onto the matching Proto's `traces` Vec via
+// [`Vm::install_aot_trace`] below. The existing trace-dispatch loop then fires the AOT mcode
+// without further plumbing, the same code path the runtime JIT uses.
 
 impl Vm {
     /// Install a precompiled
@@ -137,14 +134,22 @@ pub(in crate::vm::exec) const MAX_TRACE_NEVER_ENTERED: u8 = 16;
 const BUDGET: u8 = 48;
 
 pub(in crate::vm::exec) fn note_trace_compile_failure(
+    counters: &mut JitCounters,
     proto: Gc<crate::runtime::function::Proto>,
     head_pc: u32,
 ) {
-    note_head_failure(proto, head_pc, BUDGET / MAX_TRACE_COMPILE_FAILURES, None);
+    note_head_failure(
+        counters,
+        proto,
+        head_pc,
+        BUDGET / MAX_TRACE_COMPILE_FAILURES,
+        None,
+    );
 }
 
 /// `entry_tags`: the recording's tags on entry.
 pub(in crate::vm::exec) fn note_trace_never_entered(
+    counters: &mut JitCounters,
     proto: Gc<crate::runtime::function::Proto>,
     head_pc: u32,
     entry_tags: &[u8],
@@ -153,6 +158,7 @@ pub(in crate::vm::exec) fn note_trace_never_entered(
         .filter(|&r| !crate::jit::trace::entry_tag_enterable(entry_tags[r as usize]))
         .collect();
     note_head_failure(
+        counters,
         proto,
         head_pc,
         BUDGET / MAX_TRACE_NEVER_ENTERED,
@@ -161,6 +167,7 @@ pub(in crate::vm::exec) fn note_trace_never_entered(
 }
 
 fn note_head_failure(
+    counters: &mut JitCounters,
     proto: Gc<crate::runtime::function::Proto>,
     head_pc: u32,
     cost: u8,
@@ -180,7 +187,9 @@ fn note_head_failure(
         }
     };
     let f = &mut failures[i];
-    f.n = f.n.saturating_add(cost);
+    let n = f.n.saturating_add(cost);
+    counters.blacklisted += u64::from(f.n < BUDGET && n >= BUDGET);
+    f.n = n;
     f.stuck = stuck.unwrap_or_default();
     if head_pc == 0 && f.n >= BUDGET {
         proto.trace_call_head_settled.set(true);
@@ -268,8 +277,12 @@ pub(in crate::vm::exec) fn keep_inlined(
 }
 
 /// Gives up recording at `head_pc` of `proto`.
-pub(in crate::vm::exec) fn give_up_head(proto: Gc<crate::runtime::function::Proto>, head_pc: u32) {
-    note_head_failure(proto, head_pc, BUDGET, None);
+pub(in crate::vm::exec) fn give_up_head(
+    counters: &mut JitCounters,
+    proto: Gc<crate::runtime::function::Proto>,
+    head_pc: u32,
+) {
+    note_head_failure(counters, proto, head_pc, BUDGET, None);
 }
 
 pub(in crate::vm::exec) fn trace_head_abandoned(
