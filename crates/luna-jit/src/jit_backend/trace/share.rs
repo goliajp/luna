@@ -265,7 +265,7 @@ fn find_proto(roots: &[Gc<Proto>], c: &Content) -> Option<Gc<Proto>> {
 /// some Vm compiled it already, else compiled (and given to the image).
 pub(crate) fn tier_up(
     storage: &mut dyn luna_core::__private::JitStorage,
-    ct: &CompiledTraceParts,
+    ct: &CompiledTrace,
 ) -> Option<TraceFn> {
     let source = ct.tier_up.as_ref()?.source.borrow_mut().take()?;
     let src = source.downcast::<TierSource>().ok()?;

@@ -102,7 +102,7 @@ struct Pending {
 /// flags. Without `delay`, LLVM compiles the trace before it runs on.
 pub(crate) fn tier_up_llvm(
     storage: &mut dyn luna_core::__private::JitStorage,
-    ct: &CompiledTraceParts,
+    ct: &CompiledTrace,
     delay: Option<std::time::Duration>,
 ) -> Option<TraceFn> {
     let t = ct.tier_up.as_ref()?;

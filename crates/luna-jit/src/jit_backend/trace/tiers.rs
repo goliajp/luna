@@ -198,7 +198,7 @@ pub(super) fn compile_trace_cranelift(
 /// baseline tier ran (see `TraceCompiler::tier_up`).
 pub(crate) fn tier_up_trace(
     storage: &mut dyn luna_core::__private::JitStorage,
-    ct: &CompiledTraceParts,
+    ct: &CompiledTrace,
 ) -> Option<TraceFn> {
     share::tier_up(storage, ct)
 }
