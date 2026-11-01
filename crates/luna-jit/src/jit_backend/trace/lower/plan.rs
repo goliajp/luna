@@ -68,6 +68,12 @@ pub(super) struct Plan<'r> {
     pub(super) downrec_idx_opt: Option<(usize, u32, usize, u8)>,
     pub(super) do_internal_loop: bool,
     pub(super) head_live: Vec<bool>,
+    /// The temporaries of a looping body: registers it writes on every
+    /// path before it reads them.
+    pub(super) temps: Vec<bool>,
+    /// The ops before this one are lowered for the first pass apart (see
+    /// `peel`); 0 when the trace has no temporaries.
+    pub(super) peel_end: usize,
     pub(super) active_accum: Option<BufferedAccum>,
     pub(super) consumed_by_cmp: Vec<bool>,
     pub(super) cmp_dirs: Vec<Option<CmpDir>>,
@@ -274,6 +280,8 @@ pub(super) fn plan_trace<'r>(
             downrec_idx_opt,
             do_internal_loop,
             head_live,
+            temps: vec![false; max_stack],
+            peel_end: 0,
             active_accum,
             consumed_by_cmp,
             cmp_dirs,

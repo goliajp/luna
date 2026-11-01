@@ -210,12 +210,20 @@ pub(super) fn start_accum<E: Emit>(
     flush_ctx
 }
 
+/// The blocks before the body: the prechecks', the first pass's (see
+/// `peel`) and the loop head.
+pub(super) struct HeadBlocks {
+    pub(super) precheck: Option<Block>,
+    pub(super) ro_precheck: Option<Block>,
+    pub(super) step_precheck: Option<Block>,
+    pub(super) peel: Option<Block>,
+    pub(super) body_loop: Block,
+}
+
 /// Creates the loop head (and the math-fold precheck block, when the
-/// folds are checked once) and jumps there from the entry block.
-pub(super) fn open_body_loop<E: Emit>(
-    bcx: &mut E,
-    pl: &Plan<'_>,
-) -> (Option<Block>, Option<Block>, Option<Block>, Block) {
+/// folds are checked once, and the first pass's) and jumps to the first
+/// from the entry block.
+pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> HeadBlocks {
     let Plan {
         record,
         effective_end,
@@ -258,16 +266,24 @@ pub(super) fn open_body_loop<E: Emit>(
     // the step sign of a 5.3 integer loop (see `step_guard`)
     let step_precheck = pl.step_guard.is_some().then(|| bcx.create_block());
 
+    let peel = (pl.peel_end > 0).then(|| bcx.create_block());
     let body_loop = bcx.create_block();
     bcx.ins().jump(
         precheck
             .or(ro_precheck)
             .or(step_precheck)
+            .or(peel)
             .unwrap_or(body_loop),
         &[],
     );
     // `body_loop` is entered after the precheck block is emitted (below):
     // reading a register there first would leave it half-built while
     // another block is emitted, which the builder rejects.
-    (precheck, ro_precheck, step_precheck, body_loop)
+    HeadBlocks {
+        precheck,
+        ro_precheck,
+        step_precheck,
+        peel,
+        body_loop,
+    }
 }

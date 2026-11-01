@@ -18,6 +18,7 @@ mod gc_roots;
 mod helpers;
 mod loop_tail;
 mod ops;
+mod peel;
 mod plan;
 mod prologue;
 mod readonly;
@@ -44,6 +45,7 @@ pub(in crate::jit_backend::trace) use helpers::Helpers;
 use helpers::*;
 use loop_tail::*;
 use ops::*;
+use peel::*;
 use plan::*;
 use prologue::*;
 use readonly::*;
@@ -206,8 +208,11 @@ fn emit_trace<E: Emit>(
     emit_fold_precheck(lw, pl);
     emit_readonly_precheck(lw, pl);
     emit_step_precheck(lw, pl);
-    emit_body(lw, pl)?;
+    let loop_copy = emit_body(lw, pl)?;
     let (downrec_link_for_compiled, downrec_multi_way_count_for_compiled) = emit_tail(lw, pl)?;
+    if let Some(lc) = loop_copy {
+        emit_loop_copy(lw, pl, lc)?;
+    }
     let Lower {
         entry,
         bcx,

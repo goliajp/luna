@@ -109,7 +109,8 @@ pub(super) fn emit_tail<E: Emit>(
     } else if let Some(for_loop_idx) = for_loop_idx_opt {
         emit_loop_tail(lw, pl, for_loop_idx)?;
     } else if do_internal_loop && loop_kinds_match(&lw.current_kinds[..max_stack], &lw.head_kinds) {
-        emit_back_edge(lw, pl);
+        let tail = lw.current_kinds[..max_stack].to_vec();
+        emit_back_edge(lw, pl, &tail);
     } else {
         emit_store_back_and_return_pc(
             &mut lw.bcx,
