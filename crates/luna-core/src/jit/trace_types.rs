@@ -17,17 +17,19 @@ mod compiled_aot;
 pub(crate) mod content;
 mod exit;
 pub(crate) mod options;
+mod outcome;
 pub(crate) mod record;
 pub(crate) mod self_link;
 pub(crate) mod side_exit;
+pub(crate) mod tier_up;
 pub(crate) use adopt::{AdoptRequest, AdoptedTrace};
 pub(crate) use compiled::CompiledTrace;
-pub use compiled::{
-    CompileOutcome, INLINE_CLOSURE, INLINE_MULTI_RESULTS, INLINE_VAR_ARGS, INLINE_VARARG_CALLEE,
-    TraceFn,
-};
+pub use compiled::TraceFn;
 pub use exit::*;
 pub(crate) use options::CompileOptions;
+pub use outcome::{
+    CompileOutcome, INLINE_CLOSURE, INLINE_MULTI_RESULTS, INLINE_VAR_ARGS, INLINE_VARARG_CALLEE,
+};
 pub use record::{
     FIELD_SLOT_UNKNOWN, INDEX_SLOTS_UNKNOWN, RESULT_TAG_UNKNOWN, RecordOutcome, field_ic_enabled,
 };

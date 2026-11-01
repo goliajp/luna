@@ -1,5 +1,6 @@
 //! A compiled trace and the outcome of compiling one.
 
+use super::tier_up::TierUp;
 use super::*;
 
 /// Native entry point for a compiled trace.
@@ -304,30 +305,6 @@ pub struct CompiledTrace {
     pub tier_up: Option<Box<TierUp>>,
 }
 
-/// A trace on its way to the optimizing tier.
-pub struct TierUp {
-    /// Loop iterations run in the trace's code plus entries: the code adds
-    /// one per iteration through this cell (whose address it holds), the
-    /// dispatcher one per entry.
-    pub count: Box<TCellU32>,
-    /// [`CompileOptions::tier_up_at`] the trace was compiled with.
-    pub at: u32,
-    /// The head function's `call_hot_count` when the trace was compiled.
-    /// Once that function has been called again, the code is being reused
-    /// rather than run once, and the trace moves after
-    /// `at / TIER_UP_REUSED_DIVISOR` iterations and entries.
-    pub calls_at: u32,
-    /// The optimizing tier's entry once compiled (null before).
-    pub optimized: TCellPtr,
-    /// Set once the optimizing tier was asked, whatever it answered.
-    pub tried: TCellBool,
-    /// For a side trace: the parent's exit cells holding this trace's entry
-    /// (addresses of [`TCellPtr`]s; null when not wired).
-    pub parent_cells: [TCellPtr; 2],
-    /// What the backend compiles the trace from; taken when it does.
-    pub source: TRefLock<Option<Box<dyn std::any::Any + Send + Sync>>>,
-}
-
 impl CompiledTrace {
     /// The entry to call: the optimizing tier's once it exists.
     pub fn current_entry(&self) -> TraceFn {
@@ -354,29 +331,3 @@ impl std::fmt::Debug for CompiledTrace {
             .finish()
     }
 }
-
-/// Result of attempting to lower a closed [`TraceRecord`] to native
-/// code. Most failure cases are recoverable — the recorder bumps the
-/// head PC's failure count and refuses to re-record until the
-/// threshold rolls over again.
-#[derive(Debug)]
-pub enum CompileOutcome {
-    /// Trace compiled; the cached entry is ready for dispatch.
-    Compiled,
-    /// Some op in the trace falls outside the lowerer's whitelist (e.g. a
-    /// metamethod-bearing operand, or a yet-unsupported opcode).
-    /// The record is dropped; the head PC remembers the rejection.
-    UnsupportedOp,
-    /// Cranelift signaled an error during code emission. Should be
-    /// rare in practice — usually a programmer error in the lowerer.
-    BackendError,
-}
-
-/// [`CompiledTrace::inline_kinds`]: a call into a vararg function.
-pub const INLINE_VARARG_CALLEE: u8 = 1;
-/// A call that wants more than one value, or all of them.
-pub const INLINE_MULTI_RESULTS: u8 = 1 << 1;
-/// A call that passes a variable number of arguments.
-pub const INLINE_VAR_ARGS: u8 = 1 << 2;
-/// A closure made in a frame of an inlined function.
-pub const INLINE_CLOSURE: u8 = 1 << 3;
