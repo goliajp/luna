@@ -26,7 +26,33 @@
 /// [`std::any::Any`] to reach concrete fields. This keeps the
 /// `JITModule`-bearing types (and therefore the Cranelift dep) out
 /// of luna-core.
-pub trait JitStorage: std::any::Any {
+///
+/// # Safety
+/// The Vm calls [`Self::clear_cache`] from safe code
+/// ([`VmJitState::jit_clear_cache`](crate::__private::VmJitState::jit_clear_cache)):
+/// it must leave mapped every piece of code an entry handed out through
+/// this storage points into, so that no entry a prototype or an installed
+/// trace holds stops being live code. Code is unmapped only by
+/// [`Self::release_code`] or by dropping the storage. The example
+/// compiles, the one after it fails to.
+///
+/// ```
+/// struct Empty;
+/// // SAFETY: it holds no code
+/// unsafe impl luna_core::__private::JitStorage for Empty {
+///     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+///     fn as_any(&self) -> &dyn std::any::Any { self }
+/// }
+/// ```
+///
+/// ```compile_fail,E0200
+/// struct Empty;
+/// impl luna_core::__private::JitStorage for Empty { // error[E0200]: the trait is `unsafe`
+///     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+///     fn as_any(&self) -> &dyn std::any::Any { self }
+/// }
+/// ```
+pub unsafe trait JitStorage: std::any::Any {
     /// Mutable downcast hook. luna-jit's `CraneliftBackend`
     /// implementations call this then `downcast_mut::<CraneliftJitStorage>()`
     /// to reach the concrete cache + handle collections.
@@ -38,8 +64,8 @@ pub trait JitStorage: std::any::Any {
 
     /// Forgets the compiled code kept for reuse by cache key, so the next
     /// compile of the same function compiles it again. The code itself
-    /// stays mapped: prototypes and traces that hold its entries keep
-    /// running it until [`Self::release_code`].
+    /// stays mapped (the trait's `# Safety`): prototypes and traces that
+    /// hold its entries keep running it until [`Self::release_code`].
     fn clear_cache(&mut self) {}
 
     /// Called by the `Vm` identified by `vm` before it asks its compilers
@@ -69,7 +95,8 @@ pub trait JitStorage: std::any::Any {
 #[derive(Default)]
 pub struct NullJitStorage;
 
-impl JitStorage for NullJitStorage {
+// SAFETY: it holds no code
+unsafe impl JitStorage for NullJitStorage {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
