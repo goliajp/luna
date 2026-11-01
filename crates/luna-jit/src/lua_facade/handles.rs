@@ -5,7 +5,6 @@ use luna_core::runtime::Value;
 use luna_core::vm::{FromLuaValue, HostRootTicket, IntoValue, LuaError, Vm};
 
 use super::{Lua, PinnedHandle};
-use luna_core::__private::{GcInternals, HeapInternals};
 
 /// Handle to a Lua-callable value (`Value::Closure` or
 /// `Value::Native`) pinned in the host root pool. `Copy`-able —
@@ -101,13 +100,9 @@ impl LuaTable {
         };
         let k = k.into_value(&mut lua.0);
         let v = v.into_value(&mut lua.0);
-        // SAFETY: `self.ticket` pins `t` as a host root, so no collection
-        // frees it, and the `&mut Table` lives only for this `set`, which
-        // reaches no other reference to `t`
-        if let Err(e) = unsafe { t.as_mut() }.set(lua.0.heap_mut(), k, v) {
+        if let Err(e) = t.set(lua.0.heap_mut(), k, v) {
             return Err(lua.0.table_error(e));
         }
-        lua.0.heap_mut().barrier_store(t, &[k, v]);
         Ok(())
     }
 

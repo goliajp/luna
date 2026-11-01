@@ -55,13 +55,7 @@ impl<'vm> TableBuilder<'vm> {
         let TableBuilder { vm, t } = self;
         let k = k.into_value(vm);
         let v = v.into_value(vm);
-        // SAFETY: `t` is the table this builder allocated; the builder keeps
-        // it alive and owns the only handle until `build`, and its exclusive
-        // `&mut Vm` borrow means no other code can reach the table during
-        // the `set`, which does not collect
-        unsafe { t.as_mut() }
-            .set(&mut vm.heap, k, v)
-            .expect("table builder overflow");
+        t.set(&mut vm.heap, k, v).expect("table builder overflow");
         TableBuilder { vm, t }
     }
 
@@ -75,8 +69,7 @@ impl<'vm> TableBuilder<'vm> {
         let TableBuilder { vm, t } = self;
         let k = k.into_value(vm);
         let v = v.into_value(vm);
-        // SAFETY: same as with().
-        unsafe { t.as_mut() }.set(&mut vm.heap, k, v)?;
+        t.set(&mut vm.heap, k, v)?;
         Ok(TableBuilder { vm, t })
     }
 

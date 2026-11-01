@@ -76,20 +76,17 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
         vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
         return 0;
     }
-    // SAFETY: `t` is a live table and (`tag`, `raw_bits`) one value's tag
-    // and payload (# Safety); `g` is not dereferenced again while `table`
-    // is in use, and `Table::set_int` never runs the collector
-    let (table, v) = unsafe {
+    // SAFETY: (`tag`, `raw_bits`) is one value's tag and payload (# Safety)
+    let v = unsafe {
         let raw = luna_core::__private::RawVal {
             zero: raw_bits as u64,
         };
-        (g.as_mut(), luna_core::runtime::Value::pack(tag as u8, raw))
+        luna_core::runtime::Value::pack(tag as u8, raw)
     };
-    let r = table.set_int(vm.heap_mut(), key, v);
+    let r = g.set_int(vm.heap_mut(), key, v);
     if refused(vm, r) {
         return 0;
     }
-    barrier_for(vm, g, luna_core::runtime::Value::Int(key), v);
     1
 }
 
@@ -131,23 +128,18 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
     // SAFETY: `key_ptr` is an interned string (# Safety)
     let key_gc = unsafe { str_arg(key_ptr) };
     let key = luna_core::runtime::Value::Str(key_gc);
-    // SAFETY: `t` is a live table and (`val_tag`, `val_raw`) one value's
-    // tag and payload (# Safety); `g` is not dereferenced again while
-    // `table` is in use, and `Table::set` never runs the collector
-    let (table, v) = unsafe {
+    // SAFETY: (`val_tag`, `val_raw`) is one value's tag and payload
+    // (# Safety)
+    let v = unsafe {
         let raw = luna_core::__private::RawVal {
             zero: val_raw as u64,
         };
-        (
-            g.as_mut(),
-            luna_core::runtime::Value::pack(val_tag as u8, raw),
-        )
+        luna_core::runtime::Value::pack(val_tag as u8, raw)
     };
-    let r = table.set(vm.heap_mut(), key, v);
+    let r = g.set(vm.heap_mut(), key, v);
     if refused(vm, r) {
         return;
     }
-    barrier_for(vm, g, key, v);
 }
 
 /// Whether `r`, a store's result, is a read-only table's refusal or a
@@ -220,10 +212,7 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
         vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
         return;
     }
-    // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
-    // while `table` is in use, and `Table::set*` never runs the collector
-    let table = unsafe { g.as_mut() };
-    let r = table.set_int(vm.heap_mut(), key, luna_core::runtime::Value::Nil);
+    let r = g.set_int(vm.heap_mut(), key, luna_core::runtime::Value::Nil);
     refused(vm, r);
 }
 
@@ -255,14 +244,11 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(
         vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: table has metatable"));
         return 0;
     }
-    // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
-    // while `table` is in use, and `Table::set*` never runs the collector
-    let table = unsafe { g.as_mut() };
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
     let v = luna_core::runtime::Value::Float(f64::from_bits(val_bits as u64));
     // a NaN key raises, a read-only table refuses, and a table that cannot
     // grow grows there: the interpreter re-runs the call
-    match table.set(vm.heap_mut(), k, v) {
+    match g.set(vm.heap_mut(), k, v) {
         Ok(()) => 1,
         Err(luna_core::runtime::TableError::Memory(_)) => {
             vm.jit_park_oom();

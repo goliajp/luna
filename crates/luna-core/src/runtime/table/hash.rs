@@ -246,7 +246,7 @@ mod tests {
             crate::runtime::table::tests::with_table(|heap, t| {
                 for i in 0..n {
                     let k = Value::Str(heap.intern(format!("k{i:05}").as_bytes()));
-                    t.set(heap, k, Value::Int(i)).unwrap();
+                    t.set_inlined(heap, k, Value::Int(i)).unwrap();
                 }
                 assert_eq!(t.nodes().len() > 1 << 16, n > 1 << 16);
                 // every key is inserted, each placement reading its string

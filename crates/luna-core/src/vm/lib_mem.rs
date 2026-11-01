@@ -191,10 +191,7 @@ impl Vm {
         k: Value,
         v: Value,
     ) -> Result<(), LuaError> {
-        // SAFETY: `t` is a table the caller holds; each borrow lives for one
-        // `set`, which touches only the heap and the table and does not
-        // collect
-        let r = self.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v));
+        let r = self.table_op(|vm| t.set(&mut vm.heap, k, v));
         r.map_err(|e| self.table_error(e))?;
         self.heap.barrier_store(t, &[k, v]);
         Ok(())

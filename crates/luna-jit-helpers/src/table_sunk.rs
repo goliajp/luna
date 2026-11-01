@@ -126,9 +126,6 @@ unsafe fn materialize(
             return None;
         }
     };
-    // SAFETY: `g` was allocated just above and nothing else refers to it
-    // yet; `Table::set` never runs the collector
-    let table = unsafe { g.as_mut() };
     // Array slots.
     for i in 0..cap_u {
         // SAFETY: `i < cap`, and the first `cap` entries of the two
@@ -140,7 +137,7 @@ unsafe fn materialize(
             };
             luna_core::runtime::Value::pack(*kinds_ptr.add(i), raw)
         };
-        if table.set_int(vm.heap_mut(), (i + 1) as i64, v).is_err() {
+        if g.set_int(vm.heap_mut(), (i + 1) as i64, v).is_err() {
             vm.jit_park_oom();
             return None;
         }
@@ -164,7 +161,7 @@ unsafe fn materialize(
             )
         };
         let key = luna_core::runtime::Value::Str(key);
-        if table.set(vm.heap_mut(), key, v).is_err() {
+        if g.set(vm.heap_mut(), key, v).is_err() {
             vm.jit_park_oom();
             return None;
         }

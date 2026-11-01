@@ -177,8 +177,7 @@ impl Vm {
                 continue;
             };
             let v = op.val.map_or(Value::Nil, resolve);
-            // SAFETY: a table made above, reached by nothing else yet
-            let r = self.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v));
+            let r = self.table_op(|vm| t.set(&mut vm.heap, k, v));
             if let Err(e) = r {
                 return Err(self.table_error(e));
             }

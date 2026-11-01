@@ -7,8 +7,8 @@
 
 use luna_core::__private::VmHeap;
 use luna_core::runtime::{Gc, Table, Value};
+use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaUserdata, UserdataMarker, Vm};
-use luna_core::{__private::GcInternals, version::LuaVersion};
 
 fn vm() -> Vm {
     Vm::sandbox(LuaVersion::Lua55).open_base().build()
@@ -54,9 +54,7 @@ fn gc_bearing_payload_survives_collection_via_trace() {
     let mut vm = vm();
     let t = vm.heap_mut().new_table();
     // Stash a sentinel int in the table so we can probe its survival.
-    // SAFETY: t is freshly allocated; the heap is single-threaded.
-    unsafe { t.as_mut() }
-        .set(vm.heap_mut(), Value::Int(1), Value::Int(0xCAFE))
+    t.set(vm.heap_mut(), Value::Int(1), Value::Int(0xCAFE))
         .unwrap();
     vm.set_userdata("cache", Cache { entries: t }).unwrap();
     // The local `t` binding is not a GC root (only Lua stack /
@@ -131,14 +129,9 @@ fn trace_marks_only_listed_fields() {
     let mut vm = vm();
     let kept = vm.heap_mut().new_table();
     let independent = vm.heap_mut().new_table();
-    // SAFETY: `kept` was allocated above and is held by a local; nothing has collected since, and
-    // the borrow covers one call
-    unsafe { kept.as_mut() }
-        .set(vm.heap_mut(), Value::Int(1), Value::Int(0xABCD))
+    kept.set(vm.heap_mut(), Value::Int(1), Value::Int(0xABCD))
         .unwrap();
-    // SAFETY: `independent` was allocated above and is held by a local; nothing has collected
-    // since, and the borrow covers one call
-    unsafe { independent.as_mut() }
+    independent
         .set(vm.heap_mut(), Value::Int(1), Value::Int(0x1234))
         .unwrap();
     // Pin `independent` through host_roots so it survives despite not
@@ -181,10 +174,7 @@ fn vec_of_gc_table_all_survive() {
     let mut tables = Vec::new();
     for i in 0..16 {
         let t = vm.heap_mut().new_table();
-        // SAFETY: `t` was allocated on the line above and nothing has collected since; the borrow
-        // covers one call
-        unsafe { t.as_mut() }
-            .set(vm.heap_mut(), Value::Int(1), Value::Int(0x100 + i))
+        t.set(vm.heap_mut(), Value::Int(1), Value::Int(0x100 + i))
             .unwrap();
         tables.push(t);
     }
@@ -229,15 +219,9 @@ fn mark_value_visits_each_gc_value_in_bag() {
     let s = vm
         .heap_mut()
         .intern(b"this-is-a-long-non-interned-string-payload-1234567890");
-    // SAFETY: `t1` was allocated above and is held by a local; nothing has collected since, and the
-    // borrow covers one call
-    unsafe { t1.as_mut() }
-        .set(vm.heap_mut(), Value::Int(1), Value::Int(0xAAAA))
+    t1.set(vm.heap_mut(), Value::Int(1), Value::Int(0xAAAA))
         .unwrap();
-    // SAFETY: `t2` was allocated above and is held by a local; nothing has collected since, and the
-    // borrow covers one call
-    unsafe { t2.as_mut() }
-        .set(vm.heap_mut(), Value::Int(1), Value::Int(0xBBBB))
+    t2.set(vm.heap_mut(), Value::Int(1), Value::Int(0xBBBB))
         .unwrap();
     let slots = vec![
         Value::Int(99),
@@ -296,11 +280,7 @@ fn cycle_survives_while_rooted_then_collects_after_drop() {
     let t = vm.heap_mut().new_table();
     let ud = vm.create_userdata(Cache { entries: t });
     // Form the cycle: t[1] = ud.
-    // SAFETY: `t` was allocated above and nothing has collected since; no other reference into it
-    // is live, and the borrow covers one call
-    unsafe { t.as_mut() }
-        .set(vm.heap_mut(), Value::Int(1), ud)
-        .unwrap();
+    t.set(vm.heap_mut(), Value::Int(1), ud).unwrap();
     // Root only the userdata via a global.
     vm.set_global("cache", ud).unwrap();
     // Initial live count snapshot.

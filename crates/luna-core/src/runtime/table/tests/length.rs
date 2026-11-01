@@ -35,7 +35,7 @@ fn check_counts(t: &Table) {
 fn growing_catches_up_a_lagging_prefix() {
     with_table(|heap, t| {
         for i in 1..=8 {
-            let _ = t.set_int(heap, i, Value::Int(i));
+            let _ = t.set_int_raw(heap, i, Value::Int(i));
         }
         let asize = t.asize();
         assert_eq!(t.acount as usize, asize);
@@ -46,9 +46,9 @@ fn growing_catches_up_a_lagging_prefix() {
     });
     with_table(|heap, t| {
         for i in 1..=8 {
-            let _ = t.set_int(heap, i, Value::Int(i));
+            let _ = t.set_int_raw(heap, i, Value::Int(i));
         }
-        let _ = t.set_int(heap, 6, Value::Nil);
+        let _ = t.set_int_raw(heap, 6, Value::Nil);
         let asize = t.asize();
         t.aprefix = 1;
         t.resize(heap, asize * 2, 0).unwrap();
@@ -86,16 +86,16 @@ fn length_shortcut_matches_the_border_search() {
                 } else {
                     Value::Int(k)
                 };
-                let _ = t.set_int(heap, k, v);
+                let _ = t.set_int_raw(heap, k, v);
                 check(t);
             }
             // appends and pops at the border, as `t[#t + 1] = v` does
             for _ in 0..100 {
                 let n = t.len();
                 if next(3) == 0 && n > 0 {
-                    let _ = t.set_int(heap, n, Value::Nil);
+                    let _ = t.set_int_raw(heap, n, Value::Nil);
                 } else {
-                    let _ = t.set_int(heap, n + 1, Value::Int(n));
+                    let _ = t.set_int_raw(heap, n + 1, Value::Int(n));
                 }
                 check(t);
             }

@@ -78,8 +78,7 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
         let name_key = vm.alloc_str(b"__name")?;
         let type_name_str = vm.alloc_str(T::type_name().as_bytes())?;
         let name_val = Value::Str(type_name_str);
-        // SAFETY: mt is a fresh Gc<Table>; the heap is single-threaded.
-        unsafe { mt.as_mut() }.set(&mut vm.heap, Value::Str(name_key), name_val)?;
+        mt.set(&mut vm.heap, Value::Str(name_key), name_val)?;
 
         // Helper: build a Gc<Table> from a (key, value) bucket (or None
         // for the empty case so the caller can skip the allocation).
@@ -91,8 +90,7 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
             }
             let t = vm.alloc_table()?;
             for (k, v) in entries {
-                // SAFETY: t is freshly allocated.
-                unsafe { t.as_mut() }.set(&mut vm.heap, Value::Str(k), v)?;
+                t.set(&mut vm.heap, Value::Str(k), v)?;
             }
             Ok(Some(t))
         };
@@ -102,8 +100,7 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
             // Methods-only fast path.
             if let Some(idx) = mk_bucket(vm, methods)? {
                 let key = vm.alloc_str(b"__index")?;
-                // SAFETY: mt is freshly allocated.
-                unsafe { mt.as_mut() }.set(&mut vm.heap, Value::Str(key), Value::Table(idx))?;
+                mt.set(&mut vm.heap, Value::Str(key), Value::Table(idx))?;
             }
         } else {
             // Trampoline path — methods table + fields_get table as upvals.
@@ -116,8 +113,7 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
             let upvals: Box<[Value]> = Box::new([methods_val, fields_val]);
             let trampoline = vm.lib_native_with(index_trampoline, &upvals)?;
             let key = vm.alloc_str(b"__index")?;
-            // SAFETY: mt is freshly allocated.
-            unsafe { mt.as_mut() }.set(&mut vm.heap, Value::Str(key), trampoline)?;
+            mt.set(&mut vm.heap, Value::Str(key), trampoline)?;
         }
 
         // __newindex — installed only when any field setter is registered.
@@ -127,14 +123,12 @@ impl<'vm, T: LuaUserdata> MetatableBuilder<'vm, T> {
                 Box::new([Value::Table(setters_tbl), Value::Str(type_name_str)]);
             let trampoline = vm.lib_native_with(newindex_trampoline, &upvals)?;
             let key = vm.alloc_str(b"__newindex")?;
-            // SAFETY: mt is freshly allocated.
-            unsafe { mt.as_mut() }.set(&mut vm.heap, Value::Str(key), trampoline)?;
+            mt.set(&mut vm.heap, Value::Str(key), trampoline)?;
         }
 
         // Direct metatable entries (metamethods + static fns).
         for (k, v) in meta_entries {
-            // SAFETY: as above
-            unsafe { mt.as_mut() }.set(&mut vm.heap, Value::Str(k), v)?;
+            mt.set(&mut vm.heap, Value::Str(k), v)?;
         }
         vm.heap.barrier_back(mt);
 

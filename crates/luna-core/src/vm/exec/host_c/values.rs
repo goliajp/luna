@@ -114,9 +114,7 @@ impl Vm {
         match v {
             Value::Table(t) => {
                 self.refuse_readonly(t)?;
-                // SAFETY: `t` is held by the caller's stack slot; the borrow
-                // covers one store and `mt` is a separate handle
-                unsafe { t.as_mut() }.set_metatable(&mut self.heap, mt);
+                t.set_metatable(&mut self.heap, mt);
                 if mt.is_some() {
                     self.check_finalizer(t)?;
                 }

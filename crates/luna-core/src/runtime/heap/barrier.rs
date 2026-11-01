@@ -113,33 +113,19 @@ impl Heap {
         true
     }
 
-    /// PUC's `luaC_barrierback` after `vals` were stored into the table
-    /// `t`: a black table that took a white object goes back to gray.
-    #[inline(always)]
-    pub(crate) fn table_stored(&mut self, t: &mut crate::runtime::table::Table, vals: &[Value]) {
-        if !t.hdr.plain_store() && vals.iter().any(|&v| is_white_object(v)) {
-            // SAFETY: every table is in a block the heap allocated (only the
-            // heap's allocation makes one, `Table::new` being the crate's),
-            // which its header leads; only the flag byte is touched
-            unsafe { self.barrier_back_obj(&mut t.hdr) }
-        }
-    }
-
     /// The barrier after the table `t` took the metatable `mt`, as each
     /// dialect's `lua_setmetatable` takes it: `luaC_objbarriert` (back) up
     /// to 5.2, `luaC_objbarrier` (forward) from 5.3.
     #[inline]
     pub(crate) fn metatable_stored(
         &mut self,
-        t: &mut crate::runtime::table::Table,
+        t: Gc<crate::runtime::table::Table>,
         mt: Gc<crate::runtime::table::Table>,
     ) {
         use crate::runtime::dialect::Dialect;
         match self.dialect() {
-            Dialect::L51 | Dialect::L52 => self.table_stored(t, &[Value::Table(mt)]),
-            // SAFETY: as in `table_stored`, the header leads a table the
-            // heap allocated; `mt` is a handle
-            _ => unsafe { self.barrier_forward_header(&mut t.hdr, Value::Table(mt)) },
+            Dialect::L51 | Dialect::L52 => self.barrier_store(t, &[Value::Table(mt)]),
+            _ => self.barrier_forward(t, Value::Table(mt)),
         }
     }
 

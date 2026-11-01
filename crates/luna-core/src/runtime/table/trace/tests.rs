@@ -26,8 +26,7 @@ fn light() -> Value {
 }
 
 fn set(heap: &mut Heap, t: Gc<Table>, k: Value, v: Value) {
-    // SAFETY: test-only; no other reference to `t` is live
-    unsafe { t.as_mut() }.set(heap, k, v).unwrap();
+    t.set(heap, k, v).unwrap();
 }
 
 fn with_mode(heap: &mut Heap, t: Gc<Table>, mode: &[u8]) {
@@ -35,8 +34,7 @@ fn with_mode(heap: &mut Heap, t: Gc<Table>, mode: &[u8]) {
     let k = Value::Str(heap.intern(b"__mode"));
     let v = Value::Str(heap.intern(mode));
     set(heap, mt, k, v);
-    // SAFETY: as in `set`
-    unsafe { t.as_mut() }.set_metatable(heap, Some(mt));
+    t.set_metatable(heap, Some(mt));
 }
 
 #[test]
