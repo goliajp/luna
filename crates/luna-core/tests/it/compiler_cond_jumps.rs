@@ -20,7 +20,8 @@ const VERSIONS: [LuaVersion; 5] = [
 
 fn compile_main(src: &str, v: LuaVersion) -> Vec<Inst> {
     let ast = parse(src.as_bytes(), v).expect("parse");
-    let mut heap = luna_core::__private::new_heap();
+    // SAFETY: the heap outlives every handle made from it here, and its objects stay in it
+    let mut heap = unsafe { luna_core::__private::new_heap() };
     let proto = compile_chunk(&ast, v, b"=cond", &mut heap).expect("compile");
     proto.code.to_vec()
 }
@@ -194,7 +195,8 @@ fn repeat_conditions_jump_without_a_value() {
 fn returns_that_must_close_carry_k() {
     let ks = |src: &str, v: LuaVersion| -> Vec<bool> {
         let ast = parse(src.as_bytes(), v).expect("parse");
-        let mut heap = luna_core::__private::new_heap();
+        // SAFETY: the heap outlives every handle made from it here, and its objects stay in it
+        let mut heap = unsafe { luna_core::__private::new_heap() };
         let proto = compile_chunk(&ast, v, b"=ret", &mut heap).expect("compile");
         let f = &proto.protos[0];
         f.code

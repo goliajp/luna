@@ -8,6 +8,7 @@
 //! use luna_core::{runtime::Value, version::LuaVersion, vm::Vm};
 //! let mut vm = Vm::new(LuaVersion::Lua54);
 //! let _: Option<&luna_core::runtime::Heap> = None;
+//! let _ = luna_core::runtime::mem::MemOwner::system();
 //! let t = vm.new_table().build();
 //! let k = Value::Str(vm.intern("k"));
 //! vm.raw_set(t, k, Value::Int(1)).unwrap();
@@ -24,6 +25,11 @@
 //!
 //! ```compile_fail,E0624
 //! let _ = luna_core::runtime::Heap::new(); // error[E0624]: `new` is private
+//! ```
+//!
+//! ```compile_fail,E0624
+//! use luna_core::runtime::mem::MemOwner;
+//! let _ = luna_core::runtime::Heap::new_on(MemOwner::system()); // error[E0624]: `new_on` is private
 //! ```
 //!
 //! ```compile_fail,E0624

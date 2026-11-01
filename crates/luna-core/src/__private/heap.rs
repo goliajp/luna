@@ -5,8 +5,17 @@ use crate::runtime::heap::{Gc, GcObject};
 use crate::runtime::{Heap, Table, TableError, Value};
 
 /// A heap of its own, with a random string hash seed.
-pub fn new_heap() -> Heap {
+///
+/// # Safety
+/// No handle to an object it allocated is used after the heap is dropped,
+/// and none of its objects is stored in an object of another heap.
+pub unsafe fn new_heap() -> Heap {
     Heap::new()
+}
+
+/// A random string hash seed, as a new heap picks its own.
+pub fn fresh_seed() -> u32 {
+    crate::runtime::heap::fresh_seed()
 }
 
 /// The write barriers of `Heap` luna's other crates use.
