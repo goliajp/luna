@@ -88,15 +88,7 @@ impl Vm {
         if !self.step_due() || self.jit.pending_err.is_some() {
             return 0;
         }
-        let ct_addr = self.jit.step.ct;
-        let found = cl
-            .proto
-            .traces
-            .borrow()
-            .iter()
-            .find(|t| crate::jit::send_compat::TArc::as_ptr(t) as usize == ct_addr)
-            .cloned();
-        let Some(ct) = found else {
+        let Some(ct) = self.stepping_trace(&cl.proto) else {
             return i64::from(self.jit_gc_due(op_pc));
         };
         let d = crate::jit::trace::decode_exit_shape(
@@ -139,6 +131,19 @@ impl Vm {
         }
         self.jit.step.synced_exit = true;
         2
+    }
+
+    /// The trace of `proto` the step window was opened for.
+    fn stepping_trace(
+        &self,
+        proto: &crate::runtime::function::Proto,
+    ) -> Option<crate::jit::send_compat::TArc<crate::jit::CompiledTrace>> {
+        let ct_addr = self.jit.step.ct;
+        let traces = proto.traces.borrow();
+        let t = traces
+            .iter()
+            .find(|t| crate::jit::send_compat::TArc::as_ptr(t) as usize == ct_addr);
+        t.cloned()
     }
 
     fn top_frame_raw_mut(&mut self) -> &mut CallFrame {

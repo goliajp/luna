@@ -119,15 +119,10 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
 
     checkpoint("post:emit-pass-done");
     // before the struct, while per_exit_tags's len can be read
-    let exit_hit_counts: TArc<[TCellU32]> = {
-        let total = per_exit_inline.len() + per_exit_tags.len() + 1;
-        (0..total).map(|_| TCellU32::new(0)).collect()
-    };
+    let exits = per_exit_inline.len() + per_exit_tags.len() + 1;
+    let exit_hit_counts: TArc<[TCellU32]> = (0..exits).map(|_| TCellU32::new(0)).collect();
     // per exit, the side trace's entry once one compiles (null before)
-    let exit_side_trace_ptrs: TArc<[TCellPtr]> = {
-        let total = per_exit_inline.len() + per_exit_tags.len() + 1;
-        (0..total).map(|_| TCellPtr::null()).collect()
-    };
+    let exit_side_trace_ptrs: TArc<[TCellPtr]> = (0..exits).map(|_| TCellPtr::null()).collect();
     CompiledTraceParts {
         head_pc: record.head_pc,
         // caller (JIT wrapper or AOT pipeline)
