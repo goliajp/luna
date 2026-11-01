@@ -12,7 +12,9 @@ for i = 1, 10000 do
 end
 collectgarbage()
 print(math.floor(collectgarbage("count")))
-for _ = 1, 50 do collectgarbage("step", 0) end
+-- a whole cycle: a count taken mid-cycle depends on which string
+-- buckets were swept, and that moves with the hash seed
+repeat until collectgarbage("step", 0)
 print(math.floor(collectgarbage("count")))
 collectgarbage()
 print(math.floor(collectgarbage("count")))
