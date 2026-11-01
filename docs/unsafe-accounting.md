@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1898** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1897** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 259 | files under a `tests/`, `benches/` or `examples/` directory, or whose name contains `tests` |
 | **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; thirty-three more in `luna_core::__private`, which is not public API, see §5 |
 | **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
@@ -32,7 +32,7 @@ the pattern CI counts (§4). Several `unsafe` blocks on one line count
 once; a block spread over several lines counts once; a comment that
 quotes the pattern counts too.
 
-Changes since the 1801 snapshot (net 97 more):
+Changes since the 1801 snapshot (net 96 more):
 
 - the stores into a table go through the table's handle (`Gc<Table>::set`,
   `set_int`, `try_set_existing`, `set_metatable`), which borrows the table
@@ -92,7 +92,8 @@ Changes since the 1801 snapshot (net 97 more):
   trace into a Vm's storage borrow it through `jit_mut` in a helper (2)
 - with the `send` feature a budget reads the host's allocation function
   without a lock: the function and its `ud` sit in a block of their own,
-  swapped in whole and freed with the budget (3)
+  swapped in whole and freed with the budget (2: the blocks it replaced
+  are kept by address and freed together when the budget goes)
 - `JitStorage` is an `unsafe trait` (1): the Vm clears a storage's cache
   from safe code, so a storage vouches that clearing it leaves its code
   mapped; the null, Cranelift and LLVM storages are `unsafe impl`s (3),
@@ -109,7 +110,7 @@ Changes since the 1801 snapshot (net 97 more):
 | | `runtime/puc` | 138 | the model of PUC's allocations: the records it keeps over raw object headers (the parser's tables and frames a collection step marks, 5.1's environment records, the objects PUC makes and luna does not yet, the strings a load sets aside), its marking and sweeping of them, the 5.5 sizer |
 | | `__private` (`luna_core::__private`) | 65 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, the two table stores that leave the read-only test and the write barrier to the JIT's helpers, the table stores and write barriers that must be given the object's own heap, the VM's heap and the JIT state borrowed mutably, the tier-up source put back on a trace, the method entry a background compile hands over, the containers made on a context, the JIT entries that take register words (`jit_concat_regs`, `jit_gc_step`) or a string buffer (`jit_str_buf_acquire`), and the JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
 | | `runtime/table*` | 54 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
-| | `runtime/mem` | 94 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix, a push into room the caller made, the host's allocation function read without a lock (`send`) |
+| | `runtime/mem` | 93 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix, a push into room the caller made, the host's allocation function read without a lock (`send`) |
 | | `runtime` (other) | 43 | string headers and their trailing bytes, the value tag/payload encoding (and its copy as a tag byte and a payload word between references), closure upvalue storage |
 | | `vm/lib_*` | 32 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`), the table writes that build each library, and on Windows the `ReadFile` call that reads a console as the MSVC C library does, the `CreateFileW`, `DeleteFileW` and `MoveFileExW` calls that open, remove and rename files as it does, the `MultiByteToWideChar` and `WideCharToMultiByte` calls that take names and environment text through the ANSI code page as it does, and the `File` made of the standard input handle for seeking it |
 | | `vm` (other) | 38 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
@@ -130,7 +131,7 @@ Changes since the 1801 snapshot (net 97 more):
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-fuzz` | | 1 | the heap the dump reader's target loads into |
 | `luna-jit-derive`, `luna-tools` | | 0 | |
-| **Total** | | **1898** | |
+| **Total** | | **1897** | |
 
 ## 3. Pattern catalog
 
