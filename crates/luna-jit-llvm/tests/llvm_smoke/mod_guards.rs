@@ -14,8 +14,8 @@ fn eval(src: &str, jit: bool) -> String {
     vm.install_jit_storage(LlvmJitStorage::default());
     vm.set_jit_enabled(jit);
     vm.set_trace_jit_enabled(jit);
-    vm.jit_mut().trace_hot_threshold = 1;
-    vm.jit_mut().call_hot_threshold = 1;
+    vm.set_trace_hot_threshold(1);
+    vm.set_call_hot_threshold(1);
     let r = vm.eval(src).map_err(|e| vm.error_text(&e)).expect("eval");
     match r.first() {
         Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),

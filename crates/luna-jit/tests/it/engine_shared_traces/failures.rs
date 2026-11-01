@@ -101,11 +101,11 @@ fn another_path_compiles() {
 fn a_vm_without_an_engine_fails_on_its_own() {
     let mut a = luna_jit::new_with_jit(LuaVersion::Lua54);
     a.set_jit_enabled(false);
-    a.jit_mut().trace_hot_threshold = 8;
+    a.set_trace_hot_threshold(8);
     let (_, _, a_failed, _) = run_fails(&mut a, Value::Int(2), true, 4);
     let mut b = luna_jit::new_with_jit(LuaVersion::Lua54);
     b.set_jit_enabled(false);
-    b.jit_mut().trace_hot_threshold = 8;
+    b.set_trace_hot_threshold(8);
     let (_, _, b_failed, _) = run_fails(&mut b, Value::Int(2), true, 4);
     assert_eq!(a_failed, b_failed);
     assert_eq!(b.trace_shared_failures_known(), 0);

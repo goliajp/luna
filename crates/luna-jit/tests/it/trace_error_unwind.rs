@@ -33,8 +33,8 @@ fn run(method: bool, trace_hot: u32, call_hot: u32) -> Option<String> {
         let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
         vm.set_jit_enabled(method);
         vm.set_trace_jit_enabled(true);
-        vm.jit_mut().trace_hot_threshold = trace_hot;
-        vm.jit_mut().call_hot_threshold = call_hot;
+        vm.set_trace_hot_threshold(trace_hot);
+        vm.set_call_hot_threshold(call_hot);
         let out = match vm.eval(SRC).expect("eval").first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             other => panic!("{other:?}"),

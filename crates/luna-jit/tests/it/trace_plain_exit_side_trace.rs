@@ -77,8 +77,8 @@ fn a_side_trace_runs_only_on_the_exit_it_was_recorded_from() {
                     let mut vm = luna_jit::new_with_jit(v);
                     vm.set_trace_tier(tier);
                     if let Some(h) = hot {
-                        vm.jit_mut().trace_hot_threshold = h;
-                        vm.jit_mut().call_hot_threshold = h;
+                        vm.set_trace_hot_threshold(h);
+                        vm.set_call_hot_threshold(h);
                     }
                     let r = vm.eval(src).unwrap();
                     assert_eq!(number(&r[0]), want, "{v:?} {tier:?} hot {hot:?}\n{src}");

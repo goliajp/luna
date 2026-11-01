@@ -29,7 +29,7 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
     let g = unsafe { table_arg(t) };
     // a read-only table is left to the interpreter too, which raises
     if g.metatable().is_some() || g.is_readonly() {
-        vm.jit_mut().counters.deopt += 1;
+        vm.jit_counters_mut().deopt += 1;
         return 0;
     }
     // SAFETY: `t` is a live table and (`val_tag`, `val_raw`) one value's
@@ -45,7 +45,7 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
         (val, g.as_mut().set_unguarded(vm.heap_mut(), key, val))
     };
     if r.is_err() {
-        vm.jit_mut().counters.deopt += 1;
+        vm.jit_counters_mut().deopt += 1;
         return 0;
     }
     // SAFETY: `g` is a live table of the Vm lent to this call and `val` one of its values (# Safety)

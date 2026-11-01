@@ -167,8 +167,8 @@ fn corpus_runs_the_same_with_the_jit_engaged_early() {
             drop(interp_vm);
             for &hot in HOT {
                 let mut vm = super::trace_corpus::seeded(version, 1);
-                vm.jit_mut().trace_hot_threshold = hot;
-                vm.jit_mut().call_hot_threshold = hot;
+                vm.set_trace_hot_threshold(hot);
+                vm.set_call_hot_threshold(hot);
                 let jit = masked(run(&mut vm, &source));
                 dispatched += vm.trace_dispatched_count();
                 compiled_chunks += luna_jit::jit::cache_entry_count(&vm);
@@ -241,8 +241,8 @@ fn slow_fixture_shard() {
     let interp = masked(run(&mut interp_vm, &source));
     drop(interp_vm);
     let mut vm = super::trace_corpus::seeded(version, 1);
-    vm.jit_mut().trace_hot_threshold = hot as u32;
-    vm.jit_mut().call_hot_threshold = hot as u32;
+    vm.set_trace_hot_threshold(hot as u32);
+    vm.set_call_hot_threshold(hot as u32);
     vm.gc_stress_interval(every, offset);
     vm.gc_stress_log();
     let t = std::time::Instant::now();

@@ -72,8 +72,8 @@ fn vm_with(v: LuaVersion, policy: Option<Refuse>, traces: bool) -> Vm {
     let mut vm = Vm::new_with_mem(v, mem);
     luna_jit::install_default_jit(&mut vm);
     vm.set_trace_jit_enabled(traces);
-    vm.jit_mut().trace_hot_threshold = 1;
-    vm.jit_mut().call_hot_threshold = 1;
+    vm.set_trace_hot_threshold(1);
+    vm.set_call_hot_threshold(1);
     vm
 }
 
@@ -284,8 +284,8 @@ fn running_out_with_the_jit_on_is_a_memory_error() {
                 };
                 let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(policy)));
                 luna_jit::install_default_jit(&mut vm);
-                vm.jit_mut().trace_hot_threshold = 1;
-                vm.jit_mut().call_hot_threshold = 1;
+                vm.set_trace_hot_threshold(1);
+                vm.set_call_hot_threshold(1);
                 armed.set(true);
                 let r = result(&mut vm, src);
                 armed.set(false);

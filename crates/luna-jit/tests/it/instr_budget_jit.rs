@@ -52,8 +52,8 @@ fn vm_for(mode: Mode, version: LuaVersion) -> Vm {
         #[cfg(feature = "llvm-jit")]
         Mode::Llvm => luna_jit::install_llvm_backend(&mut vm),
     }
-    vm.jit_mut().trace_hot_threshold = 2;
-    vm.jit_mut().call_hot_threshold = 2;
+    vm.set_trace_hot_threshold(2);
+    vm.set_call_hot_threshold(2);
     vm
 }
 

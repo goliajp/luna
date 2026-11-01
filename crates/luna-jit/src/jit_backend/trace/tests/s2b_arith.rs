@@ -42,8 +42,8 @@ fn closed_empty_trace_returns_head_pc_and_passes_regs_through() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
     let rec = make_record(7, &[], p);
-    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec)
-        .expect("empty closed trace must compile");
+    let ct =
+        try_compile_trace(vm.jit_storage_mut(), &rec).expect("empty closed trace must compile");
     assert_eq!(ct.head_pc, 7);
     assert_eq!(ct.n_ops, 0);
 
@@ -76,8 +76,7 @@ fn add_trace_computes_sum_into_dst_reg() {
     // R[0] = R[1] + R[2]
     let add = Inst::iabc(Op::Add, 0, 1, 2, false);
     let rec = make_record(11, &[add], p);
-    let ct =
-        try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).expect("Add trace must compile");
+    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("Add trace must compile");
     assert_eq!(ct.head_pc, 11);
     assert_eq!(ct.n_ops, 1);
 
@@ -108,8 +107,7 @@ fn chained_arith_threads_results_through_regs() {
         Inst::iabc(Op::Sub, 0, 0, 3, false),
     ];
     let rec = make_record(0, &prog, p);
-    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec)
-        .expect("Add/Mul/Sub chain must compile");
+    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("Add/Mul/Sub chain must compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = 5;
@@ -137,8 +135,7 @@ fn move_then_mul_propagates_via_move() {
         Inst::iabc(Op::Mul, 0, 0, 1, false),
     ];
     let rec = make_record(0, &prog, p);
-    let ct =
-        try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).expect("Move + Mul must compile");
+    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("Move + Mul must compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = 999; // overwritten by Move
@@ -168,8 +165,8 @@ fn trailing_jmp_is_emit_no_op() {
         Inst::isj(Op::Jmp, -3),
     ];
     let rec = make_record(0, &prog, p);
-    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec)
-        .expect("Add + trailing Jmp must compile");
+    let ct =
+        try_compile_trace(vm.jit_storage_mut(), &rec).expect("Add + trailing Jmp must compile");
     assert_eq!(ct.n_ops, 2);
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
@@ -193,7 +190,7 @@ fn non_closed_trace_does_not_compile() {
         vec![luna_core::__private::raw::INT; p.max_stack as usize],
         false,
     );
-    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
 }
 
 #[test]
@@ -205,7 +202,7 @@ fn unsupported_op_bails() {
     // has no special treatment and falls through to a bail).
     let prog = [Inst::iabc(Op::Concat, 0, 0, 0, false)];
     let rec = make_record(0, &prog, p);
-    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
 }
 
 #[test]
@@ -226,7 +223,7 @@ fn inline_depth_bails() {
         var_count: None,
     });
     rec.closed = true;
-    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
 }
 
 #[test]
@@ -252,7 +249,7 @@ fn cross_proto_op_bails() {
         var_count: None,
     });
     rec.closed = true;
-    assert!(try_compile_trace(vm1.jit_mut().storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm1.jit_storage_mut(), &rec).is_none());
 }
 
 #[test]
@@ -269,7 +266,7 @@ fn out_of_bounds_reg_bails() {
     // small-chunk max_stack doesn't silently turn the test
     // green via the loose-precondition path.
     assert!((p.max_stack as usize) <= 2, "precondition for this test");
-    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
 }
 
 #[test]
@@ -278,7 +275,7 @@ fn compiled_trace_is_callable_repeatedly() {
     let p = load_proto(&mut vm, WIDE_SRC);
     let prog = [Inst::iabc(Op::Add, 0, 1, 2, false)];
     let rec = make_record(0, &prog, p);
-    let ct = try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     // Re-entrancy / mmap-lifetime sanity: each call recomputes

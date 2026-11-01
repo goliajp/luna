@@ -59,7 +59,7 @@ fn check(src: &str, traced: &[LuaVersion]) {
                 vm.set_trace_jit_enabled(true);
                 vm.set_trace_tier(tier);
                 if let Some(h) = hot {
-                    vm.jit_mut().trace_hot_threshold = h;
+                    vm.set_trace_hot_threshold(h);
                 }
                 let got = show(vm.eval(src).map_err(|e| vm.error_text(&e)));
                 dispatched += vm.trace_dispatched_count();

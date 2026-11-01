@@ -64,7 +64,8 @@ pub unsafe extern "C" fn luna_jit_new_table_sized(ops: i64) -> i64 {
     match unsafe { vm.heap_mut() }.try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g.as_ptr() as i64,
         Ok(None) => {
-            vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));
+            let e = vm.runtime_error("table overflow");
+            vm.set_jit_pending_err(e);
             0
         }
         // the interpreter runs the `NewTable` again and allocates
@@ -135,7 +136,8 @@ pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) {
     match table.reserve_list(heap, last.max(0) as u64) {
         Ok(()) => {}
         Err(luna_core::runtime::table::TableError::Overflow) => {
-            vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));
+            let e = vm.runtime_error("table overflow");
+            vm.set_jit_pending_err(e);
         }
         // the interpreter runs the `SetList` again and grows the table
         Err(_) => vm.jit_park_oom(),

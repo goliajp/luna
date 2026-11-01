@@ -67,8 +67,8 @@ fn vm(v: LuaVersion, mode: Mode) -> Vm {
         }
         Mode::MethodAndTrace => {}
     }
-    vm.jit_mut().trace_hot_threshold = 2;
-    vm.jit_mut().call_hot_threshold = 2;
+    vm.set_trace_hot_threshold(2);
+    vm.set_call_hot_threshold(2);
     vm
 }
 

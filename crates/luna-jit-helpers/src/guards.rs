@@ -31,9 +31,9 @@ pub unsafe extern "C" fn luna_jit_no_deopt_parked() -> i64 {
 // defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_suppress_trace_admit() {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    vm.jit_mut().suppress_downrec_admit_once = true;
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call; the
+    // flag only has the dispatcher run the head op once in the interpreter
+    unsafe { current_jit_vm().jit_mut() }.suppress_downrec_admit_once = true;
 }
 
 /// Compiled code reached the point a collection step falls due at, after
@@ -90,8 +90,8 @@ pub unsafe extern "C" fn luna_jit_park_deopt() {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     if vm.jit().pending_err.is_none() {
-        vm.jit_mut().pending_err =
-            Some(vm.runtime_error("JIT deopt: compiled code cannot run this call"));
+        let e = vm.runtime_error("JIT deopt: compiled code cannot run this call");
+        vm.set_jit_pending_err(e);
     }
 }
 

@@ -141,8 +141,8 @@ pub(crate) fn new_vm(
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
     {
-        vm.jit_mut().trace_hot_threshold = n;
-        vm.jit_mut().call_hot_threshold = n;
+        vm.set_trace_hot_threshold(n);
+        vm.set_call_hot_threshold(n);
     }
     // Test knob, also left out of --help: with the LLVM backend, how long a
     // hot trace runs Cranelift's code before LLVM compiles it (0: at once)

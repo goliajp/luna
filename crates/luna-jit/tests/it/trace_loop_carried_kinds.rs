@@ -23,8 +23,8 @@ fn run(version: LuaVersion, src: &str, jit: Option<(bool, u32)>) -> (String, u64
         Some((method, hot)) => {
             vm.set_jit_enabled(method);
             vm.set_trace_jit_enabled(true);
-            vm.jit_mut().trace_hot_threshold = hot;
-            vm.jit_mut().call_hot_threshold = hot;
+            vm.set_trace_hot_threshold(hot);
+            vm.set_call_hot_threshold(hot);
         }
         None => {
             vm.set_jit_enabled(false);

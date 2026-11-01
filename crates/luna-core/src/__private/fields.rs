@@ -1,20 +1,59 @@
 //! Fields of the runtime's objects that luna's other crates read or write.
 
+use crate::jit::JitStorage;
 use crate::jit::{CompiledTrace, TArc};
 pub use crate::runtime::function::jit_state::{JIT_NEXT_NONE, JitProtoState};
 use crate::runtime::mem::{LAny, LVec};
 use crate::runtime::{Coro, Value, function::Proto};
 use crate::vm::Vm;
-use crate::vm::jit_state::JitState;
+use crate::vm::error::LuaError;
+use crate::vm::jit_state::{JitCounters, JitState};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-/// The JIT's state on the `Vm`.
+/// The JIT's state on the `Vm`. Each method but [`Self::jit_mut`] changes
+/// only what cannot break the code the JIT runs; the example compiles, the
+/// one after it fails to.
+///
+/// ```
+/// use luna_core::{__private::VmJitState, version::LuaVersion, vm::Vm};
+/// let mut vm = Vm::new(LuaVersion::Lua54);
+/// vm.set_trace_hot_threshold(1);
+/// vm.jit_counters_mut().deopt += 1;
+/// let _ = vm.jit_storage_mut().as_any_mut();
+/// // SAFETY: nothing is moved or replaced
+/// let _ = unsafe { vm.jit_mut() }.ssa_roots;
+/// ```
+///
+/// ```compile_fail,E0133
+/// use luna_core::{__private::VmJitState, version::LuaVersion, vm::Vm};
+/// let mut a = Vm::new(LuaVersion::Lua54);
+/// let mut b = Vm::new(LuaVersion::Lua54);
+/// std::mem::swap(a.jit_mut(), b.jit_mut()); // error[E0133]: `jit_mut` is unsafe
+/// ```
 pub trait VmJitState {
     /// The JIT's state.
     fn jit(&self) -> &JitState;
     /// The JIT's state, to change.
-    fn jit_mut(&mut self) -> &mut JitState;
+    ///
+    /// # Safety
+    /// Neither the state nor its storage, compilers or recording is moved
+    /// or replaced through the reference (as by `std::mem::swap` with
+    /// another VM's); the fields the dispatcher and the collector trust
+    /// (the recording, the register and root buffers and counts, the
+    /// string buffers) are written only as the interpreter writes them.
+    unsafe fn jit_mut(&mut self) -> &mut JitState;
+    /// The storage the JIT keeps its code in. It can be read and asked to
+    /// compile, not replaced.
+    fn jit_storage_mut(&mut self) -> &mut dyn JitStorage;
+    /// The JIT's event counters.
+    fn jit_counters_mut(&mut self) -> &mut JitCounters;
+    /// Raises `e` once the running JIT code returns to the interpreter.
+    fn set_jit_pending_err(&mut self, e: LuaError);
+    /// Back-edge visits before a loop is recorded.
+    fn set_trace_hot_threshold(&mut self, n: u32);
+    /// Calls before a function is recorded or compiled.
+    fn set_call_hot_threshold(&mut self, n: u32);
 }
 
 impl VmJitState for Vm {
@@ -24,8 +63,31 @@ impl VmJitState for Vm {
     }
 
     #[inline(always)]
-    fn jit_mut(&mut self) -> &mut JitState {
+    unsafe fn jit_mut(&mut self) -> &mut JitState {
         &mut self.jit
+    }
+
+    #[inline(always)]
+    fn jit_storage_mut(&mut self) -> &mut dyn JitStorage {
+        self.jit.storage.as_mut()
+    }
+
+    #[inline(always)]
+    fn jit_counters_mut(&mut self) -> &mut JitCounters {
+        &mut self.jit.counters
+    }
+
+    #[inline(always)]
+    fn set_jit_pending_err(&mut self, e: LuaError) {
+        self.jit.pending_err = Some(e);
+    }
+
+    fn set_trace_hot_threshold(&mut self, n: u32) {
+        self.jit.trace_hot_threshold = n;
+    }
+
+    fn set_call_hot_threshold(&mut self, n: u32) {
+        self.jit.call_hot_threshold = n;
     }
 }
 
