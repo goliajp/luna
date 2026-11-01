@@ -172,6 +172,7 @@ mod trace_str_len;
 mod trace_sunk_emit_in_loops;
 mod trace_sunk_materialize_on_deopt;
 mod trace_sunk_table_emit;
+mod trace_temporaries;
 mod trace_test_kind_fold;
 mod trace_testset_kind_fold;
 mod trace_tforcall_batched_helper;
