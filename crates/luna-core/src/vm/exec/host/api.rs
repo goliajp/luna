@@ -130,7 +130,7 @@ impl Vm {
     /// chain that reaches `t`), `rawset`, `setmetatable` and
     /// `debug.setmetatable`, and the table library's stores
     /// (`table.insert`, `table.remove`, `table.sort`, `table.move`'s
-    /// destination). [`Vm::set_global`] and [`Table::set`] refuse it too.
+    /// destination). [`Vm::set_global`] and `Gc<Table>::set` refuse it too.
     /// An assignment's error carries the position of the Lua code that
     /// made it (`user_script:1: Attempt to modify a readonly table`); one
     /// raised inside a library function carries none. Reads, including

@@ -72,7 +72,7 @@ impl Vm {
     /// "Attempt to modify a readonly table", with the position of the
     /// running Lua function in front, or none when a native is running
     /// (PUC `luaG_runerror`). For an embedder that wrote through
-    /// [`Table::set`] and got a [`TableError`] back.
+    /// `Gc<Table>::set` and got a [`TableError`] back.
     pub fn table_error(&mut self, e: TableError) -> LuaError {
         if let TableError::Memory(o) = e {
             return o.into();
