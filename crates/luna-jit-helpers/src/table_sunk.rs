@@ -3,9 +3,9 @@
 
 use crate::current_jit_vm;
 use crate::table_new::unpack_table_ops;
-use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, HeapInternals, ValueInternals, VmJitAlloc};
+use luna_core::__private::{TableStores, VmHeap};
 
 /// A trace's sunk site makes its table this round (`ops` its `NewTable`'s
 /// packed operands, the site's number + 1 from bit 32): 1 when a
@@ -137,7 +137,8 @@ unsafe fn materialize(
             };
             luna_core::runtime::Value::pack(*kinds_ptr.add(i), raw)
         };
-        if g.set_int(vm.heap_mut(), (i + 1) as i64, v).is_err() {
+        // SAFETY: `g` was just made in the Vm's heap and `v` is one of its values (# Safety)
+        if unsafe { g.store_int(vm.heap_mut(), (i + 1) as i64, v) }.is_err() {
             vm.jit_park_oom();
             return None;
         }
@@ -161,7 +162,8 @@ unsafe fn materialize(
             )
         };
         let key = luna_core::runtime::Value::Str(key);
-        if g.set(vm.heap_mut(), key, v).is_err() {
+        // SAFETY: `g` was just made in the Vm's heap, `key` and `v` are its values (# Safety)
+        if unsafe { g.store(vm.heap_mut(), key, v) }.is_err() {
             vm.jit_park_oom();
             return None;
         }

@@ -59,9 +59,6 @@ pub trait HeapInternals {
         c: u32,
         k: bool,
     ) -> Result<Option<Gc<Table>>, crate::runtime::table::TableError>;
-    /// The write barrier for `vals` just stored into `t` (see
-    /// `Heap::barrier_store`).
-    fn barrier_store<T: crate::runtime::heap::GcObject>(&mut self, t: Gc<T>, vals: &[Value]);
 }
 
 impl HeapInternals for crate::runtime::Heap {
@@ -73,10 +70,6 @@ impl HeapInternals for crate::runtime::Heap {
         k: bool,
     ) -> Result<Option<Gc<Table>>, crate::runtime::table::TableError> {
         crate::runtime::Heap::try_new_table_presized(self, b, c, k)
-    }
-    #[inline]
-    fn barrier_store<T: crate::runtime::heap::GcObject>(&mut self, t: Gc<T>, vals: &[Value]) {
-        crate::runtime::Heap::barrier_store(self, t, vals);
     }
 }
 
@@ -137,14 +130,16 @@ pub trait TableInternals {
     /// exactly `last` when it is smaller, keeping the hash part's size
     /// (PUC `luaH_resizearray`).
     fn reserve_list(&mut self, heap: &mut Heap, last: u64) -> Result<(), TableError>;
-    /// `Table::set` without the read-only test and without the write
-    /// barrier, for compiled code that has made both already: the trace
-    /// JIT's store helpers test it together with the metatable, and the
-    /// method JIT's only reach tables a call tested on entry or made itself.
+    /// `TableStores::store` without the read-only test and without the
+    /// write barrier, for compiled code that has made both already: the
+    /// trace JIT's store helpers test it together with the metatable, and
+    /// the method JIT's only reach tables a call tested on entry or made.
     ///
     /// # Safety
-    /// The table is not read-only, and the caller takes the write barrier
-    /// for `key` and `val` (or the table is white, as a new one is).
+    /// `heap` is the heap that allocated the table, and `key` and `val`
+    /// are live objects of it (or not objects). The table is not read-only,
+    /// and the caller takes the write barrier for `key` and `val` (or the
+    /// table is white, as a new one is).
     unsafe fn set_unguarded(
         &mut self,
         heap: &mut Heap,

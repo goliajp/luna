@@ -1,6 +1,5 @@
 //! Pinned handle types and tuple-to-argument conversion.
 
-use luna_core::__private::VmHeap;
 use luna_core::runtime::Value;
 use luna_core::vm::{FromLuaValue, HostRootTicket, IntoValue, LuaError, Vm};
 
@@ -100,10 +99,7 @@ impl LuaTable {
         };
         let k = k.into_value(&mut lua.0);
         let v = v.into_value(&mut lua.0);
-        if let Err(e) = t.set(lua.0.heap_mut(), k, v) {
-            return Err(lua.0.table_error(e));
-        }
-        Ok(())
+        lua.0.raw_set(t, k, v)
     }
 
     /// Mark the table read-only (`on = true`) or writable again; see

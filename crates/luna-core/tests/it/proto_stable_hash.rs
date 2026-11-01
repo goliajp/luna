@@ -6,12 +6,11 @@
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
-use luna_core::runtime::Heap;
 use luna_core::version::LuaVersion;
 
 fn hash_of(src: &str) -> [u8; 16] {
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let proto = compile_chunk(&ast, LuaVersion::Lua55, b"=test", &mut heap).expect("compile");
     proto.stable_hash()
 }
@@ -60,7 +59,7 @@ fn nested_protos_have_distinct_hashes() {
     // hashes must differ (different code arrays + signatures).
     let src = "local function inner() return 7 end\nreturn inner()";
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let outer = compile_chunk(&ast, LuaVersion::Lua55, b"=test", &mut heap).expect("compile");
     let outer_hash = outer.stable_hash();
     assert!(

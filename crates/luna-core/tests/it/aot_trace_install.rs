@@ -10,7 +10,6 @@ use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
 use luna_core::jit::send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
 use luna_core::jit::trace::{ExitTag, TagResKind};
-use luna_core::runtime::Heap;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
@@ -72,7 +71,7 @@ fn collect_proto_hashes_walks_tree() {
                local function g() return 2 end\n\
                return f, g";
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let root = compile_chunk(&ast, LuaVersion::Lua55, b"=test", &mut heap).expect("compile");
 
     let vm = Vm::new(LuaVersion::Lua55);
@@ -88,7 +87,7 @@ fn collect_proto_hashes_walks_tree() {
 fn install_aot_trace_pushes_onto_proto_traces() {
     let src = "return 1";
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let root = compile_chunk(&ast, LuaVersion::Lua55, b"=test", &mut heap).expect("compile");
 
     assert_eq!(
@@ -117,7 +116,7 @@ fn install_then_lookup_via_collect_hashes() {
     // collected (proto, hash) pairs, install a trace onto it.
     let src = "local s = 0\nfor i = 1, 5 do s = s + 1 end\nreturn s";
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let root = compile_chunk(&ast, LuaVersion::Lua55, b"=test", &mut heap).expect("compile");
     let target_hash = root.stable_hash();
 

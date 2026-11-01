@@ -7,7 +7,6 @@ use super::ccall::{
     Cont, KFn, LUNA_RECOVER, PendingYield, Wait, pcall_failed, pcall_outcome, push_results,
 };
 use super::*;
-use luna_core::__private::VmHeap;
 use luna_core::vm::exec::host_c::HostContSpec;
 
 /// The continuation slot of the C function running on `api`'s thread, as
@@ -164,7 +163,8 @@ pub(super) fn pcallk(
                             wait: Wait::Recover { status },
                         }),
                     );
-                    api.vm.heap_mut().barrier_back(co);
+                    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+                    unsafe { api.vm.heap_mut().barrier_back(co) };
                     api.g().raised = LUNA_RECOVER;
                     return LUA_OK;
                 }
@@ -192,7 +192,8 @@ pub(super) fn pcallk(
             pcall_failed(api.vm, co, at, e, errerr_before)
         }
     };
-    api.vm.heap_mut().barrier_back(co);
+    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+    unsafe { api.vm.heap_mut().barrier_back(co) };
     status
 }
 
@@ -224,8 +225,7 @@ pub(super) fn yieldk(api: &mut Api, nresults: c_int, k: Option<KFn>, ctx: isize)
 
 /// PUC `lua_callk`.
 ///
-/// # Safety
-/// `L` is a live thread of an open state, the innermost API call on it;
+/// # Safety `L` is a live thread of an open state, the innermost API call on it;
 /// called by the C wrapper, which throws what this raises.
 // SAFETY: no other item in the link is named `luna_capi_lua_callk`; the C
 // wrapper `luna_c_lua_callk` is its only caller
@@ -322,9 +322,9 @@ pub unsafe extern "C" fn luna_capi_luna_pcallk_52(
     )
 }
 
-/// Call the function below the top `nargs` values in protected mode (PUC
-/// `lua_pcall`; a function in 5.1, a macro over `lua_pcallk` after). It
-/// cannot yield, so it never throws and needs no C wrapper.
+/// Call the function below the top `nargs` values in protected mode (PUC `lua_pcall`; a function in
+/// 5.1, a macro over `lua_pcallk` after). It cannot yield, so it never throws and needs no C
+/// wrapper.
 ///
 /// # Safety
 /// `L` is a live thread of an open state, and no other API call on it is
@@ -344,9 +344,8 @@ pub unsafe extern "C" fn lua_pcall(
     pcallk(&mut api, nargs, nresults, msgh, None, 0)
 }
 
-/// PUC 5.1 `lua_cpcall`: call `func` with a light userdata of `ud` as its
-/// only argument, in protected mode; the stack is left as it was, plus the
-/// error object on an error.
+/// PUC 5.1 `lua_cpcall`: call `func` with a light userdata of `ud` as its only argument, in
+/// protected mode; the stack is left as it was, plus the error object on an error.
 ///
 /// # Safety
 /// As [`lua_pcall`]; `func` is a C function.

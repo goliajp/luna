@@ -7,7 +7,7 @@
 
 use luna_core::compiler::compile_chunk_with_last_target;
 use luna_core::frontend::parser::parse;
-use luna_core::runtime::{Heap, Value};
+use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 use luna_core::vm::isa::Op;
@@ -23,7 +23,7 @@ const DIALECTS: [LuaVersion; 5] = [
 /// The numeric `for` step opcode the main chunk of `src` compiles to.
 fn loop_op(src: &str, v: LuaVersion) -> Op {
     let ast = parse(src.as_bytes(), v).expect("parse");
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let (proto, _) =
         compile_chunk_with_last_target(&ast, v, b"=for_kinds", &mut heap).expect("compile");
     let ops: Vec<Op> = proto

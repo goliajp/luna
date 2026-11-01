@@ -6,8 +6,7 @@
 //! one raised inside a library function carries none (`luaG_runerror`).
 //! The JIT's compiled stores are covered in luna-jit's tests.
 
-use luna_core::__private::VmHeap;
-use luna_core::runtime::{Gc, Table, TableError, Value};
+use luna_core::runtime::{Gc, Table, Value};
 use luna_core::{version::LuaVersion, vm::Vm};
 
 const ALL: [LuaVersion; 5] = [
@@ -314,15 +313,12 @@ fn the_host_api_refuses_and_unmarking_restores_writes() {
     for v in ALL {
         let (mut vm, ro) = setup(v);
         let k = Value::Str(vm.intern("k"));
-        assert_eq!(
-            ro.set(vm.heap_mut(), k, Value::Int(2)),
-            Err(TableError::ReadOnly)
-        );
-        assert_eq!(
-            ro.set_int(vm.heap_mut(), 1, Value::Int(2)),
-            Err(TableError::ReadOnly)
-        );
-        assert!(!ro.try_set_existing(vm.heap_mut(), k, Value::Int(2)));
+        let e = vm.raw_set(ro, k, Value::Int(2)).expect_err("read-only");
+        assert_eq!(vm.error_text(&e), MSG, "{v:?}");
+        let e = vm
+            .raw_set(ro, Value::Int(1), Value::Int(2))
+            .expect_err("read-only");
+        assert_eq!(vm.error_text(&e), MSG, "{v:?}");
         assert!(ro.is_readonly());
         let g = vm.globals();
         vm.set_readonly(g, true);

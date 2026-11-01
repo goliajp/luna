@@ -7,13 +7,12 @@
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
-use luna_core::runtime::Heap;
 use luna_core::version::LuaVersion;
 use luna_core::vm::isa::{Inst, Op, imm_form};
 
 fn compile(version: LuaVersion, src: &str) -> Vec<Inst> {
     let ast = parse(src.as_bytes(), version).expect("parse");
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let proto = compile_chunk(&ast, version, b"=k", &mut heap).expect("compile");
     let k = |i: &Inst| imm_form::to_k(*i, &proto.consts).expect("constant form");
     match version {

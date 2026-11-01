@@ -187,7 +187,7 @@ impl std::fmt::Debug for Engine {
 impl Engine {
     /// An engine holding no code yet, with a random hash seed.
     pub fn new() -> Engine {
-        Engine::with(luna_core::runtime::Heap::new().seed(), false)
+        Engine::with(luna_core::__private::new_heap().seed(), false)
     }
 
     /// The engine a Vm built without one keeps for itself: code of the same

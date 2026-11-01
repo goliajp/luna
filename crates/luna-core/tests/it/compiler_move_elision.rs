@@ -9,7 +9,7 @@
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
-use luna_core::runtime::{Heap, Value};
+use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 use luna_core::vm::isa::{Inst, Op};
@@ -20,7 +20,7 @@ use luna_core::vm::isa::{Inst, Op};
 
 fn compile_main(src: &str) -> Vec<Inst> {
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let proto =
         compile_chunk(&ast, LuaVersion::Lua55, b"=move_elision", &mut heap).expect("compile");
     proto.code.to_vec()

@@ -1,4 +1,38 @@
 //! Bytecode VM: instruction set, errors, interpreter, builtins.
+//!
+//! The heap is the VM's own. An embedder reaches it only through the VM's
+//! methods, so safe code can neither free an object the VM still uses nor
+//! store one heap's objects in another heap's tables:
+//!
+//! ```
+//! use luna_core::{runtime::Value, version::LuaVersion, vm::Vm};
+//! let mut vm = Vm::new(LuaVersion::Lua54);
+//! let _: Option<&luna_core::runtime::Heap> = None;
+//! let t = vm.new_table().build();
+//! let k = Value::Str(vm.intern("k"));
+//! vm.raw_set(t, k, Value::Int(1)).unwrap();
+//! ```
+//!
+//! Each of the following fails to compile, for the reason its comment
+//! gives; the example above compiles with the same paths.
+//!
+//! ```compile_fail,E0616
+//! use luna_core::{version::LuaVersion, vm::Vm};
+//! let mut vm = Vm::new(LuaVersion::Lua54);
+//! let _ = &mut vm.heap; // error[E0616]: field `heap` of struct `Vm` is private
+//! ```
+//!
+//! ```compile_fail,E0624
+//! let _ = luna_core::runtime::Heap::new(); // error[E0624]: `new` is private
+//! ```
+//!
+//! ```compile_fail,E0624
+//! use luna_core::{runtime::Value, version::LuaVersion, vm::Vm};
+//! let mut vm = Vm::new(LuaVersion::Lua54);
+//! let t = vm.new_table().build();
+//! let k = Value::Str(vm.intern("k"));
+//! t.set(unimplemented!(), k, Value::Int(1)); // error[E0624]: `set` is private
+//! ```
 
 #[macro_use]
 mod rules;

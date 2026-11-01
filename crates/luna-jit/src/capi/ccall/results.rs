@@ -2,7 +2,6 @@
 //! error.
 
 use super::*;
-use luna_core::__private::VmHeap;
 
 /// Put a call's results on the stack from index `at`, where its function
 /// was, adjusted to `nresults` (-1: all). The results may be held by
@@ -20,7 +19,8 @@ pub(in crate::capi) fn push_results(
     }
     cstack(co).truncate(at);
     cstack(co).extend_from_slice(&vals)?;
-    vm.heap_mut().barrier_back(co);
+    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+    unsafe { vm.heap_mut().barrier_back(co) };
     Ok(())
 }
 

@@ -3,7 +3,6 @@
 
 use super::api::C_UPVALS;
 use super::*;
-use luna_core::__private::VmHeap;
 use luna_core::__private::{HostAr, HostLevel};
 use luna_core::runtime::NativeClosure;
 use luna_core::runtime::mem::{LBox, LVec, MemRef};
@@ -111,10 +110,9 @@ fn valid(v: LuaVersion, c: u8) -> bool {
     opts.contains(&c)
 }
 
-/// PUC `lua_getinfo`: fill `ar` with what the options in `what` ask for,
-/// of the level `ar` points at, or with `>`, of the function popped from
-/// the stack. `f` pushes the function and `L` its lines. Returns 0 when an
-/// option is not one of the dialect's.
+/// PUC `lua_getinfo`: fill `ar` with what the options in `what` ask for, of the level `ar` points
+/// at, or with `>`, of the function popped from the stack. `f` pushes the function and `L` its
+/// lines. Returns 0 when an option is not one of the dialect's.
 ///
 /// # Safety
 /// As [`lua_getstack`]; `what` is a NUL-terminated string, and `ar` was
@@ -291,7 +289,8 @@ pub unsafe extern "C" fn lua_setlocal(
             Local::CSlot(s) => {
                 t.stack_mut()[s] = v;
                 let co = t.thread();
-                t.vm.heap_mut().barrier_back(co);
+                // SAFETY: `co` is a thread of this Vm, live while its state is in use
+                unsafe { t.vm.heap_mut().barrier_back(co) };
             }
             Local::Level(i) => {
                 let co = t.thread();

@@ -5,7 +5,6 @@
 //! the back-compat case (`impl LuaUserdata for T {}` with no Gc state,
 //! default no-op trace) is unchanged.
 
-use luna_core::__private::VmHeap;
 use luna_core::runtime::{Gc, Table, Value};
 use luna_core::version::LuaVersion;
 use luna_core::vm::{LuaUserdata, UserdataMarker, Vm};
@@ -52,10 +51,9 @@ impl LuaUserdata for Cache {
 #[test]
 fn gc_bearing_payload_survives_collection_via_trace() {
     let mut vm = vm();
-    let t = vm.heap_mut().new_table();
+    let t = vm.new_table().build();
     // Stash a sentinel int in the table so we can probe its survival.
-    t.set(vm.heap_mut(), Value::Int(1), Value::Int(0xCAFE))
-        .unwrap();
+    vm.raw_set(t, Value::Int(1), Value::Int(0xCAFE)).unwrap();
     vm.set_userdata("cache", Cache { entries: t }).unwrap();
     // The local `t` binding is not a GC root (only Lua stack /
     // globals / `host_roots` are). The Table is now reachable ONLY
@@ -90,7 +88,7 @@ fn gc_bearing_payload_without_trace_override_would_dangle() {
     impl LuaUserdata for CacheNoTrace {}
 
     let mut vm = vm();
-    let t = vm.heap_mut().new_table();
+    let t = vm.new_table().build();
     // Pin via host_roots so we don't actually exercise the UAF — the
     // test is about the API shape, not about producing UB.
     vm.pin_host(Value::Table(t));
@@ -127,12 +125,10 @@ impl LuaUserdata for PartialCache {
 #[test]
 fn trace_marks_only_listed_fields() {
     let mut vm = vm();
-    let kept = vm.heap_mut().new_table();
-    let independent = vm.heap_mut().new_table();
-    kept.set(vm.heap_mut(), Value::Int(1), Value::Int(0xABCD))
-        .unwrap();
-    independent
-        .set(vm.heap_mut(), Value::Int(1), Value::Int(0x1234))
+    let kept = vm.new_table().build();
+    let independent = vm.new_table().build();
+    vm.raw_set(kept, Value::Int(1), Value::Int(0xABCD)).unwrap();
+    vm.raw_set(independent, Value::Int(1), Value::Int(0x1234))
         .unwrap();
     // Pin `independent` through host_roots so it survives despite not
     // being marked by trace. This isolates the assertion that `kept`
@@ -173,9 +169,8 @@ fn vec_of_gc_table_all_survive() {
     let mut vm = vm();
     let mut tables = Vec::new();
     for i in 0..16 {
-        let t = vm.heap_mut().new_table();
-        t.set(vm.heap_mut(), Value::Int(1), Value::Int(0x100 + i))
-            .unwrap();
+        let t = vm.new_table().build();
+        vm.raw_set(t, Value::Int(1), Value::Int(0x100 + i)).unwrap();
         tables.push(t);
     }
     let tables_copy = tables.clone();
@@ -214,15 +209,11 @@ impl LuaUserdata for ValueBag {
 #[test]
 fn mark_value_visits_each_gc_value_in_bag() {
     let mut vm = vm();
-    let t1 = vm.heap_mut().new_table();
-    let t2 = vm.heap_mut().new_table();
-    let s = vm
-        .heap_mut()
-        .intern(b"this-is-a-long-non-interned-string-payload-1234567890");
-    t1.set(vm.heap_mut(), Value::Int(1), Value::Int(0xAAAA))
-        .unwrap();
-    t2.set(vm.heap_mut(), Value::Int(1), Value::Int(0xBBBB))
-        .unwrap();
+    let t1 = vm.new_table().build();
+    let t2 = vm.new_table().build();
+    let s = vm.intern(b"this-is-a-long-non-interned-string-payload-1234567890");
+    vm.raw_set(t1, Value::Int(1), Value::Int(0xAAAA)).unwrap();
+    vm.raw_set(t2, Value::Int(1), Value::Int(0xBBBB)).unwrap();
     let slots = vec![
         Value::Int(99),
         Value::Table(t1),
@@ -258,7 +249,7 @@ fn gc_stress_does_not_panic() {
     let mut vm = vm();
     let mut tables = Vec::new();
     for _ in 0..32 {
-        tables.push(vm.heap_mut().new_table());
+        tables.push(vm.new_table().build());
     }
     vm.set_userdata("pool", Pool { tables }).unwrap();
     // Tight GC loop: 200 cycles. Default heap size is small; the
@@ -277,14 +268,14 @@ fn gc_stress_does_not_panic() {
 #[test]
 fn cycle_survives_while_rooted_then_collects_after_drop() {
     let mut vm = vm();
-    let t = vm.heap_mut().new_table();
+    let t = vm.new_table().build();
     let ud = vm.create_userdata(Cache { entries: t });
     // Form the cycle: t[1] = ud.
-    t.set(vm.heap_mut(), Value::Int(1), ud).unwrap();
+    vm.raw_set(t, Value::Int(1), ud).unwrap();
     // Root only the userdata via a global.
     vm.set_global("cache", ud).unwrap();
     // Initial live count snapshot.
-    let live_before = vm.heap_mut().live_objects();
+    let live_before = luna_core::vm::inspect::heap_walk(&vm).total_objects;
     vm.eval("collectgarbage()").unwrap();
     // Cycle is rooted — both userdata + table must still be live.
     // (live_objects may also include freshly-allocated cycle internals;
@@ -292,7 +283,7 @@ fn cycle_survives_while_rooted_then_collects_after_drop() {
     let c: &Cache = vm.userdata_borrow("cache").unwrap();
     assert!(matches!(c.entries.get(Value::Int(1)), Value::Userdata(_)));
     // The collector at least didn't free the cycle.
-    let live_after = vm.heap_mut().live_objects();
+    let live_after = luna_core::vm::inspect::heap_walk(&vm).total_objects;
     // Sanity: live count is bounded by what existed before.
     assert!(live_after <= live_before + 16, "unexpected growth");
     // Now drop the root — both should become collectable.

@@ -4,7 +4,6 @@
 
 use super::*;
 use luna_core::__private::SpecialErrors;
-use luna_core::__private::VmHeap;
 use luna_core::runtime::ErrorStatus;
 use luna_core::runtime::NativeClosure;
 use luna_core::vm::exec::host_c::HostContHooks;
@@ -48,8 +47,7 @@ pub(super) enum Wait {
 /// runs at once (`Wait::Recover`).
 pub(super) const LUNA_RECOVER: c_int = -2;
 
-/// A continuation a C function left behind (`lua_callk`, `lua_pcallk`,
-/// `lua_yieldk`).
+/// A continuation a C function left behind (`lua_callk`, `lua_pcallk`, `lua_yieldk`).
 #[derive(Clone, Copy)]
 pub(super) struct Cont {
     /// `None` for a `lua_yield` without one: the resume's values are then
@@ -103,9 +101,8 @@ pub(super) struct CHook {
     pub(super) refs: super::debug::LevelRefs,
 }
 
-// SAFETY: the declarations match the definitions in `csrc/shim_core.c`;
-// each runs a host function under a fresh error boundary and returns
-// normally, whatever the host function does
+// SAFETY: the declarations match the definitions in `csrc/shim_core.c`; each runs a host function
+// under a fresh error boundary and returns normally, whatever the host function does
 // C sees `lua_State` as opaque and reads only its leading fields, which
 // `csrc/shim.h` declares
 #[allow(improper_ctypes)]
@@ -120,9 +117,8 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
-/// Run `f` with the state's Vm pointer set to one derived from `vm`, so
-/// that what C does to the Vm while `f` runs goes through `vm`, and put the
-/// previous pointer back after.
+/// Run `f` with the state's Vm pointer set to one derived from `vm`, so that what C does to the Vm
+/// while `f` runs goes through `vm`, and put the previous pointer back after.
 pub(super) fn with_c<R>(vm: &mut Vm, l: *mut LuaState, f: impl FnOnce() -> R) -> R {
     let vm_ptr: *mut Vm = vm;
     // SAFETY: `l` is a live thread of this Vm's state, so its global record
@@ -183,7 +179,8 @@ pub(super) fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
         let a = vm.nat_arg(fs, nargs, i);
         cstack(co).push_or_abort(a);
     }
-    vm.heap_mut().barrier_back(co);
+    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+    unsafe { vm.heap_mut().barrier_back(co) };
     let s = st(l);
     if s.calls.reserve(1).is_err() {
         cstack(co).truncate(base);
@@ -313,10 +310,9 @@ pub(super) fn take_error(l: *mut LuaState) -> Value {
     cstack(st(from).thread).pop().unwrap_or(Value::Nil)
 }
 
-/// The C function of call `token` yielded `py.n` values: suspend the
-/// coroutine. Its call stays until the resume, which runs its continuation
-/// or, without one, returns the resume's values from it; until then its
-/// frame stays on the C stack below the yielded values, as PUC keeps it.
+/// The C function of call `token` yielded `py.n` values: suspend the coroutine. Its call stays
+/// until the resume, which runs its continuation or, without one, returns the resume's values from
+/// it; until then its frame stays on the C stack below the yielded values, as PUC keeps it.
 fn yield_from_c(
     vm: &mut Vm,
     l: *mut LuaState,
@@ -388,7 +384,8 @@ fn run_cont(
                     pop_call(l, co, token);
                     return Err(o.into());
                 }
-                vm.heap_mut().barrier_back(co);
+                // SAFETY: `co` is a thread of this Vm, live while its state is in use
+                unsafe { vm.heap_mut().barrier_back(co) };
                 let r = close_frame(vm, l, token, None)
                     .and_then(|()| return_hook(vm, co, base, vals.len()))
                     .and_then(|()| vm.nat_ret(fs, &vals));
@@ -412,7 +409,8 @@ fn run_cont(
         } => pcall_outcome(vm, co, vals, nresults, at, errerr_before).unwrap_or(LUA_YIELD),
         Wait::Recover { status } => status,
     };
-    vm.heap_mut().barrier_back(co);
+    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+    unsafe { vm.heap_mut().barrier_back(co) };
     st(l).calls[token].k_status = status;
     let mut nret: c_int = 0;
     let ret = match cont.k.expect("a continuation function") {
