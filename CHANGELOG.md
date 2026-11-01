@@ -43,8 +43,12 @@ optimization.
   the one that made the table, they could free objects the VM still used.
   A host writes a table through the VM: `t.set(&mut heap, k, v)` →
   `vm.raw_set(t, k, v)?` (an integer key is `Value::Int(i)`), or builds it
-  with `vm.new_table().with(k, v).build()`; a metatable is set by calling
-  Lua's `setmetatable`, read from `vm.globals()`, with `vm.call_value`.
+  with `vm.new_table().with(k, v).build()`; a metatable is set with
+  `vm.set_metatable(Value::Table(t), mt)?`.
+- `Vm::set_metatable(v, mt)` is new: PUC's `lua_setmetatable`, which does
+  not look at `__metatable`; a value that is not a table or a userdata
+  gets its type's metatable. `Userdata::set_metatable` is gone from the
+  public API: it took no write barrier.
 
 - `package.path` defaults to PUC's default outside Windows too
   (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in
