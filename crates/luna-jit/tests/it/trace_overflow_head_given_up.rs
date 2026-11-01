@@ -48,5 +48,12 @@ fn overflowing_heads_stop_being_recorded() {
             "{v:?}: {} aborted recordings for two heads",
             vm.trace_aborted_count()
         );
+        // each head given up is counted once, however many recordings it took
+        let given_up = vm.trace_blacklisted_count();
+        assert!(
+            (1..=2).contains(&given_up) && vm.trace_aborted_count() >= 3 * given_up,
+            "{v:?}: {given_up} heads given up after {} aborts",
+            vm.trace_aborted_count()
+        );
     }
 }

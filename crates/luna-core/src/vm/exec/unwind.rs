@@ -44,7 +44,7 @@ impl Vm {
         if let Some(rec) = self.jit.active_trace.take() {
             self.jit.counters.aborted += 1;
             self.jit.counters.bump_close_cause("error-unwind");
-            note_trace_compile_failure(rec.head_proto, rec.head_pc);
+            note_trace_compile_failure(&mut self.jit.counters, rec.head_proto, rec.head_pc);
         }
         err = self.raise_to_handler(err);
         // An error that no protected call inside the running coroutine will

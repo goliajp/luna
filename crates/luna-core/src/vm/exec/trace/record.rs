@@ -249,7 +249,7 @@ impl Vm {
         let rec = self.jit.active_trace.take().expect("recording");
         self.jit.counters.aborted += 1;
         self.jit.counters.bump_close_cause(cause);
-        note_trace_compile_failure(rec.head_proto, rec.head_pc);
+        note_trace_compile_failure(&mut self.jit.counters, rec.head_proto, rec.head_pc);
     }
 
     /// A depth>0 `Return0` / `Return1` during recording (LuaJIT `IR_RETF`):

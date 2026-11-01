@@ -98,11 +98,11 @@ fn content_key(proto: &crate::runtime::function::Proto) -> u64 {
 /// prototypes of the same content keep failing there. A skipped head is
 /// given up on `proto` too, so its later back-edges do not ask again.
 pub(in crate::vm::exec) fn trace_head_forgone(
-    memory: &mut Option<Box<FailMemory>>,
+    jit: &mut crate::vm::jit_state::JitState,
     proto: Gc<crate::runtime::function::Proto>,
     pc: u32,
 ) -> bool {
-    let Some(memory) = memory else {
+    let Some(memory) = &mut jit.fail_memory else {
         return false;
     };
     if proto
@@ -116,6 +116,6 @@ pub(in crate::vm::exec) fn trace_head_forgone(
     if !memory.skip(&proto, pc) {
         return false;
     }
-    give_up_head(proto, pc);
+    give_up_head(&mut jit.counters, proto, pc);
     true
 }

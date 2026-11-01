@@ -72,7 +72,7 @@ impl Vm {
             if let Some(rec) = self.jit.active_trace.take() {
                 self.jit.counters.aborted += 1;
                 self.jit.counters.bump_close_cause("reached-compiled-trace");
-                note_trace_compile_failure(rec.head_proto, rec.head_pc);
+                note_trace_compile_failure(&mut self.jit.counters, rec.head_proto, rec.head_pc);
             }
             self.jit.pending_err = None;
             // an inline side exit pushes the inlined frames, which a deopt

@@ -101,22 +101,14 @@ impl Vm {
         if !already_cached && !native_stack::is_low(native_stack::COMPILE_RESERVE) {
             // an internal loop, run until a comparison exits, so one entry
             // pays for many iterations (one-shot without a comparison)
-            // Side traces MUST NOT
-            // internal-loop. The parent's recorded prefix
-            // (ops at PCs < side trace's head_pc) defines
-            // values for registers the child's body reads
-            // without re-writing each iter — e.g. for
-            // s12_step_b, parent's `pc=19 Add R[12] = R[1]
-            // + R[11]` sets R[12], and the child trace
-            // (head_pc=24) re-runs `pc=20 Move R[1] =
-            // R[12]` each iter via its outer ForLoop
-            // internal-loop, ALWAYS reading the stale
-            // entry-time R[12]. The parent's Add never
-            // re-runs during child's loop, so R[1] gets
-            // pinned to one stale value. Force one-shot
-            // for side traces: each parent-exit round-
-            // trips through dispatcher → parent's Add
-            // runs → side trace runs ONE iter → return.
+            // Side traces MUST NOT internal-loop. The parent's recorded prefix (ops at PCs < side
+            // trace's head_pc) defines values for registers the child's body reads without
+            // re-writing each iter — e.g. for s12_step_b, parent's `pc=19 Add R[12] = R[1] + R[11]`
+            // sets R[12], and the child trace (head_pc=24) re-runs `pc=20 Move R[1] = R[12]` each
+            // iter via its outer ForLoop internal-loop, ALWAYS reading the stale entry-time R[12].
+            // The parent's Add never re-runs during child's loop, so R[1] gets pinned to one stale
+            // value. Force one-shot for side traces: each parent-exit round-trips through
+            // dispatcher → parent's Add runs → side trace runs ONE iter → return.
             let opts = crate::jit::trace::CompileOptions {
                 internal_loop: closed_record.side_trace_parent.is_none(),
                 pre53: self.version() <= LuaVersion::Lua53,
@@ -149,7 +141,7 @@ impl Vm {
                 jit.counters.shared_failures_known += 1;
                 jit.counters.shared_failures_counted += u64::from(known);
                 for _ in 0..known.min(u32::from(u8::MAX)) {
-                    note_trace_compile_failure(head_proto, closed_record.head_pc);
+                    note_trace_compile_failure(&mut jit.counters, head_proto, head_pc_val);
                 }
                 return;
             }
@@ -187,12 +179,14 @@ impl Vm {
                         == "bail:entry-tag-never-entered"
                     {
                         note_trace_never_entered(
+                            &mut self.jit.counters,
                             head_proto,
                             closed_record.head_pc,
                             &closed_record.entry_tags,
                         );
                     } else {
-                        note_trace_compile_failure(head_proto, closed_record.head_pc);
+                        let c = &mut self.jit.counters;
+                        note_trace_compile_failure(c, head_proto, head_pc_val);
                         let m = self.jit.fail_memory.get_or_insert_default();
                         m.failed(&head_proto, closed_record.head_pc);
                     }
