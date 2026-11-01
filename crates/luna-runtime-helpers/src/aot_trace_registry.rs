@@ -16,12 +16,12 @@
 //! has both bracket symbols collapse to the same address; the walk
 //! short-circuits with `Ok(0)`.
 
-use luna_core::__private::{CompiledTrace, InlineSideExit};
-use luna_core::jit::aot_meta::{
-    AotTraceIndexEntry, decode_meta_blob, unpack_exit_tag, unpack_tag_res_kind,
-};
+use luna_core::__private::CompiledTrace;
+use luna_core::jit::aot_meta::{AotTraceIndexEntry, decode_meta_blob, unpack_tag_res_kind};
 use luna_core::jit::trace_types::{ExitTag, TraceFn};
 use luna_core::vm::Vm;
+
+mod decode;
 
 // Bracket symbols — same pattern as the strkey_idx
 // walker. ELF / lld auto-create `__start_<name>` / `__stop_<name>`
@@ -194,16 +194,7 @@ unsafe fn walk_meta_section(
             continue;
         };
         // Reconstruct exit_tags + entry_tags + global_tag_res_kind.
-        let mut exit_tags_vec: Vec<ExitTag> = Vec::with_capacity(decoded.exit_tags.len());
-        let mut tag_decode_ok = true;
-        for raw in decoded.exit_tags.iter().copied() {
-            if let Some(t) = unpack_exit_tag(raw) {
-                exit_tags_vec.push(t);
-            } else {
-                tag_decode_ok = false;
-                break;
-            }
-        }
+        let exit_tags_vec = decode::unpack_tags(&decoded.exit_tags);
         let Some(tag_res_kind) = unpack_tag_res_kind(decoded.header.tag_res_kind) else {
             if probe_on {
                 eprintln!(
@@ -213,7 +204,7 @@ unsafe fn walk_meta_section(
             }
             continue;
         };
-        if !tag_decode_ok {
+        let Some(exit_tags_vec) = exit_tags_vec else {
             if probe_on {
                 eprintln!(
                     "luna-runtime-helpers: aot_trace skip head_pc={} reason=exit_tag_invalid",
@@ -221,34 +212,13 @@ unsafe fn walk_meta_section(
                 );
             }
             continue;
-        }
+        };
         let entry_tags_rc: luna_core::jit::send_compat::TArc<[u8]> = decoded.entry_tags.into();
         let exit_tags_rc: luna_core::jit::send_compat::TArc<[ExitTag]> = exit_tags_vec.into();
-        // v2 per_exit_tags decode: reconstruct
-        // `Vec<(cont_pc, Rc<[ExitTag]>)>` matching the
-        // dispatcher's `decode_exit_shape` shape lookup. Each
-        // entry's packed-byte `ExitTag` array unpacks via
-        // [`unpack_exit_tag`]; an invalid byte = skip the
-        // whole trace (matches the existing exit-tag handling).
-        let mut per_exit_tags_decoded: Vec<(u32, luna_core::jit::send_compat::TArc<[ExitTag]>)> =
-            Vec::with_capacity(decoded.per_exit_tags.len());
-        let mut per_exit_tags_ok = true;
-        for ent in &decoded.per_exit_tags {
-            let mut tags: Vec<ExitTag> = Vec::with_capacity(ent.tags_packed.len());
-            for raw in ent.tags_packed.iter().copied() {
-                if let Some(t) = unpack_exit_tag(raw) {
-                    tags.push(t);
-                } else {
-                    per_exit_tags_ok = false;
-                    break;
-                }
-            }
-            if !per_exit_tags_ok {
-                break;
-            }
-            per_exit_tags_decoded.push((ent.cont_pc, tags.into()));
-        }
-        if !per_exit_tags_ok {
+        // v2 per_exit_tags: `(cont_pc, exit tags)` as the dispatcher's
+        // `decode_exit_shape` looks them up; an invalid byte skips the
+        // whole trace, as for the exit tags
+        let Some(per_exit_tags_decoded) = decode::per_exit_tags(&decoded.per_exit_tags) else {
             if probe_on {
                 eprintln!(
                     "luna-runtime-helpers: aot_trace skip head_pc={} reason=per_exit_tag_invalid",
@@ -256,7 +226,7 @@ unsafe fn walk_meta_section(
                 );
             }
             continue;
-        }
+        };
         // The per_exit_inline decode is load-bearing. Each wire entry's
         // `chain_bytes` rebuilds into a fresh
         // `Vec<FrameMaterializeInfo>` → `Rc<[...]>` for the
@@ -276,7 +246,7 @@ unsafe fn walk_meta_section(
         // behind the slot) are independent allocations of the
         // same byte content — neither side compares pointers.
         let Some(per_exit_inline_decoded) =
-            decode_per_exit_inline(&decoded.per_exit_inline, entry.head_pc, probe_on)
+            decode::per_exit_inline(&decoded.per_exit_inline, entry.head_pc, probe_on)
         else {
             continue;
         };
@@ -290,8 +260,9 @@ unsafe fn walk_meta_section(
             unsafe { core::mem::transmute::<*const u8, TraceFn>(fn_ptr_raw) };
         // SAFETY: `trace_entry` is the trace function the AOT pipeline
         // compiled for this proto at this head pc against the tags and
-        // window the meta entry carries, linked into the binary's text
-        // segment; `proto` is a live prototype the Vm just loaded
+        // window the meta entry carries, holding no address of the cells
+        // made here, linked into the binary's text segment; `proto` is a
+        // live prototype the Vm just loaded
         unsafe {
             let ct = CompiledTrace::from_aot_meta(
                 trace_entry,
@@ -316,57 +287,4 @@ unsafe fn walk_meta_section(
         }
     }
     installed
-}
-
-/// Rebuild the v3 `per_exit_inline` side exits of one trace. `None`
-/// (after printing the probe line) when a chain or a packed tag is
-/// corrupt, in which case the whole trace skips install.
-fn decode_per_exit_inline(
-    entries: &[luna_core::jit::aot_meta::PerExitInlineEntry],
-    head_pc: u32,
-    probe_on: bool,
-) -> Option<Vec<InlineSideExit>> {
-    let mut per_exit_inline_decoded: Vec<InlineSideExit> = Vec::with_capacity(entries.len());
-    let mut inline_ok = true;
-    for ent in entries {
-        let Some(chain_vec) = ent.rebuild_chain() else {
-            inline_ok = false;
-            if probe_on {
-                eprintln!(
-                    "luna-runtime-helpers: aot_trace skip head_pc={} reason=per_exit_inline_chain_invalid (cont_pc={})",
-                    head_pc, ent.cont_pc
-                );
-            }
-            break;
-        };
-        let mut tags: Vec<ExitTag> = Vec::with_capacity(ent.tags_packed.len());
-        for raw in ent.tags_packed.iter().copied() {
-            if let Some(t) = unpack_exit_tag(raw) {
-                tags.push(t);
-            } else {
-                inline_ok = false;
-                break;
-            }
-        }
-        if !inline_ok {
-            if probe_on {
-                eprintln!(
-                    "luna-runtime-helpers: aot_trace skip head_pc={} reason=per_exit_inline_tag_invalid (cont_pc={})",
-                    head_pc, ent.cont_pc
-                );
-            }
-            break;
-        }
-        per_exit_inline_decoded.push(InlineSideExit {
-            cont_pc: ent.cont_pc,
-            head_resume_pc: ent.head_resume_pc,
-            exit_tags: tags.into(),
-            chain: chain_vec.into(),
-            side_trace_ptr: Box::new(luna_core::jit::send_compat::TCellPtr::null()),
-        });
-    }
-    if !inline_ok {
-        return None;
-    }
-    Some(per_exit_inline_decoded)
 }
