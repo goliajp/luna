@@ -186,8 +186,8 @@ fn a_finalized_5_1_userdata_goes_back_after_the_main_thread() {
 #[test]
 fn a_heap_dropped_with_objects_on_finobj_and_tobefnz_frees_them() {
     #[derive(Default)]
-    struct Live(std::cell::Cell<isize>);
-    struct Track(std::rc::Rc<Live>);
+    struct Live(std::sync::atomic::AtomicIsize);
+    struct Track(std::sync::Arc<Live>);
     impl crate::runtime::mem::MemoryPolicy for Track {
         fn allow(
             &mut self,
@@ -196,14 +196,19 @@ fn a_heap_dropped_with_objects_on_finobj_and_tobefnz_frees_them() {
             _: crate::runtime::mem::BlockKind,
             _: usize,
         ) -> bool {
-            self.0.0.set(self.0.0.get() + new as isize - old as isize);
+            self.0.0.fetch_add(
+                new as isize - old as isize,
+                std::sync::atomic::Ordering::Relaxed,
+            );
             true
         }
         fn freed(&mut self, size: usize) {
-            self.0.0.set(self.0.0.get() - size as isize);
+            self.0
+                .0
+                .fetch_sub(size as isize, std::sync::atomic::Ordering::Relaxed);
         }
     }
-    let live = std::rc::Rc::new(Live::default());
+    let live = std::sync::Arc::new(Live::default());
     {
         let mem = crate::runtime::mem::MemOwner::policy(Box::new(Track(live.clone())));
         let mut heap = Heap::with_mem(mem, 1);
@@ -216,7 +221,11 @@ fn a_heap_dropped_with_objects_on_finobj_and_tobefnz_frees_them() {
         atomic_done(&mut heap, &[Value::Table(keep), Value::Table(plain)]);
         assert!(!heap.finobj.is_null() && !heap.tobefnz.is_null());
     }
-    assert_eq!(live.0.get(), 0, "every block given back");
+    assert_eq!(
+        live.0.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "every block given back"
+    );
 }
 
 #[test]

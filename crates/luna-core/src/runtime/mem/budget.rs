@@ -2,34 +2,34 @@
 //! policy, and the bytes they count.
 
 use std::alloc::Layout;
-use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
 use super::MemoryPolicy;
 use super::ctx::{BlockKind, MemCtx, Mode, RawAllocFn};
+use super::sync::{Count, Lock, Slot};
 
 /// What the contexts made from one [`MemOwner`](super::MemOwner) share:
 /// every Vm given a clone of the owner allocates against one budget.
 pub(super) struct Budget {
     /// the host function and its `ud` (`Mode::Raw`); `lua_setallocf`
     /// replaces them
-    pub(super) raw: Cell<Option<(RawAllocFn, *mut c_void)>>,
+    pub(super) raw: Slot<Option<(RawAllocFn, *mut c_void)>>,
     /// the policy asked before each allocation (`Mode::Policy`)
-    pub(super) policy: Option<RefCell<Box<dyn MemoryPolicy>>>,
+    pub(super) policy: Option<Lock<Box<dyn MemoryPolicy>>>,
     /// bytes allocated and not freed by all the contexts, kept outside
     /// `Mode::System`
-    pub(super) total: Cell<usize>,
+    pub(super) total: Count,
     /// contexts using the budget; the last one frees it
-    pub(super) users: Cell<usize>,
+    pub(super) users: Count,
 }
 
 impl Budget {
-    fn policy(&self) -> std::cell::RefMut<'_, Box<dyn MemoryPolicy>> {
+    fn policy(&self) -> impl std::ops::DerefMut<Target = Box<dyn MemoryPolicy>> + '_ {
         self.policy
             .as_ref()
             .expect("a policy context has a policy")
-            .borrow_mut()
+            .lock()
     }
 }
 
@@ -61,7 +61,7 @@ impl MemCtx {
                 NonNull::new(unsafe { std::alloc::alloc(layout) })?
             }
         };
-        self.budget().total.set(self.budget().total.get() + size);
+        self.budget().total.add(size);
         Some(p)
     }
 
@@ -91,9 +91,12 @@ impl MemCtx {
                 q
             }
         };
-        self.budget()
-            .total
-            .set(self.budget().total.get() - old + new);
+        let total = &self.budget().total;
+        if new >= old {
+            total.add(new - old);
+        } else {
+            total.sub(old - new);
+        }
         Some(q)
     }
 
@@ -112,9 +115,7 @@ impl MemCtx {
                 self.budget().policy().freed(layout.size());
             }
         }
-        self.budget()
-            .total
-            .set(self.budget().total.get() - layout.size());
+        self.budget().total.sub(layout.size());
     }
 
     /// # Safety
@@ -142,7 +143,7 @@ impl MemCtx {
     /// on the Vm's behalf (the C API's state records), so the count
     /// covers them as PUC's does.
     pub fn add_external(&self, n: usize) {
-        self.budget().total.set(self.budget().total.get() + n);
+        self.budget().total.add(n);
     }
 
     /// The host function and its `ud`, when the context has one.

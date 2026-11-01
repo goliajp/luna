@@ -20,6 +20,7 @@ mod policy;
 mod pool;
 mod resize;
 mod small;
+mod sync;
 mod vec;
 
 pub use any::LAny;

@@ -2,8 +2,8 @@
 //! parser's and the compiler's vectors come from it, and a refusal is a
 //! memory error from the load, never a crash.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use crate::sync_cell::SyncCell;
+use std::sync::Arc;
 
 use luna_core::runtime::Value;
 use luna_core::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
@@ -14,11 +14,11 @@ use luna_core::vm::Vm;
 /// buffers may succeed (`None`: all), and the most bytes in use so far.
 #[derive(Default)]
 struct Knobs {
-    budget: Cell<Option<usize>>,
-    peak: Cell<usize>,
+    budget: SyncCell<Option<usize>>,
+    peak: SyncCell<usize>,
 }
 
-struct Refuse(Rc<Knobs>);
+struct Refuse(Arc<Knobs>);
 
 impl MemoryPolicy for Refuse {
     fn allow(&mut self, old: usize, new: usize, kind: BlockKind, in_use: usize) -> bool {
@@ -71,7 +71,7 @@ fn every_refused_growth_during_a_load_is_a_memory_error() {
         LuaVersion::Lua54,
         LuaVersion::Lua55,
     ] {
-        let knobs = Rc::new(Knobs::default());
+        let knobs = Arc::new(Knobs::default());
         let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(Refuse(knobs.clone()))));
         let src = source(v);
         let mut failures = 0;
@@ -108,7 +108,7 @@ fn every_refused_growth_during_a_load_is_a_memory_error() {
 
 #[test]
 fn a_load_counts_what_the_parser_and_compiler_hold() {
-    let knobs = Rc::new(Knobs::default());
+    let knobs = Arc::new(Knobs::default());
     let mut vm = Vm::new_with_mem(
         LuaVersion::Lua54,
         MemOwner::policy(Box::new(Refuse(knobs.clone()))),
