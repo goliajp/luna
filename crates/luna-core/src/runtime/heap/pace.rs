@@ -55,13 +55,20 @@ impl Heap {
     }
 
     /// A sweep begins: it may free the object the last safe point left as
-    /// the boundary, and its address be reused. A rooted boundary is
-    /// forgotten; one the sweep frees moves to the first object after it
-    /// the sweep keeps (see [`Heap::kept_boundary`]).
+    /// the boundary, and its address be reused. A boundary the sweep frees
+    /// moves to the first object after it the sweep keeps (see
+    /// [`Heap::kept_boundary`]); that one is older than the safe point, when
+    /// every live object but the newest had a root, so it counts as rooted.
+    /// A boundary that stays keeps whether it was rooted.
     #[inline(always)]
     pub(crate) fn sweep_begins(&mut self) {
-        self.rooted_young = ptr::null_mut();
-        self.young = self.kept_boundary(self.young);
+        let b = self.kept_boundary(self.young);
+        if b != self.young {
+            self.rooted_young = b;
+        } else if self.rooted_young != self.young {
+            self.rooted_young = ptr::null_mut();
+        }
+        self.young = b;
     }
 
     /// The boundary `b`, or the first object after it on `all` that the

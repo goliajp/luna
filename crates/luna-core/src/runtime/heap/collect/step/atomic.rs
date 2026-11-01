@@ -91,7 +91,7 @@ impl Heap {
         );
         // the newest object at the last safe point may be freed by the
         // sweep: the boundary moves to the first one the sweep keeps
-        self.young = self.kept_boundary(self.young);
+        self.sweep_begins();
         self.phase = GcPhase::Sweep;
         self.sweep_prev = ptr::null_mut();
         let swept = match self.puc_rules().enter_sweep {
