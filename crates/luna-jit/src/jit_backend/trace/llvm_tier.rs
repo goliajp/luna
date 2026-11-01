@@ -89,7 +89,7 @@ struct Pending {
     done: Arc<Mutex<Option<Compiled>>>,
 }
 
-/// [`super::share::tier_up`] for the LLVM backend: the baseline trace `ct`
+/// [`super::tier_source::tier_up`] for the LLVM backend: the baseline trace `ct`
 /// compiled again by LLVM.
 ///
 /// With `delay`, the first call compiles the trace with Cranelift at once,
@@ -133,7 +133,7 @@ pub(crate) fn tier_up_llvm(
         super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
         return Some(entry);
     };
-    let entry = share::clif_tier_up(storage, &source, ct.head_pc());
+    let entry = super::tier_source::clif_tier_up(storage, &source, ct.head_pc());
     let src = source;
     let mut p = Pending {
         source: None,

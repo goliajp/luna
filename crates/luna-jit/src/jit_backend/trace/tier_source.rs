@@ -60,9 +60,58 @@ impl TierSource {
     }
 }
 
-/// The record of a baseline trace that moves to Cranelift after `at`
-/// iterations and entries, counted in `count` (fewer once its function,
-/// called `calls_at` times so far, is called again).
-pub(super) fn tier_up(count: Box<TCellU32>, at: u32, calls_at: u32) -> Box<TierUp> {
-    Box::new(TierUp::new(count, at, calls_at))
+/// The optimizing tier's code for `ct`: taken from the image it shares when
+/// some Vm compiled it already, else compiled (and given to the image).
+pub(crate) fn tier_up(
+    storage: &mut dyn luna_core::__private::JitStorage,
+    ct: &CompiledTrace,
+) -> Option<TraceFn> {
+    let source = luna_core::__private::take_tier_source(ct)?;
+    let src = source.downcast::<TierSource>().ok()?;
+    clif_tier_up(storage, &src, ct.head_pc())
+}
+
+/// Cranelift's code for the trace `src` holds.
+pub(crate) fn clif_tier_up(
+    storage: &mut dyn luna_core::__private::JitStorage,
+    src: &TierSource,
+    head_pc: u32,
+) -> Option<TraceFn> {
+    let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
+    if let Some(code) = src.image.as_ref().and_then(|i| i.optimized.get()) {
+        let vals: Vec<i64> = src.relocs.iter().map(|r| r.1).collect();
+        let bytes = code.relocated(&vals);
+        let entry = cs.baseline_code.place(&bytes).ok()?;
+        super::code_dump::dump_len("tier-up-image", head_pc, entry, bytes.len());
+        // SAFETY: as in `install`: the optimizing tier's code for this
+        // trace, with this Vm's addresses written in
+        return Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) });
+    }
+    let mut module =
+        crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
+    let (lir, relocs) = src.optimizing_lir();
+    let fn_id = lir::define_clif(&lir, &relocs, &mut *module)?;
+    module.finalize_definitions().ok()?;
+    TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
+    let ptr = module.get_finalized_function(fn_id);
+    super::code_dump::dump("tier-up", head_pc, ptr);
+    let sites = reloc::take_sites();
+    cs.trace_handles.push(TraceHandle {
+        _module: module.publish(),
+        _entry_raw: ptr,
+    });
+    if let (Some(img), Some((len, sites))) = (&src.image, sites) {
+        // SAFETY: `ptr..ptr + len` is the function just finalized, which
+        // the storage keeps mapped
+        let code = unsafe { reloc::copy_code(ptr, len, sites) };
+        let size = code.bytes.len();
+        if img.optimized.set(code).is_ok()
+            && let Some(engine) = &cs.engine
+        {
+            engine.cache().grew(size);
+        }
+    }
+    // SAFETY: `define_clif` declares the `TraceFn` signature, `(i64) -> i64`
+    // in the platform calling convention, and `storage` now owns the module
+    Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) })
 }
