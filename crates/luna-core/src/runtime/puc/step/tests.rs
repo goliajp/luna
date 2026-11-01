@@ -2,6 +2,7 @@
 //! (5.2), and what 5.3's leaves out.
 
 use super::*;
+use crate::runtime::Value;
 use crate::runtime::puc::api::full_collect;
 use crate::version::LuaVersion;
 use crate::vm::Vm;
@@ -146,14 +147,15 @@ fn a_5_2_emergency_while_sweeping_drops_the_kept_threads_first() {
 /// 5.1 has no emergency collection): what was marked and then dropped is
 /// freed by the emergency's cycle, though no safe point came after the
 /// atomic step.
+fn sweeping(s: St) -> bool {
+    matches!(
+        s,
+        St::SweepString | St::SweepUdata | St::SweepAll | St::SweepFinobj | St::SweepTobefnz
+    )
+}
+
 #[test]
 fn an_emergency_while_sweeping_frees_what_died_before_the_atomic_step() {
-    fn sweeping(s: St) -> bool {
-        matches!(
-            s,
-            St::SweepString | St::SweepUdata | St::SweepAll | St::SweepFinobj | St::SweepTobefnz
-        )
-    }
     let runs: [(LuaVersion, fn(&mut Vm)); 3] = [
         (LuaVersion::Lua53, |vm| {
             singlestep_53(vm).expect("a step");
@@ -175,6 +177,59 @@ fn an_emergency_while_sweeping_frees_what_died_before_the_atomic_step() {
             assert!(vm.emergency_collect());
             let left = vm.eval("return weak[1] == nil").expect("the script runs");
             !matches!(left[0], crate::runtime::Value::Bool(true))
+        })
+        .map(|(version, _)| version)
+        .collect();
+    assert!(kept.is_empty(), "kept in {kept:?}");
+}
+
+/// The newest object at the last safe point died before the atomic step, so
+/// the young boundary moved to the object after it, `x`, which the sweep
+/// keeps; `x` then dies. An emergency in the middle of the sweep frees it, as
+/// PUC's `luaC_fullgc` does: it finishes the sweep and collects from the
+/// roots, and nothing but a native's locals could hold an object that old.
+#[test]
+fn an_emergency_while_sweeping_frees_the_moved_boundary_once_it_died() {
+    let runs: [(LuaVersion, fn(&mut Vm)); 4] = [
+        (LuaVersion::Lua52, |vm| {
+            vm.heap.puc.stopped = false;
+            singlestep_52(vm);
+        }),
+        (LuaVersion::Lua53, |vm| {
+            singlestep_53(vm).expect("a step");
+        }),
+        (LuaVersion::Lua54, |vm| {
+            singlestep_54(vm).expect("a step");
+        }),
+        (LuaVersion::Lua55, |vm| {
+            singlestep_55(vm, false).expect("a step");
+        }),
+    ];
+    let kept: Vec<LuaVersion> = runs
+        .into_iter()
+        .filter(|&(version, step)| {
+            let mut vm = Vm::new_minimal_with_hash_seed(version, 1);
+            vm.open_all_libs().expect("the libraries open");
+            let r = vm.eval(
+                "collectgarbage('stop') collectgarbage()
+                 x = false weak = setmetatable({}, {__mode = 'v'}) return weak",
+            );
+            let Value::Table(weak) = r.expect("the script runs")[0] else {
+                unreachable!()
+            };
+            let (g, name) = (vm.globals(), Value::Str(vm.intern("x")));
+            // `x`, then an object no one holds, the newest at the safe point
+            let x = Value::Table(vm.heap.new_table());
+            let _dead = vm.heap.new_table();
+            vm.heap.safe_point();
+            vm.raw_set(g, name, x).expect("stored");
+            vm.raw_set(weak, Value::Int(1), x).expect("stored");
+            while !sweeping(vm.heap.puc.pace.state()) {
+                step(&mut vm);
+            }
+            vm.raw_set(g, name, Value::Nil).expect("stored");
+            assert!(vm.emergency_collect());
+            !weak.get_int(1).is_nil()
         })
         .map(|(version, _)| version)
         .collect();
