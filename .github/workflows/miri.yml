@@ -112,6 +112,28 @@ jobs:
             --no-default-features \
             -- --nocapture "$@"
 
+  miri-send:
+    name: Miri (the allocation context's `send` paths)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-disable-isolation
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install nightly + miri
+        run: |
+          rustup toolchain install nightly --profile minimal --component miri
+          cargo +nightly miri setup
+
+      # with the `send` feature the budget's counts are atomics, its policy
+      # sits behind a lock and a host allocation function is read without
+      # one, from a block swapped in whole: the shards above run without it
+      - name: Miri — luna-core's memory tests with the send feature
+        run: 'cargo +nightly miri test -p luna-core --lib --features send -- --nocapture runtime::mem::'
+
   doctests-nightly:
     name: luna-core doctests on nightly (compile_fail error codes)
     runs-on: ubuntu-latest

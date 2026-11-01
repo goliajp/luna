@@ -434,8 +434,11 @@ jobs:
         run: cargo build -p luna-core --features send
       - name: cargo clippy -p luna-core --features send --tests -- -D warnings
         run: cargo clippy -p luna-core --features send --tests -- -D warnings
-      - name: 'cargo test -p luna-core --features send --test it -- send_vm::'
-        run: 'cargo test -p luna-core --features send --test it -- send_vm::'
+      # vm_alloc_context: a memory policy's lock and a host allocation
+      # function swapped while another thread reads it take their `send`
+      # paths only here
+      - name: 'cargo test -p luna-core --features send --test it -- send_vm:: vm_alloc_context::'
+        run: 'cargo test -p luna-core --features send --test it -- send_vm:: vm_alloc_context::'
       # a JIT Vm of a shared engine, moved to another thread, installs the
       # engine's traces there
       - name: 'cargo test -p luna-jit --features send --test it -- engine_shared_traces::'
