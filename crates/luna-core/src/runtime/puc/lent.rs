@@ -1,8 +1,8 @@
 //! What a marker borrows from the model while it marks: moved in when it is
-//! lent out, moved back when it returns, so it reads the records, the
-//! loads in progress without pointing into the model.
+//! lent out, moved back when it returns (`Heap::lend_model` and
+//! `Heap::settle_model`, beside the loads' fields), so it reads the
+//! records, the loads in progress without pointing into the model.
 
-use super::*;
 use crate::runtime::puc::records::env51::Env51;
 use crate::runtime::puc::records::parse::ParseFrame;
 
@@ -13,24 +13,4 @@ pub(in crate::runtime) struct Lent {
     pub(in crate::runtime) env51: Option<Box<Env51>>,
     /// the loads a step runs inside
     pub(in crate::runtime) parse: Vec<ParseFrame>,
-}
-
-impl Heap {
-    /// What a marker borrows.
-    pub(in crate::runtime::puc) fn lend_model(&mut self) -> Lent {
-        let mut l = Lent {
-            env51: self.puc.records.env51_box.take(),
-            parse: Vec::new(),
-        };
-        self.lend_parse_frames(&mut l);
-        l
-    }
-
-    /// What a marker borrowed, back.
-    pub(in crate::runtime::puc) fn settle_model(&mut self, l: &mut Lent) {
-        if let Some(e) = l.env51.take() {
-            self.puc.records.env51_box = Some(e);
-        }
-        self.settle_parse_frames(l);
-    }
 }
