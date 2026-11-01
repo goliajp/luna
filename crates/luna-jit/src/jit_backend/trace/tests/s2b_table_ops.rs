@@ -1,8 +1,8 @@
 use super::*;
 use crate::jit_backend::enter_jit;
+use luna_core::__private::VmCApiLoad;
 use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
-use luna_core::__private::VmCApiLoad;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 use luna_core::vm::isa::{Inst, Op};
