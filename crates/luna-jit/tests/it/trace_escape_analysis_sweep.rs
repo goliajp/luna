@@ -124,25 +124,51 @@ fn callee_local_table_with_scalar_return_stays_sinkable() {
 /// collection due after it takes rebuilds the sunk table `t` still in
 /// its register: PUC's collection at that point finds it there. Without
 /// that exit two of the trace's exits rebuild `t`.
+///
+/// `u`'s register is a temporary (the body writes it before it reads
+/// it), so the ops up to its first write are lowered once more for the
+/// first pass, where it holds whatever it held before the loop: that copy
+/// has one exit of its own that rebuilds `t`, which leaves `u`'s register
+/// untouched, where the loop's copy writes back the pass before's `u`.
 #[test]
 fn sunk_table_is_rebuilt_at_the_exit_after_the_last_op() {
+    use luna_core::jit::trace::ExitTag;
+    use luna_jit::__private::ProtoTraceInternals;
+    use luna_jit::runtime::Value;
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
-    let r = vm
-        .eval(
-            "local n = 0
+    let main = vm
+        .load(
+            b"local n = 0
              for i = 1, 1000 do
                  local t = {i}
                  n = n + t[1]
                  local u = {}
              end
              return n",
+            b"=sunk",
         )
         .unwrap();
-    assert!(matches!(r[0], luna_jit::runtime::Value::Int(500500)));
+    let r = vm.call_value(Value::Closure(main), &[]).unwrap();
+    assert!(matches!(r[0], Value::Int(500500)));
     assert_eq!(vm.trace_sunk_alloc_count(), 1);
-    assert_eq!(vm.trace_materialize_emit_count(), 3);
+    // registers: 5 holds `t`, 6 the array item and then `u`
+    let (t_reg, u_reg) = (5, 6);
+    let traces = main.proto.traces();
+    assert_eq!(traces.len(), 1);
+    let exits = traces[0].per_exit_tags();
+    let rebuilt: Vec<&[ExitTag]> = exits
+        .iter()
+        .map(|(_, tags)| &tags[..])
+        .filter(|tags| tags[t_reg] == ExitTag::Table)
+        .collect();
+    let first_pass = rebuilt
+        .iter()
+        .filter(|tags| tags[u_reg] == ExitTag::Untouched)
+        .count();
+    assert_eq!((rebuilt.len() - first_pass, first_pass), (3, 1));
+    assert_eq!(vm.trace_materialize_emit_count(), 3 + 1);
 }
 
 /// The exits a collection check takes are no failing guards: however

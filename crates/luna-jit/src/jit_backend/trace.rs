@@ -49,7 +49,7 @@ use cranelift_codegen::settings;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
-use entry::{entry_live, side_parent_exit_tags};
+use entry::{HeadRegs, entry_live, side_parent_exit_tags};
 use kinds::*;
 use slots::op_writes_at_offset;
 pub use slots::{compute_body_writes, compute_live_in_slots, op_reads_writes};

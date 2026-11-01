@@ -46,6 +46,14 @@ fn an_inline_read_that_misses_leaves_the_trace_and_comes_back() {
     let (_vm, f, entries) = run_both(src, &[], 3);
     // the outer loop and the one that reshapes `o`
     assert_eq!(dispatchable_heads(f).len(), 2);
-    // each miss is one more entry; the loop still runs in the trace
-    assert!(entries > 2 && entries < 200, "{entries} entries");
+    // up to `i == 200` each miss (`t[9]`, `t[10]`) is one more entry, and
+    // the trace comes back at the next pass; after it the read of the
+    // reshaped `o.a` leaves at every pass (the side trace recorded from
+    // that exit reaches the loop head, where the trace is entered and the
+    // recording dropped). Plus the exit at `i == 200` and the inner loop
+    let misses = 200 / 10 * 2;
+    assert!(
+        entries > misses && entries <= misses + 1 + 200 + 1,
+        "{entries} entries"
+    );
 }

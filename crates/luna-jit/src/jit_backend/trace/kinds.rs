@@ -105,9 +105,12 @@ fn exit_tag_of(k: &RegKind) -> ExitTag {
 }
 
 /// Whether a loop's back-edge may run the body again with the registers
-/// of kinds `tail`: the body was lowered for `head`. A register held on
-/// the stack at the head is one the looping body never writes (see
-/// `entry_live`), so it takes whatever kind the tail reports.
+/// of kinds `tail`: the body was lowered for `head`, the kinds at the loop
+/// head. A register held on the stack there is one the looping body never
+/// writes (see `entry_live`), so it takes whatever kind the tail reports.
+/// A temporary is held on the stack only in the first pass's copy of the
+/// body (see `peel`); at the loop head it has the kind that pass left, and
+/// the tail must leave it that kind again.
 pub(super) fn loop_kinds_match(tail: &[RegKind], head: &[RegKind]) -> bool {
     tail.len() == head.len()
         && tail
@@ -232,6 +235,26 @@ mod tests {
 
     // a register enters with its payload under its tag: a tag no kind
     // describes would leave a copy of the value untagged at the exits
+    #[test]
+    fn a_register_held_on_the_stack_at_the_head_takes_any_kind_at_the_tail() {
+        use RegKind::*;
+        let head = [StackHeld, Int, Str];
+        assert!(loop_kinds_match(&[Table, Int, Str], &head));
+        assert!(loop_kinds_match(&[StackHeld, Int, Str], &head));
+    }
+
+    // a temporary enters the loop head with the kind the first pass left it
+    // (`Str` here): a tail that leaves another kind cannot loop
+    #[test]
+    fn a_temporary_must_leave_the_kind_it_entered_the_loop_with() {
+        use RegKind::*;
+        let head = [Int, Str];
+        assert!(loop_kinds_match(&[Int, Str], &head));
+        assert!(!loop_kinds_match(&[Int, Int], &head));
+        assert!(!loop_kinds_match(&[Int, StackHeld], &head));
+        assert!(!loop_kinds_match(&[Int], &head));
+    }
+
     #[test]
     fn every_enterable_tag_has_a_kind() {
         use luna_core::jit::trace::{entry_tag_enterable, entry_tag_of};
