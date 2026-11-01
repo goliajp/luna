@@ -8,7 +8,7 @@
 //! and `vm.load`), iterates the bracket-bounded section, matches
 //! each entry's `proto_hash` against the loaded chunk's proto
 //! tree via [`Vm::collect_proto_hashes`], and calls
-//! [`Vm::install_aot_trace`] with a freshly constructed
+//! `luna_core::__private::install_aot_trace` with a freshly constructed
 //! [`CompiledTrace`] whose `entry` points at the linker-resolved
 //! AOT mcode.
 //!

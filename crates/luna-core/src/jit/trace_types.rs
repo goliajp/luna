@@ -64,7 +64,7 @@ pub const CALL_HOT_THRESHOLD: u32 = 64;
 /// usefully). PUC LuaJIT's default is 1024; luna starts conservative.
 pub const MAX_TRACE_LEN: usize = 256;
 
-/// `CompiledTrace::entry_tags` of a head-frame register the trace does not
+/// `CompiledTraceParts::entry_tags` of a head-frame register the trace does not
 /// read before writing it: not checked on entry, and an exit that has not
 /// written it leaves the stack slot alone. No value tag uses this byte.
 pub const ENTRY_TAG_ANY: u8 = 0xFF;

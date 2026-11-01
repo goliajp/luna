@@ -331,7 +331,7 @@ pub fn lower_trace_into_named_for<M: Module>(
 unsafe impl Send for TraceHandle {}
 
 /// Placeholder `TraceFn` — installed in
-/// [`CompiledTrace::entry`] by the backend-agnostic [`lower_trace_into`]
+/// [`CompiledTraceParts::entry`] by the backend-agnostic [`lower_trace_into`]
 /// body and patched to the real finalized entry pointer by the JIT
 /// wrapper [`try_compile_trace_with_options`]. The AOT pipeline
 /// (`luna-aot`) never calls into a TraceFn directly (resolution happens

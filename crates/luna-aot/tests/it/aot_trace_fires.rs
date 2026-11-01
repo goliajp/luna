@@ -20,7 +20,7 @@
 //! The deploy binary then:
 //! 1. Walks `luna_trace_meta` at startup, matches each entry's
 //!    `proto_hash` against its freshly-loaded chunk, and installs the
-//!    AOT trace via `Vm::install_aot_trace`.
+//!    AOT trace via `luna_core::__private::install_aot_trace`.
 //! 2. Enters the dispatch loop. The first back-edge visit at the
 //!    trace's `head_pc` finds the installed `CompiledTrace` and
 //!    dispatches into the AOT mcode.

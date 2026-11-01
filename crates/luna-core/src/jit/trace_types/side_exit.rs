@@ -3,7 +3,7 @@
 use super::*;
 
 /// Per inline cmp@d>0 side-exit record. See
-/// [`CompiledTrace::per_exit_inline`] for the shape rationale.
+/// [`CompiledTraceParts::per_exit_inline`] for the shape rationale.
 #[derive(Clone, Debug)]
 pub struct InlineSideExit {
     /// PC the interpreter resumes at after the side-exit fires.

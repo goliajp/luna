@@ -166,7 +166,7 @@ impl Vm {
     }
 
     /// Dispatches of traces that hold inlined code of kind `kind` (one of
-    /// the `INLINE_*` bits of [`crate::jit::trace::CompiledTrace::inline_kinds`]).
+    /// the `INLINE_*` bits of [`crate::jit::trace::CompiledTraceParts::inline_kinds`]).
     pub fn trace_inline_kind_dispatched_count(&self, kind: u8) -> u64 {
         self.jit.counters.inline_kind_dispatched[kind.trailing_zeros() as usize & 3]
     }
