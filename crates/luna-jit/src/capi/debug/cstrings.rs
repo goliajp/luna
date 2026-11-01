@@ -1,7 +1,7 @@
 //! The strings `lua_getinfo` hands out.
 
 use super::super::*;
-use luna_core::runtime::mem::{LSlice, LVec, MemRef};
+use luna_core::runtime::mem::{LSlice, LVec};
 
 /// The strings `lua_getinfo` hands out, kept as long as the thread whose
 /// call returned them, in blocks of the state's allocation context: PUC's
@@ -12,11 +12,8 @@ use luna_core::runtime::mem::{LSlice, LVec, MemRef};
 pub(in super::super) struct CStrings(Option<LVec<LSlice<u8>>>);
 
 impl CStrings {
-    /// # Safety
-    /// An owner of `mem`'s context outlives the list (the state's Vm).
-    pub(in super::super) unsafe fn new(mem: MemRef) -> CStrings {
-        // SAFETY: as this function's (# Safety)
-        CStrings(Some(unsafe { luna_core::__private::lvec_new(mem) }))
+    pub(in super::super) fn new(list: LVec<LSlice<u8>>) -> CStrings {
+        CStrings(Some(list))
     }
 
     /// `b` NUL-terminated, at an address that stays put; `"?"` when there

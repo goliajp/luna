@@ -25,11 +25,8 @@ pub(in crate::capi) struct LevelRef {
 pub(in crate::capi) struct LevelRefs(Option<LVec<LBox<LevelRef>>>);
 
 impl LevelRefs {
-    /// # Safety
-    /// An owner of `mem`'s context outlives the list (the state's Vm).
-    pub(in crate::capi) unsafe fn new(mem: MemRef) -> LevelRefs {
-        // SAFETY: as this function's (# Safety)
-        LevelRefs(Some(unsafe { luna_core::__private::lvec_new(mem) }))
+    pub(in crate::capi) fn new(list: LVec<LBox<LevelRef>>) -> LevelRefs {
+        LevelRefs(Some(list))
     }
 }
 

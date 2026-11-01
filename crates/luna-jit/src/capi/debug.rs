@@ -5,7 +5,7 @@ use super::api::C_UPVALS;
 use super::*;
 use luna_core::__private::{HostAr, HostLevel};
 use luna_core::runtime::NativeClosure;
-use luna_core::runtime::mem::{LBox, LVec, MemRef};
+use luna_core::runtime::mem::{LBox, LVec};
 
 mod ar;
 mod cstrings;
