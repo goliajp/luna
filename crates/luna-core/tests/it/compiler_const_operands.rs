@@ -12,7 +12,8 @@ use luna_core::vm::isa::{Inst, Op, imm_form};
 
 fn compile(version: LuaVersion, src: &str) -> Vec<Inst> {
     let ast = parse(src.as_bytes(), version).expect("parse");
-    let mut heap = luna_core::__private::new_heap();
+    // SAFETY: the heap outlives every handle made from it here, and its objects stay in it
+    let mut heap = unsafe { luna_core::__private::new_heap() };
     let proto = compile_chunk(&ast, version, b"=k", &mut heap).expect("compile");
     let k = |i: &Inst| imm_form::to_k(*i, &proto.consts).expect("constant form");
     match version {

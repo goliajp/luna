@@ -37,7 +37,7 @@ optimization.
 - `Vm::raw_set(t, key, value)` is public: `rawset` without its argument
   checks, with the write barrier and `rawset`'s errors.
 - `Table::set`, `set_int`, `try_set_existing` and `set_metatable`, and
-  `Heap`'s constructors (`Heap::new`, `with_seed`, `with_mem`,
+  `Heap`'s constructors (`Heap::new`, `new_on`, `with_seed`, `with_mem`,
   `try_with_mem`, `Default`) and write barriers (`barrier_forward`,
   `barrier_back`), are gone from the public API: given another heap than
   the one that made the table, they could free objects the VM still used.

@@ -19,7 +19,8 @@ use luna_core::vm::isa::{Inst, Op};
 
 fn compile_main(src: &str) -> Vec<Inst> {
     let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
-    let mut heap = luna_core::__private::new_heap();
+    // SAFETY: the heap outlives every handle made from it here, and its objects stay in it
+    let mut heap = unsafe { luna_core::__private::new_heap() };
     let proto = compile_chunk(&ast, LuaVersion::Lua55, b"=index_lhs", &mut heap).expect("compile");
     proto.code.to_vec()
 }

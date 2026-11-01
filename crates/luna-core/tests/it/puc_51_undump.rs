@@ -256,7 +256,8 @@ fn structural_getglobal_rewrite() {
     // (GETGLOBAL → GetTabUp + _ENV synth + correct upval count) is left
     // to a follow-up that exposes a Proto-inspection accessor in
     // luna-core's test surface.
-    let _heap = luna_core::__private::new_heap();
+    // SAFETY: the heap outlives every handle made from it here, and its objects stay in it
+    let _heap = unsafe { luna_core::__private::new_heap() };
     // Compile-only check: confirm the chunk parses end-to-end and the
     // resulting Vm doesn't immediately reject the loaded chunk. The
     // actual dispatch-time correctness is exercised by `e2e_programs.rs`

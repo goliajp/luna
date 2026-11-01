@@ -21,9 +21,9 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1802** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
-| of which in tests, benches and examples | 238 | files under a `tests/`, `benches/` or `examples/` directory, or whose name contains `tests` |
-| **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; eighteen more in `luna_core::__private`, which is not public API, see §5 |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1819** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| of which in tests, benches and examples | 251 | files under a `tests/`, `benches/` or `examples/` directory, or whose name contains `tests` |
+| **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; nineteen more in `luna_core::__private`, which is not public API, see §5 |
 | **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
 | **`unsafe impl Send` / `Sync`** | 13 | see §5 |
 
@@ -32,7 +32,7 @@ the pattern CI counts (§4). Several `unsafe` blocks on one line count
 once; a block spread over several lines counts once; a comment that
 quotes the pattern counts too.
 
-Changes since the 1801 snapshot (net 1 more):
+Changes since the 1801 snapshot (net 18 more):
 
 - the stores into a table go through the table's handle (`Gc<Table>::set`,
   `set_int`, `try_set_existing`, `set_metatable`), which borrows the table
@@ -51,6 +51,9 @@ Changes since the 1801 snapshot (net 1 more):
   (9, one of them a helper that is now an `unsafe fn` itself) and a test
   (1) are blocks that state whose heap the object is in; `table/store.rs`
   adds a test of a read-only table (1)
+- `__private::new_heap` is an `unsafe fn` (1): a heap of one's own can be
+  dropped while handles to its objects live on; the tests, luna-aot and
+  luna-fuzz that make one call it in a block (16)
 
 ## 2. Distribution by crate and module
 
@@ -61,7 +64,7 @@ Changes since the 1801 snapshot (net 1 more):
 | | `vm/exec` (other) | 95 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `runtime/gc_hooks` | 176 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation (the lists of objects with finalizers and of those due), the `Gc<T>` handle, the debug check of the slow-store bit; the collector checks of the test-only builds (`gc-verify`: the freed-address probes, the tricolour and string-count checks) |
 | | `runtime/puc` | 138 | the model of PUC's allocations: the records it keeps over raw object headers (the parser's tables and frames a collection step marks, 5.1's environment records, the objects PUC makes and luna does not yet, the strings a load sets aside), its marking and sweeping of them, the 5.5 sizer |
-| | `__private` (`luna_core::__private`) | 40 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, the two table stores that leave the read-only test and the write barrier to the JIT's helpers, the table stores and write barriers that must be given the object's own heap, and the four JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
+| | `__private` (`luna_core::__private`) | 41 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, the two table stores that leave the read-only test and the write barrier to the JIT's helpers, the table stores and write barriers that must be given the object's own heap, and the four JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
 | | `runtime/table*` | 54 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
 | | `runtime/mem` | 89 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix, a push into room the caller made |
 | | `runtime` (other) | 43 | string headers and their trailing bytes, the value tag/payload encoding (and its copy as a tag byte and a payload word between references), closure upvalue storage |
@@ -71,7 +74,7 @@ Changes since the 1801 snapshot (net 1 more):
 | | `native_stack.rs` | 12 | reading the stack pointer register (x86_64, aarch64); reading the running thread's stack bounds from the OS (`pthread_getattr_np`, `pthread_get_stackaddr_np`, `GetCurrentThreadStackLimits`, and on glibc's and musl's main thread `getrlimit`, on glibc also `__libc_stack_end`) |
 | | `jit`, `frontend` | 12 | trace metadata handed to the backend; the `isb` that lets a thread run code another thread wrote (aarch64); interned-name text |
 | | unit-test files under `src/` | 16 | tests that inspect raw layouts; a test `lua_Alloc` |
-| | `tests/` | 62 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc`, the environment variables of the Windows file-name test |
+| | `tests/` | 75 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc`, the environment variables of the Windows file-name test |
 | `luna-jit` | `capi*` (not `capi/unit_tests.rs`) | 401 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
 | | `jit_backend` (not its test files) | 61 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, `Send` and `Sync` for the record a baseline trace keeps to be lowered again for the optimizing tier, copying compiled code out to share it between Vms, the debug dump of a trace's machine code |
 | | unit-test files under `src/` (`capi/unit_tests.rs`, `jit_backend/chunk_tests_basic.rs`, `jit_backend/trace/tests/`) | 70 | tests that call compiled code or the `extern "C"` helpers directly |
@@ -80,10 +83,11 @@ Changes since the 1801 snapshot (net 1 more):
 | `luna-jit-llvm` | `src/` | 8 | LLVM execution engines (one per compiled method or trace), `Send` for an engine compiled on the background compile thread, and the register-file GEPs |
 | | `tests/` | 34 | calling LLVM-compiled chunks |
 | `luna-runtime-helpers` | | 46 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor; 2 in its test of the exported helper symbols |
-| `luna-aot` | | 3 | the embedded bytecode section of an AOT binary; 1 in a test |
+| `luna-aot` | | 5 | the embedded bytecode section of an AOT binary, and the heaps it compiles a script's bytecode in; 1 in a test |
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
-| `luna-jit-derive`, `luna-tools`, `luna-fuzz` | | 0 | |
-| **Total** | | **1802** | |
+| `luna-fuzz` | | 1 | the heap the dump reader's target loads into |
+| `luna-jit-derive`, `luna-tools` | | 0 | |
+| **Total** | | **1819** | |
 
 ## 3. Pattern catalog
 
@@ -241,7 +245,7 @@ Two CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **1802**, with no headroom;
+  The ceiling is the exact count, **1819**, with no headroom;
 - `clippy::undocumented_unsafe_blocks` is set in the workspace
   `[lints.clippy]` table, and the lint job runs clippy with
   `-D warnings`, so a block or `unsafe impl` without a `SAFETY:` note
@@ -589,9 +593,14 @@ and a JIT test's metatable store (1) are blocks stating that the object is
 the running Vm's; a test of a read-only table's stores (1 in
 `table/store.rs`). 1802.
 
+`Heap::new_on` left the public API too, and `__private::new_heap` became
+an `unsafe fn`: a heap of one's own can be dropped while handles to its
+objects live on (1 in `__private`, 16 blocks in the tests, luna-aot and
+luna-fuzz that make one). 1819.
+
 ## 5. Public `unsafe` surface
 
-### `pub unsafe fn` (1 in the public API, 18 in `luna_core::__private`)
+### `pub unsafe fn` (1 in the public API, 19 in `luna_core::__private`)
 
 | Location | Function | Why |
 |---|---|---|
@@ -599,6 +608,7 @@ the running Vm's; a test of a read-only table's stores (1 in
 | `__private::GcInternals` | `from_ptr` | Rebuilds a handle from a pointer compiled code passes around; the pointer must be a live object. |
 | `__private::GcInternals` | `as_mut` | Mutation through a handle by luna's own crates; embedders use `TableBuilder` / `LuaUserdata`. |
 | `__private::ValueInternals` | `pack` | Low-level constructor from the array-part encoding, used by the JIT and the C API. |
+| `__private` | `new_heap` | A heap of its own, for luna's tools and tests: no handle to its objects is used after it is dropped, and its objects go into no other heap's. |
 | `__private::TableStores` | `store`, `store_int`, `store_existing`, `store_metatable` | A store into a table, with the write barrier: the heap passed is the one that made the table, the key and value are its objects, and no other reference to the table is held across the call. |
 | `__private::HeapBarriers` | `barrier_forward`, `barrier_back`, `barrier_store` | The write barriers, for the C API and the JIT's helpers: the objects are this heap's. |
 | `__private::TableInternals` | `set_unguarded`, `set_int_unguarded` | The JIT's store helpers write a table without the read-only test and the write barrier, which they make themselves around the store. |
@@ -644,7 +654,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 1802, the ceiling in ci.yml's unsafe-drift job
+# 1819, the ceiling in ci.yml's unsafe-drift job
 cargo clippy --workspace --all-targets \
     --exclude llvm-jit-probe --exclude luna-jit-llvm -- -D warnings
 # no undocumented_unsafe_blocks warnings (the LLVM crates need

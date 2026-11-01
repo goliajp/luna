@@ -12,7 +12,7 @@ mod cells;
 
 impl Heap {
     /// A heap whose memory comes from `mem`, with a seed of its own.
-    pub fn new_on(mem: crate::runtime::mem::MemOwner) -> Heap {
+    pub(crate) fn new_on(mem: crate::runtime::mem::MemOwner) -> Heap {
         Heap::with_mem(mem, make_seed())
     }
 

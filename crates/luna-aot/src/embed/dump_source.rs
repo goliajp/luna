@@ -27,7 +27,8 @@ pub(super) fn compile_to_dump(
         ))
     })?;
 
-    let mut heap = luna_core::__private::new_heap();
+    // SAFETY: the heap outlives every handle made from it here, and its objects stay in it
+    let mut heap = unsafe { luna_core::__private::new_heap() };
     let chunk_name = source_path
         .file_name()
         .and_then(|n| n.to_str())
