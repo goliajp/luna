@@ -50,7 +50,8 @@ pub trait VmJitState {
     /// string buffers) are written only as the interpreter writes them.
     unsafe fn jit_mut(&mut self) -> &mut JitState;
     /// Forgets the compiled code the JIT's storage keeps for reuse (see
-    /// [`JitStorage::clear_cache`]); code already in use stays mapped.
+    /// [`JitStorage::clear_cache`](crate::jit::JitStorage::clear_cache)); code
+    /// already in use stays mapped.
     fn jit_clear_cache(&mut self);
     /// The JIT's event counters.
     fn jit_counters_mut(&mut self) -> &mut JitCounters;
