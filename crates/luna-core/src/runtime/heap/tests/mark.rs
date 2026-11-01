@@ -13,10 +13,7 @@ fn deep_table_chain_marks_iteratively() {
     let mut cur = head;
     for _ in 0..n {
         let next = heap.new_table();
-        // SAFETY: `cur` is `head` or the table allocated in the previous iteration, and nothing
-        // collects inside the loop; the borrow covers one call
-        unsafe { cur.as_mut() }
-            .set(&mut heap, Value::Int(1), Value::Table(next))
+        cur.set(&mut heap, Value::Int(1), Value::Table(next))
             .unwrap();
         cur = next;
     }
@@ -48,15 +45,11 @@ fn a_gray_stack_that_cannot_grow_still_marks_everything() {
         let mut cur = branch;
         for _ in 0..50 {
             let next = heap.new_table();
-            // SAFETY: `cur` was allocated in this loop and nothing collects inside it
-            unsafe { cur.as_mut() }
-                .set(&mut heap, Value::Int(1), Value::Table(next))
+            cur.set(&mut heap, Value::Int(1), Value::Table(next))
                 .unwrap();
             cur = next;
         }
-        // SAFETY: `root` is held by this test and nothing collects inside the loop
-        unsafe { root.as_mut() }
-            .set(&mut heap, Value::Int(i + 1), Value::Table(branch))
+        root.set(&mut heap, Value::Int(i + 1), Value::Table(branch))
             .unwrap();
         kept += 51;
     }

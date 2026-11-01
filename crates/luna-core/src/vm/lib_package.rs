@@ -65,8 +65,7 @@ impl Vm {
 /// A raw store into a table a script can reach and fill: a full hash
 /// part raises "table overflow" as any other store does.
 fn raw_set_checked(vm: &mut Vm, t: Gc<Table>, k: Value, v: Value) -> Result<(), LuaError> {
-    // SAFETY: `t` is a table the caller holds (the package table or one reached from it); no reference into it is live across the `set`, which does not collect
-    match vm.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v)) {
+    match vm.table_op(|vm| t.set(&mut vm.heap, k, v)) {
         Ok(()) => {}
         Err(e @ (TableError::ReadOnly | TableError::Memory(_))) => return Err(vm.table_error(e)),
         Err(_) => return Err(vm.rt_err("table overflow")),

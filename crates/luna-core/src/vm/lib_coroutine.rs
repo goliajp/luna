@@ -120,8 +120,7 @@ fn mark_in_wrap(vm: &mut Vm, in_wrap: Gc<Table>, on: bool) -> Result<(), LuaErro
     let v = if on { Value::Bool(true) } else { Value::Nil };
     // the table is reachable through `debug.getupvalue`, so a script can
     // fill it; only adding a key can fail
-    // SAFETY: `in_wrap` is the table the running wrap/resume native carries as its upvalue, so the native keeps it alive; no reference into it is live across the `set`, which does not collect
-    match vm.table_op(|vm| unsafe { in_wrap.as_mut() }.set(&mut vm.heap, me, v)) {
+    match vm.table_op(|vm| in_wrap.set(&mut vm.heap, me, v)) {
         Ok(()) => {}
         Err(e @ (TableError::ReadOnly | TableError::Memory(_))) => return Err(vm.table_error(e)),
         Err(_) => return Err(vm.rt_err("table overflow")),

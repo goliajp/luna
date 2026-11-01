@@ -179,8 +179,7 @@ fn hold_key(vm: &mut Vm, i: i64, before: u32) -> Result<(), LuaError> {
 fn tab_seti(vm: &mut Vm, tv: Value, i: i64, v: Value, before: u32) -> Result<(), LuaError> {
     if vm.version() <= V::Lua52 {
         if let Value::Table(t) = tv {
-            // SAFETY: `t` is the table argument, kept alive by its stack slot; no reference into it is live across the `set`, which does not collect
-            match vm.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, Value::Int(i), v)) {
+            match vm.table_op(|vm| t.set(&mut vm.heap, Value::Int(i), v)) {
                 Ok(()) => {}
                 // lua_rawseti in Redis refuses a read-only table
                 Err(e @ (TableError::ReadOnly | TableError::Memory(_))) => {

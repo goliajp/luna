@@ -3,19 +3,36 @@
 use super::*;
 
 impl Table {
-    /// Insert / update `(key, val)`, with the write barrier. `heap` counts
-    /// a rehash's parts (see `runtime::puc`).
-    /// A read-only table refuses the write with [`TableError::ReadOnly`].
-    pub fn set(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
+    /// The tests' store into a table they hold alone (no barrier: nothing
+    /// in a test heap is black while they write).
+    #[cfg(test)]
+    pub(crate) fn set(
+        &mut self,
+        heap: &mut Heap,
+        key: Value,
+        val: Value,
+    ) -> Result<(), TableError> {
         if self.is_readonly() {
             return Err(TableError::ReadOnly);
         }
-        self.set_inlined(heap, key, val)?;
-        heap.table_stored(self, &[key, val]);
-        Ok(())
+        self.set_inlined(heap, key, val)
     }
 
-    /// [`Self::set`] without the read-only test, for compiled code that
+    /// [`Self::set`] by integer key, for the tests.
+    #[cfg(test)]
+    pub(crate) fn set_int(
+        &mut self,
+        heap: &mut Heap,
+        i: i64,
+        val: Value,
+    ) -> Result<(), TableError> {
+        if self.is_readonly() {
+            return Err(TableError::ReadOnly);
+        }
+        self.set_int_raw(heap, i, val)
+    }
+
+    /// `Gc<Table>::set` without the read-only test, for compiled code that
     /// has made it already: the trace JIT's store helpers test it together
     /// with the metatable, and the method JIT's only reach tables a call
     /// tested on entry or made itself. Not part of the supported API.
@@ -80,33 +97,7 @@ impl Table {
         }
     }
 
-    /// PUC `luaV_fastset` / `luaV_finishfastset` analogue: single-walk
-    /// in-place update for an existing key. Returns `true` iff `key` is
-    /// present with a non-nil value and the slot was overwritten with
-    /// `val`. Returns `false` when the key is absent, the slot holds nil,
-    /// or the key normalisation rejects it — the caller is then expected
-    /// to run the `__newindex` chain or fall back to `set` for the raw
-    /// insert — and when the table is read-only.
-    ///
-    /// Collapses the SetField hot path from two hash-chain walks
-    /// (`get` + `set`) to one. The `__newindex` invariant ("fires iff
-    /// `get` would have returned nil") is preserved because this method
-    /// writes only when the existing slot is non-nil — the exact set the
-    /// prior `tb.get(key).is_nil()` gate already excluded from
-    /// `__newindex` eligibility. See
-    /// semantics check.
-    ///
-    /// A `true` return took the write barrier.
-    #[inline]
-    pub fn try_set_existing(&mut self, heap: &mut Heap, key: Value, val: Value) -> bool {
-        let stored = !self.is_readonly() && self.set_existing_raw(key, val);
-        if stored {
-            heap.table_stored(self, &[val]);
-        }
-        stored
-    }
-
-    /// [`Self::try_set_existing`] for a caller that has checked
+    /// `Gc<Table>::try_set_existing` for a caller that has checked
     /// [`Self::is_readonly`] itself (the interpreter's stores test it with
     /// the write barrier, `Heap::store_barrier`).
     #[inline]
@@ -176,17 +167,7 @@ impl Table {
         }
     }
 
-    /// Integer-keyed variant of [`Self::set`], with the write barrier.
-    pub fn set_int(&mut self, heap: &mut Heap, i: i64, val: Value) -> Result<(), TableError> {
-        if self.is_readonly() {
-            return Err(TableError::ReadOnly);
-        }
-        self.set_int_raw(heap, i, val)?;
-        heap.table_stored(self, &[val]);
-        Ok(())
-    }
-
-    /// [`Self::set_int`] for a table the caller knows is not read-only: one
+    /// `Gc<Table>::set_int` for a table the caller knows is not read-only: one
     /// it just made (a vararg or `table.pack` table), or one whose flag it
     /// has tested.
     #[inline]

@@ -60,8 +60,7 @@ impl Vm {
             };
             shown.anchor = Some(t);
             let put = |vm: &mut Vm, k: Value, v: Value| {
-                // SAFETY: a table of luna's own the load holds
-                let r = vm.table_op(|vm| unsafe { t.as_mut() }.set(&mut vm.heap, k, v));
+                let r = vm.table_op(|vm| t.set(&mut vm.heap, k, v));
                 r.map_err(|e| vm.table_error(e))
             };
             if let Some(cl) = closure
