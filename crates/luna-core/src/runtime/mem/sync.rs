@@ -27,6 +27,11 @@ impl Count {
         self.n.set(self.n.get() + d);
     }
 
+    /// Whether the count is 1.
+    pub(super) fn is_one(&self) -> bool {
+        self.n.get() == 1
+    }
+
     /// Takes `d` off; the count left.
     #[inline(always)]
     pub(super) fn sub(&self, d: usize) -> usize {
@@ -54,42 +59,17 @@ impl Count {
         self.n.fetch_add(d, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Whether the count is 1: an owner seeing it is the last, and sees
+    /// what the owners dropped before did (as `sub`).
+    pub(super) fn is_one(&self) -> bool {
+        self.n.load(std::sync::atomic::Ordering::Acquire) == 1
+    }
+
     /// Takes `d` off; the count left. The last of an owner count to go
     /// sees every earlier owner's writes (as `Arc`'s drop).
     #[inline(always)]
     pub(super) fn sub(&self, d: usize) -> usize {
         self.n.fetch_sub(d, std::sync::atomic::Ordering::AcqRel) - d
-    }
-}
-
-/// A flag set once, by the first to ask.
-pub(super) struct Once {
-    #[cfg(not(feature = "send"))]
-    set: std::cell::Cell<bool>,
-    #[cfg(feature = "send")]
-    set: std::sync::atomic::AtomicBool,
-}
-
-impl Once {
-    pub(super) const fn new() -> Once {
-        Once {
-            #[cfg(not(feature = "send"))]
-            set: std::cell::Cell::new(false),
-            #[cfg(feature = "send")]
-            set: std::sync::atomic::AtomicBool::new(false),
-        }
-    }
-
-    /// Sets the flag: whether this call is the one that did.
-    pub(super) fn take(&self) -> bool {
-        #[cfg(not(feature = "send"))]
-        {
-            !self.set.replace(true)
-        }
-        #[cfg(feature = "send")]
-        {
-            !self.set.swap(true, std::sync::atomic::Ordering::AcqRel)
-        }
     }
 }
 
@@ -116,51 +96,82 @@ impl<T> Lock<T> {
         {
             self.v.borrow_mut()
         }
+        // a policy that panicked leaves the lock poisoned; the budget goes
+        // on as a `RefCell` does once the panic has unwound
         #[cfg(feature = "send")]
         {
-            self.v.lock().unwrap()
+            self.v
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
         }
     }
 }
 
-/// A value read and replaced whole.
+/// A value read and replaced whole. With the `send` feature a read takes
+/// no lock: the value sits in a block of its own, swapped in whole, and the
+/// blocks it replaced stay until the slot goes, as a reader on another
+/// thread may still be reading one.
 pub(super) struct Slot<T: Copy> {
     #[cfg(not(feature = "send"))]
     v: std::cell::Cell<T>,
     #[cfg(feature = "send")]
-    v: std::sync::Mutex<T>,
+    v: std::sync::atomic::AtomicPtr<T>,
+    #[cfg(feature = "send")]
+    replaced: std::sync::Mutex<Vec<Box<T>>>,
 }
 
+#[cfg(not(feature = "send"))]
 impl<T: Copy> Slot<T> {
-    pub(super) const fn new(v: T) -> Slot<T> {
+    pub(super) fn new(v: T) -> Slot<T> {
         Slot {
-            #[cfg(not(feature = "send"))]
             v: std::cell::Cell::new(v),
-            #[cfg(feature = "send")]
-            v: std::sync::Mutex::new(v),
         }
     }
 
     #[inline(always)]
     pub(super) fn get(&self) -> T {
-        #[cfg(not(feature = "send"))]
-        {
-            self.v.get()
-        }
-        #[cfg(feature = "send")]
-        {
-            *self.v.lock().unwrap()
-        }
+        self.v.get()
     }
 
     pub(super) fn set(&self, v: T) {
-        #[cfg(not(feature = "send"))]
-        {
-            self.v.set(v);
+        self.v.set(v);
+    }
+}
+
+#[cfg(feature = "send")]
+impl<T: Copy> Slot<T> {
+    pub(super) fn new(v: T) -> Slot<T> {
+        Slot {
+            v: std::sync::atomic::AtomicPtr::new(Box::into_raw(Box::new(v))),
+            replaced: std::sync::Mutex::new(Vec::new()),
         }
-        #[cfg(feature = "send")]
-        {
-            *self.v.lock().unwrap() = v;
-        }
+    }
+
+    #[inline(always)]
+    pub(super) fn get(&self) -> T {
+        let p = self.v.load(std::sync::atomic::Ordering::Acquire);
+        // SAFETY: `p` came from `Box::into_raw` and is freed only with the
+        // slot, the blocks replaced included
+        unsafe { *p }
+    }
+
+    pub(super) fn set(&self, v: T) {
+        let p = Box::into_raw(Box::new(v));
+        let old = self.v.swap(p, std::sync::atomic::Ordering::AcqRel);
+        // SAFETY: `old` came from `Box::into_raw`, and is kept, not freed
+        let old = unsafe { Box::from_raw(old) };
+        self.replaced
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(old);
+    }
+}
+
+#[cfg(feature = "send")]
+impl<T: Copy> Drop for Slot<T> {
+    fn drop(&mut self) {
+        // SAFETY: the pointer came from `Box::into_raw`, and the slot is
+        // going: nothing reads it any more
+        drop(unsafe { Box::from_raw(*self.v.get_mut()) });
     }
 }
