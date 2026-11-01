@@ -1,5 +1,6 @@
 //! A compiled trace as the dispatcher enters it.
 
+use super::tier_up::TierUp;
 use super::*;
 
 /// A trace compiled by a backend and ready to be dispatched into at its
@@ -41,7 +42,34 @@ use super::*;
 /// }
 /// ```
 pub struct CompiledTrace {
-    pub(crate) parts: CompiledTraceParts,
+    /// As [`CompiledTraceParts::head_pc`].
+    pub head_pc: u32,
+    /// As [`CompiledTraceParts::entry`].
+    pub entry: TraceFn,
+    /// As [`CompiledTraceParts::n_ops`].
+    pub n_ops: u32,
+    /// As [`CompiledTraceParts::dispatchable`].
+    pub dispatchable: bool,
+    /// As [`CompiledTraceParts::window_size`].
+    pub window_size: u32,
+    /// As [`CompiledTraceParts::exit_tags`].
+    pub exit_tags: TArc<[ExitTag]>,
+    /// As [`CompiledTraceParts::global_tag_res_kind`].
+    pub global_tag_res_kind: TagResKind,
+    /// As [`CompiledTraceParts::entry_tags`].
+    pub entry_tags: TArc<[u8]>,
+    /// As [`CompiledTraceParts::per_exit_tags`].
+    pub per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]>,
+    /// As [`CompiledTraceParts::per_exit_inline`].
+    pub per_exit_inline: TArc<[InlineSideExit]>,
+    /// As [`CompiledTraceParts::exit_hit_counts`].
+    pub exit_hit_counts: TArc<[TCellU32]>,
+    /// As [`CompiledTraceParts::exit_side_trace_ptrs`].
+    pub exit_side_trace_ptrs: TArc<[TCellPtr]>,
+    /// As [`CompiledTraceParts::tags_side_trace_ptrs`].
+    pub tags_side_trace_ptrs: TArc<[Box<TCellPtr>]>,
+    /// As [`CompiledTraceParts::global_side_trace_ptr`].
+    pub global_side_trace_ptr: Box<TCellPtr>,
     /// The exit index (as `exit_hit_counts`) of each side trace wired to
     /// this trace, by the sentinel code the IR would OR into a side
     /// trace's return (bits 56..=62). Read with [`Self::side_children`].
@@ -70,6 +98,32 @@ pub struct CompiledTrace {
     /// only an `&CompiledTrace` borrow (the parent's `traces`
     /// borrow is immutable while the close handler walks).
     pub(crate) has_any_side_wired: TCellBool,
+    /// As [`CompiledTraceParts::is_inline_abort_close`].
+    pub is_inline_abort_close: bool,
+    /// As [`CompiledTraceParts::dispatch_off_reason`].
+    pub dispatch_off_reason: Option<&'static str>,
+    /// As [`CompiledTraceParts::sinkable_sites_seen`].
+    pub sinkable_sites_seen: u32,
+    /// As [`CompiledTraceParts::accum_bufferable_seen`].
+    pub accum_bufferable_seen: u32,
+    /// As [`CompiledTraceParts::sunk_alloc_seen`].
+    pub sunk_alloc_seen: u32,
+    /// As [`CompiledTraceParts::materialize_emit_count`].
+    pub materialize_emit_count: u32,
+    /// As [`CompiledTraceParts::closure_seen`].
+    pub closure_seen: u32,
+    /// As [`CompiledTraceParts::inline_kinds`].
+    pub inline_kinds: u8,
+    /// As [`CompiledTraceParts::inline_depth`].
+    pub inline_depth: u8,
+    /// As [`CompiledTraceParts::body_writes`].
+    pub body_writes: Box<[u32]>,
+    /// As [`CompiledTraceParts::downrec_link`].
+    pub downrec_link: Option<(u32, u32)>,
+    /// As [`CompiledTraceParts::downrec_multi_way_count`].
+    pub downrec_multi_way_count: u8,
+    /// As [`CompiledTraceParts::tier_up`].
+    pub tier_up: Option<Box<TierUp>>,
 }
 
 impl CompiledTrace {
@@ -83,8 +137,63 @@ impl CompiledTrace {
     /// lives as long as any Vm the trace is installed on. The side-trace
     /// cells of `parts` are null.
     pub unsafe fn from_parts(parts: CompiledTraceParts) -> Self {
+        let CompiledTraceParts {
+            head_pc,
+            entry,
+            n_ops,
+            dispatchable,
+            window_size,
+            exit_tags,
+            global_tag_res_kind,
+            entry_tags,
+            per_exit_tags,
+            per_exit_inline,
+            exit_hit_counts,
+            exit_side_trace_ptrs,
+            tags_side_trace_ptrs,
+            global_side_trace_ptr,
+            is_inline_abort_close,
+            dispatch_off_reason,
+            sinkable_sites_seen,
+            accum_bufferable_seen,
+            sunk_alloc_seen,
+            materialize_emit_count,
+            closure_seen,
+            inline_kinds,
+            inline_depth,
+            body_writes,
+            downrec_link,
+            downrec_multi_way_count,
+            tier_up,
+        } = parts;
         Self {
-            parts,
+            head_pc,
+            entry,
+            n_ops,
+            dispatchable,
+            window_size,
+            exit_tags,
+            global_tag_res_kind,
+            entry_tags,
+            per_exit_tags,
+            per_exit_inline,
+            exit_hit_counts,
+            exit_side_trace_ptrs,
+            tags_side_trace_ptrs,
+            global_side_trace_ptr,
+            is_inline_abort_close,
+            dispatch_off_reason,
+            sinkable_sites_seen,
+            accum_bufferable_seen,
+            sunk_alloc_seen,
+            materialize_emit_count,
+            closure_seen,
+            inline_kinds,
+            inline_depth,
+            body_writes,
+            downrec_link,
+            downrec_multi_way_count,
+            tier_up,
             side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
             side_children: TRefLock::new(std::collections::HashMap::new()),
             has_any_side_wired: TCellBool::new(false),
@@ -114,14 +223,5 @@ impl std::fmt::Debug for CompiledTrace {
             .field("exit_tags", &self.exit_tags)
             .field("entry", &"<fn>")
             .finish()
-    }
-}
-
-impl std::ops::Deref for CompiledTrace {
-    type Target = CompiledTraceParts;
-
-    #[inline(always)]
-    fn deref(&self) -> &CompiledTraceParts {
-        &self.parts
     }
 }

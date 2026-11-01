@@ -44,8 +44,8 @@ impl Vm {
         // inline abort) is no safer from the parent's exit, unless only the
         // length gate (overhead, not soundness; recorded last) refused it
         let runnable = ct.dispatchable || ct.dispatch_off_reason == Some("length-gate");
-        ct.parts.dispatchable = false;
-        ct.parts.dispatch_off_reason = Some(SIDE_TRACE);
+        ct.dispatchable = false;
+        ct.dispatch_off_reason = Some(SIDE_TRACE);
         let entry_ptr = ct.entry as *const () as *const u8;
         let parent_traces = parent_proto.traces.borrow();
         let parent_ct = parent_traces.iter().find(|t| t.head_pc == parent_head_pc)?;
