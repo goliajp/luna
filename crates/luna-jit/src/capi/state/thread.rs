@@ -57,8 +57,8 @@ pub(super) fn new_thread_state(
                     status: LUA_OK,
                     pending_yield: None,
                     hook: CHook {
-                        strs: super::debug::CStrings::new(mem),
-                        refs: super::debug::LevelRefs::new(mem),
+                        strs: super::debug::CStrings::new(luna_core::__private::lvec_new(mem)),
+                        refs: super::debug::LevelRefs::new(luna_core::__private::lvec_new(mem)),
                         ..CHook::default()
                     },
                     tbc: luna_core::__private::lvec_new(mem),
