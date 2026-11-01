@@ -268,6 +268,7 @@ pub(super) fn coerce_num_51(v: Value) -> Option<Num> {
 /// A string's numeric value as the dialect converts it: 5.1 runs C
 /// `strtod` over it (so `inf`/`nan` count and a NUL ends it), 5.2 has its
 /// own reader but still only floats, 5.3+ `luaO_str2num` with integers.
+#[inline]
 pub(crate) fn str_to_num(s: &[u8], version: LuaVersion) -> Option<Num> {
     match version {
         LuaVersion::Lua51 => numeric::strtod_str(s).map(Num::Float),

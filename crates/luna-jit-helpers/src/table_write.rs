@@ -179,6 +179,7 @@ fn stored(vm: &mut luna_core::vm::Vm, r: Result<(), luna_core::runtime::TableErr
 ///
 /// # Safety
 /// `g` is a live table of `vm`'s heap, and `key` and `val` are `vm`'s values.
+#[inline]
 pub(crate) unsafe fn barrier_for(
     vm: &mut luna_core::vm::Vm,
     g: luna_core::runtime::Gc<luna_core::runtime::Table>,
