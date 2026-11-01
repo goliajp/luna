@@ -22,6 +22,10 @@ mod read;
 /// fn head(ct: &CompiledTrace) -> u32 { ct.head_pc() + ct.tier_up().is_some() as u32 }
 /// fn traces(p: &luna_core::runtime::Proto) -> usize { p.traces().len() }
 /// fn keep(ct: &CompiledTrace) -> bool { take_tier_source(ct).is_some() }
+/// // the side-trace cells are read, not rewired
+/// fn cells(ct: &CompiledTrace) -> bool {
+///     ct.global_side_trace_ptr().get().is_null() && ct.exit_side_trace_ptrs().is_empty()
+/// }
 /// // SAFETY: the caller vouches for the source
 /// unsafe fn back(ct: &CompiledTrace) {
 ///     if let Some(s) = take_tier_source(ct) { unsafe { put_tier_source(ct, s) } }
