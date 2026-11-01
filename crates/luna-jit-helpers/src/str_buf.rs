@@ -15,9 +15,9 @@ use luna_core::runtime::mem::LVec;
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_str_buf_acquire() -> i64 {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    Box::into_raw(vm.jit_str_buf_acquire()) as i64
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call; the
+    // buffer goes back to it (# Safety)
+    Box::into_raw(unsafe { current_jit_vm().jit_str_buf_acquire() }) as i64
 }
 
 /// Trace JIT helper:release a buffer back to the

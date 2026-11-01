@@ -27,7 +27,7 @@ unsafe fn drop_as<T>(p: *mut u8) {
 
 impl LAny {
     /// Move `v` into a new block of kind `kind`.
-    pub fn new<T: Any>(mem: MemRef, v: T, kind: BlockKind) -> Result<LAny, Oom> {
+    pub(crate) fn new<T: Any>(mem: MemRef, v: T, kind: BlockKind) -> Result<LAny, Oom> {
         const { assert!(std::mem::align_of::<T>() <= 16) };
         let layout = Layout::new::<T>();
         let ptr = if layout.size() == 0 {

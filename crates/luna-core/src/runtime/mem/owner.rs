@@ -16,6 +16,21 @@ use crate::version::LuaVersion;
 /// host function or the policy sees every Vm's blocks, and
 /// [`MemCtx::in_use`] counts them all), while each Vm's heap allocates
 /// through a context of its own.
+///
+/// Only luna makes containers on a context, so none can outlive its last
+/// owner; the example compiles, the one after it fails to.
+///
+/// ```
+/// use luna_core::runtime::mem::MemOwner;
+/// let o = MemOwner::system();
+/// assert_eq!(o.clone().ctx().in_use(), None);
+/// ```
+///
+/// ```compile_fail,E0624
+/// use luna_core::runtime::mem::{LVec, MemOwner};
+/// let o = MemOwner::system();
+/// let v: LVec<u64> = LVec::new(o.mem()); // error[E0624]: `new` and `mem` are private
+/// ```
 pub struct MemOwner(MemRef);
 
 impl MemOwner {
@@ -81,7 +96,7 @@ impl MemOwner {
 
     /// The handle containers keep.
     #[inline(always)]
-    pub fn mem(&self) -> MemRef {
+    pub(crate) fn mem(&self) -> MemRef {
         self.0
     }
 

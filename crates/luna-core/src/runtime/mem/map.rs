@@ -60,7 +60,7 @@ pub struct LMap<K: Copy, V: Copy> {
 
 impl<K: Copy, V: Copy> LMap<K, V> {
     /// An empty map; allocates nothing.
-    pub fn new(mem: MemRef) -> LMap<K, V> {
+    pub(crate) fn new(mem: MemRef) -> LMap<K, V> {
         LMap {
             slots: LVec::new(mem),
             len: 0,

@@ -28,7 +28,7 @@ impl<T> LVec<T> {
 
     /// An empty vector; allocates nothing.
     #[inline]
-    pub fn new(mem: MemRef) -> LVec<T> {
+    pub(crate) fn new(mem: MemRef) -> LVec<T> {
         let () = Self::ALIGN_OK;
         LVec {
             ptr: NonNull::dangling(),
@@ -41,7 +41,7 @@ impl<T> LVec<T> {
 
     /// An empty vector with room for `n`.
     #[inline]
-    pub fn with_capacity(mem: MemRef, n: usize) -> Result<LVec<T>, Oom> {
+    pub(crate) fn with_capacity(mem: MemRef, n: usize) -> Result<LVec<T>, Oom> {
         let mut v = LVec::new(mem);
         v.reserve_exact(n)?;
         Ok(v)

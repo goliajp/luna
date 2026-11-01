@@ -42,7 +42,7 @@ const NOT_TEXT: u32 = 1 << 31;
 
 impl Names {
     /// An empty set with nothing allocated yet, on `mem`.
-    pub fn new(mem: MemRef) -> Names {
+    pub(crate) fn new(mem: MemRef) -> Names {
         Names {
             text: LVec::new(mem),
             ends: LVec::new(mem),
@@ -52,7 +52,7 @@ impl Names {
     }
 
     /// An empty set sized for a chunk of `src_len` source bytes, on `mem`.
-    pub fn with_capacity(mem: MemRef, src_len: usize) -> Names {
+    pub(crate) fn with_capacity(mem: MemRef, src_len: usize) -> Names {
         Names::new(mem).reuse(src_len)
     }
 

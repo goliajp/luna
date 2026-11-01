@@ -19,7 +19,7 @@ impl<T> LBox<T> {
     const ALIGN_OK: () = assert!(std::mem::align_of::<T>() <= 8);
 
     /// Move `v` into a new block of kind `kind`.
-    pub fn new_kind(mem: MemRef, v: T, kind: BlockKind) -> Result<LBox<T>, Oom> {
+    pub(crate) fn new_kind(mem: MemRef, v: T, kind: BlockKind) -> Result<LBox<T>, Oom> {
         let () = Self::ALIGN_OK;
         let layout = Layout::new::<T>();
         let ptr: NonNull<T> = if layout.size() == 0 {
@@ -38,7 +38,7 @@ impl<T> LBox<T> {
     }
 
     /// Move `v` into a new block.
-    pub fn new(mem: MemRef, v: T) -> Result<LBox<T>, Oom> {
+    pub(crate) fn new(mem: MemRef, v: T) -> Result<LBox<T>, Oom> {
         LBox::new_kind(mem, v, BlockKind::Other)
     }
 
@@ -97,7 +97,7 @@ pub struct LSlice<T> {
 
 impl<T> LSlice<T> {
     /// An empty slice; allocates nothing.
-    pub fn empty(mem: MemRef) -> LSlice<T> {
+    pub(crate) fn empty(mem: MemRef) -> LSlice<T> {
         LSlice {
             ptr: NonNull::dangling(),
             len: 0,
@@ -147,7 +147,7 @@ impl<T> LSlice<T> {
 
 impl<T> LSlice<T> {
     /// The items of `it` in a block of exactly their number.
-    pub fn collect_exact(
+    pub(crate) fn collect_exact(
         mem: MemRef,
         it: impl ExactSizeIterator<Item = T>,
     ) -> Result<LSlice<T>, Oom> {
@@ -162,13 +162,8 @@ impl<T> LSlice<T> {
 impl<T: Clone> LSlice<T> {
     /// A slice on `mem` holding clones of `s`.
     #[inline]
-    pub fn from_slice(mem: MemRef, s: &[T]) -> Result<LSlice<T>, Oom> {
+    pub(crate) fn from_slice(mem: MemRef, s: &[T]) -> Result<LSlice<T>, Oom> {
         Ok(LVec::from_slice(mem, s)?.into_slice())
-    }
-
-    /// A copy on the same context.
-    pub fn try_clone(&self) -> Result<LSlice<T>, Oom> {
-        LSlice::from_slice(self.mem, self)
     }
 }
 

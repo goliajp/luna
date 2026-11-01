@@ -190,8 +190,7 @@ fn system_context_does_not_count() {
     v.insert(0, "b".to_owned()).unwrap();
     assert_eq!(v.remove(1), "a");
     assert_eq!(o.ctx().in_use(), None);
-    let c = v.try_clone().unwrap();
-    assert_eq!(&c[..], &["b".to_owned()]);
+    assert_eq!(&v[..], &["b".to_owned()]);
 }
 
 #[test]
