@@ -166,14 +166,21 @@ impl Heap {
 }
 
 impl Heap {
-    /// The loads' parser frames, lent to the marker `l`.
-    pub(in crate::runtime::puc) fn lend_parse_frames(&mut self, l: &mut Lent) {
-        l.parse = std::mem::take(&mut self.puc.loads.parse);
+    /// What a marker borrows: the loads' parser frames, with 5.1's
+    /// environment records (`Lent`).
+    pub(in crate::runtime::puc) fn lend_model(&mut self) -> Lent {
+        Lent {
+            env51: self.puc.records.env51_box.take(),
+            parse: std::mem::take(&mut self.puc.loads.parse),
+        }
     }
 
-    /// The frames the marker `l` borrowed, back, unless frames were opened
+    /// What a marker borrowed, back; its frames unless frames were opened
     /// meanwhile and the marker's are none.
-    pub(in crate::runtime::puc) fn settle_parse_frames(&mut self, l: &mut Lent) {
+    pub(in crate::runtime::puc) fn settle_model(&mut self, l: &mut Lent) {
+        if let Some(e) = l.env51.take() {
+            self.puc.records.env51_box = Some(e);
+        }
         if !l.parse.is_empty() || self.puc.loads.parse.is_empty() {
             self.puc.loads.parse = std::mem::take(&mut l.parse);
         }
