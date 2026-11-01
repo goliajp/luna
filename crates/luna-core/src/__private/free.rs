@@ -106,7 +106,9 @@ pub fn string_inlinable_builtin(name: &[u8]) -> Option<crate::runtime::Builtin> 
 /// # Safety
 /// `trace` was compiled for `proto`'s code at `trace.head_pc` (its entry
 /// tags, exit tags and window are that code's registers), and `proto` is a
-/// live prototype.
+/// live prototype. Since `trace` was made, no public field of it has been
+/// changed in a way that makes its parts disagree with each other or with
+/// its code.
 pub unsafe fn install_aot_trace(
     vm: &mut Vm,
     proto: Gc<crate::runtime::function::Proto>,
