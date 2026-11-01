@@ -37,6 +37,7 @@ mod fmod_nan_operands;
 mod fmod_nan_operands_msvc;
 mod for_closing_return;
 mod gc_finalizer_edges;
+mod gc_step_thread_shrink;
 #[cfg(feature = "gc-stress")]
 mod gc_stress_corpus;
 #[cfg(feature = "gc-stress")]
