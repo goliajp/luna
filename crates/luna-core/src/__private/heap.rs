@@ -59,8 +59,9 @@ impl HeapBarriers for Heap {
 /// barrier; an embedder writes through `Vm::raw_set` or `TableBuilder`.
 ///
 /// # Safety
-/// For every method: `heap` is the heap that allocated the table, and the
-/// key and value objects are live objects of that heap; the table is live;
+/// For every method: `heap` is the heap that allocated the table, and each
+/// of the key, the value and the metatable that is an object is a live
+/// object of that heap; the table is live;
 /// no other reference to the table (a `&Table` through `Deref` included)
 /// is held across the call.
 pub trait TableStores {

@@ -143,10 +143,6 @@ fn a_5_2_emergency_while_sweeping_drops_the_kept_threads_first() {
     assert!(matches!(left[0], crate::runtime::Value::Bool(true)));
 }
 
-/// An emergency in the middle of the sweep, 5.3 to 5.5 (5.2's is above;
-/// 5.1 has no emergency collection): what was marked and then dropped is
-/// freed by the emergency's cycle, though no safe point came after the
-/// atomic step.
 fn sweeping(s: St) -> bool {
     matches!(
         s,
@@ -154,6 +150,10 @@ fn sweeping(s: St) -> bool {
     )
 }
 
+/// An emergency in the middle of the sweep, 5.3 to 5.5 (5.2's is above;
+/// 5.1 has no emergency collection): what was marked and then dropped is
+/// freed by the emergency's cycle, though no safe point came after the
+/// atomic step.
 #[test]
 fn an_emergency_while_sweeping_frees_what_died_before_the_atomic_step() {
     let runs: [(LuaVersion, fn(&mut Vm)); 3] = [

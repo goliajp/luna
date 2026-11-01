@@ -167,7 +167,7 @@ impl Vm {
 
     /// The write barrier `lua_setmetatable` takes for the userdata `u`'s new
     /// metatable `mt` in every dialect: `mt` is marked (`luaC_objbarrier`).
-    /// A table's is `Table::set_metatable`'s.
+    /// A table's is the one `Gc<Table>::set_metatable` takes.
     pub(crate) fn metatable_barrier(
         &mut self,
         u: Gc<crate::runtime::Userdata>,

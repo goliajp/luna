@@ -6,13 +6,14 @@ use luna_core::__private::{GcInternals, TableInternals, ValueInternals, VmJitAll
 use luna_core::__private::{HeapBarriers, TableStores, VmHeap};
 
 /// `t[key] = val` where `t` is a Table Gc (i64 pun), `key`
-/// is an Int and `val` is an Int. Wraps `Table::set_int(&mut Heap,
-/// i64, Value)`. Returns 1 when stored, 0 when it parked a deopt (a
+/// is an Int and `val` is an Int. Wraps
+/// `TableStores::store_int`. Returns 1 when stored, 0 when it parked a deopt (a
 /// metatable, or a table that could not grow); the method JIT's code
 /// then returns at once and the interpreter runs the call.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table.
+/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
+/// the Vm the window lends, its values that Vm's.
 // SAFETY: no other item in the link is named `luna_jit_table_set_int`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -57,8 +58,9 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) -> i
 /// the `luna_jit_table_set_*_checked` helpers. It stays for the 3.x API.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table, and
-/// `tag` and `raw_bits` are one value's tag and payload.
+/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
+/// the Vm the window lends, its values that Vm's, and `tag` and `raw_bits` are one value's tag and
+/// payload.
 // SAFETY: no other item in the link is named `luna_jit_table_set_raw`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -103,8 +105,9 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
 /// the `luna_jit_table_set_*_checked` helpers. It stays for the 3.x API.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table,
-/// `key_ptr` an interned string, and `val_tag` and `val_raw` one value's tag and payload.
+/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
+/// the Vm the window lends, its values that Vm's, `key_ptr` an interned string, and `val_tag` and
+/// `val_raw` one value's tag and payload.
 // SAFETY: no other item in the link is named `luna_jit_table_set_field`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -201,7 +204,8 @@ pub(crate) unsafe fn barrier_for(
 /// the `luna_jit_table_set_*_checked` helpers. It stays for the 3.x API.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table.
+/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
+/// the Vm the window lends, its values that Vm's.
 // SAFETY: no other item in the link is named `luna_jit_table_set_nil`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -231,7 +235,8 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
 /// array length we'd expect — same shape PUC produces.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table.
+/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
+/// the Vm the window lends, its values that Vm's.
 // SAFETY: no other item in the link is named `luna_jit_table_set_float_float`: only this crate
 // defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]

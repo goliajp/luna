@@ -1,8 +1,9 @@
 //! Bytecode VM: instruction set, errors, interpreter, builtins.
 //!
-//! The heap is the VM's own. An embedder reaches it only through the VM's
-//! methods, so safe code can neither free an object the VM still uses nor
-//! store one heap's objects in another heap's tables:
+//! The heap is the VM's own and is not part of the public API: an embedder
+//! allocates and writes through the VM's methods. (Handles are not yet tied
+//! to the VM that made them: a value of one VM passed to another VM's
+//! methods is not caught.)
 //!
 //! ```
 //! use luna_core::{runtime::Value, version::LuaVersion, vm::Vm};
