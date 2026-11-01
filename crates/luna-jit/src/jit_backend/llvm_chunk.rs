@@ -81,7 +81,7 @@ pub(super) fn try_compile(
     };
     if let Some(cell) = cs.llvm_chunks.cells.get(&key) {
         let ready = cell.load(Ordering::Acquire);
-        if ready == luna_core::runtime::function::JIT_NEXT_NONE {
+        if ready == luna_core::__private::JIT_NEXT_NONE {
             return cranelift;
         }
         if ready != 0 {
@@ -96,7 +96,9 @@ pub(super) fn try_compile(
                 ret_is_table,
             };
         }
-        proto.jit_next.set(Some(cell.clone()));
+        // SAFETY: the cell holds 0, `JIT_NEXT_NONE` or the entry LLVM
+        // compiled for this proto with the ABI of `cranelift`'s
+        unsafe { proto.set_jit_next(Some(cell.clone())) };
         return cranelift;
     }
     // the copy is all done here: whether LLVM takes the function is found
@@ -107,10 +109,7 @@ pub(super) fn try_compile(
     let ticket = super::llvm_thread::submit(
         Box::new(move || {
             let Some(c) = job.compile(num_args, returns_one) else {
-                to.store(
-                    luna_core::runtime::function::JIT_NEXT_NONE,
-                    Ordering::Release,
-                );
+                to.store(luna_core::__private::JIT_NEXT_NONE, Ordering::Release);
                 return;
             };
             code.lock()
@@ -123,7 +122,9 @@ pub(super) fn try_compile(
         std::time::Instant::now() + llvm_after,
     );
     cs.llvm_tickets.push(ticket);
-    proto.jit_next.set(Some(cell.clone()));
+    // SAFETY: the compile thread stores `JIT_NEXT_NONE` or the entry of the
+    // code it compiled for this proto, with the ABI of `cranelift`'s
+    unsafe { proto.set_jit_next(Some(cell.clone())) };
     cs.llvm_chunks.cells.insert(key, cell);
     cranelift
 }

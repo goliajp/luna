@@ -2,7 +2,10 @@
 
 use super::*;
 
-impl TraceCompiler for CraneliftBackend {
+// SAFETY: each trace is code compiled from the recording asked for against the tags
+// and window its parts state (`compile_trace_for_vm`, `adopt_traces`); its code
+// stays in the Vm's JIT storage
+unsafe impl TraceCompiler for CraneliftBackend {
     // pass storage through so the compiled trace's `JITModule` is
     // parked on the per-`Vm` `storage.trace_handles` Vec
     fn try_compile_trace(

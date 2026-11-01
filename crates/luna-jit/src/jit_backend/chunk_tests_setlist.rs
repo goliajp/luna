@@ -14,8 +14,8 @@ mod s5d_b {
     //! Register kind reuse across branches (e.g. `Int` in BB-then and
     //! `Table` in BB-else) is covered by the `make_proto_*` tests
     //! below.
+    use luna_core::__private::{JitProtoState, ProtoTraceInternals};
     use luna_core::runtime::Value;
-    use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
 
     /// Simple SetList literal — `{1, 2, 3}` in a fn body. NewTable
@@ -40,7 +40,7 @@ mod s5d_b {
         assert_eq!(t.len(), 3);
         assert!(matches!(t.get_int(2), Value::Int(20)));
         assert!(matches!(
-            inner.proto.jit.get(),
+            inner.proto.jit_state(),
             JitProtoState::Compiled { .. }
         ));
     }
@@ -146,9 +146,9 @@ mod s5d_b {
                 .expect("call make(d)");
         }
         assert!(
-            matches!(make_cl.proto.jit.get(), JitProtoState::Compiled { .. }),
+            matches!(make_cl.proto.jit_state(), JitProtoState::Compiled { .. }),
             "{ver:?} make Proto did not JIT-compile (state: {:?})",
-            make_cl.proto.jit.get()
+            make_cl.proto.jit_state()
         );
     }
 
@@ -183,9 +183,9 @@ mod s5d_b {
                 .expect("call make(d)");
         }
         assert!(
-            matches!(make_cl.proto.jit.get(), JitProtoState::Compiled { .. }),
+            matches!(make_cl.proto.jit_state(), JitProtoState::Compiled { .. }),
             "{ver:?} make {{nil,nil}} Proto did not JIT-compile (state: {:?})",
-            make_cl.proto.jit.get()
+            make_cl.proto.jit_state()
         );
     }
 
@@ -276,9 +276,9 @@ mod s5d_b {
                 .expect("call get(t, 1.0)");
         }
         assert!(
-            matches!(get_cl.proto.jit.get(), JitProtoState::Compiled { .. }),
+            matches!(get_cl.proto.jit_state(), JitProtoState::Compiled { .. }),
             "{ver:?} get Proto did not JIT-compile (state: {:?})",
-            get_cl.proto.jit.get()
+            get_cl.proto.jit_state()
         );
     }
 

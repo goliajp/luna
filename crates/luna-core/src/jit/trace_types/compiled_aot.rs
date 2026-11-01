@@ -28,11 +28,11 @@ impl CompiledTrace {
     ///
     /// # Safety
     ///
-    /// `entry` must be a valid `unsafe extern "C" fn(*mut i64) -> i64`
-    /// living in the binary's text segment (linker-resolved from the
-    /// AOT-emitted trace `.o`). The constructor doesn't validate this
-    /// — `install_aot_trace` is the next gate.
-    pub fn from_aot_meta(
+    /// As [`CompiledTrace::from_parts`]: `entry` is code with the
+    /// [`TraceFn`] ABI that lives as long as the program (an AOT trace
+    /// linked into the binary's text segment), compiled against the tags
+    /// and window size given.
+    pub unsafe fn from_aot_meta(
         entry: TraceFn,
         head_pc: u32,
         n_ops: u32,
@@ -74,7 +74,7 @@ impl CompiledTrace {
                 .collect();
             v.into()
         };
-        CompiledTrace {
+        let parts = CompiledTraceParts {
             head_pc,
             entry,
             n_ops,
@@ -89,9 +89,6 @@ impl CompiledTrace {
             exit_side_trace_ptrs,
             tags_side_trace_ptrs,
             global_side_trace_ptr: Box::new(TCellPtr::null()),
-            side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
-            side_children: TRefLock::new(std::collections::HashMap::new()),
-            has_any_side_wired: TCellBool::new(false),
             is_inline_abort_close: false,
             dispatch_off_reason: None,
             sinkable_sites_seen: 0,
@@ -111,6 +108,9 @@ impl CompiledTrace {
             // install), so the candidate count is always `0`.
             downrec_multi_way_count: 0,
             tier_up: None,
-        }
+        };
+        // SAFETY: `entry` is as the parts state (# Safety), and every
+        // side-trace cell is null
+        unsafe { CompiledTrace::from_parts(parts) }
     }
 }

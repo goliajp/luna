@@ -16,8 +16,8 @@ mod s5b {
     //! expected outcome on macOS / Linux, but a 1-ULP slack guards
     //! against future cross-platform drift.
     use luna_core::__private::VmHeap;
+    use luna_core::__private::{JitProtoState, ProtoTraceInternals};
     use luna_core::runtime::Value;
-    use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
 
     fn eval_float_with(version: LuaVersion, src: &str) -> f64 {
@@ -57,7 +57,10 @@ mod s5b {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let _ = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
     }
 
     /// Symmetric `math.cos(i)` check — exercises the second entry in
@@ -111,7 +114,10 @@ mod s5b {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let _ = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
     }
 
     /// 5.4 — same body, Int loop var. Confirms the post53 Int loop +
@@ -212,7 +218,7 @@ mod s5b {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Failed));
+        assert!(matches!(cl.proto.jit_state(), JitProtoState::Failed));
         match r.first() {
             Some(&Value::Float(f)) => {
                 assert!((f - 4.0 * std::f64::consts::PI).abs() < 1e-12);
@@ -230,7 +236,7 @@ mod s5b {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let _ = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Failed));
+        assert!(matches!(cl.proto.jit_state(), JitProtoState::Failed));
     }
 
     /// The compiled code checks `math.sin` is the library's by the
@@ -251,7 +257,10 @@ mod s5b {
         let cl = vm.load(src, b"=t").expect("compile");
         let old = sin_at(cl).expect("a sin constant");
         let r1 = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
         assert_eq!(crate::jit_backend::cache_entry_count(&vm), 1);
         // "sin" left with no holder: off the library table (rehashed so
         // no dead key keeps it), out of the closure, and named by no
@@ -281,7 +290,10 @@ mod s5b {
         let new = sin_at(cl).expect("a sin constant");
         assert_ne!(old, new, "\"sin\" was not made again elsewhere");
         let r2 = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
         assert_eq!(crate::jit_backend::cache_entry_count(&vm), 2);
         match (r1.first(), r2.first()) {
             (Some(&Value::Float(a)), Some(&Value::Float(b))) => {

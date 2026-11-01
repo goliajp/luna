@@ -3,8 +3,8 @@
 //! `Table::set`, so they must keep those counters too: JIT on and JIT off
 //! give the same lengths.
 
+use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
 use luna_jit::runtime::Value;
-use luna_jit::runtime::function::JitProtoState;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
 
@@ -60,12 +60,15 @@ fn the_fill_loop_really_runs_in_the_method_jit() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     let cl = vm.load(PROGS[0].0.as_bytes(), b"=t").expect("load");
     let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
-    assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+    assert!(matches!(
+        cl.proto.jit_state(),
+        JitProtoState::Compiled { .. }
+    ));
     assert!(matches!(r[0], Value::Int(10000)));
 
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     let outer = vm.load(PROGS[1].0.as_bytes(), b"=t").expect("load");
     vm.call_value(Value::Closure(outer), &[]).expect("run");
     let mk = outer.proto.protos[0];
-    assert!(matches!(mk.jit.get(), JitProtoState::Compiled { .. }));
+    assert!(matches!(mk.jit_state(), JitProtoState::Compiled { .. }));
 }

@@ -112,14 +112,14 @@ mod s5a {
     /// distinct Compiled slots, both with the right loop semantics".
     #[test]
     fn cache_pre53_post53_distinct() {
-        use luna_core::runtime::function::JitProtoState;
+        use luna_core::__private::{JitProtoState, ProtoTraceInternals};
         let src = b"local s = 0 for i = 1, 100 do s = s + i end return s";
 
         let mut vm55 = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl55 = vm55.load(src, b"=t").expect("compile");
         let r55 = vm55.call_value(Value::Closure(cl55), &[]).expect("run");
         assert!(matches!(
-            cl55.proto.jit.get(),
+            cl55.proto.jit_state(),
             JitProtoState::Compiled { .. }
         ));
         assert!(matches!(r55.first(), Some(&Value::Int(5050))));
@@ -128,7 +128,7 @@ mod s5a {
         let cl53 = vm53.load(src, b"=t").expect("compile");
         let r53 = vm53.call_value(Value::Closure(cl53), &[]).expect("run");
         assert!(matches!(
-            cl53.proto.jit.get(),
+            cl53.proto.jit_state(),
             JitProtoState::Compiled { .. }
         ));
         assert!(matches!(r53.first(), Some(&Value::Int(5050))));
@@ -225,12 +225,15 @@ mod s5a_b {
     /// this back to the interpreter is caught.
     #[test]
     fn loop_int_1m_5_3_jit_state_compiled() {
-        use luna_core::runtime::function::JitProtoState;
+        use luna_core::__private::{JitProtoState, ProtoTraceInternals};
         let src = b"local s = 0 for i = 1, 1000000 do s = s + i end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua53);
         let cl = vm.load(src, b"=t").expect("compile");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
         assert!(matches!(r.first(), Some(&Value::Int(500000500000))));
     }
 }
@@ -319,12 +322,15 @@ mod s5a_c {
     /// chunk actually hits the JIT (not just the interpreter fallback).
     #[test]
     fn loop_int_1m_5_1_jit_state_compiled() {
-        use luna_core::runtime::function::JitProtoState;
+        use luna_core::__private::{JitProtoState, ProtoTraceInternals};
         let src = b"local s = 0 for i = 1, 1000000 do s = s + i end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua51);
         let cl = vm.load(src, b"=t").expect("compile");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
         assert!(matches!(r.first(), Some(&Value::Float(f)) if f == 500000500000.0));
     }
 
@@ -333,12 +339,15 @@ mod s5a_c {
     /// scan still pins Int.
     #[test]
     fn loop_int_1m_5_5_still_jit_int_path() {
-        use luna_core::runtime::function::JitProtoState;
+        use luna_core::__private::{JitProtoState, ProtoTraceInternals};
         let src = b"local s = 0 for i = 1, 1000000 do s = s + i end return s";
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src, b"=t").expect("compile");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
         assert!(matches!(r.first(), Some(&Value::Int(500000500000))));
     }
 

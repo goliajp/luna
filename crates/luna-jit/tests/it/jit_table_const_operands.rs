@@ -3,8 +3,8 @@
 //! string constant (5.2 / 5.3): traces and the method JIT compile them and
 //! give what the interpreter gives.
 
+use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
 use luna_jit::runtime::Value;
-use luna_jit::runtime::function::JitProtoState;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
 
@@ -148,7 +148,7 @@ fn the_method_jit_compiles_constant_stores() {
             let f = outer.proto.protos[0];
             if compiles {
                 assert!(
-                    matches!(f.jit.get(), JitProtoState::Compiled { .. }),
+                    matches!(f.jit_state(), JitProtoState::Compiled { .. }),
                     "{v:?} {body}"
                 );
             }

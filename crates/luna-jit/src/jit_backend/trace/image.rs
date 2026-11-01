@@ -113,7 +113,7 @@ pub(crate) struct Meta {
 }
 
 impl Meta {
-    pub(crate) fn of(ct: &CompiledTrace) -> Meta {
+    pub(crate) fn of(ct: &CompiledTraceParts) -> Meta {
         Meta {
             head_pc: ct.head_pc,
             n_ops: ct.n_ops,
@@ -158,7 +158,7 @@ impl Meta {
     /// A fresh [`CompiledTrace`] (no code yet: `entry` is the placeholder),
     /// with its own cells. `tiered`: the trace runs the optimizing tier's
     /// code and moves no further.
-    pub(crate) fn instantiate(&self, tiered: bool, calls_at: u32) -> CompiledTrace {
+    pub(crate) fn instantiate(&self, tiered: bool, calls_at: u32) -> CompiledTraceParts {
         let arc = |t: &[ExitTag]| -> TArc<[ExitTag]> { TArc::from(t) };
         let per_exit_tags: Vec<(u32, TArc<[ExitTag]>)> = self
             .per_exit_tags
@@ -181,7 +181,7 @@ impl Meta {
             .tier_at
             .filter(|_| !tiered)
             .map(|at| super::tier_source::tier_up(Box::new(TCellU32::new(0)), at, calls_at));
-        CompiledTrace {
+        CompiledTraceParts {
             head_pc: self.head_pc,
             entry: placeholder_trace_fn,
             n_ops: self.n_ops,
@@ -205,9 +205,6 @@ impl Meta {
                 .collect::<Vec<_>>()
                 .into(),
             global_side_trace_ptr: Box::new(TCellPtr::null()),
-            side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
-            side_children: TRefLock::new(std::collections::HashMap::new()),
-            has_any_side_wired: TCellBool::new(false),
             is_inline_abort_close: self.is_inline_abort_close,
             dispatch_off_reason: self.dispatch_off_reason,
             sinkable_sites_seen: self.sinkable_sites_seen,
@@ -253,7 +250,7 @@ pub(crate) struct Captured {
 /// addresses means nothing another Vm can find.
 pub(crate) fn build(
     record: &TraceRecord,
-    ct: &CompiledTrace,
+    ct: &CompiledTraceParts,
     side_parent: Option<(u32, usize, u64)>,
     cap: Captured,
     id: u64,

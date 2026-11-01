@@ -21,6 +21,7 @@
 //   4. Bail-tolerantly: if no traces close (small / non-loopy source),
 //      return `HarvestedTraces::None` and the pipeline skips the trace .o.
 
+use luna_core::__private::ProtoTraceInternals;
 use std::fs;
 use std::path::Path;
 
@@ -73,7 +74,9 @@ fn capture_record(record: &TraceRecord) {
     });
 }
 
-impl luna_core::__private::TraceCompiler for RecordingTraceCompiler {
+// SAFETY: what it returns comes unchanged from the inner backend, which meets the
+// conditions itself
+unsafe impl luna_core::__private::TraceCompiler for RecordingTraceCompiler {
     // `storage` is passed through to the inner backend.
     fn try_compile_trace(
         &self,
@@ -240,7 +243,7 @@ fn select_installable(
     let mut filter_stats = (0usize, 0usize, 0usize, 0usize);
     for (i, (hash, head_pc, record)) in captured.into_iter().enumerate() {
         let proto = record.head_proto;
-        let traces_ref = proto.traces.borrow();
+        let traces_ref = proto.traces();
         let Some(ct) = traces_ref.iter().find(|c| c.head_pc == head_pc).cloned() else {
             filter_stats.0 += 1;
             continue;

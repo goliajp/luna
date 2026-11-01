@@ -12,6 +12,56 @@
 //! under `luna::jit_backend`. Embedders who want the JIT use
 //! `luna::Vm::new_minimal_with_jit(version)` instead of
 //! `luna_core::vm::Vm::new_minimal(version)`.
+//!
+//! The interpreter runs a backend's code without checking it, so a
+//! backend is an `unsafe impl`, and nothing safe can change what compiled
+//! code a prototype holds. The example compiles; each one after it fails
+//! to compile, for the reason its comment gives.
+//!
+//! ```
+//! use luna_core::{jit::*, runtime::{Gc, LuaClosure, Proto, Value}, version::LuaVersion, vm::Vm};
+//! struct None_;
+//! // SAFETY: it compiles nothing
+//! unsafe impl IntChunkCompiler for None_ {
+//!     fn try_compile(&self, _: &mut dyn luna_core::__private::JitStorage, _: Gc<Proto>, _: bool,
+//!         _: bool) -> CompileResult { CompileResult::Skipped }
+//!     fn enter(&self, _: *mut Vm, _: Option<Gc<LuaClosure>>) -> JitVmGuard { noop_jit_guard() }
+//! }
+//! let mut vm = Vm::new(LuaVersion::Lua54);
+//! let Value::Closure(f) = vm.eval("return function() end").unwrap()[0] else { panic!() };
+//! let _ = (f.proto.trace_hot_count(), f.proto.call_hot_count());
+//! let _ = TCellPtr::null().get();
+//! ```
+//!
+//! ```compile_fail,E0200
+//! use luna_core::{jit::*, runtime::{Gc, LuaClosure, Proto}, vm::Vm};
+//! struct None_;
+//! impl IntChunkCompiler for None_ { // error[E0200]: the trait is `unsafe`
+//!     fn try_compile(&self, _: &mut dyn luna_core::__private::JitStorage, _: Gc<Proto>, _: bool,
+//!         _: bool) -> CompileResult { CompileResult::Skipped }
+//!     fn enter(&self, _: *mut Vm, _: Option<Gc<LuaClosure>>) -> JitVmGuard { noop_jit_guard() }
+//! }
+//! ```
+//!
+//! ```compile_fail,E0616
+//! use luna_core::{runtime::Value, version::LuaVersion, vm::Vm};
+//! let mut vm = Vm::new(LuaVersion::Lua54);
+//! let Value::Closure(f) = vm.eval("return function() end").unwrap()[0] else { panic!() };
+//! let _ = f.proto.jit.get(); // error[E0616]: field `jit` is private
+//! ```
+//!
+//! ```compile_fail,E0624
+//! luna_core::jit::TCellPtr::null().set(std::ptr::null()); // error[E0624]: `set` is private
+//! ```
+//!
+//! ```compile_fail,E0624
+//! use luna_core::{runtime::Value, version::LuaVersion, vm::Vm};
+//! let mut vm = Vm::new(LuaVersion::Lua54);
+//! let Value::Closure(f) = vm.eval("return function() end").unwrap()[0] else { panic!() };
+//! let _ = vm.collect_proto_hashes(f.proto);
+//! # let t: luna_core::__private::CompiledTrace = unimplemented!();
+//! vm.install_aot_trace(f.proto, t); // error[E0624]: `install_aot_trace` is private
+//! ```
 
 // Pure data types + small cranelift-free helpers for the trace JIT.
 pub mod trace_types;

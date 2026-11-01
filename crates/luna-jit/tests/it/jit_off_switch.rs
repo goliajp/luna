@@ -29,9 +29,9 @@ fn null_jit_leaves_hot_counters_and_recorder_idle() {
     let Value::Closure(f) = rets[1] else {
         panic!("expected the function back, got {:?}", rets[1]);
     };
-    assert_eq!(main.proto.trace_hot_count.get(), 0);
-    assert_eq!(main.proto.call_hot_count.get(), 0);
-    assert_eq!(f.proto.call_hot_count.get(), 0);
+    assert_eq!(main.proto.trace_hot_count(), 0);
+    assert_eq!(main.proto.call_hot_count(), 0);
+    assert_eq!(f.proto.call_hot_count(), 0);
     assert_eq!(vm.trace_closed_count(), 0);
     assert_eq!(vm.trace_aborted_count(), 0);
     assert_eq!(vm.trace_compiled_count(), 0);
@@ -47,7 +47,7 @@ fn switching_back_on_after_null_jit_records_again() {
     vm.set_trace_jit_enabled(true);
     let main = vm.load(HOT.as_bytes(), b"=hot").expect("load");
     vm.call_value(Value::Closure(main), &[]).expect("run");
-    assert!(main.proto.trace_hot_count.get() > 0);
+    assert!(main.proto.trace_hot_count() > 0);
     assert!(vm.trace_closed_count() > 0);
 }
 

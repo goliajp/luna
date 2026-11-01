@@ -1,14 +1,14 @@
-//! `Vm::install_aot_trace` + `Vm::collect_proto_hashes` smoke tests.
+//! `__private::install_aot_trace` + `Vm::collect_proto_hashes` smoke tests.
 //!
 //! These cover the install API surface only — the deploy-side
 //! resolver that *calls* this API lives in `luna-runtime-helpers` and
 //! is exercised by `crates/luna-aot/tests/it/aot_trace_fires.rs`.
 
-use luna_core::__private::CompiledTrace;
 use luna_core::__private::classify_exit_tags;
+use luna_core::__private::{CompiledTrace, CompiledTraceParts, ProtoTraceInternals};
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
-use luna_core::jit::send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
+use luna_core::jit::send_compat::{TArc, TCellPtr, TCellU32};
 use luna_core::jit::trace::{ExitTag, TagResKind};
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -29,7 +29,7 @@ fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
         .into();
     let global_kind: TagResKind = classify_exit_tags(&exit_tags);
     let entry_tags: TArc<[u8]> = vec![0u8; max_stack as usize].into();
-    CompiledTrace {
+    let parts = CompiledTraceParts {
         head_pc,
         entry: dummy_entry,
         n_ops: 1,
@@ -44,9 +44,6 @@ fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
         exit_side_trace_ptrs: TArc::from(vec![TCellPtr::null()]),
         tags_side_trace_ptrs: TArc::from(Vec::new()),
         global_side_trace_ptr: Box::new(TCellPtr::null()),
-        side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
-        side_children: TRefLock::new(std::collections::HashMap::new()),
-        has_any_side_wired: TCellBool::new(false),
         is_inline_abort_close: false,
         dispatch_off_reason: None,
         sinkable_sites_seen: 0,
@@ -60,7 +57,9 @@ fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
         downrec_link: None,
         downrec_multi_way_count: 0,
         tier_up: None,
-    }
+    };
+    // SAFETY: the entry has the `TraceFn` ABI; no test enters it
+    unsafe { CompiledTrace::from_parts(parts) }
 }
 
 #[test]
@@ -92,17 +91,14 @@ fn install_aot_trace_pushes_onto_proto_traces() {
     let mut heap = unsafe { luna_core::__private::new_heap() };
     let root = compile_chunk(&ast, LuaVersion::Lua55, b"=test", &mut heap).expect("compile");
 
-    assert_eq!(
-        root.traces.borrow().len(),
-        0,
-        "fresh Proto starts with no traces"
-    );
+    assert_eq!(root.traces().len(), 0, "fresh Proto starts with no traces");
 
     let mut vm = Vm::new(LuaVersion::Lua55);
     let trace = make_dummy_trace(0, root.max_stack as u32);
-    vm.install_aot_trace(root, trace);
+    // SAFETY: the trace is never entered: nothing runs `root`
+    unsafe { luna_core::__private::install_aot_trace(&mut vm, root, trace) };
 
-    let traces = root.traces.borrow();
+    let traces = root.traces();
     assert_eq!(traces.len(), 1, "install must push exactly one trace");
     assert_eq!(traces[0].head_pc, 0);
     assert!(
@@ -132,10 +128,11 @@ fn install_then_lookup_via_collect_hashes() {
         .expect("root proto must be present in collected pairs");
 
     let trace = make_dummy_trace(3, root.max_stack as u32);
-    vm.install_aot_trace(matched, trace);
+    // SAFETY: as above
+    unsafe { luna_core::__private::install_aot_trace(&mut vm, matched, trace) };
 
     assert_eq!(
-        root.traces.borrow().len(),
+        root.traces().len(),
         1,
         "trace must end up on the matched proto"
     );

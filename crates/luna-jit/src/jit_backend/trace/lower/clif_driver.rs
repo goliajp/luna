@@ -7,7 +7,7 @@ pub(super) fn lower_clif<M: Module>(
     aot_fn_name: Option<&str>,
     always_codegen: bool,
     at_exits: bool,
-) -> Option<(FuncId, CompiledTrace)> {
+) -> Option<(FuncId, CompiledTraceParts)> {
     let Plan { record, .. } = *pl;
     let mut ctx = module.make_context();
     let mut fbc = FunctionBuilderContext::new();

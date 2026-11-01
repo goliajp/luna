@@ -1,5 +1,5 @@
 use super::*;
-use luna_core::__private::CompiledTraceInternals;
+use luna_core::__private::{CompiledTraceInternals, ProtoTraceInternals};
 
 /// The record's frame shape: per-op register-window offsets and the
 /// window size.
@@ -169,7 +169,7 @@ pub(super) fn side_trace_gate(
                 // the child's register `r` is the parent's `off + r` (the
                 // frame the parent's exit resumes in)
                 let parent_writes_opt = {
-                    let traces = parent_proto.traces.borrow();
+                    let traces = parent_proto.traces();
                     traces
                         .iter()
                         .find(|t| t.head_pc == parent_head_pc)

@@ -97,3 +97,20 @@ pub fn str_sub_checked(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<
 pub fn string_inlinable_builtin(name: &[u8]) -> Option<crate::runtime::Builtin> {
     crate::vm::lib_string::inlinable_builtin(name)
 }
+
+/// Parks an AOT binary's precompiled `trace` on `proto`, for the deploy
+/// side's resolver: the dispatcher then enters it at its `head_pc` as it
+/// would a trace the JIT compiled. Nothing is checked or deduplicated; a
+/// second trace at the same `head_pc` is entered only if the first is not.
+///
+/// # Safety
+/// `trace` was compiled for `proto`'s code at `trace.head_pc` (its entry
+/// tags, exit tags and window are that code's registers), and `proto` is a
+/// live prototype.
+pub unsafe fn install_aot_trace(
+    vm: &mut Vm,
+    proto: Gc<crate::runtime::function::Proto>,
+    trace: crate::jit::CompiledTrace,
+) {
+    vm.install_aot_trace(proto, trace);
+}

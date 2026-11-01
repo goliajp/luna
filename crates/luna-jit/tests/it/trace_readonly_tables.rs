@@ -271,7 +271,7 @@ fn a_table_tested_once_per_trace_run_is_tested_again_after_host_code() {
 /// raises.
 #[test]
 fn the_method_jit_hands_a_read_only_table_argument_to_the_interpreter() {
-    use luna_jit::runtime::function::JitProtoState;
+    use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
     let src = "\
 function W(t, n) for i = 1, n do t[i] = i end return n end
 function M(n) local t = {} for i = 1, n do t[i] = i end return n end
@@ -297,7 +297,7 @@ T = {0, 0, 0}
         if v >= LuaVersion::Lua53 {
             assert!(
                 matches!(
-                    proto(&mut vm, "M").jit.get(),
+                    proto(&mut vm, "M").jit_state(),
                     JitProtoState::Compiled { .. }
                 ),
                 "{v:?}: the method JIT did not compile M"
@@ -306,7 +306,7 @@ T = {0, 0, 0}
         if v >= LuaVersion::Lua53 {
             assert!(
                 matches!(
-                    proto(&mut vm, "W").jit.get(),
+                    proto(&mut vm, "W").jit_state(),
                     JitProtoState::Compiled { .. }
                 ),
                 "{v:?}: the method JIT did not compile W"

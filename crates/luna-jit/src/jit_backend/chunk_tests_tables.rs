@@ -11,8 +11,8 @@ mod s5c {
     //! dialects). 5.1 / 5.2 use a Float loop var that conflicts
     //! with the `Len` result's Int kind on the same register —
     //! documented bail.
+    use luna_core::__private::{JitProtoState, ProtoTraceInternals};
     use luna_core::runtime::Value;
-    use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
 
     fn eval_int_with(version: LuaVersion, src: &str) -> i64 {
@@ -44,7 +44,10 @@ mod s5c {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
         assert!(matches!(r.first(), Some(&Value::Int(10000))));
     }
 
@@ -129,9 +132,9 @@ mod s5c {
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
         assert!(
-            matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }),
+            matches!(cl.proto.jit_state(), JitProtoState::Compiled { .. }),
             "{ver:?} table_alloc Proto did not JIT-compile (state: {:?})",
-            cl.proto.jit.get()
+            cl.proto.jit_state()
         );
         assert!(matches!(r.first(), Some(&Value::Int(10000))));
     }
@@ -144,7 +147,7 @@ mod s5c {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let _ = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Failed));
+        assert!(matches!(cl.proto.jit_state(), JitProtoState::Failed));
     }
 
     /// NewTable with a presized array (`b > 0`) compiles (the
@@ -158,7 +161,10 @@ mod s5c {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
         assert!(matches!(r.first(), Some(&Value::Int(20))));
     }
 }
@@ -172,8 +178,8 @@ mod s5c_b {
     //! every intermediate `rehash` round that the iteration body
     //! would otherwise trigger via `Table::set_int`'s `insert_new`
     //! path.
+    use luna_core::__private::{JitProtoState, ProtoTraceInternals};
     use luna_core::runtime::Value;
-    use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
 
     fn eval_int_with(version: LuaVersion, src: &str) -> i64 {
@@ -193,7 +199,10 @@ mod s5c_b {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
         assert!(matches!(r.first(), Some(&Value::Int(10000))));
     }
 
@@ -232,7 +241,10 @@ mod s5c_b {
         let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
         let cl = vm.load(src.as_bytes(), b"=t").expect("compile");
         let r = vm.call_value(Value::Closure(cl), &[]).expect("run");
-        assert!(matches!(cl.proto.jit.get(), JitProtoState::Compiled { .. }));
+        assert!(matches!(
+            cl.proto.jit_state(),
+            JitProtoState::Compiled { .. }
+        ));
         assert!(matches!(r.first(), Some(&Value::Int(65536))));
     }
 
@@ -315,7 +327,7 @@ mod s5d_a {
     /// any NewTable/SetList plumbing.
     #[test]
     fn table_param_int_return_round_trip_5_5() {
-        use luna_core::runtime::function::JitProtoState;
+        use luna_core::__private::{JitProtoState, ProtoTraceInternals};
         // Build f's Proto via a chunk that returns the function so we
         // can poke its JIT state. The outer chunk bails (Op::Closure
         // isn't whitelisted); the inner Proto is what we're after.
@@ -339,7 +351,7 @@ mod s5d_a {
             .expect("call f(t)");
         assert!(matches!(r2.first(), Some(&Value::Int(42))));
         assert!(matches!(
-            inner.proto.jit.get(),
+            inner.proto.jit_state(),
             JitProtoState::Compiled { .. }
         ));
     }

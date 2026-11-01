@@ -23,7 +23,10 @@ pub use capi::debug::VmCApiDebug;
 pub use capi::load::VmCApiLoad;
 pub use capi::state::VmCApiState;
 pub use capi::values::VmCApiValues;
-pub use fields::{CoroHostInternals, ProtoTraceInternals, TRACE_HEADS_NONE, VmJitState};
+pub use fields::{
+    CoroHostInternals, JIT_NEXT_NONE, JitProtoState, ProtoTraceInternals, TRACE_HEADS_NONE,
+    VmJitState,
+};
 pub use free::*;
 pub use heap::{HeapBarriers, TableStores, fresh_seed, new_heap};
 pub use layout::{STR_LEN_OFFSET, TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK};

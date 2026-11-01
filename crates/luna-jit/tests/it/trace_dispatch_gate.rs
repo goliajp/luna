@@ -10,8 +10,7 @@ use luna_jit::vm::Vm;
 
 fn admissible(cl: Gc<LuaClosure>) -> bool {
     cl.proto
-        .traces
-        .borrow()
+        .traces()
         .iter()
         .any(|t| t.dispatchable || t.downrec_link.is_some())
 }
@@ -59,7 +58,7 @@ fn flag_stays_clear_when_only_undispatchable_traces_are_cached() {
     );
     assert!(matches!(r[0], Value::Int(500)), "{r:?}");
     let Value::Closure(get) = r[1] else { panic!() };
-    let cached = get.proto.traces.borrow().len();
+    let cached = get.proto.traces().len();
     assert!(cached > 0, "get compiled no trace");
     assert!(!admissible(get));
     assert!(!get.proto.has_dispatchable_trace());
@@ -85,7 +84,7 @@ fn flag_is_set_for_a_trace_with_a_downrec_link() {
     );
     assert!(matches!(r[0], Value::Int(400)), "{r:?}");
     let Value::Closure(fib) = r[1] else { panic!() };
-    let traces = fib.proto.traces.borrow();
+    let traces = fib.proto.traces();
     assert!(
         traces.iter().any(|t| t.downrec_link.is_some()),
         "no downrec trace was cached"
@@ -121,7 +120,7 @@ fn flag_is_set_for_an_undispatchable_trace_admitted_by_its_downrec_link() {
     );
     assert!(matches!(r[0], Value::Int(1800)), "{r:?}");
     let Value::Closure(sum) = r[1] else { panic!() };
-    let traces = sum.proto.traces.borrow();
+    let traces = sum.proto.traces();
     let shapes: Vec<_> = traces
         .iter()
         .map(|t| {
@@ -167,7 +166,7 @@ fn call_head_settles_when_a_call_trace_is_cached() {
     ",
     );
     let Value::Closure(get) = r[1] else { panic!() };
-    assert!(get.proto.traces.borrow().iter().any(|t| t.head_pc == 0));
+    assert!(get.proto.traces().iter().any(|t| t.head_pc == 0));
     assert!(get.proto.trace_call_head_settled());
 }
 
@@ -204,7 +203,7 @@ fn call_head_settles_when_recording_it_is_abandoned() {
     assert!(matches!(r[0], Value::Int(1000)), "{r:?}");
     let Value::Closure(f) = r[1] else { panic!() };
     assert!(f.proto.trace_call_head_settled());
-    assert!(f.proto.traces.borrow().is_empty());
+    assert!(f.proto.traces().is_empty());
     let failed = vm.trace_compile_failed_count();
     // three for f's entry, up to three for the loop's head (a head is
     // recorded again after each failure until it is abandoned)
@@ -250,8 +249,7 @@ fn a_head_reached_by_falling_through_is_entered() {
     let heads = f.proto.trace_heads();
     let admissible_heads: Vec<u32> = f
         .proto
-        .traces
-        .borrow()
+        .traces()
         .iter()
         .filter(|t| t.dispatchable || t.downrec_link.is_some())
         .map(|t| t.head_pc)

@@ -1,8 +1,8 @@
 //! The method JIT on the constant- and immediate-operand opcodes: a
 //! function using them compiles, and gives what the interpreter gives.
 
+use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
 use luna_jit::runtime::Value;
-use luna_jit::runtime::function::JitProtoState;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
 
@@ -122,7 +122,7 @@ fn functions_on_constant_operands_are_compiled() {
         vm.call_value(Value::Closure(outer), &[]).expect("run");
         let f = outer.proto.protos[0];
         assert!(
-            matches!(f.jit.get(), JitProtoState::Compiled { .. }),
+            matches!(f.jit_state(), JitProtoState::Compiled { .. }),
             "{body}"
         );
     }
@@ -135,7 +135,7 @@ fn functions_on_constant_operands_are_compiled() {
         panic!("{r:?}")
     };
     assert!(matches!(
-        fib.proto.jit.get(),
+        fib.proto.jit_state(),
         JitProtoState::Compiled { .. }
     ));
 }

@@ -4,6 +4,7 @@
 //! `dispatchable = true` over that mark, and the single-way close left a
 //! `downrec_link` that the dispatcher admits a trace on by itself.
 
+use luna_jit::__private::ProtoTraceInternals;
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
 
@@ -36,7 +37,7 @@ fn downrec_close_keeps_an_earlier_dispatch_off_mark() {
     };
 
     // every trace of `fib` reads `t`, so none may run
-    let traces = fib.proto.traces.borrow();
+    let traces = fib.proto.traces();
     assert!(!traces.is_empty(), "fib compiled no trace");
     for ct in traces.iter() {
         assert!(

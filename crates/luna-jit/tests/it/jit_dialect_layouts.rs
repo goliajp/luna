@@ -3,8 +3,8 @@
 //! either side: traces and the method JIT compile these forms and give
 //! what the interpreter gives.
 
+use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
 use luna_jit::runtime::Value;
-use luna_jit::runtime::function::JitProtoState;
 use luna_jit::version::LuaVersion;
 use luna_jit::vm::Vm;
 
@@ -145,7 +145,7 @@ fn the_method_jit_runs_each_dialects_numeric_loops() {
             // integer-looking loops to the interpreter there
             if v >= LuaVersion::Lua53 {
                 assert!(
-                    matches!(f.proto.jit.get(), JitProtoState::Compiled { .. }),
+                    matches!(f.proto.jit_state(), JitProtoState::Compiled { .. }),
                     "{v:?} {body}: not compiled"
                 );
             }

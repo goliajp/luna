@@ -90,7 +90,7 @@ impl TraceHandle {
 pub fn try_compile_trace(
     storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
-) -> Option<CompiledTrace> {
+) -> Option<CompiledTraceParts> {
     try_compile_trace_with_options(storage, record, CompileOptions::default())
 }
 
@@ -204,7 +204,7 @@ pub fn try_compile_trace_with_options(
     storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
-) -> Option<CompiledTrace> {
+) -> Option<CompiledTraceParts> {
     compile_trace_jit(storage, record, opts, true, false)
 }
 
@@ -215,7 +215,7 @@ pub fn try_compile_trace_for(
     record: &TraceRecord,
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,
-) -> Option<CompiledTrace> {
+) -> Option<CompiledTraceParts> {
     let float_only = version <= luna_core::version::LuaVersion::Lua52;
     compile_trace_jit(storage, record, opts, true, float_only)
 }
@@ -241,7 +241,11 @@ pub(crate) fn compile_trace_for_vm(
     if let (Some(version), Some(cap)) = (version, cap) {
         share::publish(storage, record, &ct, opts, version, cap);
     }
-    Some(ct)
+    // SAFETY: `entry` is the code just compiled from `record` against the
+    // tags and window `ct` states, or the placeholder of a trace that is
+    // never entered; the code stays mapped while the Vm's storage lives,
+    // and no side-trace cell is set yet
+    Some(unsafe { CompiledTrace::from_parts(ct) })
 }
 
 /// backend-agnostic body of the trace
@@ -264,7 +268,7 @@ pub fn lower_trace_into<M: Module>(
     module: &mut M,
     record: &TraceRecord,
     opts: CompileOptions,
-) -> Option<(FuncId, CompiledTrace)> {
+) -> Option<(FuncId, CompiledTraceParts)> {
     lower_trace_into_named(module, record, opts, None)
 }
 
@@ -288,7 +292,7 @@ pub fn lower_trace_into_named<M: Module>(
     record: &TraceRecord,
     opts: CompileOptions,
     aot_fn_name: Option<&str>,
-) -> Option<(FuncId, CompiledTrace)> {
+) -> Option<(FuncId, CompiledTraceParts)> {
     lower_trace_into_inner(module, record, opts, aot_fn_name, true, false, false)
 }
 
@@ -301,7 +305,7 @@ pub fn lower_trace_into_named_for<M: Module>(
     opts: CompileOptions,
     aot_fn_name: Option<&str>,
     version: luna_core::version::LuaVersion,
-) -> Option<(FuncId, CompiledTrace)> {
+) -> Option<(FuncId, CompiledTraceParts)> {
     let float_only = version <= luna_core::version::LuaVersion::Lua52;
     lower_trace_into_inner(module, record, opts, aot_fn_name, true, float_only, false)
 }
@@ -337,7 +341,7 @@ unsafe impl Send for TraceHandle {}
 /// `luna-aot`'s embed pipeline.
 pub(super) unsafe extern "C" fn placeholder_trace_fn(_reg_state: *mut i64) -> i64 {
     panic!(
-        "placeholder_trace_fn called: CompiledTrace.entry must be patched by the JIT finalize wrapper before dispatch"
+        "placeholder_trace_fn called: CompiledTraceParts.entry must be patched by the JIT finalize wrapper before dispatch"
     );
 }
 
@@ -345,7 +349,7 @@ pub(super) unsafe extern "C" fn placeholder_trace_fn(_reg_state: *mut i64) -> i6
 /// admits it at its head (dispatchable, or linked for down-recursion), or
 /// it is a side trace whose parent's exit calls it, which the Vm allows
 /// for a trace that is only too short to dispatch on its own.
-pub(crate) fn trace_is_enterable(record: &TraceRecord, ct: &CompiledTrace) -> bool {
+pub(crate) fn trace_is_enterable(record: &TraceRecord, ct: &CompiledTraceParts) -> bool {
     ct.dispatchable
         || ct.downrec_link.is_some()
         || (record.side_trace_parent.is_some() && ct.dispatch_off_reason == Some("length-gate"))

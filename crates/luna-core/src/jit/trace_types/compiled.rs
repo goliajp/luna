@@ -1,4 +1,4 @@
-//! A compiled trace and the outcome of compiling one.
+//! The parts of a compiled trace a backend makes.
 
 use super::tier_up::TierUp;
 use super::*;
@@ -24,11 +24,10 @@ use super::*;
 // SAFETY: `TraceFn` is the ABI of native code emitted by the Cranelift lowerer (see `jit_backend::trace`); callers guarantee the `*mut i64` points to a reg_state buffer of size `window_size` and survive the trace call.
 pub type TraceFn = unsafe extern "C" fn(*mut i64) -> i64;
 
-/// A trace compiled by the lowerer and ready to be dispatched into
-/// at its head PC. Owned by `Proto.traces`; the underlying mmap is
-/// kept alive by the `Vm.jit_handles` Vec for the Vm's lifetime,
-/// just like the method JIT's compiled functions.
-pub struct CompiledTrace {
+/// What a backend compiled for a trace: its code and what the dispatcher
+/// needs to enter and leave it. [`CompiledTrace::from_parts`] makes the
+/// trace the dispatcher enters.
+pub struct CompiledTraceParts {
     /// Pc the trace dispatches at (matches the recorder's `head_pc`).
     pub head_pc: u32,
     /// Native entry function (mmap'd machine code, valid for the Vm's
@@ -156,34 +155,6 @@ pub struct CompiledTrace {
     /// per_exit_inline.len() + per_exit_tags.len()` (the
     /// `exit_hit_counts` layout's last slot).
     pub global_side_trace_ptr: Box<TCellPtr>,
-    /// The exit index (as `exit_hit_counts`) of each side trace wired to
-    /// this trace, by the sentinel code the IR would OR into a side
-    /// trace's return (bits 56..=62). Read with [`Self::side_children`].
-    pub side_trace_cache: TRefLock<std::collections::HashMap<u32, u32>>,
-    /// The side traces wired to this trace's exits, by exit index. Held
-    /// here rather than looked up on a proto: a side trace started at an
-    /// exit inside a function the trace inlined is cached on that
-    /// function's proto.
-    pub side_children: TRefLock<std::collections::HashMap<u32, TArc<CompiledTrace>>>,
-    /// Fast-path short-circuit hint for the
-    /// dispatcher's tentative-decode + cell-load + check path. Set
-    /// to `true` by the close handler when ANY of this trace's
-    /// `exit_side_trace_ptrs` cells gets wired (i.e., the first
-    /// time a child side trace compiles + the shape gate
-    /// passes). Stays `true` for the trace's lifetime — once any
-    /// side trace exists, the dispatcher must perform the per-
-    /// exit check on every dispatch.
-    ///
-    /// When `false`, the dispatcher skips the tentative decode +
-    /// cell load + child lookup entirely, falling straight through
-    /// to the cheap parent decode + writeback. Trims fib_10_x10k-
-    /// class tight-trace workloads' per-dispatch overhead from the
-    /// double-decode pattern to a single `Cell::get()`.
-    ///
-    /// `Cell<bool>` so the close handler can flip the flag through
-    /// only an `&CompiledTrace` borrow (the parent's `traces`
-    /// borrow is immutable while the close handler walks).
-    pub has_any_side_wired: TCellBool,
     /// `true` iff this trace closes at a
     /// `TraceEnd::InlineAbort` (depth>0 op the lowerer can't
     /// continue past: depth past `MAX_INLINE_DEPTH`, non-self
@@ -303,31 +274,4 @@ pub struct CompiledTrace {
     /// Set when a quicker code generator compiled this trace and a better
     /// one can take over once it is hot.
     pub tier_up: Option<Box<TierUp>>,
-}
-
-impl CompiledTrace {
-    /// The entry to call: the optimizing tier's once it exists.
-    pub fn current_entry(&self) -> TraceFn {
-        match &self.tier_up {
-            Some(t) if !t.optimized.get().is_null() => {
-                // SAFETY: `optimized` only ever holds an entry the backend
-                // returned from `TraceCompiler::tier_up`, which has the
-                // `TraceFn` ABI
-                unsafe { std::mem::transmute::<*const u8, TraceFn>(t.optimized.get()) }
-            }
-            _ => self.entry,
-        }
-    }
-}
-
-impl std::fmt::Debug for CompiledTrace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CompiledTrace")
-            .field("head_pc", &self.head_pc)
-            .field("n_ops", &self.n_ops)
-            .field("dispatchable", &self.dispatchable)
-            .field("exit_tags", &self.exit_tags)
-            .field("entry", &"<fn>")
-            .finish()
-    }
 }

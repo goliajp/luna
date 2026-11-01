@@ -17,6 +17,7 @@
 use super::slots::rw_ranges;
 use super::*;
 use luna_core::__private::CompiledTraceInternals;
+use luna_core::__private::ProtoTraceInternals;
 
 /// For each of the head frame's `max_stack` registers, whether the trace
 /// takes its value (and so its tag) from the entry. Only the ops the
@@ -123,7 +124,7 @@ pub(super) fn entry_live(
 /// or `None` for a trace that is not a side trace or whose parent is gone.
 pub(super) fn side_parent_exit_tags(record: &TraceRecord) -> Option<Vec<ExitTag>> {
     let (parent_proto, parent_head_pc, idx) = record.side_trace_parent?;
-    let traces = parent_proto.traces.borrow();
+    let traces = parent_proto.traces();
     let parent = traces.iter().find(|t| t.head_pc == parent_head_pc)?;
     let tags = parent.exit_tags_of(idx);
     let off = parent.exit_frame_offset(idx).min(tags.len());

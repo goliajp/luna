@@ -1,9 +1,13 @@
 //! Fields of the runtime's objects that luna's other crates read or write.
 
+use crate::jit::{CompiledTrace, TArc};
+pub use crate::runtime::function::jit_state::{JIT_NEXT_NONE, JitProtoState};
 use crate::runtime::mem::{LAny, LVec};
 use crate::runtime::{Coro, Value, function::Proto};
 use crate::vm::Vm;
 use crate::vm::jit_state::JitState;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 /// The JIT's state on the `Vm`.
 pub trait VmJitState {
@@ -72,6 +76,23 @@ pub trait ProtoTraceInternals {
     fn trace_heads(&self) -> Vec<u32>;
     /// Whether the call trigger is done with the prototype's entry.
     fn trace_call_head_settled(&self) -> bool;
+    /// The method JIT's state of the prototype.
+    fn jit_state(&self) -> JitProtoState;
+    /// The prototype's compiled traces. Nothing in them can be changed
+    /// through the reference.
+    fn traces(&self) -> impl std::ops::Deref<Target = Vec<TArc<CompiledTrace>>> + '_;
+    /// Takes the code a backend is compiling for the prototype in the
+    /// background, leaving none pending.
+    fn take_jit_next(&self) -> Option<Arc<AtomicUsize>>;
+    /// Sets the code a backend is compiling for the prototype in the
+    /// background.
+    ///
+    /// # Safety
+    /// The number the cell holds, now and whenever it changes, is 0,
+    /// [`JIT_NEXT_NONE`], or the entry of live code with the ABI of the
+    /// prototype's `JitProtoState::Compiled` entry, which the next call
+    /// from the interpreter installs and calls.
+    unsafe fn set_jit_next(&self, next: Option<Arc<AtomicUsize>>);
 }
 
 impl ProtoTraceInternals for Proto {
@@ -85,5 +106,21 @@ impl ProtoTraceInternals for Proto {
 
     fn trace_call_head_settled(&self) -> bool {
         self.trace_call_head_settled.get()
+    }
+
+    fn jit_state(&self) -> JitProtoState {
+        self.jit.get()
+    }
+
+    fn traces(&self) -> impl std::ops::Deref<Target = Vec<TArc<CompiledTrace>>> + '_ {
+        self.traces.borrow()
+    }
+
+    fn take_jit_next(&self) -> Option<Arc<AtomicUsize>> {
+        self.jit_next.take()
+    }
+
+    unsafe fn set_jit_next(&self, next: Option<Arc<AtomicUsize>>) {
+        self.jit_next.set(next);
     }
 }

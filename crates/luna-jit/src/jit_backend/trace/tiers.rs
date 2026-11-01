@@ -30,7 +30,7 @@ pub(super) fn compile_trace_jit(
     opts: CompileOptions,
     always_codegen: bool,
     float_only: bool,
-) -> Option<CompiledTrace> {
+) -> Option<CompiledTraceParts> {
     compile_trace_captured(storage, record, opts, always_codegen, float_only, false).map(|r| r.0)
 }
 
@@ -43,7 +43,7 @@ pub(super) fn compile_trace_captured(
     always_codegen: bool,
     float_only: bool,
     capture: bool,
-) -> Option<(CompiledTrace, Option<image::Captured>)> {
+) -> Option<(CompiledTraceParts, Option<image::Captured>)> {
     if opts.tier != luna_core::jit::trace::TraceTier::Optimizing {
         match compile_trace_baseline(storage, record, opts, always_codegen, float_only, capture) {
             Ok(ct) => return ct,
@@ -64,7 +64,7 @@ pub(super) fn compile_trace_captured(
     compile_trace_cranelift(storage, record, opts, always_codegen, float_only, capture)
 }
 
-type Compiled = Option<(CompiledTrace, Option<image::Captured>)>;
+type Compiled = Option<(CompiledTraceParts, Option<image::Captured>)>;
 
 /// The baseline tier: `Ok(None)` when the record cannot be lowered at all,
 /// `Err` when the baseline code generator cannot take it.
@@ -198,7 +198,7 @@ pub(super) fn compile_trace_cranelift(
 /// baseline tier ran (see `TraceCompiler::tier_up`).
 pub(crate) fn tier_up_trace(
     storage: &mut dyn luna_core::__private::JitStorage,
-    ct: &CompiledTrace,
+    ct: &CompiledTraceParts,
 ) -> Option<TraceFn> {
     share::tier_up(storage, ct)
 }

@@ -227,7 +227,9 @@ mod chunk_tests_tables;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CraneliftBackend;
 
-impl IntChunkCompiler for CraneliftBackend {
+// SAFETY: each entry is a function Cranelift compiled from the prototype asked for,
+// with the ABI the result states; its module stays in the Vm's JIT storage
+unsafe impl IntChunkCompiler for CraneliftBackend {
     // pass storage through to
     // `cache_lookup_or_compile`; the cache lookup + handle park both
     // operate on `Vm.jit.storage.{cache,cache_handles}`.
