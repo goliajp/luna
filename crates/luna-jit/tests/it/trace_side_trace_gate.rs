@@ -131,7 +131,8 @@ fn one_shot_side_trace_takes_its_recorded_loop_edge() {
 /// take over the inner loop before a side trace could run through it.
 struct NoInnerLoopTrace;
 
-impl luna_jit::__private::TraceCompiler for NoInnerLoopTrace {
+// SAFETY: what it returns comes unchanged from the Cranelift backend
+unsafe impl luna_jit::__private::TraceCompiler for NoInnerLoopTrace {
     fn try_compile_trace(
         &self,
         s: &mut dyn luna_jit::__private::JitStorage,

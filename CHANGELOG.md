@@ -49,6 +49,20 @@ optimization.
   not look at `__metatable`; a value that is not a table or a userdata
   gets its type's metatable. `Userdata::set_metatable` is gone from the
   public API: it took no write barrier.
+- A JIT backend vouches for the code it hands the interpreter:
+  `jit::IntChunkCompiler` (and the trace compiler) are `unsafe trait`s, so
+  a backend is written `unsafe impl IntChunkCompiler for MyBackend`; its
+  `CompileResult::Compiled` entries must be live code with the ABI the
+  result's fields state. `Vm::install_jit_backend` stays safe.
+- `Proto`'s JIT and closure-cache state (`jit`, `jit_next`, `traces`,
+  `cache`, `trace_hot_count`, `call_hot_count`, `trace_discard_count`,
+  `trace_gave_up`) is no longer public, and `JitProtoState` is gone from
+  `runtime::function`: from safe code they could point the interpreter at
+  any address. The counters are read with `proto.trace_hot_count()` and
+  `proto.call_hot_count()`.
+- `Vm::install_aot_trace` and `CompiledTrace::from_aot_meta` are no longer
+  safe public functions: the trace they take is entered unchecked. An AOT
+  binary's resolver installs its traces through luna's internal API.
 
 - `package.path` defaults to PUC's default outside Windows too
   (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in

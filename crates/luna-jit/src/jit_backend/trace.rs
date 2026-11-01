@@ -22,8 +22,8 @@ use luna_core::vm::isa::{Inst, Op};
 // (assembled in `luna_jit::lib::jit::trace`) sees both type defs and
 // codegen entry points side-by-side.
 use luna_core::__private::{
-    AdoptRequest, AdoptedTrace, CompileOptions, CompiledTrace, FrameMaterializeInfo,
-    InlineSideExit, RecordedOp, TierUp, TraceRecord,
+    AdoptRequest, AdoptedTrace, CompileOptions, CompiledTrace, CompiledTraceParts,
+    FrameMaterializeInfo, InlineSideExit, RecordedOp, TierUp, TraceRecord,
 };
 pub use luna_core::jit::trace_types::*;
 

@@ -82,7 +82,7 @@ fn a_register_nothing_wrote_is_nil() {
 /// reach it with nothing in between.
 #[test]
 fn background_code_becomes_the_entry() {
-    use luna_jit::runtime::function::JitProtoState;
+    use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     luna_jit::install_llvm_backend_with(
         &mut vm,
@@ -104,7 +104,7 @@ fn background_code_becomes_the_entry() {
     let entry = |vm: &mut luna_jit::vm::Vm| {
         let r = vm.call_value(Value::Closure(run), &[]).expect("run");
         assert!(matches!(r[0], Value::Int(610)), "{r:?}");
-        match fib.proto.jit.get() {
+        match fib.proto.jit_state() {
             JitProtoState::Compiled { entry, .. } => entry,
             s => panic!("{s:?}"),
         }
@@ -118,7 +118,7 @@ fn background_code_becomes_the_entry() {
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    let taken = fib.proto.jit_next.take();
+    let taken = fib.proto.take_jit_next();
     assert!(taken.is_none(), "the cell stays after its code was taken");
 }
 
@@ -127,7 +127,7 @@ fn background_code_becomes_the_entry() {
 /// code and keeps Cranelift's.
 #[test]
 fn background_code_turned_down_keeps_the_entry() {
-    use luna_jit::runtime::function::JitProtoState;
+    use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     luna_jit::install_llvm_backend_with(
         &mut vm,
@@ -150,26 +150,28 @@ fn background_code_turned_down_keeps_the_entry() {
     let call = |vm: &mut luna_jit::vm::Vm| {
         let r = vm.call_value(Value::Closure(run), &[]).expect("run");
         assert!(matches!(r[0], Value::Int(55)), "{r:?}");
-        match f.proto.jit.get() {
+        match f.proto.jit_state() {
             JitProtoState::Compiled { entry, .. } => entry,
             s => panic!("{s:?}"),
         }
     };
     let first = call(&mut vm);
-    let pending = f.proto.jit_next.take();
+    let pending = f.proto.take_jit_next();
     assert!(
         pending.is_some(),
         "nothing was handed to the compile thread"
     );
-    f.proto.jit_next.set(pending);
+    // SAFETY: the cell put back is the one the backend handed over
+    unsafe { f.proto.set_jit_next(pending) };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         assert_eq!(call(&mut vm), first);
-        let pending = f.proto.jit_next.take();
+        let pending = f.proto.take_jit_next();
         if pending.is_none() {
             break;
         }
-        f.proto.jit_next.set(pending);
+        // SAFETY: the cell put back is the one the backend handed over
+        unsafe { f.proto.set_jit_next(pending) };
         assert!(
             std::time::Instant::now() < deadline,
             "the compile thread never answered"

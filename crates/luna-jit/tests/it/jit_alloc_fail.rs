@@ -11,9 +11,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
 use luna_jit::jit_backend::__jit_tls_ptrs;
 use luna_jit::runtime::Value;
-use luna_jit::runtime::function::JitProtoState;
 use luna_jit::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
 use luna_jit::version::LuaVersion;
 use luna_jit::{__private::VmJitState, vm::Vm};
@@ -231,7 +231,7 @@ fn a_method_jit_call_that_cannot_allocate_runs_in_the_interpreter() {
                 vm.call_value(Value::Closure(cl), &[]).expect("run");
                 let inner = cl.proto.protos[0];
                 assert!(
-                    matches!(inner.jit.get(), JitProtoState::Compiled { .. }),
+                    matches!(inner.jit_state(), JitProtoState::Compiled { .. }),
                     "{v:?}: not compiled: {src}"
                 );
                 seen.get()

@@ -16,6 +16,7 @@ pub(crate) mod compiled;
 mod compiled_aot;
 pub(crate) mod content;
 mod exit;
+pub(crate) mod installed;
 pub(crate) mod options;
 mod outcome;
 pub(crate) mod record;
@@ -23,9 +24,10 @@ pub(crate) mod self_link;
 pub(crate) mod side_exit;
 pub(crate) mod tier_up;
 pub(crate) use adopt::{AdoptRequest, AdoptedTrace};
-pub(crate) use compiled::CompiledTrace;
+pub(crate) use compiled::CompiledTraceParts;
 pub use compiled::TraceFn;
 pub use exit::*;
+pub(crate) use installed::CompiledTrace;
 pub(crate) use options::CompileOptions;
 pub use outcome::{
     CompileOutcome, INLINE_CLOSURE, INLINE_MULTI_RESULTS, INLINE_VAR_ARGS, INLINE_VARARG_CALLEE,

@@ -61,7 +61,7 @@ pub(super) fn compile_trace_llvm(
     opts: CompileOptions,
     always_codegen: bool,
     float_only: bool,
-) -> Option<CompiledTrace> {
+) -> Option<CompiledTraceParts> {
     let opts = CompileOptions {
         tier: TraceTier::Optimizing,
         ..opts
@@ -102,7 +102,7 @@ struct Pending {
 /// flags. Without `delay`, LLVM compiles the trace before it runs on.
 pub(crate) fn tier_up_llvm(
     storage: &mut dyn luna_core::__private::JitStorage,
-    ct: &CompiledTrace,
+    ct: &CompiledTraceParts,
     delay: Option<std::time::Duration>,
 ) -> Option<TraceFn> {
     let t = ct.tier_up.as_ref()?;

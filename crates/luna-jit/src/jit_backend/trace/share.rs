@@ -7,6 +7,7 @@ use super::reloc::Code;
 use super::*;
 use crate::jit_backend::engine::HeadKey;
 use crate::jit_backend::storage::CraneliftJitStorage;
+use luna_core::__private::ProtoTraceInternals;
 use luna_core::__private::entry_tags_admit;
 use std::sync::Arc;
 
@@ -17,7 +18,7 @@ pub(crate) use super::tier_source::TierSource;
 pub(crate) fn publish(
     storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
-    ct: &CompiledTrace,
+    ct: &CompiledTraceParts,
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,
     cap: Captured,
@@ -31,8 +32,7 @@ pub(crate) fn publish(
     let side_parent = match record.side_trace_parent {
         Some((proto, pc, exit)) => {
             let parent = proto
-                .traces
-                .borrow()
+                .traces()
                 .iter()
                 .find(|t| t.head_pc == pc)
                 .map(|t| t.entry as usize);
@@ -81,8 +81,7 @@ pub(crate) fn adopt(
     let parent_id = match req.side_parent {
         Some((parent_proto, pc, _)) => {
             let parent = parent_proto
-                .traces
-                .borrow()
+                .traces()
                 .iter()
                 .find(|t| t.head_pc == pc)
                 .map(|t| t.entry as usize);
@@ -168,7 +167,7 @@ fn install(
     });
     let mut ct = img
         .meta
-        .instantiate(optimized.is_some(), req.proto.call_hot_count.get());
+        .instantiate(optimized.is_some(), req.proto.call_hot_count());
     let relocs: Vec<(RelocKind, i64)> = img
         .sources
         .iter()
@@ -198,7 +197,11 @@ fn install(
         }
     }
     Some(AdoptedTrace {
-        trace: ct,
+        // SAFETY: the code is a copy of a trace compiled for code of this
+        // content against the tags and window the image's metadata gives
+        // `ct`, placed above with this Vm's addresses; no side-trace cell
+        // is set yet
+        trace: unsafe { CompiledTrace::from_parts(ct) },
         side_parent: match (img.side_parent, req.side_parent) {
             (None, _) => None,
             // the side trace asked for: its parent is the one asked about
@@ -224,7 +227,7 @@ fn value_of(
     s: &Source,
     protos: &[Gc<Proto>],
     req: &AdoptRequest<'_>,
-    ct: &CompiledTrace,
+    ct: &CompiledTraceParts,
 ) -> Option<i64> {
     Some(match s {
         Source::Const { p, k } => match protos[*p as usize].consts.get(*k as usize)? {
@@ -262,7 +265,7 @@ fn find_proto(roots: &[Gc<Proto>], c: &Content) -> Option<Gc<Proto>> {
 /// some Vm compiled it already, else compiled (and given to the image).
 pub(crate) fn tier_up(
     storage: &mut dyn luna_core::__private::JitStorage,
-    ct: &CompiledTrace,
+    ct: &CompiledTraceParts,
 ) -> Option<TraceFn> {
     let source = ct.tier_up.as_ref()?.source.borrow_mut().take()?;
     let src = source.downcast::<TierSource>().ok()?;

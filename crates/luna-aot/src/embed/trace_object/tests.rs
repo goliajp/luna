@@ -73,7 +73,9 @@ fn meta_entry_keeps_its_own_trace_after_an_earlier_lowering_bail() {
         CompileOptions::default(),
     )
     .expect("pure-arith record lowers");
-    let ct = TArc::new(ct);
+    // SAFETY: the entry is the lowerer's placeholder, with the `TraceFn`
+    // ABI; nothing enters it
+    let ct = TArc::new(unsafe { luna_core::__private::CompiledTrace::from_parts(ct) });
 
     // an unclosed record bails in the lowerer, standing in for a trace
     // the warmup JIT compiled but `aot: true` codegen rejects

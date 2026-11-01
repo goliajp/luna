@@ -30,7 +30,9 @@ impl Default for LlvmBackend {
 /// [`LlvmBackend::llvm_after`]'s default.
 pub const LLVM_AFTER: std::time::Duration = std::time::Duration::from_millis(20);
 
-impl IntChunkCompiler for LlvmBackend {
+// SAFETY: each entry is a function Cranelift or LLVM compiled from the prototype
+// asked for, with the ABI the result states, kept in the Vm's JIT storage
+unsafe impl IntChunkCompiler for LlvmBackend {
     fn try_compile(
         &self,
         storage: &mut dyn JitStorage,
@@ -50,7 +52,8 @@ impl IntChunkCompiler for LlvmBackend {
     }
 }
 
-impl TraceCompiler for LlvmBackend {
+// SAFETY: as `CraneliftBackend`'s: its traces come from the same compile path
+unsafe impl TraceCompiler for LlvmBackend {
     fn try_compile_trace(
         &self,
         storage: &mut dyn JitStorage,

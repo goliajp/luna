@@ -144,7 +144,7 @@ fn apply_tail_kinds_and_gates(
 }
 
 /// Builds the `CompiledTrace` from the emit pass's bookkeeping.
-pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
+pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
     let Emitted {
         current_kinds,
         dispatchable,
@@ -244,7 +244,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         let total = per_exit_inline.len() + per_exit_tags.len() + 1;
         (0..total).map(|_| TCellPtr::null()).collect()
     };
-    CompiledTrace {
+    CompiledTraceParts {
         head_pc: record.head_pc,
         // caller (JIT wrapper or AOT pipeline)
         // patches `entry` after finalize. See [`placeholder_trace_fn`].
@@ -287,12 +287,6 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         // the IR has baked the right heap address.
         tags_side_trace_ptrs,
         global_side_trace_ptr: global_side_trace_box,
-        // empty at compile; close handler fills
-        // it as child side traces compile for this trace's hot
-        // exits.
-        side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
-        side_children: TRefLock::new(std::collections::HashMap::new()),
-        has_any_side_wired: TCellBool::new(false),
         per_exit_inline,
         // diagnostic only; counts Sinkable sites from the
         // pre-emit sweep. Vm sums these into
@@ -333,7 +327,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTrace {
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
         tier_up: tier_count
-            .map(|(count, at)| tier_up(count, at, record.head_proto.call_hot_count.get())),
+            .map(|(count, at)| tier_up(count, at, record.head_proto.call_hot_count())),
     }
 }
 

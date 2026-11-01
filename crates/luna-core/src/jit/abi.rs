@@ -92,7 +92,14 @@ pub enum CompileResult {
 /// helpers read. Taking a raw `*mut Vm` keeps the trait object-safe
 /// and lets the dispatcher pass `self as *mut Vm` without holding a
 /// mutable borrow on `self` while reading `self.chunk_compiler`.
-pub trait IntChunkCompiler {
+///
+/// # Safety
+/// The interpreter calls what the backend hands it without checking it.
+/// The entry of each [`CompileResult::Compiled`] is live code, for as long
+/// as the Vm lives, with the ABI the result's fields state (argument count,
+/// argument and result kinds), compiled from the prototype it was asked
+/// for; `enter`'s guard restores what it changed when dropped.
+pub unsafe trait IntChunkCompiler {
     /// Attempt to compile `proto`. Returns [`CompileResult::Compiled`] on
     /// a whitelist hit or [`CompileResult::Skipped`] when the body is
     /// outside the JIT's supported shape.
@@ -126,7 +133,13 @@ pub trait IntChunkCompiler {
 /// `None` when the lowerer bailed. `last_compile_checkpoint` exposes
 /// the lowerer's per-thread last-phase marker used by
 /// `Vm.trace_compile_failed_reasons`.
-pub trait TraceCompiler {
+///
+/// # Safety
+/// The dispatcher enters what the backend hands it without checking it.
+/// Each compiled or adopted trace, and each entry `tier_up` returns, meets
+/// the conditions of [`CompiledTrace::from_parts`] for the recording (or
+/// the trace) it was asked for, and lives as long as the Vm's JIT storage.
+pub unsafe trait TraceCompiler {
     /// Attempt to lower `record` into native code under `opts`. Returns
     /// `None` if the lowerer bailed at any checkpoint.
     ///
@@ -238,7 +251,8 @@ pub trait TraceCompiler {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NullJitBackend;
 
-impl IntChunkCompiler for NullJitBackend {
+// SAFETY: it compiles nothing
+unsafe impl IntChunkCompiler for NullJitBackend {
     fn try_compile(
         &self,
         _: &mut dyn crate::jit::JitStorage,
@@ -261,7 +275,8 @@ impl IntChunkCompiler for NullJitBackend {
     }
 }
 
-impl TraceCompiler for NullJitBackend {
+// SAFETY: it compiles nothing
+unsafe impl TraceCompiler for NullJitBackend {
     fn try_compile_trace(
         &self,
         _: &mut dyn crate::jit::JitStorage,

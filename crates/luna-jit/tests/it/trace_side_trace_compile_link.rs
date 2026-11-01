@@ -6,6 +6,7 @@
 //! `exit_side_trace_ptrs[parent_exit_idx]` Cell.
 
 use luna_core::__private::VmHostInternals;
+use luna_jit::__private::ProtoTraceInternals;
 use luna_jit::version::LuaVersion;
 
 /// fib(28) — at least one side trace must compile (counter ≥ 1)
@@ -189,7 +190,7 @@ fn walk_any_side_ptr_non_null(
     cl: luna_jit::runtime::heap::Gc<luna_jit::runtime::function::LuaClosure>,
 ) -> bool {
     fn walk(proto: luna_jit::runtime::heap::Gc<luna_jit::runtime::function::Proto>) -> bool {
-        for ct in proto.traces.borrow().iter() {
+        for ct in proto.traces().iter() {
             for cell in ct.exit_side_trace_ptrs.iter() {
                 if !cell.get().is_null() {
                     return true;
@@ -216,7 +217,7 @@ fn count_dispatchable_split(
         d: &mut usize,
         nd: &mut usize,
     ) {
-        for ct in proto.traces.borrow().iter() {
+        for ct in proto.traces().iter() {
             if ct.dispatchable {
                 *d += 1;
             } else {
@@ -241,7 +242,7 @@ fn no_side_trace_is_entered_at_its_head() {
     use luna_jit::runtime::function::Proto;
     use luna_jit::runtime::heap::Gc;
     fn walk(proto: Gc<Proto>, sides: &mut Vec<(u32, bool)>) {
-        for ct in proto.traces.borrow().iter() {
+        for ct in proto.traces().iter() {
             if ct.dispatch_off_reason == Some("side-trace") {
                 assert!(
                     !luna_jit::vm::Vm::trace_admits(ct, ct.head_pc, false),

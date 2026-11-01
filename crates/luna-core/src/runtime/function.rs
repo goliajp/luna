@@ -67,7 +67,7 @@ pub struct Proto {
     /// from this Proto, reused when OP_CLOSURE finds the same upvalues in it
     /// (`getcached`; closure.lua asserts a loop's closures over `a` and
     /// `_ENV` compare equal).
-    pub cache: std::cell::Cell<Option<Gc<LuaClosure>>>,
+    pub(crate) cache: std::cell::Cell<Option<Gc<LuaClosure>>>,
     /// Index into `upvals` of the `_ENV` upvalue (5.1 per-function-env
     /// model needs to clone-on-closure), or `u8::MAX` for "no _ENV
     /// upval". Computed once at Proto construction so `Op::Closure`'s
@@ -79,13 +79,13 @@ pub struct Proto {
     /// the mmap is parked on the `Vm.jit_handles` Vec for the Vm's
     /// lifetime. `Failed` records the whitelist miss so subsequent
     /// calls skip the compile attempt.
-    pub jit: std::cell::Cell<JitProtoState>,
+    pub(crate) jit: std::cell::Cell<JitProtoState>,
     /// Code a backend is still compiling for this function in the
     /// background: the entry it stores once ready (0 until then), with the
     /// ABI of `jit`'s, which the next call from the interpreter puts in
     /// place of `jit`'s entry; [`JIT_NEXT_NONE`] when it compiled none.
     /// `None` when nothing is pending.
-    pub jit_next: std::cell::Cell<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>>,
+    pub(crate) jit_next: std::cell::Cell<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>>,
     /// Trace JIT hot-loop detector. Incremented by `Vm::run`
     /// on each backward-jump dispatched within this Proto. Once the
     /// counter passes `TRACE_HOT_THRESHOLD`, the next visit to the
@@ -93,7 +93,7 @@ pub struct Proto {
     /// begins recording. `Cell<u32>` matches the interp's
     /// single-threaded dispatch and pays no atomic cost. Cap at
     /// `u32::MAX / 2` to leave headroom above the threshold.
-    pub trace_hot_count: std::cell::Cell<u32>,
+    pub(crate) trace_hot_count: std::cell::Cell<u32>,
     /// Trace-on-call counter. Incremented by `begin_call` on
     /// every Lua-callee push into this Proto. Once it passes
     /// `CALL_HOT_THRESHOLD`, the next call into this Proto promotes
@@ -101,7 +101,7 @@ pub struct Proto {
     /// JIT cover self-recursive functions whose body holds no
     /// negative `Op::Jmp` (`fib`, recursive `make`/`check` in
     /// `binary_trees`), where the back-edge counter never triggers.
-    pub call_hot_count: std::cell::Cell<u32>,
+    pub(crate) call_hot_count: std::cell::Cell<u32>,
     /// Count of "partial-coverage" discards on this Proto's call-triggered
     /// recordings, each a chance to record a longer trace at a deeper
     /// recursion point (the trigger lets the next call retry). Without
@@ -114,7 +114,7 @@ pub struct Proto {
     /// next close skips the coverage check and compiles + caches
     /// whatever shape it has (length gate will likely refuse
     /// dispatch but at least the trigger stops firing).
-    pub trace_discard_count: std::cell::Cell<u32>,
+    pub(crate) trace_discard_count: std::cell::Cell<u32>,
     /// Once the discard cap forces a compile on
     /// this Proto (the recorder gave up trying to capture a
     /// covered trace and just compiled whatever shape it had), set
@@ -128,7 +128,7 @@ pub struct Proto {
     /// flips back to `false` within a Vm — gave-up is permanent
     /// on the Proto, mirroring the `JitProtoState::Failed`
     /// invariant.
-    pub trace_gave_up: std::cell::Cell<bool>,
+    pub(crate) trace_gave_up: std::cell::Cell<bool>,
     /// Trace heads whose recordings failed to compile. The hot counters
     /// are not reset after a recording, so without this every later call
     /// or back-edge would record and compile the same failing trace again.
@@ -146,7 +146,7 @@ pub struct Proto {
     /// back-edge target visit. `RefCell` because compile is invoked
     /// from inside `Vm::run` and may need to push while another op
     /// is mid-dispatch in the same Proto.
-    pub traces: crate::jit::send_compat::TRefLock<
+    pub(crate) traces: crate::jit::send_compat::TRefLock<
         Vec<crate::jit::send_compat::TArc<crate::jit::trace::CompiledTrace>>,
     >,
     /// Whether `traces` holds one the dispatcher may enter at its head
@@ -247,8 +247,9 @@ pub struct NativeClosure {
 }
 
 mod hash;
-mod jit_state;
-pub use jit_state::{JIT_NEXT_NONE, JitProtoState};
+mod hot;
+pub(crate) mod jit_state;
+pub(crate) use jit_state::{JIT_NEXT_NONE, JitProtoState};
 mod trace;
 mod upvals;
 

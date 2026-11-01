@@ -64,7 +64,7 @@ pub(super) fn lower_trace_into_inner<M: Module>(
     always_codegen: bool,
     float_only: bool,
     at_exits: bool,
-) -> Option<(FuncId, CompiledTrace)> {
+) -> Option<(FuncId, CompiledTraceParts)> {
     with_plan(record, opts, float_only, |pl, escape| {
         lower_clif(module, pl, escape, aot_fn_name, always_codegen, at_exits)
     })?
@@ -143,7 +143,7 @@ pub(super) fn lower_trace_lir(
     opts: CompileOptions,
     float_only: bool,
     at_exits: bool,
-) -> Option<(super::lir::Lir, CompiledTrace)> {
+) -> Option<(super::lir::Lir, CompiledTraceParts)> {
     with_plan(record, opts, float_only, |pl, escape| {
         let mut e = super::lir::Lir::take();
         let h = match e.helpers {

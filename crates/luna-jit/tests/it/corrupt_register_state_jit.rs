@@ -2,9 +2,9 @@
 //! whose control slots `debug.setlocal` overwrites after a trace for it is
 //! running, and a table constructor whose target table is not presized.
 
+use luna_jit::__private::{JitProtoState, ProtoTraceInternals};
 use luna_jit::LuaVersion;
 use luna_jit::runtime::Value;
-use luna_jit::runtime::function::JitProtoState;
 use luna_jit::vm::isa::{Inst, Op};
 
 const DIALECTS: [LuaVersion; 5] = [
@@ -100,9 +100,9 @@ fn method_jit_setlist_without_presize() {
             }
         }
         assert!(
-            matches!(f.proto.jit.get(), JitProtoState::Compiled { .. }),
+            matches!(f.proto.jit_state(), JitProtoState::Compiled { .. }),
             "{v:?}: the function did not compile (state {:?})",
-            f.proto.jit.get()
+            f.proto.jit_state()
         );
     }
 }

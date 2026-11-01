@@ -7,59 +7,15 @@ use crate::vm::jit_state::JitCounters;
 // The deploy-side resolver in `luna-runtime-helpers` walks the binary's trace-meta section after
 // `vm.load`, resolves each entry's `(proto_hash, head_pc, fn_ptr)` triple against the loaded
 // chunk's proto tree, and pushes a `CompiledTrace` onto the matching Proto's `traces` Vec via
-// [`Vm::install_aot_trace`] below. The existing trace-dispatch loop then fires the AOT mcode
+// [`crate::__private::install_aot_trace`]. The existing trace-dispatch loop then fires the AOT mcode
 // without further plumbing, the same code path the runtime JIT uses.
 
 impl Vm {
-    /// Install a precompiled
-    /// `CompiledTrace` onto `proto.traces` so the interp dispatcher
-    /// fires it at the trace's `head_pc`. This is the runtime install
-    /// API the deploy-side `luna-runtime-helpers` resolver calls once
-    /// per AOT-emitted trace meta entry, after looking up `proto` by
-    /// stable hash (see `crate::runtime::function::Proto::stable_hash`).
-    ///
-    /// # What this does
-    ///
-    /// Pushes `trace` onto `proto.traces` via the existing `RefCell`.
-    /// The trace's `entry` fn ptr must already point at runnable
-    /// machine code (the AOT linker resolved the symbol at link time;
-    /// the deploy resolver passes the address verbatim).
-    ///
-    /// # What this does NOT do
-    ///
-    /// - **No deduplication.** Calling twice with the same `head_pc`
-    ///   pushes two entries; the dispatcher's `find` will pick the
-    ///   first match. The deploy resolver is responsible for not
-    ///   double-installing.
-    /// - **No invalidation of the runtime JIT cache.** If the runtime
-    ///   JIT later records + compiles a trace for the same
-    ///   `(proto, head_pc)`, both coexist on `proto.traces` and the
-    ///   dispatcher's `find` picks whichever appears first. AOT
-    ///   traces install before any runtime recording is possible
-    ///   (resolver runs before `vm.load` returns its first closure),
-    ///   so AOT traces win the race for the same site.
-    /// - **No coverage gating.** AOT traces are trusted by
-    ///   construction — they were validated at compile time. Setting
-    ///   `dispatchable: false` on the input would silently disable
-    ///   dispatch; the caller controls that flag.
-    ///
-    /// # Safety / soundness
-    ///
-    /// `trace.entry` is an `unsafe extern "C" fn` (mmap'd or linked
-    /// machine code). Soundness contract:
-    ///
-    /// - The fn pointer must remain valid for the `Vm`'s lifetime.
-    ///   In the AOT-binary deploy shape this is trivially satisfied —
-    ///   the fn lives in the binary's `.text`.
-    /// - `trace.entry_tags` / `exit_tags` / `window_size` must match
-    ///   what the trace's IR actually compiled against; the dispatcher
-    ///   uses them to marshal `reg_state` in and out without further
-    ///   validation. A mismatch corrupts vm.stack.
-    ///
-    /// The AOT pipeline (`luna-aot`) is responsible for ensuring these
-    /// invariants hold; this fn is a plain push — no validation that
-    /// would slow the dispatcher's hot path either.
-    pub fn install_aot_trace(
+    /// Park an AOT binary's precompiled `trace` on `proto.traces`, where
+    /// the dispatcher enters it at its `head_pc` as it would a trace the
+    /// JIT compiled. `__private::install_aot_trace` states what the trace
+    /// must be.
+    pub(crate) fn install_aot_trace(
         &mut self,
         proto: crate::runtime::Gc<crate::runtime::function::Proto>,
         trace: crate::jit::trace::CompiledTrace,

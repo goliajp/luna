@@ -3,12 +3,13 @@
 //! Cranelift: the cache entry keeps its head from being recorded again,
 //! and machine code would never run.
 
+use luna_jit::__private::ProtoTraceInternals;
 use luna_jit::jit_backend::trace::trace_codegen_count;
 use luna_jit::runtime::{Gc, LuaClosure, Value};
 use luna_jit::version::LuaVersion;
 
 fn enterable(cl: Gc<LuaClosure>) -> (usize, usize) {
-    let traces = cl.proto.traces.borrow();
+    let traces = cl.proto.traces();
     let n = traces
         .iter()
         .filter(|t| t.dispatchable || t.downrec_link.is_some())

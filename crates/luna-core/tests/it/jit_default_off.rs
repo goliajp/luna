@@ -37,9 +37,9 @@ fn assert_idle(mut vm: Vm) {
     assert!(!vm.jit_enabled());
     assert!(!vm.trace_jit_enabled());
     let (main, f) = run(&mut vm);
-    assert_eq!(main.proto.trace_hot_count.get(), 0);
-    assert_eq!(main.proto.call_hot_count.get(), 0);
-    assert_eq!(f.proto.call_hot_count.get(), 0);
+    assert_eq!(main.proto.trace_hot_count(), 0);
+    assert_eq!(main.proto.call_hot_count(), 0);
+    assert_eq!(f.proto.call_hot_count(), 0);
     assert_eq!(vm.trace_closed_count(), 0);
     assert_eq!(vm.trace_aborted_count(), 0);
     assert_eq!(vm.trace_compile_failed_count(), 0);
@@ -63,7 +63,7 @@ fn installing_a_backend_turns_the_jit_on() {
     assert!(vm.jit_enabled());
     assert!(vm.trace_jit_enabled());
     let (main, _) = run(&mut vm);
-    assert!(main.proto.trace_hot_count.get() > 0);
+    assert!(main.proto.trace_hot_count() > 0);
     assert!(vm.trace_closed_count() > 0);
 }
 
@@ -75,7 +75,7 @@ fn a_flag_set_before_install_is_kept() {
     assert!(vm.jit_enabled());
     assert!(!vm.trace_jit_enabled());
     let (main, _) = run(&mut vm);
-    assert_eq!(main.proto.trace_hot_count.get(), 0);
+    assert_eq!(main.proto.trace_hot_count(), 0);
     assert_eq!(vm.trace_closed_count(), 0);
 
     let mut vm = Vm::new(LuaVersion::Lua54);

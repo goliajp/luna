@@ -6,6 +6,7 @@
 //! (and how often it had to be entered) and that the results match the
 //! interpreter's.
 
+use luna_jit::__private::ProtoTraceInternals;
 use luna_jit::runtime::{Gc, LuaClosure, Value};
 use luna_jit::version::LuaVersion;
 use luna_jit::{__private::VmJitState, vm::Vm};
@@ -82,8 +83,7 @@ fn run_both(src: &str, args: &[Value], times: usize) -> (Vm, Gc<LuaClosure>, u64
 fn dispatchable_heads(f: Gc<LuaClosure>) -> Vec<u32> {
     let mut heads: Vec<u32> = f
         .proto
-        .traces
-        .borrow()
+        .traces()
         .iter()
         .filter(|t| t.dispatchable)
         .map(|t| t.head_pc)

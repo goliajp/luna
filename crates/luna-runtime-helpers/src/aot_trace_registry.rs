@@ -288,19 +288,25 @@ unsafe fn walk_meta_section(
         // `(I64) -> I64`, which is `TraceFn` (# Safety)
         let trace_entry: TraceFn =
             unsafe { core::mem::transmute::<*const u8, TraceFn>(fn_ptr_raw) };
-        let ct = CompiledTrace::from_aot_meta(
-            trace_entry,
-            decoded.header.head_pc,
-            decoded.header.n_ops,
-            decoded.header.dispatchable != 0,
-            decoded.header.window_size,
-            entry_tags_rc,
-            exit_tags_rc,
-            tag_res_kind,
-            per_exit_tags_decoded,
-            per_exit_inline_decoded,
-        );
-        vm.install_aot_trace(proto, ct);
+        // SAFETY: `trace_entry` is the trace function the AOT pipeline
+        // compiled for this proto at this head pc against the tags and
+        // window the meta entry carries, linked into the binary's text
+        // segment; `proto` is a live prototype the Vm just loaded
+        unsafe {
+            let ct = CompiledTrace::from_aot_meta(
+                trace_entry,
+                decoded.header.head_pc,
+                decoded.header.n_ops,
+                decoded.header.dispatchable != 0,
+                decoded.header.window_size,
+                entry_tags_rc,
+                exit_tags_rc,
+                tag_res_kind,
+                per_exit_tags_decoded,
+                per_exit_inline_decoded,
+            );
+            luna_core::__private::install_aot_trace(vm, proto, ct);
+        }
         installed += 1;
         if probe_on {
             eprintln!(

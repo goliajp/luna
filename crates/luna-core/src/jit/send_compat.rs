@@ -94,7 +94,7 @@ impl TCellU32 {
 
     /// Store `v` into the cell.
     #[inline]
-    pub fn set(&self, v: u32) {
+    pub(crate) fn set(&self, v: u32) {
         #[cfg(not(feature = "send"))]
         {
             self.inner.set(v);
@@ -166,7 +166,7 @@ impl TCellBool {
 
     /// Store `v` into the cell.
     #[inline]
-    pub fn set(&self, v: bool) {
+    pub(crate) fn set(&self, v: bool) {
         #[cfg(not(feature = "send"))]
         {
             self.inner.set(v);
@@ -259,7 +259,7 @@ impl TCellPtr {
 
     /// Store `p` into the cell.
     #[inline]
-    pub fn set(&self, p: *const u8) {
+    pub(crate) fn set(&self, p: *const u8) {
         #[cfg(not(feature = "send"))]
         {
             self.inner.set(p);

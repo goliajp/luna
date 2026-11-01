@@ -56,7 +56,9 @@ pub use storage::{EnginePair, LlvmJitStorage};
 #[derive(Default, Clone, Copy)]
 pub struct LlvmBackend;
 
-impl IntChunkCompiler for LlvmBackend {
+// SAFETY: each entry is a function LLVM compiled from the prototype asked for, with
+// the ABI the result states, kept in the backend's storage for the Vm's life
+unsafe impl IntChunkCompiler for LlvmBackend {
     fn try_compile(
         &self,
         storage: &mut dyn JitStorage,
@@ -80,7 +82,8 @@ impl IntChunkCompiler for LlvmBackend {
     }
 }
 
-impl TraceCompiler for LlvmBackend {
+// SAFETY: it compiles no trace
+unsafe impl TraceCompiler for LlvmBackend {
     fn try_compile_trace(
         &self,
         _storage: &mut dyn JitStorage,
