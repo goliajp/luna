@@ -185,7 +185,7 @@ impl Chunk {
 
     /// Store `items` as a new list.
     pub fn push_list<T: ListItem>(&mut self, items: &[T]) -> List<T> {
-        let v = T::items_mut(self);
+        let v = T::items_mut(self, list::Token(()));
         let start = v.len() as u32;
         v.extend_from_slice_or_abort(items);
         List::new(start, items.len() as u32)

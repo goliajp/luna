@@ -62,8 +62,9 @@ impl<T> std::fmt::Debug for List<T> {
 /// An item type a [`List`] can hold, with the [`Chunk`] vector it lives in.
 /// Only the tree's own item types are list items, and only the chunk adds
 /// to its vectors ([`Chunk::push_list`]): a vector moved to another chunk
-/// would outlive the context it was allocated from. The example compiles,
-/// the one after it fails to.
+/// would outlive the context it was allocated from. Each example compiles
+/// and the one after it fails to: the vector is out of reach by its type
+/// and through a bound alike.
 ///
 /// ```
 /// use luna_core::{frontend::{parse, ast::{ExprId, ListItem}}, version::LuaVersion};
@@ -77,20 +78,39 @@ impl<T> std::fmt::Debug for List<T> {
 /// let mut b = parse(b"local y = g(3, 4)", LuaVersion::Lua54).unwrap();
 /// std::mem::swap(ExprId::items_mut(&mut a), ExprId::items_mut(&mut b)); // error[E0599]
 /// ```
+///
+/// ```
+/// use luna_core::frontend::ast::{Chunk, ListItem};
+/// fn count<T: ListItem>(c: &Chunk) -> usize {
+///     T::items(c).len()
+/// }
+/// ```
+///
+/// ```compile_fail,E0061
+/// use luna_core::frontend::ast::{Chunk, ListItem};
+/// fn swap<T: ListItem>(a: &mut Chunk, b: &mut Chunk) {
+///     std::mem::swap(T::items_mut(a), T::items_mut(b)); // error[E0061]
+/// }
+/// ```
 pub trait ListItem: Copy + Sized + store::ListStore {
     /// The chunk's items of this type.
     fn items(chunk: &Chunk) -> &[Self];
 }
 
+pub(super) use store::Token;
+
 mod store {
     use super::*;
 
-    /// Where a list item type's vector is in the chunk. Out of reach
-    /// outside the crate, which keeps the vectors and the item types to
-    /// the crate's.
+    /// Where a list item type's vector is in the chunk. Outside the crate
+    /// it cannot be implemented, and a bound `T: ListItem` finds
+    /// `items_mut` but cannot call it: only the crate makes a [`Token`].
     pub trait ListStore: Sized {
-        fn items_mut(chunk: &mut Chunk) -> &mut LVec<Self>;
+        fn items_mut(chunk: &mut Chunk, _: Token) -> &mut LVec<Self>;
     }
+
+    /// The proof a caller of [`ListStore::items_mut`] is in the crate.
+    pub struct Token(pub(in crate::frontend::ast) ());
 }
 
 macro_rules! list_item {
@@ -101,7 +121,7 @@ macro_rules! list_item {
             }
         }
         impl store::ListStore for $t {
-            fn items_mut(chunk: &mut Chunk) -> &mut LVec<Self> {
+            fn items_mut(chunk: &mut Chunk, _: store::Token) -> &mut LVec<Self> {
                 &mut chunk.$field
             }
         }
