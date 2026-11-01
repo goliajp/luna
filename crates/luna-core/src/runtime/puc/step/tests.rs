@@ -120,6 +120,23 @@ fn an_emergency_while_marking_starts_the_collection_over() {
     assert!(kept.is_empty(), "kept in {kept:?}");
 }
 
+/// An emergency in the middle of 5.2's sweep: the threads the sweep kept so
+/// far are dropped, not shrunk, before the emergency's cycle starts (only a
+/// build with `DEBUG_CHECKS` sees them left over, at that cycle's restart).
+#[test]
+fn a_5_2_emergency_while_sweeping_drops_the_kept_threads_first() {
+    let mut vm = marking_then_dropped(LuaVersion::Lua52, |vm| {
+        vm.heap.puc.stopped = false;
+        singlestep_52(vm);
+    });
+    while !matches!(vm.heap.puc.pace.state(), St::SweepAll) {
+        singlestep_52(&mut vm);
+    }
+    assert!(vm.emergency_collect());
+    let left = vm.eval("return weak[1] == nil").expect("the script runs");
+    assert!(matches!(left[0], crate::runtime::Value::Bool(true)));
+}
+
 #[test]
 fn a_5_2_emergency_leaves_the_estimate_its_cycle_traversed() {
     // `luaC_fullgc` runs the cycle as steps, an emergency's as well: its
