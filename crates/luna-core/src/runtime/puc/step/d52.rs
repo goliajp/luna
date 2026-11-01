@@ -85,6 +85,8 @@ pub(in crate::runtime::puc) fn full_cycle_52<H: StepHost + ?Sized>(
 /// (see `Heap::young_len`); then the sweep, which shrinks no stack and
 /// resizes nothing (`KGC_EMERGENCY`).
 pub(in crate::runtime::puc) fn emergency_cycle_52<H: StepHost + ?Sized>(h: &mut H, young: Young) {
+    // `KGC_EMERGENCY`: the sweep that ended the cycle under way shrank none
+    h.heap().puc.records.swept_52.clear();
     mark_52(h, Some(young));
     estimate_52(h);
     h.heap().gc_finish_sweep();

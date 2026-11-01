@@ -47,8 +47,9 @@ const ATOMICSTEP: i64 = -2;
 /// `restartcollection` (5.1 `markroot`): the roots marked, the cycle
 /// propagating.
 fn restart<H: StepHost + ?Sized>(h: &mut H) {
-    // 5.2: every way out of a sweep shrinks the threads it kept
-    // (`shrink_swept_52`) or drops them (an emergency's sweep shrinks none)
+    // 5.2: the threads a sweep kept are shrunk before a program's full
+    // collection runs its cycle (`full_cycle_52`) and dropped before an
+    // emergency's (`emergency_cycle_52`), whose sweep shrinks none
     if crate::runtime::gc_hooks::DEBUG_CHECKS {
         assert!(
             h.heap().puc.records.swept_52.is_empty(),
