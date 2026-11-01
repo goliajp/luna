@@ -116,8 +116,10 @@ pub(super) struct Slot<T: Copy> {
     v: std::cell::Cell<T>,
     #[cfg(feature = "send")]
     v: std::sync::atomic::AtomicPtr<T>,
+    /// the blocks `v` held before, by address: a `Box` made of one while
+    /// a reader may still hold its address would claim it alone
     #[cfg(feature = "send")]
-    replaced: std::sync::Mutex<Vec<Box<T>>>,
+    replaced: std::sync::Mutex<Vec<std::sync::atomic::AtomicPtr<T>>>,
 }
 
 #[cfg(not(feature = "send"))]
@@ -158,20 +160,24 @@ impl<T: Copy> Slot<T> {
     pub(super) fn set(&self, v: T) {
         let p = Box::into_raw(Box::new(v));
         let old = self.v.swap(p, std::sync::atomic::Ordering::AcqRel);
-        // SAFETY: `old` came from `Box::into_raw`, and is kept, not freed
-        let old = unsafe { Box::from_raw(old) };
         self.replaced
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(old);
+            .push(std::sync::atomic::AtomicPtr::new(old));
     }
 }
 
 #[cfg(feature = "send")]
 impl<T: Copy> Drop for Slot<T> {
     fn drop(&mut self) {
-        // SAFETY: the pointer came from `Box::into_raw`, and the slot is
-        // going: nothing reads it any more
-        drop(unsafe { Box::from_raw(*self.v.get_mut()) });
+        let replaced = self
+            .replaced
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for p in std::iter::once(&mut self.v).chain(replaced.iter_mut()) {
+            // SAFETY: each pointer came from `Box::into_raw` once, and the
+            // slot is going: nothing reads it any more
+            drop(unsafe { Box::from_raw(*p.get_mut()) });
+        }
     }
 }
