@@ -6,7 +6,7 @@ impl Heap {
     /// Sweep the whole `all` list in one pass: free dead-white objects, survivors to the new
     /// current-white so the next cycle can re-mark them. Returns the number of objects freed.
     pub(super) fn full_sweep(&mut self) -> usize {
-        self.sweep_begins();
+        self.sweep_starts();
         let freed = self.sweep_all_list();
         self.whiten_fin_lists();
         self.puc_sweep_ends();
