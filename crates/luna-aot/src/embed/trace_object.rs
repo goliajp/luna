@@ -102,22 +102,22 @@ pub(super) fn lower_and_encode_meta(
             if probe_on {
                 eprintln!(
                     "luna-aot harvest: AOT lower bailed for trace idx={idx} head_pc={}",
-                    ct.head_pc
+                    ct.head_pc()
                 );
             }
             continue;
         }
 
         // Serialize the meta blob for this trace.
-        let entry_tags_vec: Vec<u8> = ct.entry_tags.iter().copied().collect();
-        let exit_tags_vec: Vec<u8> = ct.exit_tags.iter().copied().map(pack_exit_tag).collect();
+        let entry_tags_vec: Vec<u8> = ct.entry_tags().iter().copied().collect();
+        let exit_tags_vec: Vec<u8> = ct.exit_tags().iter().copied().map(pack_exit_tag).collect();
         // v2 tail — per-cont_pc typed-register side-exit shapes.
         // Each entry's `tags_packed` mirrors the JIT-time
         // `(cont_pc, Rc<[ExitTag]>)` pair, packed through
         // `pack_exit_tag` so the deploy-side reader unpacks via the
         // same byte → ExitTag mapping.
         let per_exit_tags_entries: Vec<PerExitTagsEntry> = ct
-            .per_exit_tags
+            .per_exit_tags()
             .iter()
             .map(|(cont_pc, tags)| PerExitTagsEntry {
                 cont_pc: *cont_pc,
@@ -127,11 +127,11 @@ pub(super) fn lower_and_encode_meta(
         let header = AotTraceMetaHeader {
             magic: luna_core::jit::aot_meta::AOT_META_MAGIC,
             version: luna_core::jit::aot_meta::AOT_META_VERSION,
-            head_pc: ct.head_pc,
-            n_ops: ct.n_ops,
-            window_size: ct.window_size,
-            dispatchable: u8::from(ct.dispatchable),
-            tag_res_kind: pack_tag_res_kind(ct.global_tag_res_kind),
+            head_pc: ct.head_pc(),
+            n_ops: ct.n_ops(),
+            window_size: ct.window_size(),
+            dispatchable: u8::from(ct.dispatchable()),
+            tag_res_kind: pack_tag_res_kind(ct.global_tag_res_kind()),
             entry_tags_len: entry_tags_vec.len() as u16,
             exit_tags_len: exit_tags_vec.len() as u32,
         };
@@ -147,7 +147,7 @@ pub(super) fn lower_and_encode_meta(
         // slot (no shared ownership with the dispatcher field —
         // neither side compares pointers).
         let per_exit_inline_entries: Vec<PerExitInlineEntry> = ct
-            .per_exit_inline
+            .per_exit_inline()
             .iter()
             .map(PerExitInlineEntry::from_inline_side_exit)
             .collect();

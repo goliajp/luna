@@ -10,7 +10,7 @@
 //! finishes in Cranelift's code.
 
 use super::*;
-use luna_core::__private::JitStorage;
+use luna_core::__private::{JitStorage, ProtoTraceInternals};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 

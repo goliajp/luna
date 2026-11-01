@@ -11,7 +11,7 @@
 //! recursive functions move to the trace JIT once the per-Proto hot
 //! counter passes [`TRACE_HOT_THRESHOLD`].
 
-use luna_core::jit::send_compat::{TArc, TCellBool, TCellPtr, TCellU32, TRefLock};
+use luna_core::jit::send_compat::{TArc, TCellPtr, TCellU32};
 use luna_core::runtime::Gc;
 use luna_core::runtime::function::Proto;
 use luna_core::vm::isa::{Inst, Op};

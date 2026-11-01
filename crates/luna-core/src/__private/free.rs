@@ -104,15 +104,38 @@ pub fn string_inlinable_builtin(name: &[u8]) -> Option<crate::runtime::Builtin> 
 /// second trace at the same `head_pc` is entered only if the first is not.
 ///
 /// # Safety
-/// `trace` was compiled for `proto`'s code at `trace.head_pc` (its entry
-/// tags, exit tags and window are that code's registers), and `proto` is a
-/// live prototype. Since `trace` was made, no public field of it has been
-/// changed in a way that makes its parts disagree with each other or with
-/// its code.
+/// `trace` meets [`crate::jit::CompiledTrace::from_parts`]'s conditions,
+/// it was compiled for `proto`'s code at its `head_pc` (its entry tags,
+/// exit tags and window are that code's registers), and `proto` is a live
+/// prototype.
 pub unsafe fn install_aot_trace(
     vm: &mut Vm,
     proto: Gc<crate::runtime::function::Proto>,
     trace: crate::jit::CompiledTrace,
 ) {
     vm.install_aot_trace(proto, trace);
+}
+
+/// Takes the source `trace` would be compiled from at the optimizing tier,
+/// which then stays at its tier until a source is put back.
+pub fn take_tier_source(
+    trace: &crate::jit::CompiledTrace,
+) -> Option<Box<dyn std::any::Any + Send + Sync>> {
+    trace.tier_up.as_ref()?.source.borrow_mut().take()
+}
+
+/// Gives `trace`, installed, the source it is compiled from at the
+/// optimizing tier. A trace with no tier to move to keeps none.
+///
+/// # Safety
+/// `source` was made for `trace` by the backend that compiled it, in the
+/// JIT storage of the Vm `trace` is installed on (the code the optimizing
+/// tier makes from it is entered with `trace`'s tags and window).
+pub unsafe fn put_tier_source(
+    trace: &crate::jit::CompiledTrace,
+    source: Box<dyn std::any::Any + Send + Sync>,
+) {
+    if let Some(t) = &trace.tier_up {
+        *t.source.borrow_mut() = Some(source);
+    }
 }

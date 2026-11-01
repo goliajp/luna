@@ -172,10 +172,10 @@ pub(super) fn side_trace_gate(
                     let traces = parent_proto.traces();
                     traces
                         .iter()
-                        .find(|t| t.head_pc == parent_head_pc)
+                        .find(|t| t.head_pc() == parent_head_pc)
                         .map(|pct| {
                             let off = pct.exit_frame_offset(parent_exit) as u32;
-                            pct.body_writes
+                            pct.body_writes()
                                 .iter()
                                 .filter_map(|&w| w.checked_sub(off))
                                 .collect::<Vec<u32>>()

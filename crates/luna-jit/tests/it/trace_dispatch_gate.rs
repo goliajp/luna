@@ -12,7 +12,7 @@ fn admissible(cl: Gc<LuaClosure>) -> bool {
     cl.proto
         .traces()
         .iter()
-        .any(|t| t.dispatchable || t.downrec_link.is_some())
+        .any(|t| t.dispatchable() || t.downrec_link().is_some())
 }
 
 fn run(vm: &mut Vm, src: &[u8]) -> Vec<Value> {
@@ -86,7 +86,7 @@ fn flag_is_set_for_a_trace_with_a_downrec_link() {
     let Value::Closure(fib) = r[1] else { panic!() };
     let traces = fib.proto.traces();
     assert!(
-        traces.iter().any(|t| t.downrec_link.is_some()),
+        traces.iter().any(|t| t.downrec_link().is_some()),
         "no downrec trace was cached"
     );
     assert!(fib.proto.has_dispatchable_trace());
@@ -125,20 +125,20 @@ fn flag_is_set_for_an_undispatchable_trace_admitted_by_its_downrec_link() {
         .iter()
         .map(|t| {
             (
-                t.head_pc,
-                t.dispatchable,
-                t.downrec_link.is_some(),
-                t.dispatch_off_reason,
+                t.head_pc(),
+                t.dispatchable(),
+                t.downrec_link().is_some(),
+                t.dispatch_off_reason(),
             )
         })
         .collect();
     assert!(
         traces
             .iter()
-            .any(|t| !t.dispatchable && t.downrec_link.is_some()),
+            .any(|t| !t.dispatchable() && t.downrec_link().is_some()),
         "no undispatchable downrec trace: {shapes:?}"
     );
-    assert!(!traces.iter().any(|t| t.dispatchable), "{shapes:?}");
+    assert!(!traces.iter().any(|t| t.dispatchable()), "{shapes:?}");
     assert!(sum.proto.has_dispatchable_trace());
     drop(traces);
     assert!(
@@ -166,7 +166,7 @@ fn call_head_settles_when_a_call_trace_is_cached() {
     ",
     );
     let Value::Closure(get) = r[1] else { panic!() };
-    assert!(get.proto.traces().iter().any(|t| t.head_pc == 0));
+    assert!(get.proto.traces().iter().any(|t| t.head_pc() == 0));
     assert!(get.proto.trace_call_head_settled());
 }
 
@@ -251,8 +251,8 @@ fn a_head_reached_by_falling_through_is_entered() {
         .proto
         .traces()
         .iter()
-        .filter(|t| t.dispatchable || t.downrec_link.is_some())
-        .map(|t| t.head_pc)
+        .filter(|t| t.dispatchable() || t.downrec_link().is_some())
+        .map(|t| t.head_pc())
         .collect();
     assert_eq!(admissible_heads.len(), 1, "{admissible_heads:?}");
     assert_eq!(heads[0], admissible_heads[0]);

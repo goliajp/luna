@@ -77,8 +77,8 @@ pub(super) fn compile_trace_llvm(
     Some(compiled)
 }
 
-/// A trace running Cranelift's code until LLVM's is ready; what
-/// [`TierUp::source`] holds meanwhile.
+/// A trace running Cranelift's code until LLVM's is ready; the trace's
+/// tier source meanwhile.
 struct Pending {
     /// What LLVM compiles, until it is handed to the compile thread.
     source: Option<Box<share::TierSource>>,
@@ -105,8 +105,7 @@ pub(crate) fn tier_up_llvm(
     ct: &CompiledTrace,
     delay: Option<std::time::Duration>,
 ) -> Option<TraceFn> {
-    let t = ct.tier_up.as_ref()?;
-    let source = t.source.borrow_mut().take()?;
+    let source = luna_core::__private::take_tier_source(ct)?;
     let source = match source.downcast::<Pending>() {
         Ok(mut p) => {
             if p.ready.load(Ordering::Acquire) {
@@ -114,7 +113,7 @@ pub(crate) fn tier_up_llvm(
                 // written on the compile thread
                 luna_core::jit::code_fence();
                 let entry = install(storage, c)?;
-                super::code_dump::dump("tier-up-llvm", ct.head_pc, entry as *const u8);
+                super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
                 return Some(entry);
             }
             if p.due.load(Ordering::Relaxed)
@@ -122,7 +121,8 @@ pub(crate) fn tier_up_llvm(
             {
                 hand_over(storage, &p, src, std::time::Instant::now());
             }
-            *t.source.borrow_mut() = Some(p);
+            // SAFETY: the pending compile of the source just taken from `ct`
+            unsafe { luna_core::__private::put_tier_source(ct, p) };
             return None;
         }
         Err(s) => s.downcast::<share::TierSource>().ok()?,
@@ -130,10 +130,10 @@ pub(crate) fn tier_up_llvm(
     let Some(delay) = delay else {
         let (lir, relocs) = source.optimizing_lir();
         let entry = install(storage, compile(&lir, &relocs))?;
-        super::code_dump::dump("tier-up-llvm", ct.head_pc, entry as *const u8);
+        super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
         return Some(entry);
     };
-    let entry = share::clif_tier_up(storage, &source, ct.head_pc);
+    let entry = share::clif_tier_up(storage, &source, ct.head_pc());
     let src = source;
     let mut p = Pending {
         source: None,
@@ -153,7 +153,8 @@ pub(crate) fn tier_up_llvm(
         );
         push_ticket(storage, ticket);
     }
-    *t.source.borrow_mut() = Some(Box::new(p));
+    // SAFETY: the pending compile of the source taken from `ct` above
+    unsafe { luna_core::__private::put_tier_source(ct, Box::new(p)) };
     entry
 }
 

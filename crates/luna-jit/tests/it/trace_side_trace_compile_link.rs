@@ -191,7 +191,7 @@ fn walk_any_side_ptr_non_null(
 ) -> bool {
     fn walk(proto: luna_jit::runtime::heap::Gc<luna_jit::runtime::function::Proto>) -> bool {
         for ct in proto.traces().iter() {
-            for cell in ct.exit_side_trace_ptrs.iter() {
+            for cell in ct.exit_side_trace_ptrs().iter() {
                 if !cell.get().is_null() {
                     return true;
                 }
@@ -218,7 +218,7 @@ fn count_dispatchable_split(
         nd: &mut usize,
     ) {
         for ct in proto.traces().iter() {
-            if ct.dispatchable {
+            if ct.dispatchable() {
                 *d += 1;
             } else {
                 *nd += 1;
@@ -243,13 +243,13 @@ fn no_side_trace_is_entered_at_its_head() {
     use luna_jit::runtime::heap::Gc;
     fn walk(proto: Gc<Proto>, sides: &mut Vec<(u32, bool)>) {
         for ct in proto.traces().iter() {
-            if ct.dispatch_off_reason == Some("side-trace") {
+            if ct.dispatch_off_reason() == Some("side-trace") {
                 assert!(
-                    !luna_jit::vm::Vm::trace_admits(ct, ct.head_pc, false),
+                    !luna_jit::vm::Vm::trace_admits(ct, ct.head_pc(), false),
                     "a side trace at pc {} is entered at its head",
-                    ct.head_pc
+                    ct.head_pc()
                 );
-                sides.push((ct.head_pc, ct.downrec_link.is_some()));
+                sides.push((ct.head_pc(), ct.downrec_link().is_some()));
             }
         }
         for inner in proto.protos.iter() {

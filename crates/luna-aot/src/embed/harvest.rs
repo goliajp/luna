@@ -244,16 +244,16 @@ fn select_installable(
     for (i, (hash, head_pc, record)) in captured.into_iter().enumerate() {
         let proto = record.head_proto;
         let traces_ref = proto.traces();
-        let Some(ct) = traces_ref.iter().find(|c| c.head_pc == head_pc).cloned() else {
+        let Some(ct) = traces_ref.iter().find(|c| c.head_pc() == head_pc).cloned() else {
             filter_stats.0 += 1;
             continue;
         };
         drop(traces_ref);
-        if !ct.dispatchable {
+        if !ct.dispatchable() {
             filter_stats.1 += 1;
             continue;
         }
-        if !ct.per_exit_inline.is_empty() {
+        if !ct.per_exit_inline().is_empty() {
             // depth>0 inlined cmp side-exits are supported. The lowerer's
             // `emit_chain_ptr_arg` routes the `FrameMaterializeInfo`
             // chain pointer through a relocatable data slot the
@@ -271,7 +271,7 @@ fn select_installable(
         // per_exit_tags is supported by wire format v2 — accept.
         // (Counter for diagnostics: how many of the captured traces
         // went through the v2 path.)
-        if !ct.per_exit_tags.is_empty() {
+        if !ct.per_exit_tags().is_empty() {
             filter_stats.3 += 1;
         }
         installable.push((i, hash, head_pc, record, ct));

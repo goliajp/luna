@@ -85,8 +85,8 @@ fn dispatchable_heads(f: Gc<LuaClosure>) -> Vec<u32> {
         .proto
         .traces()
         .iter()
-        .filter(|t| t.dispatchable)
-        .map(|t| t.head_pc)
+        .filter(|t| t.dispatchable())
+        .map(|t| t.head_pc())
         .collect();
     heads.sort_unstable();
     heads

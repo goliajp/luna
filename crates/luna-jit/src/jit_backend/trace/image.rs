@@ -151,7 +151,7 @@ impl Meta {
             body_writes: ct.body_writes.clone(),
             downrec_link: ct.downrec_link,
             downrec_multi_way_count: ct.downrec_multi_way_count,
-            tier_at: ct.tier_up.as_ref().map(|t| t.at),
+            tier_at: ct.tier_up.as_ref().map(|t| t.at()),
         }
     }
 

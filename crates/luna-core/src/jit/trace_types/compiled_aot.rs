@@ -31,9 +31,8 @@ impl CompiledTrace {
     /// As [`CompiledTrace::from_parts`]: `entry` is code with the
     /// [`TraceFn`] ABI that lives as long as the program (an AOT trace
     /// linked into the binary's text segment), compiled against the tags
-    /// and window size given. Between this call and the trace's
-    /// installation, no public field is changed in a way that makes the
-    /// parts disagree with each other or with that code.
+    /// and window size given, and holding the address of none of the
+    /// trace's cells (they are made here).
     pub unsafe fn from_aot_meta(
         entry: TraceFn,
         head_pc: u32,
@@ -111,8 +110,8 @@ impl CompiledTrace {
             downrec_multi_way_count: 0,
             tier_up: None,
         };
-        // SAFETY: `entry` is as the parts state (# Safety), and every
-        // side-trace cell is null
+        // SAFETY: `entry` is as the parts state and holds no address of
+        // the cells made above (# Safety); every side-trace cell is null
         unsafe { CompiledTrace::from_parts(parts) }
     }
 }

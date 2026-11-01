@@ -97,8 +97,8 @@ fn compile_trace_baseline(
         .tier_up
         .as_ref()
         .map(|_| std::sync::Arc::new(lir.detach()));
-    if let (Some(t), Some(l)) = (&compiled.tier_up, &shared_lir) {
-        *t.source.borrow_mut() = Some(Box::new(share::TierSource {
+    if let (Some(t), Some(l)) = (&mut compiled.tier_up, &shared_lir) {
+        *t.source_mut() = Some(Box::new(share::TierSource {
             lir: l.clone(),
             relocs: lir.relocs.clone(),
             image: None,

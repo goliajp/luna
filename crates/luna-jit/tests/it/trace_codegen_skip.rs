@@ -12,7 +12,7 @@ fn enterable(cl: Gc<LuaClosure>) -> (usize, usize) {
     let traces = cl.proto.traces();
     let n = traces
         .iter()
-        .filter(|t| t.dispatchable || t.downrec_link.is_some())
+        .filter(|t| t.dispatchable() || t.downrec_link().is_some())
         .count();
     (traces.len(), n)
 }
