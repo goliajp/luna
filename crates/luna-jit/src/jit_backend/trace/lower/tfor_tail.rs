@@ -160,7 +160,7 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
             let call_pc = record.ops[for_loop_idx - 1].pc;
             gc_due_exit_as(lw, pl, for_loop_idx, body_pc, call_pc);
         }
-        emit_back_edge(lw, pl);
+        emit_back_edge(lw, pl, &tail_kinds);
     } else {
         emit_store_back_and_return_pc(
             &mut lw.bcx,

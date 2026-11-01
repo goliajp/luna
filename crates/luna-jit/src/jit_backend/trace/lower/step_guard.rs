@@ -48,8 +48,11 @@ pub(super) fn emit_step_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;
-    let (reg_state, trace_fn_sig_ref, body_loop) =
-        (lw.entry.reg_state, lw.entry.trace_fn_sig_ref, lw.body_loop);
+    let (reg_state, trace_fn_sig_ref, body_loop) = (
+        lw.entry.reg_state,
+        lw.entry.trace_fn_sig_ref,
+        lw.body_start(),
+    );
     lw.bcx.switch_to_block(block);
     lw.bcx.seal_block(block);
     let entry_stored = entry_values(lw);

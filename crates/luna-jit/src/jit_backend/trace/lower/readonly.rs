@@ -126,11 +126,8 @@ pub(super) fn emit_readonly_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) 
         record, max_stack, ..
     } = *pl;
     let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
-    let Lower {
-        ro_precheck,
-        body_loop,
-        ..
-    } = *lw;
+    let Lower { ro_precheck, .. } = *lw;
+    let body_loop = lw.body_start();
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;

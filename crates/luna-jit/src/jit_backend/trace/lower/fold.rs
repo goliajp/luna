@@ -12,11 +12,8 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         ..
     } = *pl;
     let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
-    let Lower {
-        precheck,
-        body_loop,
-        ..
-    } = *lw;
+    let Lower { precheck, .. } = *lw;
+    let body_loop = lw.body_start();
     let RuntimeHelpers {
         suppress_admit_id,
         math_fn_check_id,

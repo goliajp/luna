@@ -1,29 +1,63 @@
 use super::*;
 
+/// What lowering each op of the body uses.
+pub(super) struct BodyCx {
+    /// the virtual registers of an op (see `vconsts`)
+    kvars: [Variable; NVIRT],
+    /// this op's register window (a copy, so the emit code can take `lw`
+    /// mutably while it reads it), plus `kvars` for the virtual registers
+    regs_w: Vec<Variable>,
+    /// per op, the registers it or a later op writes before the next full
+    /// commit ([`rewritten_before_sync`])
+    rewritten: Vec<bool>,
+}
+
 /// The emit pass over the body: enters the loop head and lowers each
-/// recorded op up to `effective_end`.
-pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()> {
+/// recorded op up to `effective_end`; with temporaries, the first pass's
+/// copy of the first ops and the rest, leaving the loop head's copy for
+/// after the tail (see `peel`).
+pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<Option<LoopCopy>> {
+    let n_regs = lw.entry.regs_full.len();
+    let mut cx = BodyCx {
+        kvars: std::array::from_fn(|_| lw.bcx.declare_var(types::I64)),
+        regs_w: Vec::with_capacity(pl.frame_w + NVIRT),
+        rewritten: rewritten_before_sync(n_regs, pl.record, pl, pl.effective_end),
+    };
+    checkpoint("pre:main-emit-loop");
+    let rest = match lw.peel {
+        Some(peel) => Some(emit_first_pass(lw, pl, cx, peel)?),
+        None => {
+            lw.bcx.switch_to_block(lw.body_loop);
+            // not sealed: the tail's back edge adds a second predecessor
+            commit_start(lw, pl);
+            emit_ops(lw, pl, &mut cx, 0..pl.effective_end)?;
+            None
+        }
+    };
+    commit_end(lw, pl, pl.effective_end);
+    alt_join(lw, pl.effective_end);
+    debug_assert!(lw.alt_joins.is_empty(), "every skip joins a recorded op");
+    Some(rest)
+}
+
+/// Lowers the recorded ops `ops`.
+pub(super) fn emit_ops<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    cx: &mut BodyCx,
+    ops: std::ops::Range<usize>,
+) -> Option<()> {
     let Plan {
         record,
         frame_w,
-        effective_end,
         active_accum,
         ..
     } = *pl;
-    let Lower { body_loop, .. } = *lw;
-    lw.bcx.switch_to_block(body_loop);
-    // not sealed: the tail's back edge adds a second predecessor below
-    commit_start(lw, pl);
-    // the virtual registers of an op (see `vconsts`)
-    let kvars: [Variable; NVIRT] = std::array::from_fn(|_| lw.bcx.declare_var(types::I64));
-    // this op's register window (a copy, so the emit code can take `lw`
-    // mutably while it reads it), plus `kvars` for the virtual registers
-    let mut regs_w: Vec<Variable> = Vec::with_capacity(frame_w + NVIRT);
-    checkpoint("pre:main-emit-loop");
     let n_regs = lw.entry.regs_full.len();
-    let rewritten = rewritten_before_sync(n_regs, record, pl, effective_end);
-    for (i, rop) in record.ops[..effective_end].iter().enumerate() {
-        commit_before(lw, pl, i, &rewritten[i * n_regs..(i + 1) * n_regs]);
+    let (kvars, regs_w) = (&cx.kvars, &mut cx.regs_w);
+    for i in ops {
+        let rop = &record.ops[i];
+        commit_before(lw, pl, i, &cx.rewritten[i * n_regs..(i + 1) * n_regs]);
         gc_quiet_before(lw, pl, i);
         alt_join(lw, i);
         let vregs: VRegs = pl.vconsts.get(i).copied().unwrap_or([None; NVIRT]);
@@ -59,7 +93,7 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         // `frame_w` wide, which the ops spilling their window rely on
         let nvirt = vregs.iter().rposition(Option::is_some).map_or(0, |j| j + 1);
         regs_w.extend_from_slice(&kvars[..nvirt]);
-        let regs: &[Variable] = &regs_w;
+        let regs: &[Variable] = regs_w;
         // body emit handler for the 4-op
         // string-accumulator idiom. Skip the 2 pre-Moves + the
         // post-Move (they're collapsed into the buffered emit).
@@ -145,14 +179,11 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
         }
         // the op a failed emit stopped at, for diagnostics
         set_last_op(oc.i, oc.op as u8);
-        let held = enter_virt(lw, pl, &oc, &kvars)?;
+        let held = enter_virt(lw, pl, &oc, kvars)?;
         emit_op(lw, pl, &oc)?;
         leave_virt(lw, held);
         readonly_after_op(lw, oc.op);
     }
-    commit_end(lw, pl, effective_end);
-    alt_join(lw, effective_end);
-    debug_assert!(lw.alt_joins.is_empty(), "every skip joins a recorded op");
     Some(())
 }
 

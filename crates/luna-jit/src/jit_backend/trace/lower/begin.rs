@@ -11,10 +11,16 @@ pub(super) fn begin_body<E: Emit>(
     defined_aot_data: std::collections::HashSet<DataId>,
     sunk: (Vec<Option<Vec<Variable>>>, Vec<Option<Vec<RegKind>>>, u32),
     flush_ctx: Option<FlushCtx>,
-    blocks: (Option<Block>, Option<Block>, Option<Block>, Block),
+    blocks: HeadBlocks,
 ) -> Lower<E> {
     let (virt_vars, virt_kinds, sunk_alloc_seen) = sunk;
-    let (precheck, ro_precheck, step_precheck, body_loop) = blocks;
+    let HeadBlocks {
+        precheck,
+        ro_precheck,
+        step_precheck,
+        peel,
+        body_loop,
+    } = blocks;
     let current_kinds = entry_kinds(pl);
     let ro_invariant = match ro_precheck {
         Some(_) => readonly_invariants(pl, &current_kinds),
@@ -27,6 +33,8 @@ pub(super) fn begin_body<E: Emit>(
         precheck,
         ro_precheck,
         step_precheck,
+        peel,
+        back_edge_kinds: None,
         body_loop,
         head_kinds: current_kinds[..pl.max_stack].to_vec(),
         defined_aot_data,

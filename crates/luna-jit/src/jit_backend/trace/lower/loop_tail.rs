@@ -193,7 +193,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         && body_pc == record.head_pc
         && loop_kinds_match(&tail_kinds, &lw.head_kinds)
     {
-        emit_back_edge(lw, pl);
+        emit_back_edge(lw, pl, &tail_kinds);
     } else {
         emit_store_back_and_return_pc(
             &mut lw.bcx,
@@ -210,15 +210,18 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
     Some(())
 }
 
-/// The edge back to the loop head. With an iteration count to keep, the
-/// trace leaves at its head once the count is reached; the dispatcher then
-/// moves it to the optimizing tier.
-pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
+/// The edge back to the loop head, leaving the head-frame registers of
+/// kinds `tail`: the kinds the loop's copy of the first pass starts with
+/// (see `peel`). With an iteration count to keep, the trace leaves at its
+/// head once the count is reached; the dispatcher then moves it to the
+/// optimizing tier.
+pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, tail: &[RegKind]) {
     let Plan {
         record, max_stack, ..
     } = *pl;
     let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     let Lower { body_loop, .. } = *lw;
+    lw.back_edge_kinds = Some(tail.to_vec());
     commit_back_edge(lw);
     let Some((cell, at)) = &lw.tier_count else {
         lw.bcx.ins().jump(body_loop, &[]);

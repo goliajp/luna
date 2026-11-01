@@ -15,6 +15,11 @@ pub(super) struct Lower<E: Emit> {
     pub(super) ro_precheck: Option<Block>,
     /// The block before the loop head that checks a 5.3 loop's step sign.
     pub(super) step_precheck: Option<Block>,
+    /// The first pass of a looping body with temporaries (see `peel`).
+    pub(super) peel: Option<Block>,
+    /// The kinds the back edge leaves the head-frame registers with, once
+    /// it is emitted.
+    pub(super) back_edge_kinds: Option<Vec<RegKind>>,
     pub(super) body_loop: Block,
     /// The kinds the body is lowered for: a back edge runs it again only
     /// when the caller window holds these (see `loop_kinds_match`).
@@ -97,6 +102,12 @@ pub(super) struct Lower<E: Emit> {
 }
 
 impl<E: Emit> Lower<E> {
+    /// Where the body starts after the prechecks.
+    #[inline]
+    pub(super) fn body_start(&self) -> Block {
+        self.peel.unwrap_or(self.body_loop)
+    }
+
     /// The variable of register `i` (of the window and the inline frames).
     #[inline]
     pub(super) fn reg(&self, i: usize) -> Variable {
@@ -112,7 +123,7 @@ pub(super) fn entry_values<E: Emit>(lw: &mut Lower<E>) -> Vec<Option<Value>> {
 }
 
 /// The upvalues a trace has read so far.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(super) struct UpvalReads {
     /// Per upvalue index, the variable holding its value once read: the
     /// running closure stays the same through a dispatch.
@@ -129,6 +140,7 @@ pub(super) struct UpvalReads {
 }
 
 /// The constants registers hold at this point of the pass.
+#[derive(Clone)]
 pub(super) struct Known {
     /// The integer constants (from `LoadI` / `LoadK` earlier in the pass),
     /// so a `//`, `%` or shift by one needs no guard.
