@@ -67,14 +67,23 @@ optimization.
   longer public: `LVec::new`, `with_capacity`, `with_capacity_or_abort`
   and `from_slice`, `LSlice::empty`, `collect_exact` and `from_slice`,
   `LBox::new` and `new_kind`, `LMap::new`, `LAny::new`, `Names::new` and
-  `Names::with_capacity`, and `MemOwner::mem`; `LVec::try_clone` and
-  `LSlice::try_clone` are gone. A container made through them could be
+  `Names::with_capacity`, and `MemOwner::mem`; `LVec::try_clone`,
+  `LVec::from_slice_or_abort` and `LSlice::try_clone` are gone. A container made through them could be
   dropped after its context's last owner and free through the freed
   context. A host keeps its own data in `Vec` and `Box`.
 - A parsed `Chunk`'s node arenas, list vectors and names are read through
   methods of the same name instead of public fields: `chunk.exprs[i]` →
   `chunk.exprs()[i]`, `&chunk.names` → `chunk.names()`. Swapping a vector
   between two chunks freed it through the other chunk's context.
+  `ListItem` is sealed and only reads: `T::items(&chunk)` returns the
+  chunk's items as a slice, and `ListItem::items_mut` is gone (add a list
+  with `chunk.push_list(items)`).
+- An allocation context is used by one holder: each Vm's heap and each
+  `Chunk::new` allocate through a context of their own when the caller
+  keeps a clone of the `MemOwner` it passed, sharing only its budget, so
+  with the `send` feature a chunk on the main thread and a Vm sent to
+  another no longer use one context at once. `Heap::mem_owner` is no
+  longer public.
 - With the `send` feature, `MemoryPolicy` requires `Send`: a Vm sent to
   another thread takes its policy along, and Vms sharing one may run on
   several. A policy that counts through `Rc<Cell<_>>` uses
@@ -87,6 +96,10 @@ optimization.
   backend made instead of a `CompiledTrace`; the trace is made from them
   with the `unsafe` `CompiledTrace::from_parts`, whose `# Safety` states
   what the parts must agree on.
+- `luna_jit_llvm::LlvmJitStorage::clear` is no longer public: it unmapped
+  code prototypes and traces still held. `JitStorage::clear_cache` (a
+  provided method) forgets the code a storage keeps for reuse and leaves
+  that code mapped; `luna_jit::jit::cache_clear` calls it.
 
 - `package.path` defaults to PUC's default outside Windows too
   (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in
