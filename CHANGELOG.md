@@ -63,6 +63,30 @@ optimization.
 - `Vm::install_aot_trace` and `CompiledTrace::from_aot_meta` are no longer
   safe public functions: the trace they take is entered unchecked. An AOT
   binary's resolver installs its traces through luna's internal API.
+- The constructors that put a container on an allocation context are no
+  longer public: `LVec::new`, `with_capacity`, `with_capacity_or_abort`
+  and `from_slice`, `LSlice::empty`, `collect_exact` and `from_slice`,
+  `LBox::new` and `new_kind`, `LMap::new`, `LAny::new`, `Names::new` and
+  `Names::with_capacity`, and `MemOwner::mem`; `LVec::try_clone` and
+  `LSlice::try_clone` are gone. A container made through them could be
+  dropped after its context's last owner and free through the freed
+  context. A host keeps its own data in `Vec` and `Box`.
+- A parsed `Chunk`'s node arenas, list vectors and names are read through
+  methods of the same name instead of public fields: `chunk.exprs[i]` →
+  `chunk.exprs()[i]`, `&chunk.names` → `chunk.names()`. Swapping a vector
+  between two chunks freed it through the other chunk's context.
+- With the `send` feature, `MemoryPolicy` requires `Send`: a Vm sent to
+  another thread takes its policy along, and Vms sharing one may run on
+  several. A policy that counts through `Rc<Cell<_>>` uses
+  `Arc<AtomicUsize>` (or a `Mutex`) instead.
+- `TCellPtr::set`, `TCellU32::set` and `TCellBool::set` are no longer
+  public: through them safe code could rewrite the entries a compiled
+  trace jumps to.
+- `luna_jit::jit::trace::try_compile_trace` and
+  `try_compile_trace_with_options` return the `CompiledTraceParts` a
+  backend made instead of a `CompiledTrace`; the trace is made from them
+  with the `unsafe` `CompiledTrace::from_parts`, whose `# Safety` states
+  what the parts must agree on.
 
 - `package.path` defaults to PUC's default outside Windows too
   (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in

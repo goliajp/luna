@@ -1,9 +1,7 @@
 //! What compiling a trace came to, and what an inlined call held.
 
-#[allow(unused_imports)]
-use super::*;
-
-/// Result of attempting to lower a closed [`TraceRecord`] to native
+/// Result of attempting to lower a closed
+/// [`TraceRecord`](crate::__private::TraceRecord) to native
 /// code. Most failure cases are recoverable — the recorder bumps the
 /// head PC's failure count and refuses to re-record until the
 /// threshold rolls over again.
@@ -20,7 +18,8 @@ pub enum CompileOutcome {
     BackendError,
 }
 
-/// [`CompiledTraceParts::inline_kinds`]: a call into a vararg function.
+/// [`CompiledTraceParts::inline_kinds`](crate::__private::CompiledTraceParts::inline_kinds):
+/// a call into a vararg function.
 pub const INLINE_VARARG_CALLEE: u8 = 1;
 /// A call that wants more than one value, or all of them.
 pub const INLINE_MULTI_RESULTS: u8 = 1 << 1;
