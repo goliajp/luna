@@ -3,7 +3,6 @@
 //! with a replacement function), and `Vm::call_value_with_handler`, PUC's
 //! `lua_pcall` with a message handler.
 
-use luna_core::__private::VmHeap;
 use luna_core::__private::VmHostInternals;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
@@ -67,7 +66,7 @@ fn load(vm: &mut Vm, src: &str) -> Value {
 fn call_with_handler_returns_the_results() {
     let mut vm = Vm::new(LuaVersion::Lua54);
     let f = load(&mut vm, "return 'z', ...");
-    let h = vm.globals().get(Value::Str(vm.heap_mut().intern(b"print")));
+    let h = vm.globals().get(Value::Str(vm.intern(b"print")));
     // a value the host keeps across calls is pinned
     vm.pin_host(h);
     let r = vm
@@ -103,11 +102,11 @@ fn call_with_handler_runs_the_handler_before_unwinding() {
     for (v, text) in expect {
         let mut vm = Vm::new(v);
         let f = load(&mut vm, src);
-        let debug = vm.globals().get(Value::Str(vm.heap_mut().intern(b"debug")));
+        let debug = vm.globals().get(Value::Str(vm.intern(b"debug")));
         let Value::Table(debug) = debug else {
             panic!("no debug library")
         };
-        let tb = debug.get(Value::Str(vm.heap_mut().intern(b"traceback")));
+        let tb = debug.get(Value::Str(vm.intern(b"traceback")));
         // values the host keeps across calls are pinned
         vm.pin_host(f);
         vm.pin_host(tb);

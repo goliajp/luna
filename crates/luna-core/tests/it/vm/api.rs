@@ -3,7 +3,6 @@
 //! public surface; these tests pin the same semantic invariants there.
 
 use super::*;
-use luna_core::__private::VmHeap;
 
 /// Native that pushes its arg count back as the result — analogous to
 /// `lua_pushinteger(L, lua_gettop(L))`.
@@ -89,7 +88,7 @@ fn api_globals_round_trip_through_set_and_lua_read() {
     assert!(matches!(v[0], Value::Int(42)));
     vm.eval("from_lua = 'set by lua'").unwrap();
     let g = vm.globals();
-    let key = Value::Str(vm.heap_mut().intern(b"from_lua"));
+    let key = Value::Str(vm.intern(b"from_lua"));
     let got = g.get(key);
     if let Value::Str(s) = got {
         assert_eq!(s.as_bytes(), b"set by lua");

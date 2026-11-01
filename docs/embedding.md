@@ -286,10 +286,8 @@ without the JIT:
   no position, as PUC does for an error raised inside a C function.
   `table.sort` raises only when it would store, so an already sorted
   array of up to three elements is left alone, as in Redis
-- the host side: `Vm::set_global`, `Table::set` and `Table::set_int`
-  return the error (`TableError::ReadOnly` from the `Table` methods; turn
-  it into the interpreter's error with `Vm::table_error`), and
-  `LuaTable::set` on the facade does too
+- the host side: `Vm::set_global` and `Vm::raw_set` return the error,
+  and `LuaTable::set` on the facade does too
 
 Reads, `__index` lookups and iteration are not affected and cost nothing
 extra; a write checks one bit in the table's header (the bit the write

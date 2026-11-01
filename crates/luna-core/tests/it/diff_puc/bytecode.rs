@@ -1,7 +1,6 @@
 //! Fixtures compiled by PUC `luac`, loaded and run by both engines.
 
 use super::*;
-use luna_core::__private::VmHeap;
 use luna_core::__private::{VmCApiLoad, VmHostInternals};
 
 const LUAC_ENV: &[(&str, &str)] = &[
@@ -241,7 +240,7 @@ fn puc_bytecode_loads_in_every_dialect() {
 pub(crate) fn same_error(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm::LuaError> {
     let mut e = vm.nat_arg(fs, nargs, 0);
     if e.is_nil() && vm.version() >= LuaVersion::Lua55 {
-        e = luna_core::runtime::Value::Str(vm.heap_mut().intern(b"(error object is a nil value)"));
+        e = luna_core::runtime::Value::Str(vm.intern(b"(error object is a nil value)"));
     }
     vm.nat_ret(fs, &[e])
 }

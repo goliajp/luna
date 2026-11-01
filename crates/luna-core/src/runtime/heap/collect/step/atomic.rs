@@ -13,7 +13,7 @@ impl Heap {
         self.gc_finish_atomic_work(None);
     }
 
-    /// [`Heap::gc_finish_atomic`], counting the work PUC's `atomic` counts
+    /// `Heap::gc_finish_atomic`, counting the work PUC's `atomic` counts
     /// for the objects it traverses (with `run` the running thread), and
     /// entering the sweep as the dialect does: 5.1 sweeps nothing yet, 5.3
     /// one object, the others to the first object kept. Returns the work
