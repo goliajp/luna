@@ -44,8 +44,7 @@ optimization.
   A host writes a table through the VM: `t.set(&mut heap, k, v)` →
   `vm.raw_set(t, k, v)?` (an integer key is `Value::Int(i)`), or builds it
   with `vm.new_table().with(k, v).build()`; a metatable is set by calling
-  Lua's `setmetatable` (`vm.call_value(vm.get_global("setmetatable"),
-  &[t, mt])?`).
+  Lua's `setmetatable`, read from `vm.globals()`, with `vm.call_value`.
 
 - `package.path` defaults to PUC's default outside Windows too
   (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in
