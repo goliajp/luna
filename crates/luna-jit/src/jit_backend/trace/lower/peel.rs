@@ -56,8 +56,8 @@ impl Restart {
 
     /// Whether `self`, the loop head's copy at `P`, holds what the ops
     /// after `P` were lowered for, `at`: the same kinds, sunk fields and
-    /// upvalue reads, and at least the constants, tested tables and quiet
-    /// collector they took as known.
+    /// upvalue reads, and at least the constants and quiet collector they
+    /// took as known (they take no table as tested: see `emit_first_pass`).
     fn holds(&self, at: &Restart) -> bool {
         let keys = |u: &UpvalReads| {
             let mut c: Vec<u32> = u.cache.keys().copied().collect();
@@ -84,7 +84,6 @@ impl Restart {
             && self.virt_kinds == at.virt_kinds
             && keys(&self.upvals) == keys(&at.upvals)
             && known
-            && at.ro_checked.iter().all(|v| self.ro_checked.contains(v))
             && (self.gc_quiet || !at.gc_quiet)
     }
 }
@@ -131,6 +130,10 @@ pub(super) fn emit_first_pass<E: Emit>(
     for (r, s) in stored.iter().enumerate() {
         lw.stored[r] = s.then(|| use_var_resolved(&mut lw.bcx, lw.entry.regs_full[r]));
     }
+    // the tested tables are known by their values in one copy, which the
+    // other copy's do not match: none is tested at the join, as where the
+    // ways of a comparison rejoin
+    lw.ro_checked.clear();
     let at = Restart::take(lw);
     emit_ops(lw, pl, &mut cx, p..pl.effective_end)?;
     Some(LoopCopy {
