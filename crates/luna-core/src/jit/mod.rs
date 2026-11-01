@@ -14,9 +14,12 @@
 //! `luna_core::vm::Vm::new_minimal(version)`.
 //!
 //! The interpreter runs a backend's code without checking it, so a
-//! backend is an `unsafe impl`, and nothing safe can change what compiled
-//! code a prototype holds. The example compiles; each one after it fails
-//! to compile, for the reason its comment gives.
+//! backend is an `unsafe impl`. Nothing safe changes what compiled code a
+//! prototype or an installed trace holds, nor replaces or frees the
+//! storage that code lives in (clearing a storage's cache leaves the code
+//! mapped); taking a trace's tier-up source only keeps the trace at its
+//! tier. The example compiles; each one after it fails to compile, for the
+//! reason its comment gives.
 //!
 //! ```
 //! use luna_core::{jit::*, runtime::{Gc, LuaClosure, Proto, Value}, version::LuaVersion, vm::Vm};

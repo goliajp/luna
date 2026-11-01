@@ -1,5 +1,12 @@
 use super::*;
 
+/// The Vm's JIT storage, for a test to compile a trace into.
+fn vm_storage(vm: &mut luna_core::vm::Vm) -> &mut dyn luna_core::__private::JitStorage {
+    use luna_core::__private::VmJitState;
+    // SAFETY: the tests only compile into the storage, which stays in place
+    unsafe { vm.jit_mut() }.storage.as_mut()
+}
+
 mod div_magic;
 mod drop_unused_block_params_tests;
 mod lir_primitives;

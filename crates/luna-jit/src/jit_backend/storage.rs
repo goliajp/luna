@@ -95,6 +95,12 @@ impl JitStorage for CraneliftJitStorage {
         self
     }
 
+    fn clear_cache(&mut self) {
+        // the handles stay: functions already compiled keep calling their
+        // code until the Vm drops
+        self.cache.clear();
+    }
+
     fn claim(&mut self, vm: u64) {
         match self.owner {
             None => self.owner = Some(vm),

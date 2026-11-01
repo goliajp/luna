@@ -59,7 +59,7 @@ fn new_table_writes_non_null_table_ptr_into_dst() {
     // Trace: R[0] = {}. The B/C size hints don't matter — the
     // lowerer reaches for the unsized helper.
     let rec = closed_record(p, 0, &[Inst::iabc(Op::NewTable, 0, 0, 0, false)]);
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     // SAFETY: `ct` was compiled into `vm`'s storage, `state` has the
@@ -90,7 +90,7 @@ fn set_i_then_get_i_roundtrips_through_a_fresh_table() {
             Inst::iabc(Op::GetI, 3, 0, 1, false),
         ],
     );
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[2] = 42; // value to write
@@ -123,7 +123,7 @@ fn len_reports_array_size_after_set_i_sequence() {
             Inst::iabc(Op::Len, 2, 0, 0, false),
         ],
     );
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 99;
@@ -163,7 +163,7 @@ fn metatable_on_set_i_exits_at_the_store() {
     );
     rec.entry_tags[0] = luna_core::__private::raw::TABLE;
     rec.entry_tags[2] = luna_core::__private::raw::TABLE;
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = plain.as_ptr() as i64;
@@ -197,7 +197,7 @@ fn metatable_on_get_i_parks_pending_err() {
     // Trace: R[1] = R[0][1].
     let mut rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 1, 0, 1, false)]);
     rec.entry_tags[0] = luna_core::__private::raw::TABLE;
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = t.as_ptr() as i64;
@@ -231,7 +231,7 @@ fn metatable_on_len_exits_at_the_len() {
     );
     rec.entry_tags[0] = luna_core::__private::raw::TABLE;
     rec.entry_tags[2] = luna_core::__private::raw::TABLE;
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = plain.as_ptr() as i64;
@@ -259,7 +259,7 @@ fn new_table_dst_out_of_bounds_bails() {
     let p = load_proto(&mut vm, WIDE_SRC);
     // Reg index 200 is way past the proto's max_stack (~5).
     let rec = closed_record(p, 0, &[Inst::iabc(Op::NewTable, 200, 0, 0, false)]);
-    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm_storage(&mut vm), &rec).is_none());
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn get_i_table_reg_out_of_bounds_bails() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
     let rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 0, 200, 1, false)]);
-    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm_storage(&mut vm), &rec).is_none());
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn set_i_value_reg_out_of_bounds_bails() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
     let rec = closed_record(p, 0, &[Inst::iabc(Op::SetI, 0, 1, 200, false)]);
-    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm_storage(&mut vm), &rec).is_none());
 }
 
 #[test]
@@ -283,5 +283,5 @@ fn len_table_reg_out_of_bounds_bails() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
     let rec = closed_record(p, 0, &[Inst::iabc(Op::Len, 0, 200, 0, false)]);
-    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm_storage(&mut vm), &rec).is_none());
 }

@@ -31,8 +31,9 @@
 //!
 //! None. Compiled entries live for the Vm's lifetime; dropping the
 //! `LlvmJitStorage` drops every `ExecutionEngine`, which unmaps
-//! the JIT mcode pages. Tests can call [`LlvmJitStorage::clear`]
-//! to force a fresh compile between cases.
+//! the JIT mcode pages. `clear_cache` forgets the cached entries,
+//! so the next compile of a function compiles it again, and leaves the
+//! engines, and the code, in place.
 
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
@@ -118,9 +119,8 @@ pub struct EnginePair {
 unsafe impl Send for EnginePair {}
 
 impl LlvmJitStorage {
-    /// Drop every cached entry + ExecutionEngine. Tests use this to
-    /// force a fresh compile between cases.
-    pub fn clear(&mut self) {
+    /// Drops every cached entry and execution engine, unmapping the code.
+    fn clear(&mut self) {
         self.cache.clear();
         self.engines.clear();
     }
@@ -163,5 +163,10 @@ impl JitStorage for LlvmJitStorage {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn clear_cache(&mut self) {
+        // the engines stay: entries already handed out keep running
+        self.cache.clear();
     }
 }
