@@ -180,7 +180,7 @@ pub struct DecodedExit<'a> {
 /// restores through the global tags, even when an exit resumes at that pc
 /// as well.
 ///
-/// Layout reminder (from `CompiledTrace::exit_hit_counts`):
+/// Layout reminder (from `CompiledTraceParts::exit_hit_counts`):
 /// - `[0..inline.len())` — inline cmp@d>0 sites, indexed by
 ///   `site_id - 1` (1-based encoding lets `site_id == 0` mean
 ///   "non-inline").

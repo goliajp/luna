@@ -61,7 +61,7 @@ pub(super) fn emit_entry<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> EntryRegs {
     // every non-INLINE / non-TAG callsite (clean-tail, Call
     // truncation, ForLoop / TForLoop exits, generic deopts). Each
     // such callsite bakes this Box's heap address into its IR.
-    // Transported into [`CompiledTrace::global_side_trace_ptr`] at
+    // Transported into [`CompiledTraceParts::global_side_trace_ptr`] at
     // emit end without moving (Box's heap allocation stays put).
     let global_side_trace_box: Box<TCellPtr> = Box::new(TCellPtr::null());
     let _global_side_trace_cell_addr = (&*global_side_trace_box) as *const TCellPtr as i64;

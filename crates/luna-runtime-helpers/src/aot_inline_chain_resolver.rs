@@ -32,7 +32,7 @@
 //     garbage.
 //   - Keeping the chain's ownership on the Rust side mirrors the JIT
 //     path's `per_exit_inline_vec.push((..., chain_rc, ...))` — the
-//     dispatcher's `CompiledTrace::per_exit_inline[i].chain` field can
+//     dispatcher's `CompiledTraceParts::per_exit_inline[i].chain` field can
 //     hold its own Rc rebuilt from the same bytes (decoded by the
 //     trace install path); the IR pointer and the dispatcher field
 //     point at independently-allocated copies of the same data, but

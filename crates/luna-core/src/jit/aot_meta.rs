@@ -222,7 +222,7 @@ pub fn unpack_tag_res_kind(b: u8) -> Option<TagResKind> {
 }
 
 /// One per-cont_pc side-exit entry serialized into the v2 tail of a
-/// meta blob. Mirrors `CompiledTrace::per_exit_tags`'s `(u32,
+/// meta blob. Mirrors `CompiledTraceParts::per_exit_tags`'s `(u32,
 /// Rc<[ExitTag]>)` shape, with the `ExitTag` slice already packed
 /// through [`pack_exit_tag`].
 #[derive(Clone, Debug)]
@@ -237,7 +237,7 @@ pub struct PerExitTagsEntry {
 }
 
 /// One per-site inline cmp@d>0 side-exit entry serialized into the v3
-/// tail of a meta blob. Mirrors `CompiledTrace::per_exit_inline`'s
+/// tail of a meta blob. Mirrors `CompiledTraceParts::per_exit_inline`'s
 /// [`crate::jit::trace_types::InlineSideExit`] shape minus the
 /// runtime-only `side_trace_ptr` cell (always defaults null on AOT
 /// install). The `chain` field carries [`FrameMaterializeInfo`]

@@ -216,7 +216,7 @@ pub struct JitCounters {
     /// Side traces that compiled but failed the shape-match gate.
     pub side_trace_shape_mismatch: u64,
     /// Dispatches of traces holding each kind of inlined code, by the bit
-    /// of [`crate::jit::trace::CompiledTrace::inline_kinds`].
+    /// of [`crate::jit::trace::CompiledTraceParts::inline_kinds`].
     pub inline_kind_dispatched: [u64; 4],
     /// Recordings not compiled because other Vms sharing compiled code
     /// failed to compile one like it.

@@ -20,7 +20,7 @@ pub enum CompileOutcome {
     BackendError,
 }
 
-/// [`CompiledTrace::inline_kinds`]: a call into a vararg function.
+/// [`CompiledTraceParts::inline_kinds`]: a call into a vararg function.
 pub const INLINE_VARARG_CALLEE: u8 = 1;
 /// A call that wants more than one value, or all of them.
 pub const INLINE_MULTI_RESULTS: u8 = 1 << 1;

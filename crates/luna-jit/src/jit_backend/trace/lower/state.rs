@@ -51,7 +51,7 @@ pub(super) struct Lower<E: Emit> {
     pub(super) current_kinds: Vec<RegKind>,
     pub(super) dispatchable: bool,
     /// The first emit-pass site that made the trace not dispatchable,
-    /// which `CompiledTrace::dispatch_off_reason` reports.
+    /// which `CompiledTraceParts::dispatch_off_reason` reports.
     pub(super) dispatch_off_reason: Option<&'static str>,
     /// The register kinds at each side exit, taken where the exit is
     /// emitted, so a later writer does not change what the exit restores.
