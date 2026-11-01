@@ -36,8 +36,8 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) -> i
     // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
     // while the borrow is in use, and `Table::set*` never runs the
     // collector; the method JIT stores only into tables its call tested on
-    // entry or made itself (see `Vm::try_jit_call_op`), and an integer
-    // needs no barrier
+    // entry or made itself (see `Vm::try_jit_call_op`), an integer needs
+    // no barrier, and the heap stays in place
     let r = unsafe {
         g.as_mut()
             .set_int_unguarded(vm.heap_mut(), key, luna_core::runtime::Value::Int(val))
@@ -84,7 +84,7 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
         luna_core::runtime::Value::pack(tag as u8, raw)
     };
     // SAFETY: `g` is a live table of the Vm lent to this call (# Safety) and `v` one of its values;
-    // no reference to the table is held across the store
+    // no reference to the table is held across the store, and the heap stays in place
     let r = unsafe { g.store_int(vm.heap_mut(), key, v) };
     if refused(vm, r) {
         return 0;
@@ -141,7 +141,7 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
     };
     // a refusal parks the deopt request, the store's only outcome here
     // SAFETY: `g` is a live table of the Vm lent to this call (# Safety), `key` and `v` its values;
-    // no reference to the table is held across the store
+    // no reference to the table is held across the store, and the heap stays in place
     let r = unsafe { g.store(vm.heap_mut(), key, v) };
     refused(vm, r);
 }
@@ -185,7 +185,7 @@ pub(crate) unsafe fn barrier_for(
     key: luna_core::runtime::Value,
     val: luna_core::runtime::Value,
 ) {
-    // SAFETY: the table and the values are `vm`'s (# Safety)
+    // SAFETY: the table and the values are `vm`'s (# Safety), and the heap stays in place
     unsafe { vm.heap_mut().barrier_store(g, &[key, val]) };
 }
 
@@ -222,7 +222,7 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
         return;
     }
     // SAFETY: `g` is a live table of the Vm lent to this call (# Safety); no reference to the table
-    // is held across the store
+    // is held across the store, and the heap stays in place
     let r = unsafe { g.store_int(vm.heap_mut(), key, luna_core::runtime::Value::Nil) };
     refused(vm, r);
 }
@@ -261,7 +261,7 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(
     // a NaN key raises, a read-only table refuses, and a table that cannot
     // grow grows there: the interpreter re-runs the call
     // SAFETY: `g` is a live table of the Vm lent to this call (# Safety) and the key and value are
-    // numbers; no reference to the table is held across the store
+    // numbers; no reference to the table is held across the store, and the heap stays in place
     match unsafe { g.store(vm.heap_mut(), k, v) } {
         Ok(()) => 1,
         Err(luna_core::runtime::TableError::Memory(_)) => {

@@ -122,7 +122,7 @@ impl<'a> Api<'a> {
     pub(super) fn push(&mut self, v: Value) {
         self.stack_mut().push_or_abort(v);
         let co = self.thread();
-        // SAFETY: `co` is a thread of this Vm, live while its state is in use
+        // SAFETY: `co` is a live thread of this Vm; the heap is written in place
         unsafe { self.vm.heap_mut().barrier_back(co) };
     }
 
@@ -132,7 +132,7 @@ impl<'a> Api<'a> {
     pub(super) fn push_all(&mut self, vs: &[Value]) -> Result<(), LuaError> {
         self.stack_mut().extend_from_slice(vs)?;
         let co = self.thread();
-        // SAFETY: `co` is a thread of this Vm, live while its state is in use
+        // SAFETY: `co` is a live thread of this Vm; the heap is written in place
         unsafe { self.vm.heap_mut().barrier_back(co) };
         Ok(())
     }
@@ -142,7 +142,7 @@ impl<'a> Api<'a> {
     pub(super) fn push_all_in_room(&mut self, vs: &[Value]) {
         self.stack_mut().extend_from_slice_or_abort(vs);
         let co = self.thread();
-        // SAFETY: `co` is a thread of this Vm, live while its state is in use
+        // SAFETY: `co` is a live thread of this Vm; the heap is written in place
         unsafe { self.vm.heap_mut().barrier_back(co) };
     }
 
@@ -256,7 +256,7 @@ impl<'a> Api<'a> {
             Slot::Stack(i) => {
                 self.stack_mut()[i] = v;
                 let co = self.thread();
-                // SAFETY: `co` is a thread of this Vm, live while its state is in use
+                // SAFETY: `co` is a live thread of this Vm; the heap is written in place
                 unsafe { self.vm.heap_mut().barrier_back(co) };
             }
             Slot::Upvalue(n) if n >= 1 => {
@@ -267,7 +267,7 @@ impl<'a> Api<'a> {
                     // call's stack slot; no other reference into it is live, and
                     // the borrow covers one store
                     unsafe { nc.as_mut() }.upvals[C_UPVALS + n - 1] = v;
-                    // SAFETY: `nc` is the running C function's closure, live in this Vm
+                    // SAFETY: `nc` is this Vm's running C closure; the heap is written in place
                     unsafe { self.vm.heap_mut().barrier_back(nc) };
                 }
             }
@@ -275,7 +275,7 @@ impl<'a> Api<'a> {
                 if let (Some(nc), Value::Table(_)) = (self.running_c(), v) {
                     // SAFETY: as for an upvalue above
                     unsafe { nc.as_mut() }.upvals[1] = v;
-                    // SAFETY: `nc` is the running C function's closure, live in this Vm
+                    // SAFETY: `nc` is this Vm's running C closure; the heap is written in place
                     unsafe { self.vm.heap_mut().barrier_back(nc) };
                 }
             }

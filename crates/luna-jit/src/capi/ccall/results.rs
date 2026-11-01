@@ -19,7 +19,7 @@ pub(in crate::capi) fn push_results(
     }
     cstack(co).truncate(at);
     cstack(co).extend_from_slice(&vals)?;
-    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+    // SAFETY: `co` is a live thread of this Vm; the heap is written in place
     unsafe { vm.heap_mut().barrier_back(co) };
     Ok(())
 }

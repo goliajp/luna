@@ -41,7 +41,7 @@ pub(super) fn new_thread_state(
 ) -> Option<*mut LuaState> {
     // SAFETY: `g` is the live global record of `co`'s state, whose Vm
     // pointer is live
-    let mem = unsafe { (*(*g).vm).heap_mut().mem() };
+    let mem = unsafe { (*(*g).vm).heap().mem() };
     let b = LAny::new(
         mem,
         ThreadBox {
@@ -111,7 +111,7 @@ pub(in crate::capi) fn try_state_of(vm: &mut Vm, co: Gc<Coro>) -> Option<*mut Lu
         unsafe { co.as_mut() }
             .host_stack_mut()
             .push_or_abort(co.body);
-        // SAFETY: `co` is a thread of this Vm, live while its state is in use
+        // SAFETY: `co` is a live thread of this Vm; the heap is written in place
         unsafe { vm.heap_mut().barrier_back(co) };
     }
     Some(l)

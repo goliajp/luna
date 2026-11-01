@@ -163,7 +163,7 @@ pub(super) fn pcallk(
                             wait: Wait::Recover { status },
                         }),
                     );
-                    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+                    // SAFETY: `co` is a live thread of this Vm; the heap is written in place
                     unsafe { api.vm.heap_mut().barrier_back(co) };
                     api.g().raised = LUNA_RECOVER;
                     return LUA_OK;
@@ -192,7 +192,7 @@ pub(super) fn pcallk(
             pcall_failed(api.vm, co, at, e, errerr_before)
         }
     };
-    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+    // SAFETY: `co` is a live thread of this Vm; the heap is written in place
     unsafe { api.vm.heap_mut().barrier_back(co) };
     status
 }

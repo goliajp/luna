@@ -190,11 +190,32 @@ impl VmHostInternals for crate::vm::Vm {
 
 /// The heap of a `Vm`, for luna's other crates (the JIT's helpers, the C
 /// API): not part of the supported API.
+///
+/// ```
+/// use luna_core::{__private::VmHeap, version::LuaVersion, vm::Vm};
+/// let mut a = Vm::new(LuaVersion::Lua54);
+/// let b = Vm::new(LuaVersion::Lua54);
+/// let _ = b.heap().bytes();
+/// // SAFETY: the heap stays in place and nothing is written through it
+/// let _ = unsafe { a.heap_mut() }.bytes();
+/// ```
+///
+/// ```compile_fail,E0133
+/// use luna_core::{__private::VmHeap, version::LuaVersion, vm::Vm};
+/// let mut a = Vm::new(LuaVersion::Lua54);
+/// let mut b = Vm::new(LuaVersion::Lua54);
+/// std::mem::swap(a.heap_mut(), b.heap_mut()); // error[E0133]: `heap_mut` is unsafe
+/// ```
 pub trait VmHeap {
     /// The VM's heap.
     fn heap(&self) -> &crate::runtime::Heap;
     /// The VM's heap, to allocate in and write to.
-    fn heap_mut(&mut self) -> &mut crate::runtime::Heap;
+    ///
+    /// # Safety
+    /// The heap is not moved or replaced through the reference (as by
+    /// `std::mem::swap` with another VM's heap), and the objects written
+    /// through it are this VM's.
+    unsafe fn heap_mut(&mut self) -> &mut crate::runtime::Heap;
 }
 
 impl VmHeap for crate::vm::Vm {
@@ -204,7 +225,7 @@ impl VmHeap for crate::vm::Vm {
     }
 
     #[inline(always)]
-    fn heap_mut(&mut self) -> &mut crate::runtime::Heap {
+    unsafe fn heap_mut(&mut self) -> &mut crate::runtime::Heap {
         &mut self.heap
     }
 }

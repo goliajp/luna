@@ -84,7 +84,7 @@ fn closures_do_not_allocate_an_env_cell_each() {
     vm.eval("keep = {} for i = 1, 1000 do keep[i] = function() return i end end collectgarbage()")
         .expect("eval");
     let mut upvalues = 0;
-    vm.heap_mut()
+    vm.heap()
         .walk_objects(|t| upvalues += usize::from(t == ObjTag::Upvalue));
     // each closure captures its own `i`; none adds an `_ENV` cell of its own
     assert!((1000..1100).contains(&upvalues), "{upvalues} upvalue cells");
