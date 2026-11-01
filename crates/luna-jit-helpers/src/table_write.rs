@@ -136,10 +136,9 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
         };
         luna_core::runtime::Value::pack(val_tag as u8, raw)
     };
+    // a refusal parks the deopt request, the store's only outcome here
     let r = g.set(vm.heap_mut(), key, v);
-    if refused(vm, r) {
-        return;
-    }
+    refused(vm, r);
 }
 
 /// Whether `r`, a store's result, is a read-only table's refusal or a
