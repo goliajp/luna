@@ -29,7 +29,8 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
     if vm.jit().pending_err.is_some() {
         return 0;
     }
-    match vm.heap_mut().try_new_table() {
+    // SAFETY: the heap stays in place
+    match unsafe { vm.heap_mut() }.try_new_table() {
         Ok(g) => g.as_ptr() as i64,
         // compiled code leaves at the `NewTable`, and the interpreter
         // allocates, collecting in an emergency as compiled code may not
@@ -59,7 +60,8 @@ pub unsafe extern "C" fn luna_jit_new_table_sized(ops: i64) -> i64 {
         return 0;
     }
     let (b, c, k) = unpack_table_ops(ops);
-    match vm.heap_mut().try_new_table_presized(b, c, k) {
+    // SAFETY: the heap stays in place
+    match unsafe { vm.heap_mut() }.try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g.as_ptr() as i64,
         Ok(None) => {
             vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));
@@ -93,7 +95,8 @@ pub unsafe extern "C" fn luna_jit_chunk_new_table(ops: i64, presized: i64) -> i6
         return 0;
     }
     let (b, c, k) = unpack_table_ops(presized);
-    match vm.heap_mut().try_new_table_presized(b, c, k) {
+    // SAFETY: the heap stays in place
+    match unsafe { vm.heap_mut() }.try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g.as_ptr() as i64,
         _ => 0,
     }
@@ -114,7 +117,8 @@ pub(crate) fn unpack_table_ops(ops: i64) -> (u32, u32, bool) {
 /// land in it.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table.
+/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
+/// the Vm lent to the call.
 // SAFETY: no other item in the link is named `luna_jit_table_reserve_list`: only this crate
 // defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -124,10 +128,11 @@ pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) {
     if vm.jit().pending_err.is_some() {
         return;
     }
-    // SAFETY: `t` is a live table (# Safety); `reserve_list` never runs the
-    // collector, and nothing else refers into the table meanwhile
-    let table = unsafe { table_arg(t).as_mut() };
-    match table.reserve_list(vm.heap_mut(), last.max(0) as u64) {
+    // SAFETY: `t` is a live table of the Vm lent to this call (# Safety), grown in
+    // place in its heap; `reserve_list` never runs the collector, and nothing
+    // else refers into the table meanwhile
+    let (table, heap) = unsafe { (table_arg(t).as_mut(), vm.heap_mut()) };
+    match table.reserve_list(heap, last.max(0) as u64) {
         Ok(()) => {}
         Err(luna_core::runtime::table::TableError::Overflow) => {
             vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));

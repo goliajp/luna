@@ -289,7 +289,7 @@ pub unsafe extern "C" fn lua_setlocal(
             Local::CSlot(s) => {
                 t.stack_mut()[s] = v;
                 let co = t.thread();
-                // SAFETY: `co` is a thread of this Vm, live while its state is in use
+                // SAFETY: `co` is a live thread of this Vm; the heap is written in place
                 unsafe { t.vm.heap_mut().barrier_back(co) };
             }
             Local::Level(i) => {

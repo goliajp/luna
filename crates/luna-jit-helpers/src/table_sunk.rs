@@ -115,7 +115,8 @@ unsafe fn materialize(
     n_hash_u: usize,
     (hash_keys_ptr, hash_raws_ptr, hash_kinds_ptr): (*const u64, *const u64, *const u8),
 ) -> Option<luna_core::runtime::Gc<luna_core::runtime::Table>> {
-    let g = match vm.heap_mut().try_new_table_presized(b, c, k) {
+    // SAFETY: the heap stays in place
+    let g = match unsafe { vm.heap_mut() }.try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g,
         Ok(None) => {
             vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));
@@ -137,7 +138,8 @@ unsafe fn materialize(
             };
             luna_core::runtime::Value::pack(*kinds_ptr.add(i), raw)
         };
-        // SAFETY: `g` was just made in the Vm's heap and `v` is one of its values (# Safety)
+        // SAFETY: `g` was just made in the Vm's heap, which stays in place, and `v` is one of its
+        // values (# Safety)
         if unsafe { g.store_int(vm.heap_mut(), (i + 1) as i64, v) }.is_err() {
             vm.jit_park_oom();
             return None;
@@ -162,7 +164,8 @@ unsafe fn materialize(
             )
         };
         let key = luna_core::runtime::Value::Str(key);
-        // SAFETY: `g` was just made in the Vm's heap, `key` and `v` are its values (# Safety)
+        // SAFETY: `g` was just made in the Vm's heap, which stays in place, and `key` and `v` are
+        // its values (# Safety)
         if unsafe { g.store(vm.heap_mut(), key, v) }.is_err() {
             vm.jit_park_oom();
             return None;

@@ -221,7 +221,7 @@ pub unsafe extern "C" fn lua_setallocf(L: *mut LuaState, f: Option<LuaAlloc>, ud
         (*g).alloc = f;
         (*g).alloc_ud = ud;
         if let Some(f) = f {
-            (*(*g).vm).heap_mut().mem_ctx().set_raw_alloc(f, ud);
+            (*(*g).vm).heap().mem_ctx().set_raw_alloc(f, ud);
         }
     }
 }

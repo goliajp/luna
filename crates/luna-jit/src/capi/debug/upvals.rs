@@ -72,7 +72,7 @@ pub unsafe extern "C" fn lua_setupvalue(
                 // SAFETY: the function is on the stack, so alive; no other
                 // reference into it is live, and the borrow covers one store
                 unsafe { nc.as_mut() }.upvals[k] = v;
-                // SAFETY: `nc` is the running C function's closure, live in this Vm
+                // SAFETY: `nc` is this Vm's running C closure; the heap is written in place
                 unsafe { api.vm.heap_mut().barrier_back(nc) };
                 Vec::new()
             }

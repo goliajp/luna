@@ -35,7 +35,8 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
     // SAFETY: `t` is a live table and (`val_tag`, `val_raw`) one value's
     // tag and payload (# Safety); `g` is not dereferenced again while the
     // borrow is in use, and `Table::set` never runs the collector; the table
-    // is not read-only (tested above), and the barrier is taken below
+    // is not read-only (tested above), the barrier is taken below, and the
+    // heap stays in place
     let (val, r) = unsafe {
         let raw = luna_core::__private::RawVal {
             zero: val_raw as u64,

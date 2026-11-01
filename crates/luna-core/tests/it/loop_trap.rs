@@ -2,7 +2,6 @@
 //! memory cap and an armed hook. Each way of arming one while a chunk runs
 //! must be seen from the next instruction on.
 
-use luna_core::__private::VmHeap;
 use std::cell::Cell;
 
 use luna_core::runtime::Value;
@@ -39,8 +38,8 @@ fn arm_cap(vm: &mut Vm, _slot: u32, _nargs: u32) -> Result<u32, LuaError> {
 
 fn vm_with(name: &str, f: NativeFn) -> Vm {
     let mut vm = Vm::new(LuaVersion::Lua54);
-    let n = vm.heap_mut().new_native(f, Box::new([]));
-    vm.set_global(name, Value::Native(n)).expect("set_global");
+    let n = vm.native(f);
+    vm.set_global(name, n).expect("set_global");
     vm
 }
 

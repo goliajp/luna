@@ -1,7 +1,6 @@
 use super::*;
 use crate::jit_backend::enter_jit;
 use luna_core::__private::VmCApiLoad;
-use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -147,9 +146,9 @@ fn len_reports_array_size_after_set_i_sequence() {
 fn metatable_on_set_i_exits_at_the_store() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
-    let plain = vm.heap_mut().new_table();
-    let t = vm.heap_mut().new_table();
-    let mt = vm.heap_mut().new_table();
+    let plain = vm.new_table().build();
+    let t = vm.new_table().build();
+    let mt = vm.new_table().build();
     vm.set_metatable(luna_core::runtime::Value::Table(t), Some(mt))
         .unwrap();
 
@@ -190,8 +189,8 @@ fn metatable_on_set_i_exits_at_the_store() {
 fn metatable_on_get_i_parks_pending_err() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
-    let t = vm.heap_mut().new_table();
-    let mt = vm.heap_mut().new_table();
+    let t = vm.new_table().build();
+    let mt = vm.new_table().build();
     vm.set_metatable(luna_core::runtime::Value::Table(t), Some(mt))
         .unwrap();
 
@@ -215,9 +214,9 @@ fn metatable_on_get_i_parks_pending_err() {
 fn metatable_on_len_exits_at_the_len() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
-    let plain = vm.heap_mut().new_table();
-    let t = vm.heap_mut().new_table();
-    let mt = vm.heap_mut().new_table();
+    let plain = vm.new_table().build();
+    let t = vm.new_table().build();
+    let mt = vm.new_table().build();
     vm.set_metatable(luna_core::runtime::Value::Table(t), Some(mt))
         .unwrap();
 

@@ -179,7 +179,7 @@ pub(super) fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
         let a = vm.nat_arg(fs, nargs, i);
         cstack(co).push_or_abort(a);
     }
-    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+    // SAFETY: `co` is a live thread of this Vm; the heap is written in place
     unsafe { vm.heap_mut().barrier_back(co) };
     let s = st(l);
     if s.calls.reserve(1).is_err() {
@@ -384,7 +384,7 @@ fn run_cont(
                     pop_call(l, co, token);
                     return Err(o.into());
                 }
-                // SAFETY: `co` is a thread of this Vm, live while its state is in use
+                // SAFETY: `co` is a live thread of this Vm; the heap is written in place
                 unsafe { vm.heap_mut().barrier_back(co) };
                 let r = close_frame(vm, l, token, None)
                     .and_then(|()| return_hook(vm, co, base, vals.len()))
@@ -409,7 +409,7 @@ fn run_cont(
         } => pcall_outcome(vm, co, vals, nresults, at, errerr_before).unwrap_or(LUA_YIELD),
         Wait::Recover { status } => status,
     };
-    // SAFETY: `co` is a thread of this Vm, live while its state is in use
+    // SAFETY: `co` is a live thread of this Vm; the heap is written in place
     unsafe { vm.heap_mut().barrier_back(co) };
     st(l).calls[token].k_status = status;
     let mut nret: c_int = 0;
