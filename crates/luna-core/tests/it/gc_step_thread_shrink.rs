@@ -122,16 +122,20 @@ fn coroutines_resumed_between_the_steps_of_a_shrinking_cycle_keep_their_values()
         let mut vm = vm(v);
         vm.eval(
             r#"
-            local i = 0
+            -- every other step resumes the next coroutine: the cycle takes
+            -- 200 to 400 steps, so some run during it and some after
+            local i, n = 0, 0
             repeat
               i = i + 1
-              if i <= 200 then
-                local ok, a, b = coroutine.resume(cos[i])
-                assert(ok and a == i and b == tostring(i), i)
+              if i % 2 == 0 and n < 200 then
+                n = n + 1
+                local ok, a, b = coroutine.resume(cos[n])
+                assert(ok and a == n and b == tostring(n), n)
               end
             until collectgarbage("step", 0)
+            assert(n > 0 and n < 200, n)
             -- the ones the cycle did not reach, after it
-            for j = i + 1, 200 do
+            for j = n + 1, 200 do
               local ok, a = coroutine.resume(cos[j])
               assert(ok and a == j, j)
             end
