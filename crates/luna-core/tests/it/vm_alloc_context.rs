@@ -212,3 +212,47 @@ fn a_chunk_on_a_clone_a_vm_was_given_allocates_apart_from_it() {
     }
     run.join().unwrap();
 }
+
+// the Vm allocates through a host function on one thread while the host
+// swaps the function on another (`lua_setallocf`): the Vm reads the swap
+// without a lock, and every block goes back through one of the two
+#[cfg(feature = "send")]
+#[test]
+fn a_host_function_swapped_from_another_thread_takes_the_later_blocks() {
+    use luna_core::__private::MemCtxInternals;
+    use luna_core::vm::SendVm;
+    use std::thread;
+    let (a, b) = (Arc::new(Seen::default()), Arc::new(Seen::default()));
+    let ud = |s: &Arc<Seen>| Arc::as_ptr(s) as *mut c_void;
+    // SAFETY: `counting` follows the `lua_Alloc` contract on any thread; `a`
+    // and `b` outlive the owner and the Vm; each accepts the other's blocks
+    // (the same allocator and alignment)
+    let o = unsafe { MemOwner::raw(counting, ud(&a), LuaVersion::Lua54) };
+    let s = SendVm::from_vm(Vm::new_with_mem(LuaVersion::Lua54, o.clone()));
+    let run = thread::spawn(move || {
+        for _ in 0..20 {
+            s.eval("local t = {} for i = 1, 2000 do t[i] = {i} end")
+                .unwrap();
+        }
+    });
+    for n in 0..100_000 {
+        if run.is_finished() {
+            break;
+        }
+        let to = if n % 2 == 0 { &b } else { &a };
+        // SAFETY: as above
+        unsafe { o.ctx().set_raw_alloc(counting, ud(to)) };
+        thread::yield_now();
+    }
+    run.join().unwrap();
+    drop(o);
+    assert!(
+        a.news.get() > 0 && b.news.get() > 0,
+        "both functions made blocks"
+    );
+    assert_eq!(
+        a.live.get().wrapping_add(b.live.get()),
+        0,
+        "every block is freed"
+    );
+}
