@@ -56,7 +56,7 @@ fn loop_edge_inside_a_self_link_body_is_declined() {
         (add, p.code[add as usize]),
     ];
     let rec = self_link_record(p, &ops);
-    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
     assert_eq!(last_compile_checkpoint(), "bail:self-link-body-terminator");
 }
 
@@ -75,6 +75,6 @@ fn call_not_inlined_inside_a_self_link_body_is_declined() {
         (add, p.code[add as usize]),
     ];
     let rec = self_link_record(p, &ops);
-    assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
     assert_eq!(last_compile_checkpoint(), "bail:self-link-body-terminator");
 }

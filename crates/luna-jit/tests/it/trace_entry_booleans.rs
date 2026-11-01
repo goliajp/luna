@@ -14,8 +14,8 @@ fn vm() -> Vm {
     // the method JIT would run these functions instead of the interpreter
     // the trace recorder watches
     vm.set_jit_enabled(false);
-    vm.jit_mut().call_hot_threshold = 2;
-    vm.jit_mut().trace_hot_threshold = 2;
+    vm.set_call_hot_threshold(2);
+    vm.set_trace_hot_threshold(2);
     vm
 }
 

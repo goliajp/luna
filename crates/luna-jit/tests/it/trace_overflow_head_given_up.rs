@@ -26,8 +26,8 @@ fn overflowing_heads_stop_being_recorded() {
         let mut vm = luna_jit::new_with_jit(v);
         // the method JIT would take the all-integer `f` off the interpreter
         vm.set_jit_enabled(false);
-        vm.jit_mut().trace_hot_threshold = 1;
-        vm.jit_mut().call_hot_threshold = 1;
+        vm.set_trace_hot_threshold(1);
+        vm.set_call_hot_threshold(1);
         let r = vm.eval(&src).expect("eval");
         assert!(
             matches!(r[0], Value::Int(23_985_150))

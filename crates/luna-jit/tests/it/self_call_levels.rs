@@ -36,7 +36,7 @@ fn both(v: LuaVersion, src: &str) -> (String, String, usize) {
         vm.open_all_libs().expect("the libraries open");
         vm.set_trace_jit_enabled(false);
         if jit {
-            vm.jit_mut().call_hot_threshold = 1;
+            vm.set_call_hot_threshold(1);
         } else {
             vm.set_jit_enabled(false);
         }

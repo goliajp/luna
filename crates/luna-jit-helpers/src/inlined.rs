@@ -47,7 +47,8 @@ pub unsafe extern "C" fn luna_jit_op_closure_in(
     let cl =
         unsafe { luna_core::runtime::Gc::from_ptr(cl_raw as *mut luna_core::runtime::LuaClosure) };
     let Some(head) = vm.jit_last_lua_frame() else {
-        vm.jit_mut().pending_err = Some(vm.runtime_error("JIT op_closure: no Lua frame"));
+        let e = vm.runtime_error("JIT op_closure: no Lua frame");
+        vm.set_jit_pending_err(e);
         return 0;
     };
     // SAFETY: `cl` runs the inlined frame at `frame_off` above the head

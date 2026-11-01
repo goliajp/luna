@@ -156,8 +156,8 @@ pub(super) fn tiered_seeded(
 ) -> Vm {
     let mut vm = seeded(version, seed);
     vm.set_jit_enabled(false);
-    vm.jit_mut().trace_hot_threshold = hot;
-    vm.jit_mut().call_hot_threshold = hot;
+    vm.set_trace_hot_threshold(hot);
+    vm.set_call_hot_threshold(hot);
     vm.set_trace_tier(tier);
     vm.set_trace_tier_up_at(tier_up_at);
     vm

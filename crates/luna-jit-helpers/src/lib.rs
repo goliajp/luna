@@ -189,9 +189,12 @@ fn raw_bits(raw: luna_core::__private::RawVal) -> i64 {
 unsafe fn push_ssa_roots(vm: &mut luna_core::vm::Vm, roots: i64) -> usize {
     let prev = vm.jit().ssa_roots;
     if roots != 0 {
-        // SAFETY: the link word of the list (# Safety)
-        unsafe { *(roots as *mut i64).add(1) = prev as i64 };
-        vm.jit_mut().ssa_roots = roots as usize;
+        // SAFETY: the link word of the list (# Safety); the list is linked
+        // as the collector reads it, until the head is restored
+        unsafe {
+            *(roots as *mut i64).add(1) = prev as i64;
+            vm.jit_mut().ssa_roots = roots as usize;
+        }
     }
     prev
 }

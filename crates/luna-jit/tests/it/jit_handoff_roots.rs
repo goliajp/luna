@@ -55,7 +55,7 @@ fn run(from: usize) -> (String, usize, usize) {
     let mut vm = Vm::new_with_mem(LuaVersion::Lua54, MemOwner::policy(Box::new(policy)));
     luna_jit::install_default_jit(&mut vm);
     vm.set_trace_jit_enabled(false);
-    vm.jit_mut().call_hot_threshold = 1;
+    vm.set_call_hot_threshold(1);
     let out = match vm.eval(WALK) {
         Ok(r) => match r.first() {
             Some(Value::Int(i)) => i.to_string(),

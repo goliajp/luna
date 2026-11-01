@@ -27,8 +27,8 @@ pub(super) fn traced(version: LuaVersion, tier: TraceTier, tier_up_at: u32) -> V
     // the method JIT would run whole functions instead of the interpreter
     // the trace recorder watches
     vm.set_jit_enabled(false);
-    vm.jit_mut().trace_hot_threshold = 8;
-    vm.jit_mut().call_hot_threshold = 8;
+    vm.set_trace_hot_threshold(8);
+    vm.set_call_hot_threshold(8);
     vm.set_trace_tier(tier);
     vm.set_trace_tier_up_at(tier_up_at);
     vm

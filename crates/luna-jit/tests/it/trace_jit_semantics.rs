@@ -292,8 +292,8 @@ fn pairs_loop_meeting_other_key_kinds() {
     for v in INT_DIALECTS {
         let (interp, _) = run(v, src, false);
         let mut vm = luna_jit::new_with_jit(v);
-        vm.jit_mut().trace_hot_threshold = 1;
-        vm.jit_mut().call_hot_threshold = 1;
+        vm.set_trace_hot_threshold(1);
+        vm.set_call_hot_threshold(1);
         let jit = match vm.eval(src).expect("eval").first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             other => panic!("{other:?}"),
@@ -326,7 +326,7 @@ fn generic_for_recorded_at_its_first_back_edge() {
         let (interp, _) = run(v, src, false);
         assert_eq!(interp, "70", "{v:?}");
         let mut vm = luna_jit::new_with_jit(v);
-        vm.jit_mut().trace_hot_threshold = 0;
+        vm.set_trace_hot_threshold(0);
         let jit = match vm.eval(src).expect("eval").first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             other => panic!("{other:?}"),
@@ -352,7 +352,7 @@ fn string_operand_in_arithmetic() {
     for v in INT_DIALECTS {
         let (interp, _) = run(v, src, false);
         let mut vm = luna_jit::new_with_jit(v);
-        vm.jit_mut().trace_hot_threshold = 1;
+        vm.set_trace_hot_threshold(1);
         let jit = match vm.eval(src).expect("eval").first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),
             other => panic!("{other:?}"),
@@ -441,8 +441,8 @@ fn math_function_reassigned_between_dispatches() {
 fn same_hot(v: LuaVersion, src: &str) -> String {
     let (interp, _) = run(v, src, false);
     let mut vm = luna_jit::new_with_jit(v);
-    vm.jit_mut().trace_hot_threshold = 1;
-    vm.jit_mut().call_hot_threshold = 1;
+    vm.set_trace_hot_threshold(1);
+    vm.set_call_hot_threshold(1);
     let jit = match vm.eval(src) {
         Ok(r) => match r.first() {
             Some(Value::Str(s)) => String::from_utf8_lossy(s.as_bytes()).into_owned(),

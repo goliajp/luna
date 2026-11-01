@@ -124,8 +124,8 @@ fn upvalue_call_target_that_is_not_a_closure_keeps_its_type() {
     ] {
         for src in cases {
             let mut vm = luna_jit::new_with_jit(v);
-            vm.jit_mut().trace_hot_threshold = 7;
-            vm.jit_mut().call_hot_threshold = 7;
+            vm.set_trace_hot_threshold(7);
+            vm.set_call_hot_threshold(7);
             let r = vm.eval(src).unwrap();
             let hits = match r[0] {
                 luna_jit::runtime::Value::Int(i) => i as f64,

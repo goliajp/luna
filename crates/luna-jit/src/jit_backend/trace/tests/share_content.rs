@@ -14,7 +14,7 @@ return t.n
 fn vm(engine: &Engine) -> luna_core::vm::Vm {
     let mut vm = engine.new_vm(LuaVersion::Lua54);
     vm.set_jit_enabled(false);
-    vm.jit_mut().trace_hot_threshold = 8;
+    vm.set_trace_hot_threshold(8);
     vm
 }
 

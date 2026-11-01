@@ -81,8 +81,8 @@ pub(crate) fn run_with(
     if hot == 0 {
         vm.set_trace_jit_enabled(false);
     } else {
-        vm.jit_mut().trace_hot_threshold = hot;
-        vm.jit_mut().call_hot_threshold = hot;
+        vm.set_trace_hot_threshold(hot);
+        vm.set_call_hot_threshold(hot);
         vm.set_trace_tier(TraceTier::Auto);
         vm.set_trace_tier_up_at(37);
     }

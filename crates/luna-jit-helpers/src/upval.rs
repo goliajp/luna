@@ -74,7 +74,8 @@ pub unsafe extern "C" fn luna_jit_upval_get_float(idx: i64) -> i64 {
     match vm.upval_get(cl, idx as u32) {
         luna_core::runtime::Value::Float(f) => f.to_bits() as i64,
         _ => {
-            vm.jit_mut().pending_err = Some(vm.runtime_error("JIT deopt: upvalue is not a float"));
+            let e = vm.runtime_error("JIT deopt: upvalue is not a float");
+            vm.set_jit_pending_err(e);
             0
         }
     }
@@ -98,8 +99,8 @@ pub unsafe extern "C" fn luna_jit_upval_is_int(idx: i64) -> i64 {
     match vm.upval_get(cl, idx as u32) {
         luna_core::runtime::Value::Int(_) => 1,
         _ => {
-            vm.jit_mut().pending_err =
-                Some(vm.runtime_error("JIT deopt: upvalue is not an integer"));
+            let e = vm.runtime_error("JIT deopt: upvalue is not an integer");
+            vm.set_jit_pending_err(e);
             0
         }
     }
@@ -126,8 +127,8 @@ pub unsafe extern "C" fn luna_jit_self_upval_check(idx: i64) -> i64 {
     match vm.upval_get(cl, idx as u32) {
         luna_core::runtime::Value::Closure(c) if c.ptr_eq(cl) => 1,
         _ => {
-            vm.jit_mut().pending_err =
-                Some(vm.runtime_error("JIT deopt: callee is not the running closure"));
+            let e = vm.runtime_error("JIT deopt: callee is not the running closure");
+            vm.set_jit_pending_err(e);
             0
         }
     }

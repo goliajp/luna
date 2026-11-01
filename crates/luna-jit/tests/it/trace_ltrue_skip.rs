@@ -78,7 +78,7 @@ fn a_trace_runs_ltrue_skip_like_the_interpreter() {
         for tier in [TraceTier::Baseline, TraceTier::Optimizing] {
             let mut vm = luna_jit::new_with_jit(version);
             vm.set_jit_enabled(false);
-            vm.jit_mut().trace_hot_threshold = 2;
+            vm.set_trace_hot_threshold(2);
             vm.set_trace_tier(tier);
             let baseline_before = baseline_codegen_count();
             let got = run(&mut vm, &chunk);

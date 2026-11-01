@@ -275,7 +275,7 @@ fn a_generic_for_trace_hands_back_the_next_loop_variables() {
     for v in [LuaVersion::Lua54, LuaVersion::Lua55] {
         let mut vm = luna_jit::new_with_jit(v);
         vm.set_jit_enabled(false);
-        vm.jit_mut().trace_hot_threshold = 1;
+        vm.set_trace_hot_threshold(1);
         let r = vm.eval(src).expect("runs");
         assert_eq!(
             show(&r),

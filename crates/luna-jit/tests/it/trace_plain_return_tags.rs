@@ -52,8 +52,8 @@ fn run(v: LuaVersion, src: &str, jit: Option<(TraceTier, Option<u32>)>) -> Strin
         Some((tier, hot)) => {
             vm.set_trace_tier(tier);
             if let Some(h) = hot {
-                vm.jit_mut().trace_hot_threshold = h;
-                vm.jit_mut().call_hot_threshold = h;
+                vm.set_trace_hot_threshold(h);
+                vm.set_call_hot_threshold(h);
             }
         }
     }

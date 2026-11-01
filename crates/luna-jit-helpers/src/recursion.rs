@@ -142,7 +142,9 @@ pub unsafe extern "C" fn luna_jit_self_level(
             Ok(Some(lim)) => Ok(lim),
             Ok(None) => Err(SELF_NOT_STARTED),
             Err(e) => {
-                vm.jit_mut().pending_raise = Some(e);
+                // SAFETY: the error is raised where the compiled code was
+                // entered, as the interpreter's own failed call would be
+                unsafe { vm.jit_mut() }.pending_raise = Some(e);
                 Err(SELF_FAILED)
             }
         }

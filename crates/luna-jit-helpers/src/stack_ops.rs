@@ -53,7 +53,8 @@ pub unsafe extern "C" fn luna_jit_op_concat_regs(
         (vm, mark, ops)
     };
     let r = vm.jit_concat_regs(a as u32, ops, reload as u64);
-    vm.jit_mut().ssa_roots = mark;
+    // SAFETY: restores the root list `push_ssa_roots` linked over
+    unsafe { vm.jit_mut() }.ssa_roots = mark;
     r
 }
 
@@ -147,7 +148,8 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     let base = match vm.jit_last_lua_frame() {
         Some(f) => f.base,
         None => {
-            vm.jit_mut().pending_err = Some(vm.runtime_error("JIT op_closure: no Lua frame"));
+            let e = vm.runtime_error("JIT op_closure: no Lua frame");
+            vm.set_jit_pending_err(e);
             return 0;
         }
     };

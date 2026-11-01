@@ -77,8 +77,8 @@ const SRC: &str = r#"
 /// Runs `SRC` on a fresh JIT Vm; returns (method chunks, traces dispatched).
 fn one_vm() -> (usize, u64) {
     let mut vm = luna_jit::new_with_jit(luna_jit::LuaVersion::Lua54);
-    vm.jit_mut().trace_hot_threshold = 2;
-    vm.jit_mut().call_hot_threshold = 2;
+    vm.set_trace_hot_threshold(2);
+    vm.set_call_hot_threshold(2);
     vm.eval(SRC).expect("eval");
     let chunks = luna_jit::jit::cache_entry_count(&vm);
     (chunks, vm.trace_dispatched_count())
@@ -329,8 +329,8 @@ fn dropping_a_vm_unmaps_its_code_pages() {
 /// from the engine, traces dispatched).
 fn engine_vm(engine: &luna_jit::Engine) -> (u64, u64) {
     let mut vm = engine.new_vm(luna_jit::LuaVersion::Lua54);
-    vm.jit_mut().trace_hot_threshold = 2;
-    vm.jit_mut().call_hot_threshold = 2;
+    vm.set_trace_hot_threshold(2);
+    vm.set_call_hot_threshold(2);
     vm.eval(SRC).expect("eval");
     (vm.trace_adopted_count(), vm.trace_dispatched_count())
 }
