@@ -28,8 +28,10 @@ pub(super) enum Mode {
 /// Where a Vm's memory comes from, shared by every container of the Vm
 /// through a [`MemRef`]. Owned jointly by the heap and the Vm
 /// ([`MemOwner`](super::MemOwner)), so it outlives every container either
-/// of them holds. A context serves one heap: Vms given clones of one
-/// owner each get a context of their own, sharing the owner's budget.
+/// of them holds. A context is allocated through by one holder, on one
+/// thread: a heap and what its Vm keeps, or a chunk. Vms and chunks given
+/// clones of one owner each get a context of their own, sharing the
+/// owner's budget.
 // laid out in declaration order: with the kept-block lists at offset 0 the
 // allocation path spends two more instructions indexing them
 #[repr(C)]
@@ -40,11 +42,8 @@ pub struct MemCtx {
     pub(super) budget: NonNull<super::budget::Budget>,
     pub(super) codes: [u8; KINDS],
     pub(super) owners: super::sync::Count,
-    /// whether a heap has taken the context; another heap given it makes a
-    /// context of its own
-    pub(super) claimed: super::sync::Once,
     /// the fixed "not enough memory" string a memory error carries (PUC
-    /// `memerrmsg`), made by the heap that claimed the context; null before
+    /// `memerrmsg`), made by the heap allocating through the context; null before
     /// it is made and after that heap is dropped
     pub(super) memerr: Cell<*mut crate::runtime::LuaStr>,
     /// memory errors raised so far, for telling a memory error from a

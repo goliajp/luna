@@ -124,7 +124,7 @@ impl ParseScratch {
     pub(crate) fn new(mem: MemOwner) -> ParseScratch {
         let m = mem.mem();
         ParseScratch {
-            chunk: Chunk::new(mem),
+            chunk: Chunk::on(mem),
             end_lines: LVec::new(m),
             lex_buf: LVec::new(m),
             stacks: ListStacks::new(m),

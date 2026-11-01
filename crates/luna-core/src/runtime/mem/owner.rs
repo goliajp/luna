@@ -8,7 +8,7 @@ use super::MemoryPolicy;
 use super::budget::Budget;
 use super::ctx::{MemCtx, MemRef, Mode, RawAllocFn};
 use super::kind::kind_codes;
-use super::sync::{Count, Lock, Once, Slot};
+use super::sync::{Count, Lock, Slot};
 use crate::version::LuaVersion;
 
 /// One owner of a [`MemCtx`]; the context is freed with its last owner.
@@ -16,7 +16,8 @@ use crate::version::LuaVersion;
 /// Clones can be given to several Vms: they then share one budget (the
 /// host function or the policy sees every Vm's blocks, and
 /// [`MemCtx::in_use`] counts them all), while each Vm's heap allocates
-/// through a context of its own.
+/// through a context of its own, as does a chunk made on a clone the
+/// caller also keeps.
 ///
 /// Only luna makes containers on a context, so none can outlive its last
 /// owner; the example compiles, the one after it fails to.
@@ -57,7 +58,6 @@ impl MemOwner {
             budget,
             codes,
             owners: Count::new(1),
-            claimed: Once::new(),
             memerr: Cell::new(std::ptr::null_mut()),
             oom_raised: Cell::new(0),
             pool: RefCell::default(),
@@ -108,18 +108,17 @@ impl MemOwner {
         self.0.ctx()
     }
 
-    /// The owner of the context a new heap allocates through: this one,
-    /// unless another heap has taken it, else a new context on the same
-    /// budget. A context's memory error string and kept blocks are its
-    /// one heap's.
-    pub(crate) fn for_heap(self) -> MemOwner {
+    /// The owner of a context only its holder allocates through: this one
+    /// when no clone of it is left anywhere else, otherwise a new context
+    /// on the same budget. A heap and a chunk each take one, so a context
+    /// is used by one holder, on one thread: a clone kept by the caller
+    /// shares the budget only.
+    pub(crate) fn unshared(self) -> MemOwner {
         let c = self.0.ctx();
-        if c.claimed.take() {
+        if c.owners.is_one() {
             return self;
         }
-        let own = MemOwner::on(c.mode, c.budget, c.codes);
-        own.0.ctx().claimed.take();
-        own
+        MemOwner::on(c.mode, c.budget, c.codes)
     }
 }
 
