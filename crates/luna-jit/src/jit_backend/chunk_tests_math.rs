@@ -15,6 +15,7 @@ mod s5b {
     //! calls share the same C runtime — bit-exact equality is the
     //! expected outcome on macOS / Linux, but a 1-ULP slack guards
     //! against future cross-platform drift.
+    use luna_core::__private::VmHeap;
     use luna_core::runtime::Value;
     use luna_core::runtime::function::JitProtoState;
     use luna_core::version::LuaVersion;
@@ -267,7 +268,7 @@ mod s5b {
         vm.eval("collectgarbage() collectgarbage()")
             .expect("collect");
         assert!(
-            vm.heap.find_interned(b"sin").is_none(),
+            vm.heap().find_interned(b"sin").is_none(),
             "\"sin\" outlived its holders"
         );
         vm.eval(

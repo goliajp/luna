@@ -3,6 +3,7 @@
 //! library tables it finds, 5.2 makes every library anew, 5.3 on only
 //! points the globals back at the libraries `package.loaded` holds.
 
+use luna_core::__private::VmHeap;
 use luna_core::__private::{VmCApiLoad, VmHostInternals};
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
@@ -109,13 +110,13 @@ fn counts_around(v: LuaVersion, setup: &str, reopen: bool) -> (i64, i64) {
         panic!("the setup compiles");
     };
     vm.call_value(Value::Closure(f), &[]).expect("setup");
-    let before = vm.heap.bytes() as i64;
+    let before = vm.heap_mut().bytes() as i64;
     if reopen {
         vm.open_all_libs().expect("reopen");
     }
-    let after = vm.heap.bytes() as i64;
+    let after = vm.heap_mut().bytes() as i64;
     vm.host_gc(LUA_GCCOLLECT, [0; 3]).expect("collect");
-    (after - before, vm.heap.bytes() as i64 - before)
+    (after - before, vm.heap_mut().bytes() as i64 - before)
 }
 
 /// The bytes a second `open_all_libs` adds, and what of them a full

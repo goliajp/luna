@@ -230,7 +230,7 @@ fn http_get(
         };
         // let body = reqwest::get(&url).await?.text().await?;
         let body = format!("fake response from {url}");
-        let interned = vm.heap.intern(body.as_bytes());
+        let interned = vm.intern(body);
         Ok(vm.nat_return(fs, &[Value::Str(interned)]))
     })
 }
@@ -458,7 +458,7 @@ The wrapper mirrors the common embedder ops on [`Vm`]:
 - `call_value(f, args) -> Result<Vec<Value>, LuaError>`
 - `set_global<V: IntoValue>(name, v) -> Result<(), LuaError>`
 - `get_global(name) -> Value` (new — present only on SendVm)
-- `intern_str(s) -> Gc<LuaStr>`
+- `intern(bytes) -> Gc<LuaStr>`
 - `set_userdata<T: LuaUserdata>(name, value) -> Result<(), LuaError>`
 - `pin_host / read_host / unpin` (host roots)
 - `Clone` (cheap, shares the underlying Vm via Arc)

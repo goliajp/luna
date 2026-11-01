@@ -160,8 +160,7 @@ pub(super) fn nat_setmetatable<const PRE: bool>(
     // Redis's `lua_setmetatable` refuses a read-only table
     vm.refuse_readonly(t)?;
     // SAFETY: `t` is the table argument, kept alive by its stack slot; the borrow covers one call, and `mt` is a separate handle
-    unsafe { t.as_mut() }.set_metatable(mt);
-    vm.metatable_barrier(Value::Table(t), mt);
+    unsafe { t.as_mut() }.set_metatable(&mut vm.heap, mt);
     // register for finalization if the new metatable carries `__gc` (PUC marks
     // the object finalizable at setmetatable time)
     vm.check_finalizer(t)?;

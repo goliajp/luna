@@ -5,6 +5,7 @@
 //! expected lines are what a C host doing the same with `lua_call` /
 //! `lua_pcall` prints under each PUC release.
 
+use luna_core::__private::VmHeap;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::LuaError;
@@ -31,7 +32,7 @@ fn hs(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// `hp(f)`: the library `pcall` called with `f` through `call_value`
 fn hp(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
     let f = vm.nat_arg(fs, nargs, 0);
-    let key = Value::Str(vm.heap.intern(b"pcall"));
+    let key = Value::Str(vm.heap_mut().intern(b"pcall"));
     let pcall = vm.globals().get(key);
     let r = vm.call_value(pcall, &[f])?;
     Ok(vm.nat_return(fs, &r))

@@ -78,7 +78,7 @@ fn iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_jit::vm::LuaError>
         return Ok(vm.nat_return(fs, &[Value::Nil]));
     }
     if k == 150
-        && let Value::Table(t) = vm.globals().get(Value::Str(vm.intern_str("MARK")))
+        && let Value::Table(t) = vm.globals().get(Value::Str(vm.intern("MARK")))
     {
         vm.set_readonly(t, true);
     }
@@ -91,7 +91,7 @@ fn iter(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_jit::vm::LuaError>
 }
 
 fn call(vm: &mut Vm, f: &str, args: &[Value]) -> Result<(), String> {
-    let fv = vm.globals().get(Value::Str(vm.intern_str(f)));
+    let fv = vm.globals().get(Value::Str(vm.intern(f)));
     vm.call_value(fv, args)
         .map(|_| ())
         .map_err(|e| vm.error_text(&e))
@@ -289,7 +289,7 @@ T = {0, 0, 0}
             call(&mut vm, "W", &[t, Value::Int(3)]).expect("W");
             call(&mut vm, "M", &[Value::Int(3)]).expect("M");
         }
-        let proto = |vm: &mut Vm, f: &str| match vm.globals().get(Value::Str(vm.intern_str(f))) {
+        let proto = |vm: &mut Vm, f: &str| match vm.globals().get(Value::Str(vm.intern(f))) {
             Value::Closure(c) => c.proto,
             v => panic!("{f} is {v:?}"),
         };

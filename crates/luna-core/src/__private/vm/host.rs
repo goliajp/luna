@@ -187,3 +187,24 @@ impl VmHostInternals for crate::vm::Vm {
         crate::vm::Vm::trace_admits(t, pc, downrec_blocked)
     }
 }
+
+/// The heap of a `Vm`, for luna's other crates (the JIT's helpers, the C
+/// API): not part of the supported API.
+pub trait VmHeap {
+    /// The VM's heap.
+    fn heap(&self) -> &crate::runtime::Heap;
+    /// The VM's heap, to allocate in and write to.
+    fn heap_mut(&mut self) -> &mut crate::runtime::Heap;
+}
+
+impl VmHeap for crate::vm::Vm {
+    #[inline(always)]
+    fn heap(&self) -> &crate::runtime::Heap {
+        &self.heap
+    }
+
+    #[inline(always)]
+    fn heap_mut(&mut self) -> &mut crate::runtime::Heap {
+        &mut self.heap
+    }
+}

@@ -327,7 +327,7 @@ fn hook_call_returning_err_aborts_async_native() {
     // Confirm the hook fired (saw the async-native Call). Read via
     // the globals table (bare Vm has no `get_global`; SS-B's SendVm
     // added one, but luna-core's bare Vm exposes only `globals()`).
-    let key = Value::Str(vm.intern_str("hook_saw_call"));
+    let key = Value::Str(vm.intern("hook_saw_call"));
     let saw = vm.globals().get(key);
     assert!(
         matches!(saw, Value::Bool(true)),

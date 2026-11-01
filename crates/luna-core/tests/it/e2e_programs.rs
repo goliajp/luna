@@ -16,6 +16,7 @@
 //! manipulation, table mutation, pattern matching, coroutine
 //! generator, sort, error handling. See `PROGRAMS` array.
 
+use luna_core::__private::VmHeap;
 use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::process::{Command, Stdio};
@@ -37,7 +38,7 @@ fn capture_print(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_core::vm:
     // Use the Lua-level global `tostring` so the output formatting
     // matches PUC's `print` byte-for-byte (including number-to-string
     // dialect quirks).
-    let tostring_key = Value::Str(vm.heap.intern(b"tostring"));
+    let tostring_key = Value::Str(vm.heap_mut().intern(b"tostring"));
     let tostring_fn = vm.globals().get(tostring_key);
     let mut line: Vec<u8> = Vec::new();
     for i in 0..nargs {

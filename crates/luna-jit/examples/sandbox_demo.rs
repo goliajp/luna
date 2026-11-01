@@ -41,7 +41,7 @@ fn host_redis_get(vm: &mut Vm, func_slot: u32, nargs: u32) -> Result<u32, LuaErr
     // Stub: pretend "user:alice" → "42", everything else nil.
     let result = match key {
         Value::Str(s) if s.as_bytes() == b"user:alice" => {
-            let v = vm.heap.intern(b"42");
+            let v = vm.intern(b"42");
             Value::Str(v)
         }
         _ => Value::Nil,

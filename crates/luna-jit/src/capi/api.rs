@@ -2,6 +2,7 @@
 //! as C sees it, and raising an error for the C side to throw.
 
 use super::*;
+use luna_core::__private::VmHeap;
 use luna_core::runtime::{NativeClosure, Table};
 
 mod raise;
@@ -124,7 +125,7 @@ impl<'a> Api<'a> {
     pub(super) fn push(&mut self, v: Value) {
         self.stack_mut().push_or_abort(v);
         let co = self.thread();
-        self.vm.heap.barrier_back(co);
+        self.vm.heap_mut().barrier_back(co);
     }
 
     /// Push `vs`, values that may be held by nothing else (results taken
@@ -133,7 +134,7 @@ impl<'a> Api<'a> {
     pub(super) fn push_all(&mut self, vs: &[Value]) -> Result<(), LuaError> {
         self.stack_mut().extend_from_slice(vs)?;
         let co = self.thread();
-        self.vm.heap.barrier_back(co);
+        self.vm.heap_mut().barrier_back(co);
         Ok(())
     }
 
@@ -142,7 +143,7 @@ impl<'a> Api<'a> {
     pub(super) fn push_all_in_room(&mut self, vs: &[Value]) {
         self.stack_mut().extend_from_slice_or_abort(vs);
         let co = self.thread();
-        self.vm.heap.barrier_back(co);
+        self.vm.heap_mut().barrier_back(co);
     }
 
     /// Make room for `n` more values on the stack, collecting in an
@@ -255,7 +256,7 @@ impl<'a> Api<'a> {
             Slot::Stack(i) => {
                 self.stack_mut()[i] = v;
                 let co = self.thread();
-                self.vm.heap.barrier_back(co);
+                self.vm.heap_mut().barrier_back(co);
             }
             Slot::Upvalue(n) if n >= 1 => {
                 if let Some(nc) = self.running_c()
@@ -265,14 +266,14 @@ impl<'a> Api<'a> {
                     // call's stack slot; no other reference into it is live, and
                     // the borrow covers one store
                     unsafe { nc.as_mut() }.upvals[C_UPVALS + n - 1] = v;
-                    self.vm.heap.barrier_back(nc);
+                    self.vm.heap_mut().barrier_back(nc);
                 }
             }
             Slot::Environ => {
                 if let (Some(nc), Value::Table(_)) = (self.running_c(), v) {
                     // SAFETY: as for an upvalue above
                     unsafe { nc.as_mut() }.upvals[1] = v;
-                    self.vm.heap.barrier_back(nc);
+                    self.vm.heap_mut().barrier_back(nc);
                 }
             }
             Slot::Globals => {

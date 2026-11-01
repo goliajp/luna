@@ -7,6 +7,7 @@ use super::ccall::{
     Cont, KFn, LUNA_RECOVER, PendingYield, Wait, pcall_failed, pcall_outcome, push_results,
 };
 use super::*;
+use luna_core::__private::VmHeap;
 use luna_core::vm::exec::host_c::HostContSpec;
 
 /// The continuation slot of the C function running on `api`'s thread, as
@@ -163,7 +164,7 @@ pub(super) fn pcallk(
                             wait: Wait::Recover { status },
                         }),
                     );
-                    api.vm.heap.barrier_back(co);
+                    api.vm.heap_mut().barrier_back(co);
                     api.g().raised = LUNA_RECOVER;
                     return LUA_OK;
                 }
@@ -191,7 +192,7 @@ pub(super) fn pcallk(
             pcall_failed(api.vm, co, at, e, errerr_before)
         }
     };
-    api.vm.heap.barrier_back(co);
+    api.vm.heap_mut().barrier_back(co);
     status
 }
 

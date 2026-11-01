@@ -29,7 +29,7 @@ pub use panic_watch::{panic_free, panics_in};
 pub use runtime::*;
 pub use types::*;
 pub use vm::alloc::{JIT_GC_CALL, JIT_GC_LIMIT_OFFSET, JIT_GC_PREV, VmJitAlloc};
-pub use vm::host::VmHostInternals;
+pub use vm::host::{VmHeap, VmHostInternals};
 pub use vm::jit::VmJitFrames;
 
 /// Have every collection on this thread end by checking the trace

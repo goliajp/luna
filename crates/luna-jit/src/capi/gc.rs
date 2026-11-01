@@ -3,6 +3,7 @@
 
 use super::ccall::{take_error, with_c};
 use super::*;
+use luna_core::__private::VmHeap;
 
 /// PUC 5.4+ `lua_WarnFunction`.
 pub type LuaWarnFunction = unsafe extern "C" fn(ud: *mut c_void, msg: *const c_char, tocont: c_int);
@@ -220,7 +221,7 @@ pub unsafe extern "C" fn lua_setallocf(L: *mut LuaState, f: Option<LuaAlloc>, ud
         (*g).alloc = f;
         (*g).alloc_ud = ud;
         if let Some(f) = f {
-            (*(*g).vm).heap.mem_ctx().set_raw_alloc(f, ud);
+            (*(*g).vm).heap_mut().mem_ctx().set_raw_alloc(f, ud);
         }
     }
 }

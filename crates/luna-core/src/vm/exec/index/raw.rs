@@ -3,10 +3,11 @@
 use super::*;
 
 impl Vm {
-    /// `t[key] = v` without metamethods (PUC `lua_rawset`); a read-only
-    /// table refuses it before the key is looked at, as Redis's
-    /// `lua_rawset` does.
-    pub(crate) fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
+    /// `t[key] = v` without metamethods, with the write barrier (PUC
+    /// `lua_rawset`, and `rawset`'s errors: a nil or NaN key, a table that
+    /// cannot grow); a read-only table refuses it before the key is looked
+    /// at, as Redis's `lua_rawset` does.
+    pub fn raw_set(&mut self, t: Gc<Table>, key: Value, v: Value) -> Result<(), LuaError> {
         // the barrier taken before the write tests the read-only mark too
         if !self.heap.store_barrier(t, &[key, v]) {
             return Err(self.readonly_error());

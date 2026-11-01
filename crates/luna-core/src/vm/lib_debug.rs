@@ -113,13 +113,12 @@ fn d_setmetatable(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
             // Redis's `lua_setmetatable` refuses a read-only table
             vm.refuse_readonly(t)?;
             // SAFETY: `t` is the first argument, kept alive by its stack slot; the borrow covers one call, and `m` is a separate handle, not a reference into `t`
-            unsafe { t.as_mut() }.set_metatable(m);
-            vm.metatable_barrier(Value::Table(t), m);
+            unsafe { t.as_mut() }.set_metatable(&mut vm.heap, m);
         }
         Value::Userdata(u) => {
             // SAFETY: `u` is the first argument, kept alive by its stack slot; the borrow covers one call
             unsafe { u.as_mut() }.set_metatable(m);
-            vm.metatable_barrier(Value::Userdata(u), m);
+            vm.metatable_barrier(u, m);
         }
         // every other type shares one metatable per basic type
         _ => vm.set_type_metatable(v, m),

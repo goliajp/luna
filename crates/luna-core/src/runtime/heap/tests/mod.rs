@@ -139,7 +139,7 @@ fn collect_traces_table_contents() {
         .unwrap();
     // SAFETY: `inner` was allocated above and is held by a local; nothing has collected since, and
     // the borrow covers one call
-    unsafe { inner.as_mut() }.set_metatable(Some(t));
+    unsafe { inner.as_mut() }.set_metatable(&mut heap, Some(t));
     assert_eq!(heap.live_objects(), base + 4);
     // root only the outer table: everything reachable through it survives
     assert_eq!(heap.collect(&[Value::Table(t)]), 0);

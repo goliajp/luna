@@ -3,14 +3,16 @@
 use super::*;
 
 impl Table {
-    /// Insert / update `(key, val)`. `heap` counts a rehash's parts (see
-    /// `runtime::puc`).
+    /// Insert / update `(key, val)`, with the write barrier. `heap` counts
+    /// a rehash's parts (see `runtime::puc`).
     /// A read-only table refuses the write with [`TableError::ReadOnly`].
     pub fn set(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
         if self.is_readonly() {
             return Err(TableError::ReadOnly);
         }
-        self.set_inlined(heap, key, val)
+        self.set_inlined(heap, key, val)?;
+        heap.table_stored(self, &[key, val]);
+        Ok(())
     }
 
     /// [`Self::set`] without the read-only test, for compiled code that
@@ -94,12 +96,14 @@ impl Table {
     /// `__newindex` eligibility. See
     /// semantics check.
     ///
-    /// The caller is responsible for firing `Heap::barrier_back` after a
-    /// `true` return (same contract as the surrounding `raw_set`
-    /// wrapper).
+    /// A `true` return took the write barrier.
     #[inline]
-    pub fn try_set_existing(&mut self, key: Value, val: Value) -> bool {
-        !self.is_readonly() && self.set_existing_raw(key, val)
+    pub fn try_set_existing(&mut self, heap: &mut Heap, key: Value, val: Value) -> bool {
+        let stored = !self.is_readonly() && self.set_existing_raw(key, val);
+        if stored {
+            heap.table_stored(self, &[val]);
+        }
+        stored
     }
 
     /// [`Self::try_set_existing`] for a caller that has checked
@@ -172,12 +176,14 @@ impl Table {
         }
     }
 
-    /// Integer-keyed variant of [`Self::set`].
+    /// Integer-keyed variant of [`Self::set`], with the write barrier.
     pub fn set_int(&mut self, heap: &mut Heap, i: i64, val: Value) -> Result<(), TableError> {
         if self.is_readonly() {
             return Err(TableError::ReadOnly);
         }
-        self.set_int_raw(heap, i, val)
+        self.set_int_raw(heap, i, val)?;
+        heap.table_stored(self, &[val]);
+        Ok(())
     }
 
     /// [`Self::set_int`] for a table the caller knows is not read-only: one

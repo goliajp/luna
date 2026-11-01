@@ -1,5 +1,6 @@
-//! Smoke tests: SandboxBuilder + eval/eval_chunk + intern_str / try_as_str / as_bytes.
+//! Smoke tests: SandboxBuilder + eval/eval_chunk + intern / try_as_str / as_bytes.
 
+use luna_core::__private::VmHeap;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -69,10 +70,10 @@ fn eval_chunk_uses_chunk_name() {
 }
 
 #[test]
-fn intern_str_is_idempotent() {
+fn intern_is_idempotent() {
     let mut vm = Vm::sandbox(LuaVersion::Lua55).build();
-    let s1 = vm.intern_str("hello");
-    let s2 = vm.intern_str("hello");
+    let s1 = vm.intern("hello");
+    let s2 = vm.intern("hello");
     // Interning the same content twice returns the same Gc<LuaStr>
     // handle.
     assert!(s1.ptr_eq(s2));
@@ -81,13 +82,13 @@ fn intern_str_is_idempotent() {
 #[test]
 fn try_as_str_utf8_only() {
     let mut vm = Vm::sandbox(LuaVersion::Lua55).build();
-    let s = vm.intern_str("café");
+    let s = vm.intern("café");
     let v = Value::Str(s);
     assert_eq!(v.try_as_str(), Some("café"));
 
     // Binary value (LuaStr with non-UTF-8 bytes via the heap directly):
     let bytes = b"\xff\xfe\x00binary";
-    let s_bin = vm.heap.intern(bytes);
+    let s_bin = vm.heap_mut().intern(bytes);
     let v_bin = Value::Str(s_bin);
     assert_eq!(v_bin.try_as_str(), None);
     assert_eq!(v_bin.as_bytes(), Some(&bytes[..]));

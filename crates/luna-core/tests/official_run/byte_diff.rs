@@ -1,6 +1,7 @@
 //! Opt-in (`LUNA_OFFICIAL_BYTE_DIFF`) comparison of what a file prints on luna and on PUC.
 
 use super::*;
+use luna_core::__private::VmHeap;
 
 /// Byte-diff stdout capture preamble. Opt-in via
 /// `LUNA_OFFICIAL_BYTE_DIFF=1` env var.
@@ -100,7 +101,7 @@ pub(super) fn byte_diff_should_skip(version: LuaVersion, name: &str) -> bool {
 /// unchanged — no re-encoding.
 #[allow(dead_code)]
 pub(super) fn read_byte_diff_stdout(vm: &mut Vm) -> Option<Vec<u8>> {
-    let k = Value::Str(vm.heap.intern(b"__luna_official_stdout"));
+    let k = Value::Str(vm.heap_mut().intern(b"__luna_official_stdout"));
     let globals = vm.globals();
     match globals.get(k) {
         Value::Str(s) => Some(s.as_bytes().to_vec()),

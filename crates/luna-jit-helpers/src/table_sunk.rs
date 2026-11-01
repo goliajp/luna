@@ -3,6 +3,7 @@
 
 use crate::current_jit_vm;
 use crate::table_new::unpack_table_ops;
+use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, HeapInternals, ValueInternals, VmJitAlloc};
 
@@ -114,7 +115,7 @@ unsafe fn materialize(
     n_hash_u: usize,
     (hash_keys_ptr, hash_raws_ptr, hash_kinds_ptr): (*const u64, *const u64, *const u8),
 ) -> Option<luna_core::runtime::Gc<luna_core::runtime::Table>> {
-    let g = match vm.heap.try_new_table_presized(b, c, k) {
+    let g = match vm.heap_mut().try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g,
         Ok(None) => {
             vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));
@@ -139,7 +140,7 @@ unsafe fn materialize(
             };
             luna_core::runtime::Value::pack(*kinds_ptr.add(i), raw)
         };
-        if table.set_int(&mut vm.heap, (i + 1) as i64, v).is_err() {
+        if table.set_int(vm.heap_mut(), (i + 1) as i64, v).is_err() {
             vm.jit_park_oom();
             return None;
         }
@@ -163,7 +164,7 @@ unsafe fn materialize(
             )
         };
         let key = luna_core::runtime::Value::Str(key);
-        if table.set(&mut vm.heap, key, v).is_err() {
+        if table.set(vm.heap_mut(), key, v).is_err() {
             vm.jit_park_oom();
             return None;
         }

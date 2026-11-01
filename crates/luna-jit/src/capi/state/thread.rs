@@ -2,6 +2,7 @@
 //! the thread.
 
 use super::*;
+use luna_core::__private::VmHeap;
 
 /// PUC `LUA_EXTRASPACE`: raw memory just below the `lua_State` pointer,
 /// for the host (`lua_getextraspace`).
@@ -41,7 +42,7 @@ pub(super) fn new_thread_state(
 ) -> Option<*mut LuaState> {
     // SAFETY: `g` is the live global record of `co`'s state, whose Vm
     // pointer is live
-    let mem = unsafe { (*(*g).vm).heap.mem() };
+    let mem = unsafe { (*(*g).vm).heap_mut().mem() };
     let b = LAny::new(
         mem,
         ThreadBox {
@@ -111,7 +112,7 @@ pub(in crate::capi) fn try_state_of(vm: &mut Vm, co: Gc<Coro>) -> Option<*mut Lu
         unsafe { co.as_mut() }
             .host_stack_mut()
             .push_or_abort(co.body);
-        vm.heap.barrier_back(co);
+        vm.heap_mut().barrier_back(co);
     }
     Some(l)
 }

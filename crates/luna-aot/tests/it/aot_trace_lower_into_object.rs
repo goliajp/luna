@@ -89,7 +89,7 @@ fn load_wide_arity_proto(vm: &mut luna_core::vm::Vm) -> Gc<Proto> {
         "#,
         )
         .expect("eval");
-    let key = vm.intern_str("add5");
+    let key = vm.intern("add5");
     let g = vm.globals();
     let v = g.get(luna_core::runtime::Value::Str(key));
     let cl = match v {

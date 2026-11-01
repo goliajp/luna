@@ -4,6 +4,7 @@
 
 use super::*;
 use luna_core::__private::SpecialErrors;
+use luna_core::__private::VmHeap;
 use luna_core::runtime::ErrorStatus;
 use luna_core::runtime::NativeClosure;
 use luna_core::vm::exec::host_c::HostContHooks;
@@ -182,7 +183,7 @@ pub(super) fn capi_trampoline(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, L
         let a = vm.nat_arg(fs, nargs, i);
         cstack(co).push_or_abort(a);
     }
-    vm.heap.barrier_back(co);
+    vm.heap_mut().barrier_back(co);
     let s = st(l);
     if s.calls.reserve(1).is_err() {
         cstack(co).truncate(base);
@@ -387,7 +388,7 @@ fn run_cont(
                     pop_call(l, co, token);
                     return Err(o.into());
                 }
-                vm.heap.barrier_back(co);
+                vm.heap_mut().barrier_back(co);
                 let r = close_frame(vm, l, token, None)
                     .and_then(|()| return_hook(vm, co, base, vals.len()))
                     .and_then(|()| vm.nat_ret(fs, &vals));
@@ -411,7 +412,7 @@ fn run_cont(
         } => pcall_outcome(vm, co, vals, nresults, at, errerr_before).unwrap_or(LUA_YIELD),
         Wait::Recover { status } => status,
     };
-    vm.heap.barrier_back(co);
+    vm.heap_mut().barrier_back(co);
     st(l).calls[token].k_status = status;
     let mut nret: c_int = 0;
     let ret = match cont.k.expect("a continuation function") {

@@ -181,13 +181,13 @@ impl Heap {
     }
 
     /// Adopt a compiler-built prototype (its `hdr` must carry ObjTag::Proto).
-    pub fn adopt_proto(&mut self, proto: Proto) -> Gc<Proto> {
+    pub(crate) fn adopt_proto(&mut self, proto: Proto) -> Gc<Proto> {
         self.try_adopt_proto(proto)
             .unwrap_or_else(|_| oom_abort(Layout::new::<Proto>()))
     }
 
     /// [`Heap::adopt_proto`], failing when memory runs out.
-    pub fn try_adopt_proto(&mut self, proto: Proto) -> Result<Gc<Proto>, Oom> {
+    pub(crate) fn try_adopt_proto(&mut self, proto: Proto) -> Result<Gc<Proto>, Oom> {
         debug_assert!(proto.hdr.tag == ObjTag::Proto);
         let g = self.try_adopt(proto)?;
         self.puc_born(g, Made);

@@ -4,6 +4,7 @@
 use super::super::api::C_UPVALS;
 use super::super::*;
 use super::c_api_fn;
+use luna_core::__private::VmHeap;
 use luna_core::__private::{GcInternals, VmCApiDebug};
 
 /// Where upvalue `n` of a native lives in its upvalue array: a C
@@ -72,7 +73,7 @@ pub unsafe extern "C" fn lua_setupvalue(
                 // SAFETY: the function is on the stack, so alive; no other
                 // reference into it is live, and the borrow covers one store
                 unsafe { nc.as_mut() }.upvals[k] = v;
-                api.vm.heap.barrier_back(nc);
+                api.vm.heap_mut().barrier_back(nc);
                 Vec::new()
             }
             None => return std::ptr::null(),
