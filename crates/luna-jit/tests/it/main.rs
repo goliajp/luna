@@ -2,6 +2,13 @@
 // each separate test binary pays its own fat-LTO link. tests that need a
 // process to themselves stay as files next to this directory
 
+/// The Vm's JIT storage, for a test to compile a trace into.
+fn vm_storage(vm: &mut luna_jit::vm::Vm) -> &mut dyn luna_jit::__private::JitStorage {
+    use luna_jit::__private::VmJitState;
+    // SAFETY: the tests only compile into the storage, which stays in place
+    unsafe { vm.jit_mut() }.storage.as_mut()
+}
+
 mod base_var_scaffold;
 mod capi_aux;
 mod capi_debug;

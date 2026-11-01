@@ -36,6 +36,12 @@ pub trait JitStorage: std::any::Any {
     /// used by read-only diagnostics.
     fn as_any(&self) -> &dyn std::any::Any;
 
+    /// Forgets the compiled code kept for reuse by cache key, so the next
+    /// compile of the same function compiles it again. The code itself
+    /// stays mapped: prototypes and traces that hold its entries keep
+    /// running it until [`Self::release_code`].
+    fn clear_cache(&mut self) {}
+
     /// Called by the `Vm` identified by `vm` before it asks its compilers
     /// for code through this storage. Code a storage holds can be
     /// released only if every compile through it came from one `Vm`.

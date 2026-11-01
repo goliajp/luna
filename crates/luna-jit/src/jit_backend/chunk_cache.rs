@@ -207,12 +207,7 @@ pub fn chunk_adopted_count(vm: &luna_core::vm::Vm) -> u64 {
 /// Takes `&mut Vm` since the cache is per-`Vm`. Public for the same
 /// reason as [`cache_entry_count`].
 pub fn cache_clear(vm: &mut luna_core::vm::Vm) {
-    let storage = vm.jit_storage_mut().as_any_mut();
-    if let Some(cs) = storage.downcast_mut::<storage::CraneliftJitStorage>() {
-        // the handles stay: functions already compiled keep calling
-        // their code until the Vm drops
-        cs.cache.clear();
-    }
+    vm.jit_clear_cache();
 }
 
 /// Stable cache key. The `proto.code` bytes + `num_params` +

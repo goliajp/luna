@@ -1,7 +1,7 @@
 use super::*;
+use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 use luna_core::vm::isa::{Inst, Op};
-use luna_core::{__private::VmJitState, version::LuaVersion};
 
 const WIDE_SRC: &[u8] = b"local a,b,c,d = 0,0,0,0; return a+b+c+d";
 
@@ -48,7 +48,7 @@ fn lt_k1_returns_head_pc_when_cmp_matches() {
     // if (R[1] < R[2]) ~= 1 then pc++   — recorded "1 < 2", matched K=1.
     let lt = Inst::iabc(Op::Lt, 1, 2, 0, true);
     let rec = cmp_jmp_record(p, 5, 10, lt);
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("Lt + trailing Jmp must compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("Lt + trailing Jmp must compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 3; // 3 < 7 holds → matches K=true → continue
@@ -70,7 +70,7 @@ fn lt_k1_side_exits_when_cmp_inverts() {
     let p = load_proto(&mut vm, WIDE_SRC);
     let lt = Inst::iabc(Op::Lt, 1, 2, 0, true); // K=1
     let rec = cmp_jmp_record(p, 5, 10, lt);
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 9; // 9 < 7 false → mismatch with K=1 → side-exit
@@ -99,7 +99,7 @@ fn lt_k0_inverts_continue_condition() {
     // cmp result was false (9 < 7), matched K=0 → took Jmp.
     let lt = Inst::iabc(Op::Lt, 1, 2, 0, false);
     let rec = cmp_jmp_record(p, 3, 8, lt);
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[1] = 9;
@@ -132,7 +132,7 @@ fn le_emits_signed_less_equal() {
     // if (R[1] <= R[2]) ~= 1 then pc++
     let le = Inst::iabc(Op::Le, 1, 2, 0, true);
     let rec = cmp_jmp_record(p, 0, 0, le);
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     // Equal: 5 <= 5 holds → continue.
@@ -161,7 +161,7 @@ fn eq_emits_int_equality() {
     // if (R[0] == R[1]) ~= 1 then pc++
     let eq = Inst::iabc(Op::Eq, 0, 1, 0, true);
     let rec = cmp_jmp_record(p, 7, 4, eq);
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = 42;
@@ -209,7 +209,7 @@ fn arith_then_cmp_side_exit_stores_back_post_arith_value() {
         });
     }
     rec.closed = true;
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     // R[0] = 10 - 7 = 3; 3 < 5 → continue → return head_pc.
@@ -258,7 +258,7 @@ fn cmp_at_trailing_position_bails() {
         var_count: None,
     });
     rec.closed = true;
-    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm_storage(&mut vm), &rec).is_none());
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn cmp_followed_by_non_jmp_bails() {
         });
     }
     rec.closed = true;
-    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm_storage(&mut vm), &rec).is_none());
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn cmp_jmp_with_wrong_pc_offset_bails() {
         var_count: None,
     });
     rec.closed = true;
-    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm_storage(&mut vm), &rec).is_none());
 }
 
 #[test]
@@ -345,7 +345,7 @@ fn orphan_jmp_mid_trace_bails() {
         });
     }
     rec.closed = true;
-    assert!(try_compile_trace(vm.jit_storage_mut(), &rec).is_none());
+    assert!(try_compile_trace(vm_storage(&mut vm), &rec).is_none());
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn loop_pattern_alternates_continue_and_exit() {
         });
     }
     rec.closed = true;
-    let ct = try_compile_trace(vm.jit_storage_mut(), &rec).expect("compile");
+    let ct = try_compile_trace(vm_storage(&mut vm), &rec).expect("compile");
 
     let mut state: Vec<i64> = vec![0; p.max_stack as usize];
     state[0] = 20;

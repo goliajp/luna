@@ -1,6 +1,5 @@
 //! Fields of the runtime's objects that luna's other crates read or write.
 
-use crate::jit::JitStorage;
 use crate::jit::{CompiledTrace, TArc};
 pub use crate::runtime::function::jit_state::{JIT_NEXT_NONE, JitProtoState};
 use crate::runtime::mem::{LAny, LVec};
@@ -11,15 +10,17 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 /// The JIT's state on the `Vm`. Each method but [`Self::jit_mut`] changes
-/// only what cannot break the code the JIT runs; the example compiles, the
-/// one after it fails to.
+/// only what cannot break the code the JIT runs: none hands out the
+/// storage the code lives in. The example compiles, the two after it fail
+/// to.
 ///
 /// ```
 /// use luna_core::{__private::VmJitState, version::LuaVersion, vm::Vm};
 /// let mut vm = Vm::new(LuaVersion::Lua54);
 /// vm.set_trace_hot_threshold(1);
 /// vm.jit_counters_mut().deopt += 1;
-/// let _ = vm.jit_storage_mut().as_any_mut();
+/// vm.jit_clear_cache();
+/// let _ = vm.jit().storage.as_any();
 /// // SAFETY: nothing is moved or replaced
 /// let _ = unsafe { vm.jit_mut() }.ssa_roots;
 /// ```
@@ -29,6 +30,12 @@ use std::sync::atomic::AtomicUsize;
 /// let mut a = Vm::new(LuaVersion::Lua54);
 /// let mut b = Vm::new(LuaVersion::Lua54);
 /// std::mem::swap(a.jit_mut(), b.jit_mut()); // error[E0133]: `jit_mut` is unsafe
+/// ```
+///
+/// ```compile_fail,E0599
+/// use luna_core::{__private::VmJitState, version::LuaVersion, vm::Vm};
+/// let mut vm = Vm::new(LuaVersion::Lua54);
+/// let _ = vm.jit_storage_mut(); // error[E0599]: no such method
 /// ```
 pub trait VmJitState {
     /// The JIT's state.
@@ -42,9 +49,9 @@ pub trait VmJitState {
     /// (the recording, the register and root buffers and counts, the
     /// string buffers) are written only as the interpreter writes them.
     unsafe fn jit_mut(&mut self) -> &mut JitState;
-    /// The storage the JIT keeps its code in. It can be read and asked to
-    /// compile, not replaced.
-    fn jit_storage_mut(&mut self) -> &mut dyn JitStorage;
+    /// Forgets the compiled code the JIT's storage keeps for reuse (see
+    /// [`JitStorage::clear_cache`]); code already in use stays mapped.
+    fn jit_clear_cache(&mut self);
     /// The JIT's event counters.
     fn jit_counters_mut(&mut self) -> &mut JitCounters;
     /// Raises a runtime error with `msg` once the running JIT code returns
@@ -67,9 +74,8 @@ impl VmJitState for Vm {
         &mut self.jit
     }
 
-    #[inline(always)]
-    fn jit_storage_mut(&mut self) -> &mut dyn JitStorage {
-        self.jit.storage.as_mut()
+    fn jit_clear_cache(&mut self) {
+        self.jit.storage.clear_cache();
     }
 
     #[inline(always)]

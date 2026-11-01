@@ -6,6 +6,7 @@
 //! one-shot, and then a loop edge they recorded is straight-line code: such
 //! a side trace compiles and runs (`side_trace_through_an_inner_loop`).
 
+use crate::vm_storage;
 use luna_core::__private::VmJitState;
 use luna_jit::__private::raw;
 use luna_jit::__private::{CompileOptions, RecordedOp, TraceRecord};
@@ -89,7 +90,7 @@ fn short_backward_jump_with_a_table_write_is_declined() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     let p = proto_of(&mut vm, WHILE_WRITE);
     let rec = side_record(p, &while_body(p), None);
-    assert!(try_compile_trace_with_options(vm.jit_storage_mut(), &rec, looping()).is_none());
+    assert!(try_compile_trace_with_options(vm_storage(&mut vm), &rec, looping()).is_none());
     assert_eq!(last_compile_checkpoint(), IMPURE_BACK_EDGE);
 }
 
@@ -98,7 +99,7 @@ fn long_backward_jump_with_a_table_write_is_declined() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     let p = proto_of(&mut vm, WHILE_WRITE);
     let rec = side_record(p, &while_body(p), Some(Inst::isj(Op::Jmp, -300)));
-    assert!(try_compile_trace_with_options(vm.jit_storage_mut(), &rec, looping()).is_none());
+    assert!(try_compile_trace_with_options(vm_storage(&mut vm), &rec, looping()).is_none());
     assert_eq!(last_compile_checkpoint(), IMPURE_BACK_EDGE);
 }
 
@@ -108,7 +109,7 @@ fn forward_jump_with_a_table_write_passes_the_gate() {
     let p = proto_of(&mut vm, WHILE_WRITE);
     for sj in [0, 1, 200] {
         let rec = side_record(p, &while_body(p), Some(Inst::isj(Op::Jmp, sj)));
-        let _ = try_compile_trace_with_options(vm.jit_storage_mut(), &rec, looping());
+        let _ = try_compile_trace_with_options(vm_storage(&mut vm), &rec, looping());
         assert_ne!(last_compile_checkpoint(), IMPURE_BACK_EDGE, "sJ {sj}");
     }
 }
@@ -118,7 +119,7 @@ fn one_shot_side_trace_takes_its_recorded_loop_edge() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua54);
     let p = proto_of(&mut vm, WHILE_WRITE);
     let rec = side_record(p, &while_body(p), None);
-    let _ = try_compile_trace(vm.jit_storage_mut(), &rec);
+    let _ = try_compile_trace(vm_storage(&mut vm), &rec);
     assert_ne!(last_compile_checkpoint(), IMPURE_BACK_EDGE);
 }
 
