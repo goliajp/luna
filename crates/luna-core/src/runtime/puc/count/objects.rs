@@ -38,7 +38,7 @@ impl GcHeader {
 
     /// Whether this object is one PUC has not made (see [`Heap::acct_new`]).
     #[inline(always)]
-    pub(crate) fn is_uncounted(&self) -> bool {
+    pub(in crate::runtime) fn is_uncounted(&self) -> bool {
         self.sub & UNCOUNTED != 0
     }
 }
@@ -144,6 +144,24 @@ impl Heap {
     #[inline(always)]
     pub(crate) fn new_obj(&mut self, o: PucObj) {
         self.acct_obj(o.kind(), self.puc_size(o));
+    }
+
+    /// `o`, which luna made at `h`, is made by PUC now: counted here, as
+    /// made now or as made without counting before.
+    #[inline(always)]
+    pub(crate) fn count_made(&mut self, h: Gc<GcHeader>, o: PucObj) {
+        if h.is_uncounted() {
+            self.promote_obj(h, o);
+        } else {
+            self.new_obj(o);
+        }
+    }
+
+    /// Whether `s` holds the bytes `b` and is a string luna made without
+    /// counting (one PUC has not made yet).
+    #[inline]
+    pub(crate) fn uncounted_with(s: Gc<LuaStr>, b: &[u8]) -> bool {
+        s.as_bytes() == b && s.hdr().is_uncounted()
     }
 
     /// `o`, made without counting, is PUC's now: counted here.

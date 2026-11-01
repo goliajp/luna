@@ -83,12 +83,7 @@ impl Vm {
         } else {
             match cl.upvals().first() {
                 Some(&uv) => {
-                    let h = uv.hdr();
-                    if h.is_uncounted() {
-                        self.heap.promote_obj(h, PucObj::Upval);
-                    } else {
-                        self.heap.new_obj(PucObj::Upval);
-                    }
+                    self.heap.count_made(uv.hdr(), PucObj::Upval);
                     self.heap.barrier_new_upval(cl, uv);
                 }
                 None => self.heap.new_obj(PucObj::Upval),

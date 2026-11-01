@@ -226,8 +226,7 @@ impl Vm {
         if !long {
             return Ok(Value::Str(self.heap.try_intern(b)?));
         }
-        let uncounted =
-            |s: &Gc<crate::runtime::LuaStr>| s.as_bytes() == b && s.hdr().is_uncounted();
+        let uncounted = |s: &Gc<crate::runtime::LuaStr>| Heap::uncounted_with(*s, b);
         let found = p.and_then(|p| {
             let consts = p.consts.iter().filter_map(|v| match v {
                 Value::Str(s) => Some(*s),

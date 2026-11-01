@@ -10,8 +10,7 @@
 //!   `blocks.rs`, `defer.rs`, `aside.rs`), whose fields are that module's
 //!   alone
 //!
-//! Besides those methods, the facade is `GcHeader::is_uncounted` (`count`),
-//! the collector's steps the VM drives (`step.rs`, run on the VM as their
+//! Besides those methods, the facade is the collector's steps the VM drives (`step.rs`, run on the VM as their
 //! `StepHost`), the marker's `keep` (`mark.rs`), and the types their
 //! arguments and results name, re-exported below with their own methods.
 //! The model's other items are visible to the runtime alone, so the
