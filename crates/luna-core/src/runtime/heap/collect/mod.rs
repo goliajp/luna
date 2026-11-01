@@ -8,12 +8,14 @@ pub(crate) use step::{Propagated, Running};
 impl Heap {
     /// Mark from `roots`, sweep everything unreachable. Returns the number of
     /// objects freed.
-    pub fn collect(&mut self, roots: &[Value]) -> usize {
+    #[cfg(test)]
+    pub(crate) fn collect(&mut self, roots: &[Value]) -> usize {
         self.collect_ex(roots, &[])
     }
 
     /// Like `collect`, with additional bare-object roots (e.g. the VM's open
     /// upvalues, which are not first-class Values).
+    #[cfg(test)]
     pub(crate) fn collect_ex(&mut self, roots: &[Value], extra: &[Gc<Upvalue>]) -> usize {
         let seed = |m: &mut Marker| {
             for &r in roots {
@@ -78,6 +80,7 @@ impl Heap {
     /// Finish the collection [`Heap::gc_begin_full`] started, with the
     /// roots marked in `m`: mark from them, run the atomic tail and sweep.
     /// Returns the number of objects freed.
+    #[cfg(test)]
     pub(crate) fn gc_end_full(&mut self, mut m: Marker) -> usize {
         self.mark_from(&mut m);
         self.gc_sweep_full()

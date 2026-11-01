@@ -37,6 +37,7 @@
 //! `luna-jit` and the resolver becomes a no-op — interp-only AOT
 //! binaries pay zero scan cost and the bracket-symbol references are
 //! elided.
+use luna_core::__private::VmHeap;
 use luna_core::vm::Vm;
 
 /// Index entry layout — must match the cranelift-emit shape in
@@ -198,7 +199,7 @@ unsafe fn walk_index_bytes(vm: &mut Vm, base: *const u8, len_bytes: usize) -> Op
             let len = core::ptr::read_unaligned(entry.bytes_ptr as *const u64) as usize;
             core::slice::from_raw_parts(entry.bytes_ptr.add(8), len)
         };
-        let interned = vm.heap.try_intern(bytes).ok()?;
+        let interned = vm.heap_mut().try_intern(bytes).ok()?;
         // the slot holds the string for the Vm's life, whether or not a
         // constant of the program it loads names it yet
         vm.pin_host(luna_core::runtime::Value::Str(interned));
@@ -238,7 +239,10 @@ mod tests {
         assert_eq!(n, Some(1));
         vm.eval("collectgarbage() collectgarbage()")
             .expect("collect");
-        let live = vm.heap.find_interned(key).map(|s| s.as_ptr() as *const u8);
+        let live = vm
+            .heap_mut()
+            .find_interned(key)
+            .map(|s| s.as_ptr() as *const u8);
         assert_eq!(live, Some(slot), "the slot's string was collected");
     }
 }

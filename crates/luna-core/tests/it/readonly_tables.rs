@@ -7,6 +7,7 @@
 //! The JIT's compiled stores are covered in luna-jit's tests.
 
 use luna_core::__private::GcInternals;
+use luna_core::__private::VmHeap;
 use luna_core::runtime::{Gc, Table, TableError, Value};
 use luna_core::{version::LuaVersion, vm::Vm};
 
@@ -313,19 +314,19 @@ fn package_seeall_refuses_a_read_only_module() {
 fn the_host_api_refuses_and_unmarking_restores_writes() {
     for v in ALL {
         let (mut vm, ro) = setup(v);
-        let k = Value::Str(vm.intern_str("k"));
+        let k = Value::Str(vm.intern("k"));
         // SAFETY: `ro` is a live table held by the global RO, and no other
         // reference into it exists during these calls
         let t = unsafe { ro.as_mut() };
         assert_eq!(
-            t.set(&mut vm.heap, k, Value::Int(2)),
+            t.set(vm.heap_mut(), k, Value::Int(2)),
             Err(TableError::ReadOnly)
         );
         assert_eq!(
-            t.set_int(&mut vm.heap, 1, Value::Int(2)),
+            t.set_int(vm.heap_mut(), 1, Value::Int(2)),
             Err(TableError::ReadOnly)
         );
-        assert!(!t.try_set_existing(k, Value::Int(2)));
+        assert!(!t.try_set_existing(vm.heap_mut(), k, Value::Int(2)));
         assert!(ro.is_readonly());
         let g = vm.globals();
         vm.set_readonly(g, true);

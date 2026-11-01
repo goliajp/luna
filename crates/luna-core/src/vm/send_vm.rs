@@ -211,12 +211,11 @@ impl SendVm {
         self.with_vm_mut(|vm| vm.global_named(name))
     }
 
-    /// Intern a UTF-8 string into the heap's string table. Mirror
-    /// of [`Vm::intern_str`]; returns a raw `Gc<LuaStr>` whose
-    /// lifetime is tied to the underlying Vm (callers must keep the
-    /// `SendVm` alive, the usual Gc-handle contract).
-    pub fn intern_str(&self, s: &str) -> crate::runtime::Gc<crate::runtime::LuaStr> {
-        self.with_vm_mut(|vm| vm.intern_str(s))
+    /// The Lua string of `bytes`, as [`Vm::intern`] makes it; the handle
+    /// lives as long as the underlying Vm (callers keep the `SendVm` alive,
+    /// the usual Gc-handle contract).
+    pub fn intern(&self, bytes: impl AsRef<[u8]>) -> crate::runtime::Gc<crate::runtime::LuaStr> {
+        self.with_vm_mut(|vm| vm.intern(bytes))
     }
 
     /// Allocate a host userdata wrapping `value` and bind it to a

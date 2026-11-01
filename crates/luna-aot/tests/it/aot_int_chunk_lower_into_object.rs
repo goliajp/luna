@@ -66,7 +66,7 @@ fn int_chunk_lowerer_emits_into_object_module() {
         .expect("eval");
 
     // Resolve the `add` function's Proto from the globals table.
-    let key = vm.intern_str("add");
+    let key = vm.intern("add");
     let g = vm.globals();
     let add_val = g.get(luna_core::runtime::Value::Str(key));
     let cl = match add_val {

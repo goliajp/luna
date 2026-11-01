@@ -2,6 +2,7 @@
 //! and `setfenv` gives its target a new cell, so a change reaches only that
 //! function — never a sibling, the creator, or a closure made earlier.
 
+use luna_core::__private::VmHeap;
 use luna_core::runtime::{ObjTag, Value};
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -83,7 +84,7 @@ fn closures_do_not_allocate_an_env_cell_each() {
     vm.eval("keep = {} for i = 1, 1000 do keep[i] = function() return i end end collectgarbage()")
         .expect("eval");
     let mut upvalues = 0;
-    vm.heap
+    vm.heap_mut()
         .walk_objects(|t| upvalues += usize::from(t == ObjTag::Upvalue));
     // each closure captures its own `i`; none adds an `_ENV` cell of its own
     assert!((1000..1100).contains(&upvalues), "{upvalues} upvalue cells");

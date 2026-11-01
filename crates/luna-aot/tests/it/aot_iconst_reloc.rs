@@ -106,7 +106,7 @@ fn load_proto_with_field_const(vm: &mut luna_core::vm::Vm) -> Gc<Proto> {
         "#,
         )
         .expect("eval");
-    let key = vm.intern_str("setter");
+    let key = vm.intern("setter");
     let g = vm.globals();
     let v = g.get(luna_core::runtime::Value::Str(key));
     let cl = match v {

@@ -3,6 +3,7 @@
 
 use crate::table_write::barrier_for;
 use crate::{current_jit_vm, str_arg, table_arg};
+use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, TableInternals, ValueInternals};
 
@@ -32,18 +33,17 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
         return 0;
     }
     // SAFETY: `t` is a live table and (`val_tag`, `val_raw`) one value's
-    // tag and payload (# Safety); `g` is not dereferenced again while
-    // `table` is in use, and `Table::set` never runs the collector
-    let (val, table) = unsafe {
+    // tag and payload (# Safety); `g` is not dereferenced again while the
+    // borrow is in use, and `Table::set` never runs the collector; the table
+    // is not read-only (tested above), and the barrier is taken below
+    let (val, r) = unsafe {
         let raw = luna_core::__private::RawVal {
             zero: val_raw as u64,
         };
-        (
-            luna_core::runtime::Value::pack(val_tag as u8, raw),
-            g.as_mut(),
-        )
+        let val = luna_core::runtime::Value::pack(val_tag as u8, raw);
+        (val, g.as_mut().set_unguarded(vm.heap_mut(), key, val))
     };
-    if table.set_unguarded(&mut vm.heap, key, val).is_err() {
+    if r.is_err() {
         vm.jit_mut().counters.deopt += 1;
         return 0;
     }

@@ -2,6 +2,7 @@
 //! growth, and sunk tables materialised at a side exit.
 
 use crate::{current_jit_vm, table_arg};
+use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, HeapInternals, TableInternals, VmJitAlloc};
 
@@ -28,7 +29,7 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
     if vm.jit().pending_err.is_some() {
         return 0;
     }
-    match vm.heap.try_new_table() {
+    match vm.heap_mut().try_new_table() {
         Ok(g) => g.as_ptr() as i64,
         // compiled code leaves at the `NewTable`, and the interpreter
         // allocates, collecting in an emergency as compiled code may not
@@ -58,7 +59,7 @@ pub unsafe extern "C" fn luna_jit_new_table_sized(ops: i64) -> i64 {
         return 0;
     }
     let (b, c, k) = unpack_table_ops(ops);
-    match vm.heap.try_new_table_presized(b, c, k) {
+    match vm.heap_mut().try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g.as_ptr() as i64,
         Ok(None) => {
             vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));
@@ -92,7 +93,7 @@ pub unsafe extern "C" fn luna_jit_chunk_new_table(ops: i64, presized: i64) -> i6
         return 0;
     }
     let (b, c, k) = unpack_table_ops(presized);
-    match vm.heap.try_new_table_presized(b, c, k) {
+    match vm.heap_mut().try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g.as_ptr() as i64,
         _ => 0,
     }
@@ -126,7 +127,7 @@ pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) {
     // SAFETY: `t` is a live table (# Safety); `reserve_list` never runs the
     // collector, and nothing else refers into the table meanwhile
     let table = unsafe { table_arg(t).as_mut() };
-    match table.reserve_list(&mut vm.heap, last.max(0) as u64) {
+    match table.reserve_list(vm.heap_mut(), last.max(0) as u64) {
         Ok(()) => {}
         Err(luna_core::runtime::table::TableError::Overflow) => {
             vm.jit_mut().pending_err = Some(vm.runtime_error("table overflow"));

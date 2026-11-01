@@ -1,6 +1,7 @@
 //! Table store helpers.
 
 use crate::{current_jit_vm, str_arg, table_arg};
+use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
 use luna_core::__private::{
     GcInternals, HeapInternals, TableInternals, ValueInternals, VmJitAlloc,
@@ -34,11 +35,14 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) -> i
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
-    // while `table` is in use, and `Table::set*` never runs the collector
-    let table = unsafe { g.as_mut() };
-    // the method JIT stores only into tables its call tested on entry or
-    // made itself (see `Vm::try_jit_call_op`)
-    let r = table.set_int_unguarded(&mut vm.heap, key, luna_core::runtime::Value::Int(val));
+    // while the borrow is in use, and `Table::set*` never runs the
+    // collector; the method JIT stores only into tables its call tested on
+    // entry or made itself (see `Vm::try_jit_call_op`), and an integer
+    // needs no barrier
+    let r = unsafe {
+        g.as_mut()
+            .set_int_unguarded(vm.heap_mut(), key, luna_core::runtime::Value::Int(val))
+    };
     stored(vm, r)
 }
 
@@ -81,7 +85,7 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
         };
         (g.as_mut(), luna_core::runtime::Value::pack(tag as u8, raw))
     };
-    let r = table.set_int(&mut vm.heap, key, v);
+    let r = table.set_int(vm.heap_mut(), key, v);
     if refused(vm, r) {
         return 0;
     }
@@ -139,7 +143,7 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
             luna_core::runtime::Value::pack(val_tag as u8, raw),
         )
     };
-    let r = table.set(&mut vm.heap, key, v);
+    let r = table.set(vm.heap_mut(), key, v);
     if refused(vm, r) {
         return;
     }
@@ -182,7 +186,7 @@ pub(crate) fn barrier_for(
     key: luna_core::runtime::Value,
     val: luna_core::runtime::Value,
 ) {
-    vm.heap.barrier_store(g, &[key, val]);
+    vm.heap_mut().barrier_store(g, &[key, val]);
 }
 
 /// Write `Value::Nil` to `t[key]` (Int key). Used by
@@ -219,7 +223,7 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
     // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
     // while `table` is in use, and `Table::set*` never runs the collector
     let table = unsafe { g.as_mut() };
-    let r = table.set_int(&mut vm.heap, key, luna_core::runtime::Value::Nil);
+    let r = table.set_int(vm.heap_mut(), key, luna_core::runtime::Value::Nil);
     refused(vm, r);
 }
 
@@ -256,9 +260,9 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(
     let table = unsafe { g.as_mut() };
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
     let v = luna_core::runtime::Value::Float(f64::from_bits(val_bits as u64));
-    // a NaN key raises, and a table that cannot grow grows there: the
-    // interpreter re-runs the call
-    match table.set_unguarded(&mut vm.heap, k, v) {
+    // a NaN key raises, a read-only table refuses, and a table that cannot
+    // grow grows there: the interpreter re-runs the call
+    match table.set(vm.heap_mut(), k, v) {
         Ok(()) => 1,
         Err(luna_core::runtime::TableError::Memory(_)) => {
             vm.jit_park_oom();

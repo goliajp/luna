@@ -103,8 +103,7 @@ pub(super) fn ll_seeall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErro
             vm.refuse_readonly(t)?;
             let mt = vm.alloc_table()?;
             // SAFETY: `t` is the table argument, kept alive by its stack slot; `mt` is a separate new table, and the borrow covers one call
-            unsafe { t.as_mut() }.set_metatable(Some(mt));
-            vm.metatable_barrier(Value::Table(t), Some(mt));
+            unsafe { t.as_mut() }.set_metatable(&mut vm.heap, Some(mt));
             mt
         }
     };

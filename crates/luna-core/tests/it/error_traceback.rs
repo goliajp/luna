@@ -9,6 +9,7 @@
 //! walking the global table, in the order of its keys, which the seed
 //! decides (`'_G.error'`, `'error'` or `'t8.f'`).
 
+use luna_core::__private::VmHeap;
 use std::path::PathBuf;
 
 use luna_core::runtime::Value;
@@ -116,8 +117,8 @@ fn library_functions_are_c_levels() {
 fn a_native_called_by_the_host() {
     for (dialect, v) in DIALECTS {
         let mut vm = seeded(v);
-        let error = vm.globals().get(Value::Str(vm.heap.intern(b"error")));
-        let msg = Value::Str(vm.heap.intern(b"boom"));
+        let error = vm.globals().get(Value::Str(vm.heap_mut().intern(b"error")));
+        let msg = Value::Str(vm.heap_mut().intern(b"boom"));
         vm.call_value(error, &[msg]).unwrap_err();
         let want = if v == LuaVersion::Lua51 {
             "stack traceback:\n\t[C]: ?"

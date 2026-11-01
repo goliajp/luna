@@ -2,7 +2,7 @@
 //!
 //! `vm.eval` / `vm.eval_chunk` collapse the
 //! `load(src.as_bytes(), name.as_bytes())? → call_value(Value::Closure(cl), &[])`
-//! sequence into a single call. `vm.intern_str` exposes the heap-side
+//! sequence into a single call. `vm.intern` exposes the heap-side
 //! string interner for embedders that need a `Gc<LuaStr>` handle
 //! (table key, set comparison, etc.).
 //!
@@ -40,14 +40,13 @@ impl Vm {
         self.call_value(Value::Closure(cl), &[])
     }
 
-    /// Intern a UTF-8 string into the heap's string table.
-    /// Idempotent — interning the same bytes twice returns the same
-    /// [`Gc<LuaStr>`] handle.
+    /// The Lua string of `bytes`, from the VM's string table: interning
+    /// the same bytes twice gives the same [`Gc<LuaStr>`].
     ///
-    /// Useful for embedders constructing table keys or comparing Lua
-    /// strings without going through `Value::Str` wrapping each time.
-    pub fn intern_str(&mut self, s: &str) -> Gc<LuaStr> {
-        self.heap.intern(s.as_bytes())
+    /// For table keys and values an embedder builds, and for comparing Lua
+    /// strings without wrapping each one in `Value::Str`.
+    pub fn intern(&mut self, bytes: impl AsRef<[u8]>) -> Gc<LuaStr> {
+        self.heap.intern(bytes.as_ref())
     }
 
     // ─── Host-root pool ─────────────────────────────────────────

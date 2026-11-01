@@ -137,14 +137,31 @@ pub trait TableInternals {
     /// exactly `last` when it is smaller, keeping the hash part's size
     /// (PUC `luaH_resizearray`).
     fn reserve_list(&mut self, heap: &mut Heap, last: u64) -> Result<(), TableError>;
-    /// `Self::set` without the read-only test, for compiled code that
-    /// has made it already: the trace JIT's store helpers test it together
-    /// with the metatable, and the method JIT's only reach tables a call
-    /// tested on entry or made itself.
-    fn set_unguarded(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError>;
-    /// `Self::set_int` without the read-only test; see
+    /// `Table::set` without the read-only test and without the write
+    /// barrier, for compiled code that has made both already: the trace
+    /// JIT's store helpers test it together with the metatable, and the
+    /// method JIT's only reach tables a call tested on entry or made itself.
+    ///
+    /// # Safety
+    /// The table is not read-only, and the caller takes the write barrier
+    /// for `key` and `val` (or the table is white, as a new one is).
+    unsafe fn set_unguarded(
+        &mut self,
+        heap: &mut Heap,
+        key: Value,
+        val: Value,
+    ) -> Result<(), TableError>;
+    /// `Table::set_int` without the read-only test and the barrier; see
     /// `Self::set_unguarded`.
-    fn set_int_unguarded(&mut self, heap: &mut Heap, i: i64, val: Value) -> Result<(), TableError>;
+    ///
+    /// # Safety
+    /// As `Self::set_unguarded`'s.
+    unsafe fn set_int_unguarded(
+        &mut self,
+        heap: &mut Heap,
+        i: i64,
+        val: Value,
+    ) -> Result<(), TableError>;
 }
 
 impl TableInternals for crate::runtime::Table {
@@ -153,11 +170,21 @@ impl TableInternals for crate::runtime::Table {
         crate::runtime::Table::reserve_list(self, heap, last)
     }
     #[inline]
-    fn set_unguarded(&mut self, heap: &mut Heap, key: Value, val: Value) -> Result<(), TableError> {
+    unsafe fn set_unguarded(
+        &mut self,
+        heap: &mut Heap,
+        key: Value,
+        val: Value,
+    ) -> Result<(), TableError> {
         crate::runtime::Table::set_unguarded(self, heap, key, val)
     }
     #[inline]
-    fn set_int_unguarded(&mut self, heap: &mut Heap, i: i64, val: Value) -> Result<(), TableError> {
+    unsafe fn set_int_unguarded(
+        &mut self,
+        heap: &mut Heap,
+        i: i64,
+        val: Value,
+    ) -> Result<(), TableError> {
         crate::runtime::Table::set_int_unguarded(self, heap, i, val)
     }
 }

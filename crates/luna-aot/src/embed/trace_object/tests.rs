@@ -15,7 +15,7 @@ use super::{build_object_module, emit_meta_sections, lower_and_encode_meta};
 fn load_proto(vm: &mut luna_core::vm::Vm) -> Gc<Proto> {
     vm.eval("function add5(a, b, c, d, e) return ((a + b) * c) - d + e end")
         .expect("eval");
-    let key = vm.intern_str("add5");
+    let key = vm.intern("add5");
     let g = vm.globals();
     let v = g.get(Value::Str(key));
     let Value::Closure(cl) = v else {

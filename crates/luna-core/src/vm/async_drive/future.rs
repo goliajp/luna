@@ -110,7 +110,7 @@ impl<'vm> Future for EvalFuture<'vm> {
                             .set_error_kind(crate::vm::error::LuaErrorKind::Syntax);
                         this.vm.set_error_source(name.clone(), syntax.line);
                         let msg = format!("{}", syntax);
-                        let s = this.vm.intern_str(&msg);
+                        let s = this.vm.intern(&msg);
                         // Restore JIT + clean up before returning.
                         if let Some(prev) = this.saved_jit_enabled.take() {
                             this.vm.set_jit_flag(prev);

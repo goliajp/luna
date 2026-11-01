@@ -1,5 +1,6 @@
 use super::*;
 use crate::jit_backend::enter_jit;
+use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, VmCApiLoad};
 use luna_core::version::LuaVersion;
@@ -146,12 +147,12 @@ fn len_reports_array_size_after_set_i_sequence() {
 fn metatable_on_set_i_exits_at_the_store() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
-    let plain = vm.heap.new_table();
-    let t = vm.heap.new_table();
-    let mt = vm.heap.new_table();
+    let plain = vm.heap_mut().new_table();
+    let t = vm.heap_mut().new_table();
+    let mt = vm.heap_mut().new_table();
     // SAFETY: `t` was allocated just above and nothing else refers to
     // it; no collection runs before the trace
-    unsafe { t.as_mut() }.set_metatable(Some(mt));
+    unsafe { t.as_mut() }.set_metatable(vm.heap_mut(), Some(mt));
 
     // R[0][1] = R[1]; R[2][1] = R[1]
     let mut rec = closed_record(
@@ -190,11 +191,11 @@ fn metatable_on_set_i_exits_at_the_store() {
 fn metatable_on_get_i_parks_pending_err() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
-    let t = vm.heap.new_table();
-    let mt = vm.heap.new_table();
+    let t = vm.heap_mut().new_table();
+    let mt = vm.heap_mut().new_table();
     // SAFETY: `t` was allocated just above and nothing else refers to
     // it; no collection runs before the trace
-    unsafe { t.as_mut() }.set_metatable(Some(mt));
+    unsafe { t.as_mut() }.set_metatable(vm.heap_mut(), Some(mt));
 
     // Trace: R[1] = R[0][1].
     let mut rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 1, 0, 1, false)]);
@@ -216,12 +217,12 @@ fn metatable_on_get_i_parks_pending_err() {
 fn metatable_on_len_exits_at_the_len() {
     let mut vm = crate::jit_backend::test_vm_new(LuaVersion::Lua55);
     let p = load_proto(&mut vm, WIDE_SRC);
-    let plain = vm.heap.new_table();
-    let t = vm.heap.new_table();
-    let mt = vm.heap.new_table();
+    let plain = vm.heap_mut().new_table();
+    let t = vm.heap_mut().new_table();
+    let mt = vm.heap_mut().new_table();
     // SAFETY: `t` was allocated just above and nothing else refers to
     // it; no collection runs before the trace
-    unsafe { t.as_mut() }.set_metatable(Some(mt));
+    unsafe { t.as_mut() }.set_metatable(vm.heap_mut(), Some(mt));
 
     // R[0][1] = R[1]; R[3] = #R[2]
     let mut rec = closed_record(

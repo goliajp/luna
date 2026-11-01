@@ -121,7 +121,7 @@ fn an_error_after_yield(
         YieldOnce::new().await;
         // SAFETY: see `an_return_42`.
         let vm = unsafe { &mut *vm };
-        let s = vm.intern_str("kaboom");
+        let s = vm.intern("kaboom");
         Err(LuaError(Value::Str(s)))
     })
 }

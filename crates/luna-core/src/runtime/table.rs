@@ -265,10 +265,14 @@ impl Table {
         self.metatable
     }
 
-    /// Install (or clear) this table's metatable. Does not perform any
-    /// `__metatable` guarding; that belongs in the Vm-level `setmetatable`.
-    pub fn set_metatable(&mut self, mt: Option<Gc<Table>>) {
+    /// Install (or clear) this table's metatable, with the write barrier.
+    /// Does not perform any `__metatable` guarding; that belongs in the
+    /// Vm-level `setmetatable`.
+    pub fn set_metatable(&mut self, heap: &mut Heap, mt: Option<Gc<Table>>) {
         self.metatable = mt;
+        if let Some(m) = mt {
+            heap.metatable_stored(self, m);
+        }
     }
 
     #[inline]

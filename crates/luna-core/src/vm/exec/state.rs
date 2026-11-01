@@ -26,16 +26,29 @@ use crate::runtime::mem::LVec;
 ///
 /// With the `send` feature, `luna_core::vm::SendVm` wraps a `Vm` for
 /// embedders that move one between threads.
+///
+/// The heap is the VM's own: an embedder reaches it only through the VM's
+/// methods, so it cannot free what the VM still uses.
+///
+/// ```compile_fail,E0616
+/// let mut vm = luna_core::vm::Vm::new(luna_core::version::LuaVersion::Lua54);
+/// let _ = &mut vm.heap; // error[E0616]: field `heap` of struct `Vm` is private
+/// ```
+///
+/// ```compile_fail,E0599
+/// let mut heap = luna_core::runtime::Heap::new();
+/// heap.collect(&[]); // error[E0599]: no method `collect` on `Heap`
+/// ```
 // fixed field order: the interpreter's hot paths are tuned to this layout
 // (stack, frames and the call counters near the front), and letting the
 // compiler reorder it after an unrelated field change costs instructions
 // on every call
 #[repr(C)]
 pub struct Vm {
-    /// The GC heap owned by this VM. Embedders normally interact via the
-    /// `Vm` methods (`load` / `call_value` / `set_global` / …) rather than
-    /// the heap directly.
-    pub heap: Heap,
+    /// The GC heap owned by this VM: embedders reach it through the `Vm`
+    /// methods (`load`, `call_value`, `set_global`, `intern`, `raw_set`,
+    /// …), luna's other crates through `__private::VmHeap`.
+    pub(crate) heap: Heap,
     /// Embedding cooperative budget: a per-Vm tick counter the run loop
     /// decrements once per dispatch turn; at zero it raises "instruction
     /// budget exceeded". `None` = unbounded; `Some(0)` once it ran out,

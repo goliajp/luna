@@ -6,6 +6,7 @@
 //! (and how often it had to be entered) and that the results match the
 //! interpreter's.
 
+use luna_core::__private::VmHeap;
 use luna_jit::runtime::{Gc, LuaClosure, Value};
 use luna_jit::version::LuaVersion;
 use luna_jit::{__private::VmJitState, vm::Vm};
@@ -201,7 +202,7 @@ fn string_sub_and_a_short_string_compare_stay_in_the_trace() {
             end
             return c, string.sub(s, c + 1)
         end";
-    let arg = |vm: &mut Vm| Value::Str(vm.heap.intern(b"session:user:7:counter:123"));
+    let arg = |vm: &mut Vm| Value::Str(vm.heap_mut().intern(b"session:user:7:counter:123"));
     let mut vm = trace_vm();
     let f = function(&mut vm, src);
     let s = arg(&mut vm);

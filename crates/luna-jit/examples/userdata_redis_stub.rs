@@ -1,16 +1,14 @@
 //! Redis-stub-shaped dispatch table via `LuaUserdata`.
 //!
 //! Without the trait, installing a populated dispatch table takes
-//! 3 steps + 1 unsafe block per table entry:
+//! 3 steps per table entry:
 //!
 //! ```ignore
 //! // raw table API:
-//! let t = vm.heap.new_table();
-//! let key = Value::Str(vm.heap.intern(b"call"));
+//! let t = vm.new_table().build();
+//! let key = Value::Str(vm.intern("call"));
 //! let func = vm.native(redis_call);
-//! unsafe { t.as_mut() }
-//!     .set(&mut vm.heap, key, func)
-//!     .expect("redis method registration");
+//! vm.raw_set(t, key, func)?;
 //! // ... × 7 entries
 //! vm.set_global("redis", Value::Table(t));
 //! ```
@@ -89,7 +87,7 @@ impl LuaUserdata for FakeRedis {
                 }
                 match this.dispatch(argv) {
                     Ok(bytes) => {
-                        let s = vm.intern_str(std::str::from_utf8(&bytes).unwrap_or(""));
+                        let s = vm.intern(std::str::from_utf8(&bytes).unwrap_or(""));
                         Ok(Value::Str(s))
                     }
                     Err(msg) => Err(vm.runtime_error(&msg)),
@@ -102,7 +100,7 @@ impl LuaUserdata for FakeRedis {
                 let argv: Vec<Vec<u8>> = args.into_iter().map(val_to_bytes).collect();
                 match this.dispatch(argv) {
                     Ok(bytes) => {
-                        let s = vm.intern_str(std::str::from_utf8(&bytes).unwrap_or(""));
+                        let s = vm.intern(std::str::from_utf8(&bytes).unwrap_or(""));
                         Ok(Value::Str(s))
                     }
                     Err(_) => Ok(Value::Nil),
@@ -113,7 +111,7 @@ impl LuaUserdata for FakeRedis {
             Ok::<_, LuaError>(this.call_log.len() as i64)
         });
         m.add_method("status_reply", |vm, _this, (s,): (String,)| {
-            Ok::<_, LuaError>(Value::Str(vm.intern_str(&s)))
+            Ok::<_, LuaError>(Value::Str(vm.intern(&s)))
         });
     }
 }

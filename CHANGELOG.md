@@ -23,6 +23,24 @@ optimization.
 
 ### Breaking
 
+- `Vm::heap` is no longer public, and `Heap::collect`, `Heap::adopt_proto`
+  and `Heap::try_adopt_proto` are gone from the public API: from safe code
+  they could free objects the VM still used. Use the VM's methods instead:
+  `vm.heap.intern(b)` → `vm.intern(b)`; `vm.heap.new_table()` →
+  `vm.new_table().build()`; `t.set(&mut vm.heap, k, v)` →
+  `vm.raw_set(t, k, v)?`; the heap's byte and object counts →
+  `vm.memory_in_use()` / `vm.memory_used()`.
+- `Vm::intern_str(&str)` is now `Vm::intern(impl AsRef<[u8]>)`, which also
+  takes bytes that are not UTF-8; `SendVm::intern_str` is `SendVm::intern`
+  likewise.
+- `Vm::raw_set(t, key, value)` is public: `rawset` without its argument
+  checks, with the write barrier and `rawset`'s errors.
+- `Table::set`, `Table::set_int` and `Table::try_set_existing` take the
+  write barrier themselves (`try_set_existing` now takes the heap), and
+  `Table::set_metatable` takes the heap and the barrier each dialect's
+  `lua_setmetatable` takes: a caller no longer fires
+  `Heap::barrier_back` after them.
+
 - `package.path` defaults to PUC's default outside Windows too
   (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in
   each dialect's order), where it was

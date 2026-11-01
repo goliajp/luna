@@ -186,7 +186,7 @@ fn free_list_lifo() {
 #[test]
 fn gc_tracer_walks_live_slots_only() {
     let mut vm = Vm::new_minimal(LuaVersion::Lua55);
-    let s_doomed = vm.intern_str("doomed");
+    let s_doomed = vm.intern("doomed");
     let t1 = vm.pin_host(Value::Str(s_doomed));
 
     // Allocate / churn a bit, then drop the pin.
@@ -198,7 +198,7 @@ fn gc_tracer_walks_live_slots_only() {
     assert!(vm.read_host(t1).is_none());
 
     // Pin a fresh value; pool reused the slot.
-    let s_alive = vm.intern_str("alive");
+    let s_alive = vm.intern("alive");
     let t2 = vm.pin_host(Value::Str(s_alive));
     match vm.read_host(t2).unwrap() {
         Value::Str(s) => assert_eq!(s.as_bytes(), b"alive"),

@@ -8,6 +8,7 @@ impl Heap {
     /// tail (weak / ephemeron / finalizer / proto-cache / flip), detach `all`
     /// and enter `GcPhase::Sweep`. Releases `propagate`.
     /// PUC `atomic` + `entersweep` transition.
+    #[cfg(test)]
     pub(crate) fn gc_finish_atomic(&mut self) {
         self.gc_finish_atomic_work(None);
     }

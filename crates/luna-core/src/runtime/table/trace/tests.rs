@@ -36,7 +36,7 @@ fn with_mode(heap: &mut Heap, t: Gc<Table>, mode: &[u8]) {
     let v = Value::Str(heap.intern(mode));
     set(heap, mt, k, v);
     // SAFETY: as in `set`
-    unsafe { t.as_mut() }.set_metatable(Some(mt));
+    unsafe { t.as_mut() }.set_metatable(heap, Some(mt));
 }
 
 #[test]
