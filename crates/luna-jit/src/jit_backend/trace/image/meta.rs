@@ -75,6 +75,9 @@ impl Meta {
     /// A fresh [`CompiledTrace`] (no code yet: `entry` is the placeholder),
     /// with its own cells. `tiered`: the trace runs the optimizing tier's
     /// code and moves no further.
+    // kept out of line: inlined into the adoption path, its collects were
+    // not, which costs every adopted trace more than the call
+    #[inline(never)]
     pub(crate) fn instantiate(&self, tiered: bool, calls_at: u32) -> CompiledTraceParts {
         let arc = |t: &[ExitTag]| -> TArc<[ExitTag]> { TArc::from(t) };
         let per_exit_tags: Vec<(u32, TArc<[ExitTag]>)> = self
