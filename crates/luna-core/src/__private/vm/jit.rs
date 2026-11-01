@@ -9,7 +9,23 @@ use crate::runtime::heap::Gc;
 use crate::vm::LuaError;
 use crate::vm::exec::JitLimits;
 
-/// The internals of `Vm` luna's other crates use.
+/// The internals of `Vm` luna's other crates use. Those that take raw
+/// register words are unsafe; the example compiles, the one after it fails
+/// to.
+///
+/// ```
+/// use luna_core::{__private::VmJitFrames, version::LuaVersion, vm::Vm};
+/// let mut vm = Vm::new(LuaVersion::Lua54);
+/// let _ = vm.jit_handed_levels();
+/// // SAFETY: no operands
+/// let _ = unsafe { vm.jit_concat_regs(0, &mut [], 0) };
+/// ```
+///
+/// ```compile_fail,E0133
+/// use luna_core::{__private::VmJitFrames, version::LuaVersion, vm::Vm};
+/// let mut vm = Vm::new(LuaVersion::Lua54);
+/// vm.jit_concat_regs(0, &mut [[200, 0]], 0); // error[E0133]: `jit_concat_regs` is unsafe
+/// ```
 pub trait VmJitFrames {
     /// Record the frame of the compiled level at `base` (level 0's when
     /// `None`), which the interpreter goes on with at `pc`, its registers
@@ -86,7 +102,12 @@ pub trait VmJitFrames {
     /// place) of operand j for bit j of `reload` (bit 63 standing for
     /// every operand from 63 on); `0` when the interpreter must redo the
     /// op (an error, `__concat`, or a deopt already parked).
-    fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]], reload: u64) -> i64;
+    ///
+    /// # Safety
+    /// Each of `ops` is the tag and payload of the value in register
+    /// `a + j` of the running trace's head frame, or a tag below 0 and a
+    /// payload of the type that register's stack slot holds now.
+    unsafe fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]], reload: u64) -> i64;
     /// Read the tag byte of
     /// `vm.stack[base + slot_offset]`. Used by `Op::TForLoop` emit
     /// to dispatch on the iterator's return-key tag at runtime
@@ -205,8 +226,9 @@ impl VmJitFrames for crate::vm::Vm {
         crate::vm::Vm::jit_spill_stack(self, slot_offset, v)
     }
     #[inline]
-    fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]], reload: u64) -> i64 {
-        crate::vm::Vm::jit_concat_regs(self, a, ops, reload)
+    unsafe fn jit_concat_regs(&mut self, a: u32, ops: &mut [[i64; 2]], reload: u64) -> i64 {
+        // SAFETY: as this function's (# Safety)
+        unsafe { crate::vm::Vm::jit_concat_regs(self, a, ops, reload) }
     }
     #[inline]
     fn jit_stack_tag(&mut self, slot_offset: u32) -> u8 {

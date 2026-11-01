@@ -73,7 +73,15 @@ impl Vm {
     /// as of its exit `exit_ret`: when due, the step runs here, with the
     /// stack and the frame's pc as that exit leaves them; 0 when the trace
     /// goes on, 2 when it leaves through that exit with the step made.
-    pub(crate) fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64 {
+    ///
+    /// # Safety
+    /// As [`crate::__private::VmJitAlloc::jit_gc_step`]'s.
+    pub(crate) unsafe fn jit_gc_step(
+        &mut self,
+        op_pc: u32,
+        exit_ret: u64,
+        regs: Option<&[i64]>,
+    ) -> i64 {
         let (Some(regs), Some((cl, base))) = (regs, self.step_frame()) else {
             return i64::from(self.jit_gc_due(op_pc));
         };

@@ -12,7 +12,22 @@ pub use crate::jit::abi::{JIT_GC_CALL, JIT_GC_PREV};
 /// [`VmJitAlloc::jit_due_words`] points at, in bytes.
 pub const JIT_GC_LIMIT_OFFSET: i32 = crate::runtime::puc::api::GC_LIMIT_OFFSET as i32;
 
-/// The internals of `Vm` luna's other crates use.
+/// The internals of `Vm` luna's other crates use. The example compiles,
+/// the one after it fails to.
+///
+/// ```
+/// use luna_core::{__private::VmJitAlloc, version::LuaVersion, vm::Vm};
+/// let mut vm = Vm::new(LuaVersion::Lua54);
+/// let _ = vm.jit_step_window(1);
+/// // SAFETY: no registers
+/// let _ = unsafe { vm.jit_gc_step(0, 0, None) };
+/// ```
+///
+/// ```compile_fail,E0133
+/// use luna_core::{__private::VmJitAlloc, version::LuaVersion, vm::Vm};
+/// let mut vm = Vm::new(LuaVersion::Lua54);
+/// vm.jit_gc_step(0, 1, Some(&[0; 4])); // error[E0133]: `jit_gc_step` is unsafe
+/// ```
 pub trait VmJitAlloc {
     /// Compiled code just allocated (or 5.2 entered a call): whether a
     /// collection step is due, noted with the op whose check it is
@@ -26,7 +41,12 @@ pub trait VmJitAlloc {
     /// `op_pc` names; `regs` the trace frame's registers as of its exit
     /// `exit_ret` when [`VmJitAlloc::jit_step_window`] allowed them: 0 to
     /// go on, otherwise leave through that exit.
-    fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64;
+    ///
+    /// # Safety
+    /// With `regs`, the call comes from the running trace, and `regs` holds
+    /// the tag-typed payloads of its frame's registers as its exit
+    /// `exit_ret` leaves them.
+    unsafe fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64;
     /// The count and, [`JIT_GC_LIMIT_OFFSET`] bytes after it,
     /// the point a collection step falls due at: compiled code calls
     /// [`VmJitAlloc::jit_gc_due`] only once the count has reached it.
@@ -119,8 +139,9 @@ impl VmJitAlloc for crate::vm::Vm {
         crate::vm::Vm::jit_step_window(self, exit_ret)
     }
     #[inline]
-    fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64 {
-        crate::vm::Vm::jit_gc_step(self, op_pc, exit_ret, regs)
+    unsafe fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64 {
+        // SAFETY: as this function's (# Safety)
+        unsafe { crate::vm::Vm::jit_gc_step(self, op_pc, exit_ret, regs) }
     }
     #[inline]
     fn jit_due_words(&self) -> *const usize {

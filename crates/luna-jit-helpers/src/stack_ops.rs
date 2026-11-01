@@ -33,7 +33,8 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread; `ops` points at `2 * n`
-/// writable words; `roots` is 0 or the address of a root list as `push_ssa_roots` takes it.
+/// writable words, operand j's as `VmJitFrames::jit_concat_regs` takes it for register `a + j`;
+/// `roots` is 0 or the address of a root list as `push_ssa_roots` takes it.
 // SAFETY: no other item in the link is named `luna_jit_op_concat_regs`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -52,10 +53,13 @@ pub unsafe extern "C" fn luna_jit_op_concat_regs(
         let ops = std::slice::from_raw_parts_mut(ops as *mut [i64; 2], n as usize);
         (vm, mark, ops)
     };
-    let r = vm.jit_concat_regs(a as u32, ops, reload as u64);
-    // SAFETY: restores the root list `push_ssa_roots` linked over
-    unsafe { vm.jit_mut() }.ssa_roots = mark;
-    r
+    // SAFETY: the operands are as the concat takes them (# Safety); the root
+    // list `push_ssa_roots` linked over is restored after
+    unsafe {
+        let r = vm.jit_concat_regs(a as u32, ops, reload as u64);
+        vm.jit_mut().ssa_roots = mark;
+        r
+    }
 }
 
 /// Read the tag byte of `vm.stack[base + slot_offset]`
