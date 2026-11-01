@@ -60,19 +60,47 @@ impl<T> std::fmt::Debug for List<T> {
 }
 
 /// An item type a [`List`] can hold, with the [`Chunk`] vector it lives in.
-pub trait ListItem: Copy + Sized {
-    /// The chunk's vector of this item type.
-    fn items(chunk: &Chunk) -> &LVec<Self>;
-    /// The same vector, to add to.
-    fn items_mut(chunk: &mut Chunk) -> &mut LVec<Self>;
+/// Only the tree's own item types are list items, and only the chunk adds
+/// to its vectors ([`Chunk::push_list`]): a vector moved to another chunk
+/// would outlive the context it was allocated from. The example compiles,
+/// the one after it fails to.
+///
+/// ```
+/// use luna_core::{frontend::{parse, ast::{ExprId, ListItem}}, version::LuaVersion};
+/// let a = parse(b"local x = f(1, 2)", LuaVersion::Lua54).unwrap();
+/// let _ = ExprId::items(&a);
+/// ```
+///
+/// ```compile_fail,E0599
+/// use luna_core::{frontend::{parse, ast::{ExprId, ListItem}}, version::LuaVersion};
+/// let mut a = parse(b"local x = f(1, 2)", LuaVersion::Lua54).unwrap();
+/// let mut b = parse(b"local y = g(3, 4)", LuaVersion::Lua54).unwrap();
+/// std::mem::swap(ExprId::items_mut(&mut a), ExprId::items_mut(&mut b)); // error[E0599]
+/// ```
+pub trait ListItem: Copy + Sized + store::ListStore {
+    /// The chunk's items of this type.
+    fn items(chunk: &Chunk) -> &[Self];
+}
+
+mod store {
+    use super::*;
+
+    /// Where a list item type's vector is in the chunk. Out of reach
+    /// outside the crate, which keeps the vectors and the item types to
+    /// the crate's.
+    pub trait ListStore: Sized {
+        fn items_mut(chunk: &mut Chunk) -> &mut LVec<Self>;
+    }
 }
 
 macro_rules! list_item {
     ($t:ty, $field:ident) => {
         impl ListItem for $t {
-            fn items(chunk: &Chunk) -> &LVec<Self> {
+            fn items(chunk: &Chunk) -> &[Self] {
                 &chunk.$field
             }
+        }
+        impl store::ListStore for $t {
             fn items_mut(chunk: &mut Chunk) -> &mut LVec<Self> {
                 &mut chunk.$field
             }
