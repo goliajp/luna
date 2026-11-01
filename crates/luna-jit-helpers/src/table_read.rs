@@ -23,8 +23,7 @@ pub unsafe extern "C" fn luna_jit_table_get_field(t: i64, key_ptr: i64) -> i64 {
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: table has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: table has metatable");
         return 0;
     }
     // SAFETY: `key_ptr` is an interned string (# Safety)
@@ -61,14 +60,12 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
     let g: luna_core::runtime::Gc<luna_core::runtime::Table> = match env {
         luna_core::runtime::Value::Table(t) => t,
         _ => {
-            let e = vm.runtime_error("JIT deopt: GetTabUp upval not Table");
-            vm.set_jit_pending_err(e);
+            vm.park_jit_error("JIT deopt: GetTabUp upval not Table");
             return 0;
         }
     };
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: GetTabUp env has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: GetTabUp env has metatable");
         return 0;
     }
     // SAFETY: `key_ptr` is an interned string (# Safety)
@@ -231,8 +228,7 @@ pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
     // the interpreter, which walks __index correctly (including the
     // infinite-loop error events.lua relies on).
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: table has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: table has metatable");
         return 0;
     }
     // Return the raw 8-byte payload of the stored
@@ -268,8 +264,7 @@ pub unsafe extern "C" fn luna_jit_table_get_float(t: i64, key_bits: i64) -> i64 
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: table has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: table has metatable");
         return 0;
     }
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
@@ -294,8 +289,7 @@ pub unsafe extern "C" fn luna_jit_table_len(t: i64) -> i64 {
     // 5.4+ honours __len on tables; the helper bypasses it.
     // Park a deopt request and let the interpreter compute the length.
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: table has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: table has metatable");
         return 0;
     }
     g.len()
