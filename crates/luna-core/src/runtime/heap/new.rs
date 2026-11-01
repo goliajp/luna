@@ -68,7 +68,7 @@ impl Heap {
     /// [`Heap::with_mem`], or `None` when the allocation context cannot
     /// give the heap its first blocks.
     pub(crate) fn try_with_mem(mem: crate::runtime::mem::MemOwner, seed: u32) -> Option<Heap> {
-        let mem = mem.for_heap();
+        let mem = mem.unshared();
         let strings = StringTable::new(mem.mem()).ok()?;
         let mut h = Heap {
             all: ptr::null_mut(),
@@ -124,7 +124,7 @@ impl Heap {
 
     /// An owner of the heap's allocation context, for holders that must
     /// keep it alive as long as they do (the Vm's own containers).
-    pub fn mem_owner(&self) -> crate::runtime::mem::MemOwner {
+    pub(crate) fn mem_owner(&self) -> crate::runtime::mem::MemOwner {
         self.mem.clone()
     }
 }

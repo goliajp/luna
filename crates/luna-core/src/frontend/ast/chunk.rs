@@ -101,8 +101,16 @@ impl Default for Block {
 }
 
 impl Chunk {
-    /// An empty chunk whose vectors come from `mem`.
+    /// An empty chunk whose vectors come from `mem`'s budget, through a
+    /// context of the chunk's own when a clone of `mem` is kept elsewhere
+    /// (by a Vm on another thread, say).
     pub fn new(mem: MemOwner) -> Chunk {
+        Chunk::on(mem.unshared())
+    }
+
+    /// An empty chunk whose vectors come from `mem`'s context itself: the
+    /// Vm's loads build their trees on its heap's context.
+    pub(crate) fn on(mem: MemOwner) -> Chunk {
         let m = mem.mem();
         Chunk {
             exprs: LVec::new(m),
