@@ -147,3 +147,35 @@ fn vms_given_clones_of_one_owner_share_its_count() {
     drop(b);
     assert_eq!(a.memory_in_use(), Some(one));
 }
+
+/// Panics the first time it is asked after `armed`.
+struct PanicOnce(Arc<SyncCell<bool>>);
+
+impl MemoryPolicy for PanicOnce {
+    fn allow(&mut self, _old: usize, _new: usize, _kind: BlockKind, _in_use: usize) -> bool {
+        if self.0.get() {
+            self.0.set(false);
+            panic!("the policy gives up once");
+        }
+        true
+    }
+}
+
+// with or without the `send` feature, a policy that panicked is asked again
+// for the next block (a lock it left poisoned does not fail every later
+// allocation, nor the frees as the Vm drops)
+#[test]
+fn a_policy_that_panicked_once_is_asked_again() {
+    let armed = Arc::new(SyncCell::new(false));
+    let mem = MemOwner::policy(Box::new(PanicOnce(armed.clone())));
+    let mut vm = Vm::new_with_mem(LuaVersion::Lua54, mem.clone());
+    armed.set(true);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        vm.eval("local t = {} for i = 1, 100 do t[i] = {i} end")
+    }));
+    assert!(r.is_err(), "the policy's panic reaches the caller");
+    drop(vm);
+    let mut vm = Vm::new_with_mem(LuaVersion::Lua54, mem);
+    let r = vm.eval("local t = {} for i = 1, 100 do t[i] = {i} end return #t");
+    assert!(matches!(r.unwrap()[0], Value::Int(100)));
+}
