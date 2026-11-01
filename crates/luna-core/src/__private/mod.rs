@@ -13,6 +13,7 @@ mod fields;
 mod free;
 mod heap;
 mod layout;
+mod mem;
 mod panic_watch;
 mod runtime;
 mod types;
@@ -30,6 +31,7 @@ pub use fields::{
 pub use free::*;
 pub use heap::{HeapBarriers, TableStores, fresh_seed, new_heap};
 pub use layout::{STR_LEN_OFFSET, TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK};
+pub use mem::{lany_new, lbox_new, lvec_new, lvec_with_capacity};
 pub use panic_watch::{panic_free, panics_in};
 pub use runtime::*;
 pub use types::*;

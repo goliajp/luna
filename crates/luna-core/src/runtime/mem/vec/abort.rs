@@ -13,7 +13,7 @@ use super::LVec;
 impl<T> LVec<T> {
     /// [`LVec::with_capacity`], ending the process on failure.
     #[inline]
-    pub fn with_capacity_or_abort(mem: MemRef, n: usize) -> LVec<T> {
+    pub(crate) fn with_capacity_or_abort(mem: MemRef, n: usize) -> LVec<T> {
         let mut v = LVec::new(mem);
         v.reserve_exact_or_abort(n);
         v
@@ -97,11 +97,6 @@ impl<T: Clone> LVec<T> {
     pub fn regrow(&mut self, n: usize, v: T) {
         assert!(n <= self.cap);
         self.fill_to(n, v);
-    }
-
-    /// [`LVec::from_slice`], ending the process on failure.
-    pub fn from_slice_or_abort(mem: MemRef, s: &[T]) -> LVec<T> {
-        LVec::from_slice(mem, s).unwrap_or_else(|_| vec_oom::<T>(s.len()))
     }
 
     /// [`LVec::extend_from_slice`], ending the process on failure.

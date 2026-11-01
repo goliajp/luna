@@ -42,16 +42,9 @@ impl<T: Clone> LVec<T> {
         self.len = len;
     }
 
-    /// A copy on the same context.
-    pub fn try_clone(&self) -> Result<LVec<T>, Oom> {
-        let mut v = LVec::with_capacity(self.mem(), self.len)?;
-        v.extend_from_slice(self)?;
-        Ok(v)
-    }
-
     /// A vector on `mem` holding clones of `s`.
     #[inline]
-    pub fn from_slice(mem: MemRef, s: &[T]) -> Result<LVec<T>, Oom> {
+    pub(crate) fn from_slice(mem: MemRef, s: &[T]) -> Result<LVec<T>, Oom> {
         let mut v = LVec::with_capacity(mem, s.len())?;
         v.extend_from_slice(s)?;
         Ok(v)

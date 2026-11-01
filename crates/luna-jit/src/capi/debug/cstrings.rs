@@ -12,8 +12,11 @@ use luna_core::runtime::mem::{LSlice, LVec, MemRef};
 pub(in super::super) struct CStrings(Option<LVec<LSlice<u8>>>);
 
 impl CStrings {
-    pub(in super::super) fn new(mem: MemRef) -> CStrings {
-        CStrings(Some(LVec::new(mem)))
+    /// # Safety
+    /// An owner of `mem`'s context outlives the list (the state's Vm).
+    pub(in super::super) unsafe fn new(mem: MemRef) -> CStrings {
+        // SAFETY: as this function's (# Safety)
+        CStrings(Some(unsafe { luna_core::__private::lvec_new(mem) }))
     }
 
     /// `b` NUL-terminated, at an address that stays put; `"?"` when there
@@ -27,7 +30,8 @@ impl CStrings {
         }
         let mem = list.mem();
         let made = (|| {
-            let mut z = LVec::with_capacity(mem, b.len() + 1)?;
+            // SAFETY: the string joins the list, on the list's context
+            let mut z = unsafe { luna_core::__private::lvec_with_capacity(mem, b.len() + 1) }?;
             z.extend_from_slice(b)?;
             z.push(0)?;
             list.reserve(1)?;

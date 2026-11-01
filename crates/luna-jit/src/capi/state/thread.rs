@@ -42,28 +42,32 @@ pub(super) fn new_thread_state(
     // SAFETY: `g` is the live global record of `co`'s state, whose Vm
     // pointer is live
     let mem = unsafe { (*(*g).vm).heap().mem() };
-    let b = LAny::new(
-        mem,
-        ThreadBox {
-            extra,
-            st: LuaState {
-                g,
-                thread: co,
-                base: 0,
-                calls: LVec::new(mem),
-                status: LUA_OK,
-                pending_yield: None,
-                hook: CHook {
-                    strs: super::debug::CStrings::new(mem),
-                    refs: super::debug::LevelRefs::new(mem),
-                    ..CHook::default()
+    // SAFETY: the thread's block and what it holds go with the thread, or
+    // with the Vm's heap, before the Vm gives up its context
+    let b = unsafe {
+        luna_core::__private::lany_new(
+            mem,
+            ThreadBox {
+                extra,
+                st: LuaState {
+                    g,
+                    thread: co,
+                    base: 0,
+                    calls: luna_core::__private::lvec_new(mem),
+                    status: LUA_OK,
+                    pending_yield: None,
+                    hook: CHook {
+                        strs: super::debug::CStrings::new(mem),
+                        refs: super::debug::LevelRefs::new(mem),
+                        ..CHook::default()
+                    },
+                    tbc: luna_core::__private::lvec_new(mem),
+                    parked: None,
                 },
-                tbc: LVec::new(mem),
-                parked: None,
             },
-        },
-        BlockKind::Thread,
-    )
+            BlockKind::Thread,
+        )
+    }
     .ok()?;
     // SAFETY: `co` is a live thread the caller holds and the Vm is not
     // touching it now; the borrow covers the reservation

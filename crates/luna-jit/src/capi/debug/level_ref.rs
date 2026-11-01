@@ -25,8 +25,11 @@ pub(in crate::capi) struct LevelRef {
 pub(in crate::capi) struct LevelRefs(Option<LVec<LBox<LevelRef>>>);
 
 impl LevelRefs {
-    pub(in crate::capi) fn new(mem: MemRef) -> LevelRefs {
-        LevelRefs(Some(LVec::new(mem)))
+    /// # Safety
+    /// An owner of `mem`'s context outlives the list (the state's Vm).
+    pub(in crate::capi) unsafe fn new(mem: MemRef) -> LevelRefs {
+        // SAFETY: as this function's (# Safety)
+        LevelRefs(Some(unsafe { luna_core::__private::lvec_new(mem) }))
     }
 }
 
@@ -44,7 +47,8 @@ pub(in crate::capi) fn encode_ref(api: &mut Api, l: *mut LuaState, r: usize) -> 
         return Some(std::ptr::from_ref::<LevelRef>(b) as usize);
     }
     refs.reserve(1).ok()?;
-    let b = LBox::new(refs.mem(), LevelRef { l, r }).ok()?;
+    // SAFETY: the box joins the list, on the list's context
+    let b = unsafe { luna_core::__private::lbox_new(refs.mem(), LevelRef { l, r }) }.ok()?;
     let p = std::ptr::from_ref::<LevelRef>(&b) as usize;
     refs.push_or_abort(b);
     Some(p)

@@ -3,7 +3,7 @@
 
 use super::ccall::{CCall, CHook, PendingYield};
 use super::*;
-use luna_core::runtime::mem::{BlockKind, LAny, MemOwner};
+use luna_core::runtime::mem::{BlockKind, MemOwner};
 
 mod make;
 mod thread;

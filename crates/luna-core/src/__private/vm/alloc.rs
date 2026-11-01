@@ -96,7 +96,11 @@ pub trait VmJitAlloc {
     /// make an empty one when the pool is empty. The trace keeps it (as
     /// the boxed pointer the helper leaks) in a stack slot through the
     /// loop and appends each piece to it.
-    fn jit_str_buf_acquire(&mut self) -> Box<LVec<u8>>;
+    ///
+    /// # Safety
+    /// The buffer goes back to this Vm (`jit_str_buf_release`) or is
+    /// dropped before the Vm is: it is a block of the Vm's context.
+    unsafe fn jit_str_buf_acquire(&mut self) -> Box<LVec<u8>>;
     /// Return a previously-acquired buffer to the
     /// pool, dropping any excess past `jit_str_buf_pool_cap`. The
     /// buffer is `clear`ed (capacity retained) so the next acquire
@@ -181,7 +185,7 @@ impl VmJitAlloc for crate::vm::Vm {
         crate::vm::Vm::jit_sunk_make(self, site, make)
     }
     #[inline]
-    fn jit_str_buf_acquire(&mut self) -> Box<LVec<u8>> {
+    unsafe fn jit_str_buf_acquire(&mut self) -> Box<LVec<u8>> {
         crate::vm::Vm::jit_str_buf_acquire(self)
     }
     #[inline]
