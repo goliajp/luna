@@ -134,7 +134,6 @@ pub(crate) fn tier_up_llvm(
         return Some(entry);
     };
     let entry = super::tier_source::clif_tier_up(storage, &source, ct.head_pc());
-    let src = source;
     let mut p = Pending {
         source: None,
         due: Arc::default(),
@@ -143,9 +142,9 @@ pub(crate) fn tier_up_llvm(
     };
     let now = std::time::Instant::now();
     if delay.is_zero() {
-        hand_over(storage, &p, src, now);
+        hand_over(storage, &p, source, now);
     } else {
-        p.source = Some(src);
+        p.source = Some(source);
         let due = p.due.clone();
         let ticket = crate::jit_backend::llvm_thread::submit(
             Box::new(move || due.store(true, Ordering::Relaxed)),

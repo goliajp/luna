@@ -158,23 +158,26 @@ impl Vm {
             self.jit.counters.deopt += 1;
             return 0;
         }
-        let payload = |v: Value| {
-            // SAFETY: every `RawVal` `unpack` returns has all 8 bytes initialised
-            unsafe { v.unpack().1.zero as i64 }
-        };
+        self.reload_concat_operands(lo, ops, reload);
+        stack_payload(self.stack[lo])
+    }
+
+    /// Writes into `ops` the payloads of the registers from `lo` that
+    /// `reload` names (bit 63: the 63rd and every one after).
+    fn reload_concat_operands(&self, lo: usize, ops: &mut [[i64; 2]], reload: u64) {
         let mut want = reload;
         while want != 0 {
             let j = want.trailing_zeros() as usize;
             want &= want - 1;
-            if j == 63 {
-                for k in 63..n {
-                    ops[k][1] = payload(self.stack[lo + k]);
-                }
-            } else if j < n {
-                ops[j][1] = payload(self.stack[lo + j]);
+            let ks = if j == 63 {
+                63..ops.len()
+            } else {
+                j..(j + 1).min(ops.len())
+            };
+            for k in ks {
+                ops[k][1] = stack_payload(self.stack[lo + k]);
             }
         }
-        payload(self.stack[lo])
     }
 
     /// Read the tag byte of
@@ -245,4 +248,10 @@ impl Vm {
         );
         true
     }
+}
+
+/// The payload word of `v`.
+fn stack_payload(v: Value) -> i64 {
+    // SAFETY: every `RawVal` `unpack` returns has all 8 bytes initialised
+    unsafe { v.unpack().1.zero as i64 }
 }
