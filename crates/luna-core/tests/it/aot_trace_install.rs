@@ -100,9 +100,9 @@ fn install_aot_trace_pushes_onto_proto_traces() {
 
     let traces = root.traces();
     assert_eq!(traces.len(), 1, "install must push exactly one trace");
-    assert_eq!(traces[0].head_pc, 0);
+    assert_eq!(traces[0].head_pc(), 0);
     assert!(
-        traces[0].dispatchable,
+        traces[0].dispatchable(),
         "dummy trace was marked dispatchable"
     );
 }

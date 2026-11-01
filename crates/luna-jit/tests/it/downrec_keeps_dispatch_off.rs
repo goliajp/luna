@@ -41,20 +41,20 @@ fn downrec_close_keeps_an_earlier_dispatch_off_mark() {
     assert!(!traces.is_empty(), "fib compiled no trace");
     for ct in traces.iter() {
         assert!(
-            !ct.dispatchable,
+            !ct.dispatchable(),
             "trace at pc {} is dispatchable",
-            ct.head_pc
+            ct.head_pc()
         );
         assert!(
-            ct.downrec_link.is_none(),
+            ct.downrec_link().is_none(),
             "trace at pc {} can be admitted as a DownRec trace",
-            ct.head_pc
+            ct.head_pc()
         );
     }
     assert!(
         traces
             .iter()
-            .any(|ct| ct.dispatch_off_reason == Some("GetUpval:not-Closure-use")),
+            .any(|ct| ct.dispatch_off_reason() == Some("GetUpval:not-Closure-use")),
         "no trace was marked for the upvalue read"
     );
 }

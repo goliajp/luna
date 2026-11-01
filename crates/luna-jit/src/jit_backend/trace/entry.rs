@@ -125,7 +125,7 @@ pub(super) fn entry_live(
 pub(super) fn side_parent_exit_tags(record: &TraceRecord) -> Option<Vec<ExitTag>> {
     let (parent_proto, parent_head_pc, idx) = record.side_trace_parent?;
     let traces = parent_proto.traces();
-    let parent = traces.iter().find(|t| t.head_pc == parent_head_pc)?;
+    let parent = traces.iter().find(|t| t.head_pc() == parent_head_pc)?;
     let tags = parent.exit_tags_of(idx);
     let off = parent.exit_frame_offset(idx).min(tags.len());
     Some(tags[off..].to_vec())

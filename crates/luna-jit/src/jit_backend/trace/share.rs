@@ -18,7 +18,7 @@ pub(crate) use super::tier_source::TierSource;
 pub(crate) fn publish(
     storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
-    ct: &CompiledTraceParts,
+    ct: &mut CompiledTraceParts,
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,
     cap: Captured,
@@ -34,8 +34,8 @@ pub(crate) fn publish(
             let parent = proto
                 .traces()
                 .iter()
-                .find(|t| t.head_pc == pc)
-                .map(|t| t.entry as usize);
+                .find(|t| t.head_pc() == pc)
+                .map(|t| t.entry() as usize);
             // a parent that is not shared leaves its side traces unshared
             let Some(id) = parent.and_then(|e| cs.images.get(&e).copied()) else {
                 return;
@@ -53,8 +53,8 @@ pub(crate) fn publish(
     if has_code {
         cs.images.insert(ct.entry as usize, img.id);
     }
-    if let Some(t) = &ct.tier_up
-        && let Some(src) = t.source.borrow_mut().as_mut()
+    if let Some(t) = &mut ct.tier_up
+        && let Some(src) = t.source_mut().as_mut()
         && let Some(src) = src.downcast_mut::<TierSource>()
     {
         src.image = Some(img.clone());
@@ -83,8 +83,8 @@ pub(crate) fn adopt(
             let parent = parent_proto
                 .traces()
                 .iter()
-                .find(|t| t.head_pc == pc)
-                .map(|t| t.entry as usize);
+                .find(|t| t.head_pc() == pc)
+                .map(|t| t.entry() as usize);
             match parent.and_then(|e| cs.images.get(&e).copied()) {
                 Some(id) => Some(id),
                 None => return Vec::new(),
@@ -186,9 +186,9 @@ fn install(
         ct.entry = unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) };
         cs.images.insert(entry as usize, img.id);
         if optimized.is_none()
-            && let (Some(t), Some(lir)) = (&ct.tier_up, &img.lir)
+            && let (Some(t), Some(lir)) = (&mut ct.tier_up, &img.lir)
         {
-            *t.source.borrow_mut() = Some(Box::new(TierSource {
+            *t.source_mut() = Some(Box::new(TierSource {
                 lir: lir.clone(),
                 relocs,
                 image: Some(img.clone()),
@@ -199,8 +199,8 @@ fn install(
     Some(AdoptedTrace {
         // SAFETY: the code is a copy of a trace compiled for code of this
         // content against the tags and window the image's metadata gives
-        // `ct`, placed above with this Vm's addresses; no side-trace cell
-        // is set yet
+        // `ct`, placed above with this Vm's addresses and `ct`'s cells; the
+        // tier source is made above for it; no side-trace cell is set yet
         trace: unsafe { CompiledTrace::from_parts(ct) },
         side_parent: match (img.side_parent, req.side_parent) {
             (None, _) => None,
@@ -245,7 +245,7 @@ fn value_of(
         Source::TierCell => ct
             .tier_up
             .as_ref()
-            .map_or(0, |t| &*t.count as *const TCellU32 as i64),
+            .map_or(0, |t| t.count() as *const TCellU32 as i64),
     })
 }
 
@@ -267,9 +267,9 @@ pub(crate) fn tier_up(
     storage: &mut dyn luna_core::__private::JitStorage,
     ct: &CompiledTrace,
 ) -> Option<TraceFn> {
-    let source = ct.tier_up.as_ref()?.source.borrow_mut().take()?;
+    let source = luna_core::__private::take_tier_source(ct)?;
     let src = source.downcast::<TierSource>().ok()?;
-    clif_tier_up(storage, &src, ct.head_pc)
+    clif_tier_up(storage, &src, ct.head_pc())
 }
 
 /// Cranelift's code for the trace `src` holds.

@@ -237,14 +237,14 @@ pub(crate) fn compile_trace_for_vm(
 ) -> Option<CompiledTrace> {
     let capture = version.is_some()
         && crate::jit_backend::storage::from_storage(storage).is_ok_and(|cs| cs.engine.is_some());
-    let (ct, cap) = compile_trace_captured(storage, record, opts, false, float_only, capture)?;
+    let (mut ct, cap) = compile_trace_captured(storage, record, opts, false, float_only, capture)?;
     if let (Some(version), Some(cap)) = (version, cap) {
-        share::publish(storage, record, &ct, opts, version, cap);
+        share::publish(storage, record, &mut ct, opts, version, cap);
     }
     // SAFETY: `entry` is the code just compiled from `record` against the
-    // tags and window `ct` states, or the placeholder of a trace that is
-    // never entered; the code stays mapped while the Vm's storage lives,
-    // and no side-trace cell is set yet
+    // tags, window and cells `ct` holds (its tier source made with it), or
+    // the placeholder of a trace never entered; the code stays mapped while
+    // the Vm's storage lives, and no side-trace cell is set yet
     Some(unsafe { CompiledTrace::from_parts(ct) })
 }
 

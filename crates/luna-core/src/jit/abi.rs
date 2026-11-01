@@ -181,16 +181,17 @@ pub unsafe trait TraceCompiler {
     }
 
     /// Compiles `ct`, whose code came from a quicker, less optimizing code
-    /// generator, again from what `crate::jit::trace::TierUp::source`
-    /// holds; the new entry behaves exactly like the old one. `None` when
-    /// the backend has no better code for it.
+    /// generator, again from its tier source (`__private::take_tier_source`);
+    /// the new entry behaves exactly like the old one. `None` when the
+    /// backend has no better code for it.
     ///
-    /// A backend that compiles better code in the background leaves
-    /// something in `source` (returning `None`, or quicker code meanwhile):
-    /// the Vm then asks again at the next entry of the trace once it runs
-    /// code this returned, else after another
-    /// `crate::jit::trace::TierUp::at` loop iterations and entries of the
-    /// baseline code, and switches to each entry this returns.
+    /// A backend that compiles better code in the background puts a source
+    /// back (`__private::put_tier_source`; returning `None`, or quicker code
+    /// meanwhile): the Vm then asks again at the next entry of the trace
+    /// once it runs code this returned, else after another
+    /// [`TierUp::at`](crate::__private::TierUp::at) loop iterations and
+    /// entries of the baseline code, and switches to each entry this
+    /// returns.
     fn tier_up(
         &self,
         storage: &mut dyn crate::jit::JitStorage,
