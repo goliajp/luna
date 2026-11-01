@@ -135,7 +135,9 @@ impl CompiledTrace {
     /// entry and exit tags and the window size `parts` states (the
     /// dispatcher moves registers in and out by them unchecked), that
     /// lives as long as any Vm the trace is installed on. The side-trace
-    /// cells of `parts` are null.
+    /// cells of `parts` are null. Between this call and the trace's
+    /// installation, no public field is changed in a way that makes the
+    /// parts disagree with each other or with that code.
     pub unsafe fn from_parts(parts: CompiledTraceParts) -> Self {
         let CompiledTraceParts {
             head_pc,
