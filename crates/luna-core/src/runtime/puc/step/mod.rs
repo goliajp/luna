@@ -56,8 +56,8 @@ fn restart<H: StepHost + ?Sized>(h: &mut H) {
             "5.2: threads a sweep kept are left unshrunk at the next cycle"
         );
     }
-    let next = h.heap().puc.cycle.get().wrapping_add(1);
-    h.heap().puc.cycle = std::num::NonZeroU32::new(next).unwrap_or(std::num::NonZeroU32::MIN);
+    let c = h.heap().puc.cycle;
+    h.heap().puc.cycle = c.checked_add(1).unwrap_or(std::num::NonZeroU32::MIN);
     gc_count_marked(h);
     let mut m = h.heap().gc_begin_propagate();
     h.mark_roots_restart(&mut m);
