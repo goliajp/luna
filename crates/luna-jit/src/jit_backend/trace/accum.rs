@@ -235,22 +235,19 @@ fn accum_candidates(
             continue;
         }
 
-        // both the accumulator slot and the
-        // piece slot must be Str at recorder-fire time for the
-        // buffered emit to be sound. `luna_jit_str_buf_extend`
-        // unconditionally interprets the raw bits as a
-        // `*const LuaStr`; a non-Str payload (e.g. Int(1) =
-        // raw=1) would dereference address 0x1 → SIGSEGV. The
-        // dispatcher's entry-tag guard (`src/vm/exec.rs:~5124`)
-        // ensures runtime tags match `record.entry_tags`, so
-        // gating on Str-at-recorder-fire is sufficient. Covered by
-        // `trace_ipairs_val_tag_guard::ipairs_mixed_tag_array_deopts
-        // _no_garbage` with `{'a', 1, 'c'}`.
+        // both the accumulator slot and the piece slot must hold strings
+        // where the concatenation reads them for the buffered emit to be
+        // sound: `luna_jit_str_buf_extend` takes the raw bits as a
+        // `*const LuaStr`. The accumulator is checked on entry; the piece
+        // is a string the body made, or one checked on entry when the body
+        // does not write it first. Covered by
+        // `trace_ipairs_val_tag_guard::ipairs_mixed_tag_array_deopts_no_garbage`
+        // with `{'a', 1, 'c'}`.
         let entry_tags = &record.entry_tags;
         let s_tag = entry_tags.get(s_slot as usize).copied();
         let v_tag = entry_tags.get(v_slot as usize).copied();
         if s_tag != Some(luna_core::__private::raw::STR)
-            || v_tag != Some(luna_core::__private::raw::STR)
+            || !piece_is_str(record, ci - 1, v_slot, v_tag)
         {
             continue;
         }
@@ -271,4 +268,26 @@ fn accum_candidates(
         ));
     }
     candidates
+}
+
+/// Whether register `r` holds a string where op `ci` reads it: the last op
+/// before that writes it makes a string (a concatenation, the load of a
+/// string constant), or none does and its entry tag `tag` is a string's.
+fn piece_is_str(record: &TraceRecord, ci: usize, r: u32, tag: Option<u8>) -> bool {
+    use luna_core::vm::isa::Op;
+    let w = record.ops[..ci]
+        .iter()
+        .rev()
+        .find(|o| o.inline_depth == 0 && super::slots::op_writes_at_offset(o, 0).any(|x| x == r));
+    match w {
+        None => tag == Some(luna_core::__private::raw::STR),
+        Some(w) => match w.inst.op() {
+            Op::Concat => w.inst.concat_operands().1 == r,
+            Op::LoadK => matches!(
+                w.proto.consts.get(w.inst.bx() as usize),
+                Some(luna_core::runtime::Value::Str(_))
+            ),
+            _ => false,
+        },
+    }
 }

@@ -73,6 +73,11 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()>
                 continue;
             }
             if i == ba.concat_idx {
+                if lw.current_kinds[ba.piece_slot as usize] != RegKind::Str {
+                    // the plan admits only a piece made a string
+                    checkpoint("bail:accum-piece-not-str");
+                    return None;
+                }
                 // Read piece slot raw bits + buf ptr.
                 let piece_raw = lw.bcx.use_var(regs[ba.piece_slot as usize]);
                 let buf_ptr = lw.bcx.use_var(fctx.buf_var);
