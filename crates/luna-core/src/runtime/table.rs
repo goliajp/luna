@@ -236,7 +236,7 @@ impl Table {
     /// Whether writes to this table are refused (Redis's
     /// `lua_enablereadonlytable`): every assignment, `rawset`, the table
     /// library's stores and `setmetatable` on it raise "Attempt to modify
-    /// a readonly table", and [`Table::set`] / [`Table::set_int`] return
+    /// a readonly table", and `Gc<Table>::set` / `Gc<Table>::set_int` return
     /// [`TableError::ReadOnly`]. Reads are unaffected. Set it with
     /// [`crate::vm::Vm::set_readonly`].
     #[cfg_attr(luna_hot, inline(always))]

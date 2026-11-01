@@ -51,7 +51,7 @@ pub(in super::super) unsafe fn table_set_existing_at(
 
 /// `tb[*pk] := *pv` as a raw set (PUC `luaH_finishset` with no `__newindex`
 /// to call): an integer in the array part in place, anything else through
-/// [`Table::set`] out of line. `false` when that refuses the key (nil, NaN,
+/// `Gc<Table>::set` out of line. `false` when that refuses the key (nil, NaN,
 /// overflow), having done nothing; the miss path then raises the error.
 ///
 /// # Safety
