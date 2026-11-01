@@ -88,7 +88,7 @@ fn hook_table(vm: &mut Vm, init: bool) -> Result<(Gc<Table>, bool), LuaError> {
         let k = vm.api_push_string_dyn(b"k")?;
         let mode = vm.str_value(b"__mode")?;
         vm.raw_set(t, mode, k)?;
-        vm.host_set_metatable(Value::Table(t), Some(t))?;
+        vm.set_metatable(Value::Table(t), Some(t))?;
     }
     Ok((t, true))
 }

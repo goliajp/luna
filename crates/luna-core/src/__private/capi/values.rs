@@ -126,7 +126,7 @@ impl VmCApiValues for crate::vm::Vm {
     }
     #[inline]
     fn host_set_metatable(&mut self, v: Value, mt: Option<Gc<Table>>) -> Result<(), LuaError> {
-        crate::vm::Vm::host_set_metatable(self, v, mt)
+        crate::vm::Vm::set_metatable(self, v, mt)
     }
     #[inline]
     fn host_arith(&mut self, op: u8, l: Value, r: Value) -> Result<Value, LuaError> {

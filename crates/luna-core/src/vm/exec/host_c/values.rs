@@ -105,12 +105,9 @@ impl Vm {
     /// whose new metatable has `__gc` is marked for finalization now; 5.1
     /// marks every userdata with a metatable, and looks for `__gc` when it
     /// collects it. A read-only table refuses, as Redis's
-    /// `lua_setmetatable` does.
-    pub(crate) fn host_set_metatable(
-        &mut self,
-        v: Value,
-        mt: Option<Gc<Table>>,
-    ) -> Result<(), LuaError> {
+    /// `lua_setmetatable` does. Like `lua_setmetatable`, and unlike Lua's
+    /// `setmetatable`, it does not look at `__metatable`.
+    pub fn set_metatable(&mut self, v: Value, mt: Option<Gc<Table>>) -> Result<(), LuaError> {
         match v {
             Value::Table(t) => {
                 self.refuse_readonly(t)?;

@@ -165,8 +165,9 @@ impl Userdata {
         self.metatable
     }
 
-    /// Install (or clear) this userdata's metatable.
-    pub fn set_metatable(&mut self, mt: Option<Gc<Table>>) {
+    /// Install (or clear) this userdata's metatable, without the write
+    /// barrier, which the caller takes; hosts use `Vm::set_metatable`.
+    pub(crate) fn set_metatable(&mut self, mt: Option<Gc<Table>>) {
         self.metatable = mt;
     }
 

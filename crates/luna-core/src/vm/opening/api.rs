@@ -137,7 +137,7 @@ impl Opener {
             Value::Table(t) => Some(t),
             _ => None,
         };
-        vm.host_set_metatable(obj, mt)?;
+        vm.set_metatable(obj, mt)?;
         self.pop(vm, 1);
         Ok(())
     }

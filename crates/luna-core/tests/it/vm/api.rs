@@ -185,3 +185,43 @@ fn api_collect_garbage_returns_freed_count() {
     let _ = vm.collect_garbage(); // returns usize ≥ 0 by type
     let _ = vm.collect_garbage(); // second call is a no-op-ish
 }
+
+/// `Vm::set_metatable` is `lua_setmetatable`: it sets a table's metatable
+/// even when the old one has `__metatable`, a number's for every number,
+/// and clears with `None`.
+#[test]
+fn api_set_metatable_is_raw_and_reaches_type_metatables() {
+    for v in [LuaVersion::Lua51, LuaVersion::Lua53, LuaVersion::Lua55] {
+        let mut vm = Vm::new(v);
+        let r = vm
+            .eval("t = setmetatable({}, {__metatable = 'locked'}) return {__index = function() return 7 end}")
+            .expect("eval");
+        let Value::Table(mt) = r[0] else {
+            panic!("a table")
+        };
+        let Value::Table(t) = vm.eval("return t").expect("eval")[0] else {
+            panic!("a table")
+        };
+        vm.set_metatable(Value::Table(t), Some(mt)).expect("set");
+        let r = vm
+            .eval("return t.anything == 7, getmetatable(t) == nil")
+            .expect("eval");
+        assert!(
+            matches!(r[0], Value::Bool(true)) && matches!(r[1], Value::Bool(false)),
+            "{v:?} {r:?}"
+        );
+        vm.set_metatable(Value::Int(1), Some(mt)).expect("set");
+        assert!(
+            matches!(
+                vm.eval("return (5).x == 7").expect("eval")[0],
+                Value::Bool(true)
+            ),
+            "{v:?}"
+        );
+        vm.set_metatable(Value::Table(t), None).expect("clear");
+        assert!(
+            vm.eval("return t.anything").expect("eval")[0].is_nil(),
+            "{v:?}"
+        );
+    }
+}
