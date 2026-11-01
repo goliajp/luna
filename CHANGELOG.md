@@ -35,11 +35,12 @@ optimization.
   likewise.
 - `Vm::raw_set(t, key, value)` is public: `rawset` without its argument
   checks, with the write barrier and `rawset`'s errors.
-- `Table::set`, `Table::set_int` and `Table::try_set_existing` take the
-  write barrier themselves (`try_set_existing` now takes the heap), and
-  `Table::set_metatable` takes the heap and the barrier each dialect's
-  `lua_setmetatable` takes: a caller no longer fires
-  `Heap::barrier_back` after them.
+- A table's stores are methods of its handle, `Gc<Table>`, and take the
+  write barrier themselves: `unsafe { t.as_mut() }.set(&mut heap, k, v)`
+  → `t.set(heap, k, v)`, likewise `set_int`, `try_set_existing` (which
+  now takes the heap) and `set_metatable` (which takes the heap and the
+  barrier each dialect's `lua_setmetatable` takes). A caller no longer
+  fires `Heap::barrier_back` after them.
 
 - `package.path` defaults to PUC's default outside Windows too
   (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in
