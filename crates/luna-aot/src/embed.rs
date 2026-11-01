@@ -70,9 +70,8 @@ pub use target::{TargetLibc, TargetOs, TargetSpec};
 ///
 /// # End-to-end behaviour
 ///
-/// The produced binary is **runnable**: it prints the embedded
-/// bytecode length to `stderr` and exits 0. It does not execute the
-/// bytecode; use [`compile_and_link`] for a binary that runs the
+/// The produced binary is **runnable**: it prints the embedded bytecode length to `stderr` and
+/// exits 0. It does not execute the bytecode; use [`compile_and_link`] for a binary that runs the
 /// script through a `Vm`.
 pub fn embed_bytecode(
     source_path: &Path,
