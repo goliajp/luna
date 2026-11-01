@@ -56,17 +56,30 @@ impl Heap {
 
     /// A sweep begins: it may free the object the last safe point left as
     /// the boundary, and its address be reused. A rooted boundary is
-    /// forgotten; one the sweep frees too, every object counting as young
-    /// until the next safe point (as after the atomic step).
+    /// forgotten; one the sweep frees moves to the first object after it
+    /// the sweep keeps (see [`Heap::kept_boundary`]).
     #[inline(always)]
     pub(crate) fn sweep_begins(&mut self) {
         self.rooted_young = ptr::null_mut();
-        let b = self.young;
-        // SAFETY: the boundary is a live object: every sweep, the only
-        // thing that frees one, forgets it first when it is dead
-        if !b.is_null() && unsafe { is_white((*b).flags) && (*b).flags & self.current_white == 0 } {
-            self.young = ptr::null_mut();
+        self.young = self.kept_boundary(self.young);
+    }
+
+    /// The boundary `b`, or the first object after it on `all` that the
+    /// sweep under way or about to start keeps (null: none). The objects
+    /// passed over are dead ones that sweep frees: an object the last safe
+    /// point saw is still older than the boundary, and the boundary outlives
+    /// the sweep. Called before that sweep frees anything past `b`.
+    #[inline(always)]
+    pub(crate) fn kept_boundary(&self, mut b: *mut GcHeader) -> *mut GcHeader {
+        // SAFETY: the boundary is a live object (every sweep moves it off
+        // one it frees, here, before freeing anything past it), and the
+        // links of `all` from it lead to allocated objects
+        unsafe {
+            while !b.is_null() && is_white((*b).flags) && (*b).flags & self.current_white == 0 {
+                b = (*b).next;
+            }
         }
+        b
     }
 
     /// The next safe point is one where the stack holds every live value.
@@ -76,12 +89,12 @@ impl Heap {
     }
 
     /// How many objects were allocated since the last
-    /// [`Heap::safe_point`]: the ones on `all` before the boundary. A sweep
-    /// keeps them (they are the current white) and their order, and may
-    /// free the boundary itself, so an emergency collection counts them
-    /// before it sweeps anything. `None` while every object counts as
-    /// young (no safe point since the state was made or since an atomic
-    /// step), dead ones a pending sweep frees among them. With whether a
+    /// [`Heap::safe_point`] and outlive any sweep under way: the ones on
+    /// `all` before the boundary, less the dead ones that sweep frees. A
+    /// sweep keeps the rest (they are the current white) and their order,
+    /// so an emergency collection counts them before it sweeps anything,
+    /// and they lead `all` after it. `None` while every object counts as
+    /// young (no safe point since the state was made). With whether a
     /// rooted safe point left the boundary (see [`Heap::rooted_safe_point`]).
     pub(crate) fn young_len(&self) -> (Option<usize>, bool) {
         if self.young.is_null() {
@@ -92,7 +105,8 @@ impl Heap {
         // SAFETY: the links of `all` lead to allocated objects
         unsafe {
             while !cur.is_null() && cur != self.young {
-                n += 1;
+                let f = (*cur).flags;
+                n += usize::from(!is_white(f) || f & self.current_white != 0);
                 cur = (*cur).next;
             }
         }

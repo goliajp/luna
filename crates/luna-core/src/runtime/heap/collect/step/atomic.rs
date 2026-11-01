@@ -89,8 +89,8 @@ impl Heap {
             "gray queue not drained at atomic"
         );
         // the newest object at the last safe point may be freed by the
-        // sweep: until the next safe point every object counts as young
-        self.young = ptr::null_mut();
+        // sweep: the boundary moves to the first one the sweep keeps
+        self.young = self.kept_boundary(self.young);
         self.phase = GcPhase::Sweep;
         self.sweep_prev = ptr::null_mut();
         let swept = match self.puc_rules().enter_sweep {

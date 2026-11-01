@@ -122,7 +122,8 @@ fn an_emergency_while_marking_starts_the_collection_over() {
 
 /// An emergency in the middle of 5.2's sweep: the threads the sweep kept are
 /// dropped, not shrunk, before the emergency's cycle starts (a build with
-/// `DEBUG_CHECKS` sees them left over at that cycle's restart).
+/// `DEBUG_CHECKS` sees them left over at that cycle's restart), and the
+/// cycle frees what died before the atomic step.
 #[test]
 fn a_5_2_emergency_while_sweeping_drops_the_kept_threads_first() {
     let mut vm = marking_then_dropped(LuaVersion::Lua52, |vm| {
@@ -134,6 +135,50 @@ fn a_5_2_emergency_while_sweeping_drops_the_kept_threads_first() {
     }
     assert!(vm.emergency_collect());
     assert!(vm.heap.puc.records.swept_52.is_empty());
+    // `luaC_fullgc` finishes the sweep and runs a whole cycle: what was
+    // marked and then dropped is freed, with no safe point since the atomic
+    // step as well
+    let left = vm.eval("return weak[1] == nil").expect("the script runs");
+    assert!(matches!(left[0], crate::runtime::Value::Bool(true)));
+}
+
+/// An emergency in the middle of the sweep, 5.3 to 5.5 (5.2's is above;
+/// 5.1 has no emergency collection): what was marked and then dropped is
+/// freed by the emergency's cycle, though no safe point came after the
+/// atomic step.
+#[test]
+fn an_emergency_while_sweeping_frees_what_died_before_the_atomic_step() {
+    fn sweeping(s: St) -> bool {
+        matches!(
+            s,
+            St::SweepString | St::SweepUdata | St::SweepAll | St::SweepFinobj | St::SweepTobefnz
+        )
+    }
+    let runs: [(LuaVersion, fn(&mut Vm)); 3] = [
+        (LuaVersion::Lua53, |vm| {
+            singlestep_53(vm).expect("a step");
+        }),
+        (LuaVersion::Lua54, |vm| {
+            singlestep_54(vm).expect("a step");
+        }),
+        (LuaVersion::Lua55, |vm| {
+            singlestep_55(vm, false).expect("a step");
+        }),
+    ];
+    let kept: Vec<LuaVersion> = runs
+        .into_iter()
+        .filter(|&(version, step)| {
+            let mut vm = marking_then_dropped(version, step);
+            while !sweeping(vm.heap.puc.pace.state()) {
+                step(&mut vm);
+            }
+            assert!(vm.emergency_collect());
+            let left = vm.eval("return weak[1] == nil").expect("the script runs");
+            !matches!(left[0], crate::runtime::Value::Bool(true))
+        })
+        .map(|(version, _)| version)
+        .collect();
+    assert!(kept.is_empty(), "kept in {kept:?}");
 }
 
 #[test]
