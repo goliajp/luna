@@ -11,42 +11,87 @@ use crate::runtime::mem::{LVec, MemOwner};
 /// [`Chunk::name`] / [`Chunk::str`] the text of a [`Name`] or literal.
 ///
 /// Its vectors come from an allocation context, which the chunk keeps
-/// alive ([`Chunk::new`]).
+/// alive ([`Chunk::new`]); they are read through methods, so none can be
+/// moved to a chunk on another context. The example compiles, the one
+/// after it fails to.
+///
+/// ```
+/// use luna_core::{frontend::parse, version::LuaVersion};
+/// let a = parse(b"local x = 1", LuaVersion::Lua54).unwrap();
+/// assert_eq!(a.stats().len(), a.stat_lines().len());
+/// ```
+///
+/// ```compile_fail,E0616
+/// use luna_core::{frontend::parse, version::LuaVersion};
+/// let mut a = parse(b"local x = 1", LuaVersion::Lua54).unwrap();
+/// let mut b = parse(b"local y = 2", LuaVersion::Lua54).unwrap();
+/// std::mem::swap(&mut a.stat_lines, &mut b.stat_lines); // error[E0616]: field `stat_lines` is private
+/// ```
 #[derive(Debug)]
 pub struct Chunk {
-    /// Arena of all expression nodes; index with [`ExprId`].
-    pub exprs: LVec<Expr>,
-    /// Arena of all statement nodes; index with [`StatId`].
-    pub stats: LVec<Stat>,
-    /// starting source line of each statement, indexed by `StatId`
-    pub stat_lines: LVec<u32>,
+    pub(crate) exprs: LVec<Expr>,
+    pub(crate) stats: LVec<Stat>,
+    pub(crate) stat_lines: LVec<u32>,
     /// Top-level block (the script body).
     pub block: Block,
     /// line of the final `<eof>` token (PUC main-chunk `lastlinedefined`); the
     /// implicit final return is attributed here
     pub end_line: u32,
-    /// The identifiers and string literals the nodes refer to.
-    pub names: Names,
-    /// Items of every `List<ExprId>`.
-    pub expr_lists: LVec<ExprId>,
-    /// Items of every `List<StatId>` (block bodies).
-    pub stat_lists: LVec<StatId>,
-    /// Items of every `List<Name>`.
-    pub name_lists: LVec<Name>,
-    /// Items of every `List<AttribName>`.
-    pub attrib_name_lists: LVec<AttribName>,
-    /// Items of every `List<TableField>`.
-    pub field_lists: LVec<TableField>,
-    /// Items of every `List<IfArm>`.
-    pub arm_lists: LVec<IfArm>,
-    /// For each `^` and `%`, in the order they were made: the id of the
-    /// right operand and how many times `errno` had been set by then.
-    pub fold_marks: LVec<(u32, u64)>,
-    /// The ids of the keys written `obj.name` (string-literal keys made from
-    /// a name), in increasing order.
-    pub dot_keys: LVec<u32>,
+    pub(crate) names: Names,
+    pub(crate) expr_lists: LVec<ExprId>,
+    pub(crate) stat_lists: LVec<StatId>,
+    pub(crate) name_lists: LVec<Name>,
+    pub(crate) attrib_name_lists: LVec<AttribName>,
+    pub(crate) field_lists: LVec<TableField>,
+    pub(crate) arm_lists: LVec<IfArm>,
+    pub(crate) fold_marks: LVec<(u32, u64)>,
+    pub(crate) dot_keys: LVec<u32>,
     /// the allocation context the vectors come from
     mem: MemOwner,
+}
+
+/// One method per arena or list vector, and the names, read.
+macro_rules! readers {
+    ($($(#[$m:meta])* $f:ident: $t:ty;)*) => {
+        impl Chunk {
+            $(
+                $(#[$m])*
+                #[inline]
+                pub fn $f(&self) -> &$t {
+                    &self.$f
+                }
+            )*
+        }
+    };
+}
+
+readers! {
+    /// Arena of all expression nodes; index with [`ExprId`].
+    exprs: [Expr];
+    /// Arena of all statement nodes; index with [`StatId`].
+    stats: [Stat];
+    /// starting source line of each statement, indexed by `StatId`
+    stat_lines: [u32];
+    /// The identifiers and string literals the nodes refer to.
+    names: Names;
+    /// Items of every `List<ExprId>`.
+    expr_lists: [ExprId];
+    /// Items of every `List<StatId>` (block bodies).
+    stat_lists: [StatId];
+    /// Items of every `List<Name>`.
+    name_lists: [Name];
+    /// Items of every `List<AttribName>`.
+    attrib_name_lists: [AttribName];
+    /// Items of every `List<TableField>`.
+    field_lists: [TableField];
+    /// Items of every `List<IfArm>`.
+    arm_lists: [IfArm];
+    /// For each `^` and `%`, in the order they were made: the id of the
+    /// right operand and how many times `errno` had been set by then.
+    fold_marks: [(u32, u64)];
+    /// The ids of the keys written `obj.name` (string-literal keys made from
+    /// a name), in increasing order.
+    dot_keys: [u32];
 }
 
 impl Default for Block {
