@@ -1,7 +1,6 @@
 //! The interpreter state and the error handling `lua.c` wraps around it.
 
 use super::*;
-use luna_core::__private::VmHeap;
 
 mod msgh;
 use luna_core::__private::{VmCApiLoad, VmHostInternals};
@@ -153,7 +152,7 @@ impl Interp {
             _ => (spec, spec),
         };
         let require = self.vm().globals().get(self.str_value("require"));
-        let name = Value::Str(self.vm().heap_mut().intern(module));
+        let name = Value::Str(self.vm().intern(module));
         match self.docall(require, &[name]) {
             Ok(_) if self.version() == LuaVersion::Lua51 => true,
             Ok(vals) => {
@@ -173,7 +172,7 @@ impl Interp {
     }
 
     pub(crate) fn str_value(&mut self, s: &str) -> Value {
-        Value::Str(self.vm().heap_mut().intern(s.as_bytes()))
+        Value::Str(self.vm().intern(s.as_bytes()))
     }
 
     /// `handle_script`: load the script (stdin for `-` unless it follows
@@ -198,7 +197,7 @@ impl Interp {
         let args = if v <= LuaVersion::Lua52 {
             argv[script + 1..]
                 .iter()
-                .map(|a| Value::Str(self.vm().heap_mut().intern(a)))
+                .map(|a| Value::Str(self.vm().intern(a)))
                 .collect()
         } else {
             match self.pushargs() {

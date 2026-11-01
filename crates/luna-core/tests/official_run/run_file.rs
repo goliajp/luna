@@ -6,7 +6,6 @@ use super::byte_diff::{
     run_official_on_puc,
 };
 use super::*;
-use luna_core::__private::VmHeap;
 use luna_core::__private::panics_in;
 
 mod vm_setup;
@@ -232,8 +231,7 @@ fn run_chunk(vm: &mut Vm, src: &[u8], label: &str, version: LuaVersion) -> Resul
                 match vm.load(driver_src, b"=driver") {
                     Ok(d) => vm.call_value(Value::Closure(d), &[Value::Closure(cl)]),
                     Err(e) => Err(luna_core::vm::error::LuaError(Value::Str(
-                        vm.heap_mut()
-                            .intern(format!("driver compile: {e}").as_bytes()),
+                        vm.intern(format!("driver compile: {e}").as_bytes()),
                     ))),
                 }
             } else {
@@ -295,7 +293,7 @@ fn report_byte_diff(vm: &mut Vm, src: &[u8], label: &str, version: LuaVersion) {
 /// subsequent `globals.get` simply returns `Value::Nil` for that key.
 pub(super) fn read_assert_counters(vm: &mut Vm) -> (i64, i64) {
     fn get_i64(vm: &mut Vm, key: &str) -> i64 {
-        let k = Value::Str(vm.heap_mut().intern(key.as_bytes()));
+        let k = Value::Str(vm.intern(key.as_bytes()));
         let globals = vm.globals();
         match globals.get(k) {
             Value::Int(i) => i,

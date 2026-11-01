@@ -1,7 +1,6 @@
 //! `lua.c`'s message handler.
 
 use super::*;
-use luna_core::__private::VmHeap;
 use luna_core::__private::{VmCApiValues, VmHostInternals};
 
 /// `lua.c`'s message handler of each dialect: the error message with a
@@ -15,7 +14,7 @@ pub(super) fn msghandler(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaErr
             None if err.is_nil() => err,
             // `luaL_callmeta`: whatever `__tostring` returns
             None => match vm.metafield(err, "__tostring") {
-                Value::Nil => Value::Str(vm.heap_mut().intern(b"(no error message)")),
+                Value::Nil => Value::Str(vm.intern(b"(no error message)")),
                 mm => vm
                     .call_value(mm, &[err])?
                     .first()
@@ -62,11 +61,11 @@ fn traceback_51(vm: &mut Vm, err: Value) -> Result<Value, LuaError> {
     if !matches!(err, Value::Str(_) | Value::Int(_) | Value::Float(_)) {
         return Ok(err);
     }
-    let key = Value::Str(vm.heap_mut().intern(b"debug"));
+    let key = Value::Str(vm.intern(b"debug"));
     let Value::Table(debug) = vm.globals().get(key) else {
         return Ok(err);
     };
-    let key = Value::Str(vm.heap_mut().intern(b"traceback"));
+    let key = Value::Str(vm.intern(b"traceback"));
     let tb = debug.get(key);
     if !matches!(tb, Value::Closure(_) | Value::Native(_)) {
         return Ok(err);

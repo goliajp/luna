@@ -1,6 +1,5 @@
 //! Smoke tests: SandboxBuilder + eval/eval_chunk + intern / try_as_str / as_bytes.
 
-use luna_core::__private::VmHeap;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -88,7 +87,7 @@ fn try_as_str_utf8_only() {
 
     // Binary value (LuaStr with non-UTF-8 bytes via the heap directly):
     let bytes = b"\xff\xfe\x00binary";
-    let s_bin = vm.heap_mut().intern(bytes);
+    let s_bin = vm.intern(bytes);
     let v_bin = Value::Str(s_bin);
     assert_eq!(v_bin.try_as_str(), None);
     assert_eq!(v_bin.as_bytes(), Some(&bytes[..]));

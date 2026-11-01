@@ -87,7 +87,7 @@ impl LuaUserdata for FakeRedis {
                 }
                 match this.dispatch(argv) {
                     Ok(bytes) => {
-                        let s = vm.intern(std::str::from_utf8(&bytes).unwrap_or(""));
+                        let s = vm.intern(&bytes);
                         Ok(Value::Str(s))
                     }
                     Err(msg) => Err(vm.runtime_error(&msg)),
@@ -100,7 +100,7 @@ impl LuaUserdata for FakeRedis {
                 let argv: Vec<Vec<u8>> = args.into_iter().map(val_to_bytes).collect();
                 match this.dispatch(argv) {
                     Ok(bytes) => {
-                        let s = vm.intern(std::str::from_utf8(&bytes).unwrap_or(""));
+                        let s = vm.intern(&bytes);
                         Ok(Value::Str(s))
                     }
                     Err(_) => Ok(Value::Nil),

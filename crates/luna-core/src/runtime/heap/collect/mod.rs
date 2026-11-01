@@ -46,12 +46,11 @@ impl Heap {
         }
     }
 
-    /// Start a full stop-the-world collection (PUC `fullinc`): the
-    /// marker the caller marks its roots with, then hands to
-    /// [`Heap::gc_end_full`]. Any in-flight incremental cycle must have been
-    /// finished first (`gc_finish_atomic`, `gc_finish_sweep`). Barrier-
-    /// grayed objects carried over stay queued, and the gray stack's block
-    /// goes back to `gray` afterwards, so a collection does not regrow it.
+    /// Start a full stop-the-world collection (PUC `fullinc`): the marker the caller marks its
+    /// roots with, then hands to `Heap::gc_end_full`. Any in-flight incremental cycle must have
+    /// been finished first (`gc_finish_atomic`, `gc_finish_sweep`). Barrier-grayed objects carried
+    /// over stay queued, and the gray stack's block goes back to `gray` afterwards, so a collection
+    /// does not regrow it.
     pub(crate) fn gc_begin_full(&mut self) -> Marker {
         debug_assert!(self.phase == GcPhase::Pause);
         self.grayagain = mark::GrayStack::default();
@@ -86,7 +85,7 @@ impl Heap {
         self.gc_sweep_full()
     }
 
-    /// The sweep of [`Heap::gc_end_full`], after its marking.
+    /// The sweep of `Heap::gc_end_full`, after its marking.
     pub(crate) fn gc_sweep_full(&mut self) -> usize {
         self.puc_full_sweep_begins();
         let n = self.full_sweep();
@@ -94,11 +93,10 @@ impl Heap {
         n
     }
 
-    /// Stop-the-world mark from the roots already in `m`: tobefnz, drain,
-    /// then the atomic tail (weak / ephemeron / finalizer resurrection /
-    /// current-white flip). After return all reachable objects are BLACK
-    /// and `current_white` has flipped, so the caller's sweep tests
-    /// `other-white` for dead. Does NOT change `phase`.
+    /// Stop-the-world mark from the roots already in `m`: tobefnz, drain, then the atomic tail
+    /// (weak / ephemeron / finalizer resurrection / current-white flip). After return all reachable
+    /// objects are BLACK and `current_white` has flipped, so the caller's sweep tests `other-white`
+    /// for dead. Does NOT change `phase`.
     pub(crate) fn mark_from(&mut self, m: &mut Marker) {
         // objects already queued for finalization but not yet run must stay
         // alive until the VM calls their `__gc` (they may be unreachable now).
@@ -149,9 +147,8 @@ impl Heap {
     ///   → clearbykeys(ephemeron) + clearbykeys(allweak)
     ///   → clearbyvalues(weak, origweak)        ─ NEW (post-resurrect) only
     ///   → clearbyvalues(allweak, origall)      ─ (same)
-    /// The `origweak` split matters because finalizer resurrection can
-    /// re-trace fresh proto/closure → new weak tables joining `m.weak`;
-    /// PUC limits the late value-clear to those new heads.
+    /// The `origweak` split matters because finalizer resurrection can re-trace fresh proto/closure
+    /// → new weak tables joining `m.weak`; PUC limits the late value-clear to those new heads.
     pub(super) fn atomic_tail(&mut self, m: &mut Marker, run: Option<Running>) -> i64 {
         let early_is_dead = |v: Value| -> bool {
             let h = match v {

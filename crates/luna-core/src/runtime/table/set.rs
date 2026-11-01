@@ -45,7 +45,7 @@ impl Table {
         self.set_inlined(heap, key, val)
     }
 
-    /// [`Self::set_int`] without the read-only test; see
+    /// `Gc<Table>::set_int` without the read-only test; see
     /// [`Self::set_unguarded`].
     pub(crate) fn set_int_unguarded(
         &mut self,
@@ -56,7 +56,7 @@ impl Table {
         self.set_norm(heap, Value::Int(i), val)
     }
 
-    /// [`Self::set`] for the interpreter's own write path, which has
+    /// `Gc<Table>::set` for the interpreter's own write path, which has
     /// checked [`Self::is_readonly`] itself. `set` is left to the
     /// compiler's judgement: marking it `#[inline]` made the JIT's
     /// table-store helpers ~10% slower on aarch64.
