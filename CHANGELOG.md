@@ -799,6 +799,14 @@ optimization.
 
 ### Fixed
 
+- Vms given clones of one `MemOwner` no longer share one allocation
+  context: a memory error in one of them, after another was dropped,
+  carried the "not enough memory" string the dropped one had freed, and
+  the first to be dropped stopped the others from reusing freed blocks.
+  Each Vm's heap now allocates through a context of its own; the clones
+  still share one budget (the policy or host function, and the count
+  `Vm::memory_in_use` reports, which covers all of them).
+
 - C API: 5.5's `lua_newstate` hashes strings with the seed it is given, as
   PUC's does; it took a seed of its own.
 - C API: 5.2's `luaL_argerror` and `luaL_traceback` find a global

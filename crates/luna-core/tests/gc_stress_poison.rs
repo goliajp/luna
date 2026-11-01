@@ -105,3 +105,22 @@ fn gc_lua_family_under_poison_allocator() {
     }
     eprintln!("[poison-stress] {n} iterations clean — no UAF surfaced under 0xDD poison");
 }
+
+// two Vms on one budget: the memory error of the one left carries its own
+// "not enough memory", not the string the other freed when it was dropped
+#[test]
+fn a_memory_error_after_a_vm_sharing_the_budget_is_dropped() {
+    use luna_core::runtime::mem::{MemOwner, MemoryLimit};
+    let o = MemOwner::policy(Box::new(MemoryLimit(4 << 20)));
+    let mut a = Vm::new_with_mem(LuaVersion::Lua54, o.clone());
+    drop(Vm::new_with_mem(LuaVersion::Lua54, o));
+    let e = a
+        .eval("local t = {} for i = 1, 1e8 do t[i] = i end")
+        .expect_err("the budget runs out");
+    let Value::Str(s) = e.0 else {
+        panic!("a memory error is a string: {:?}", e.0)
+    };
+    assert_eq!(s.as_bytes(), b"not enough memory");
+    let r = a.eval("return 1 + 1").expect("the Vm runs on");
+    assert!(matches!(r[..], [Value::Int(2)]), "{r:?}");
+}

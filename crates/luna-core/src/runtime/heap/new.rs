@@ -68,6 +68,7 @@ impl Heap {
     /// [`Heap::with_mem`], or `None` when the allocation context cannot
     /// give the heap its first blocks.
     pub(crate) fn try_with_mem(mem: crate::runtime::mem::MemOwner, seed: u32) -> Option<Heap> {
+        let mem = mem.for_heap();
         let strings = StringTable::new(mem.mem()).ok()?;
         let mut h = Heap {
             all: ptr::null_mut(),
@@ -134,8 +135,10 @@ impl Drop for Heap {
         // nothing is counted any more, and the dead strings a string
         // sweep held off `all` come back
         let held = self.puc_heap_drops();
-        // every block goes straight back to the system
+        // every block goes straight back to the system, and no memory error
+        // carries the string freed below
         self.mem().ctx().close_pools();
+        self.mem().ctx().forget_memerr();
         // free everything regardless of reachability, including any list still
         // detached for an in-flight incremental sweep
         // SAFETY: the heap is being dropped, so nothing uses its objects any more; the object lists and the held strings hold every object it allocated and has not freed, each exactly once, and `next` is read before `free_obj`; the pool holds tables from `alloc_block` already unlinked from every list

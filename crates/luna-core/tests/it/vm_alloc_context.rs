@@ -132,3 +132,18 @@ fn the_system_allocator_is_not_counted() {
     let vm = Vm::new(LuaVersion::Lua54);
     assert_eq!(vm.memory_in_use(), None);
 }
+
+#[test]
+fn vms_given_clones_of_one_owner_share_its_count() {
+    let o = MemOwner::policy(Box::new(luna_core::runtime::mem::MemoryLimit(usize::MAX)));
+    let a = Vm::new_with_mem(LuaVersion::Lua54, o.clone());
+    let one = a.memory_in_use().expect("a policy counts");
+    let mut b = Vm::new_with_mem(LuaVersion::Lua54, o);
+    let two = b.memory_in_use().expect("a policy counts");
+    assert!(two > one, "{two} after the second Vm, {one} before");
+    assert_eq!(a.memory_in_use(), Some(two));
+    b.eval("keep = string.rep('x', 100000)").unwrap();
+    assert!(a.memory_in_use().unwrap() >= two + 100000);
+    drop(b);
+    assert_eq!(a.memory_in_use(), Some(one));
+}
