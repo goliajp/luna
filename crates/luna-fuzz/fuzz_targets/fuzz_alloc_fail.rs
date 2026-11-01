@@ -27,8 +27,8 @@ use libfuzzer_sys::fuzz_target;
 use luna_core::__private::VmJitState;
 use luna_core::runtime::Value;
 use luna_core::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::Relaxed};
 
 #[allow(dead_code)]
 #[path = "program.rs"]
@@ -68,20 +68,19 @@ enum Mode {
 /// What the policy saw, shared with the test after the Vm is gone.
 #[derive(Default)]
 struct Seen {
-    armed: Cell<bool>,
-    asked: Cell<u32>,
-    refused: Cell<u32>,
-    live: Cell<isize>,
+    armed: AtomicBool,
+    asked: AtomicU32,
+    refused: AtomicU32,
+    live: AtomicIsize,
 }
 
-struct Policy(Mode, Rc<Seen>);
+struct Policy(Mode, Arc<Seen>);
 
 impl MemoryPolicy for Policy {
     fn allow(&mut self, old: usize, new: usize, _kind: BlockKind, in_use: usize) -> bool {
         let s = &self.1;
-        let ok = !s.armed.get() || {
-            let n = s.asked.get() + 1;
-            s.asked.set(n);
+        let ok = !s.armed.load(Relaxed) || {
+            let n = s.asked.fetch_add(1, Relaxed) + 1;
             match self.0 {
                 Mode::From(k) => n < k,
                 Mode::Once(k) => n != k,
@@ -89,15 +88,15 @@ impl MemoryPolicy for Policy {
             }
         };
         if ok {
-            s.live.set(s.live.get() + new as isize - old as isize);
+            s.live.fetch_add(new as isize - old as isize, Relaxed);
         } else {
-            s.refused.set(s.refused.get() + 1);
+            s.refused.fetch_add(1, Relaxed);
         }
         ok
     }
 
     fn freed(&mut self, size: usize) {
-        self.1.live.set(self.1.live.get() - size as isize);
+        self.1.live.fetch_sub(size as isize, Relaxed);
     }
 }
 
@@ -115,7 +114,7 @@ fuzz_target!(|data: &[u8]| {
         eprintln!("=== {mode:?}, jit {jit} ===\n{src}");
     }
 
-    let seen = Rc::new(Seen::default());
+    let seen = Arc::new(Seen::default());
     {
         let mem = MemOwner::policy(Box::new(Policy(mode, seen.clone())));
         // the policy is armed once the Vm and its libraries are made: a Vm
@@ -129,7 +128,7 @@ fuzz_target!(|data: &[u8]| {
             vm.install_null_jit();
         }
         vm.set_instr_budget(Some(50_000_000));
-        seen.armed.set(true);
+        seen.armed.store(true, Relaxed);
         let outcome = match vm.load(src.as_bytes(), b"=prog") {
             Ok(f) => vm.call_value(Value::Closure(f), &[]).err().map(|e| vm.error_text(&e)),
             Err(e) => Some(String::from_utf8_lossy(&e.msg).into_owned()),
@@ -137,15 +136,15 @@ fuzz_target!(|data: &[u8]| {
         if show {
             eprintln!(
                 "=== outcome: {outcome:?}, asked {}, refused {} ===",
-                seen.asked.get(),
-                seen.refused.get()
+                seen.asked.load(Relaxed),
+                seen.refused.load(Relaxed)
             );
         }
         // a refusal surfaces as the memory error, unless the program's own
         // error came first or a pcall in it swallowed the memory error
         if let Some(e) = &outcome {
             assert!(
-                seen.refused.get() > 0
+                seen.refused.load(Relaxed) > 0
                     || !e.contains("not enough memory")
                     || src.contains("not enough memory"),
                 "a memory error with nothing refused: {e}\n{src}"
@@ -155,7 +154,7 @@ fuzz_target!(|data: &[u8]| {
         // policy still armed; they must cope with refusals too
     }
     assert_eq!(
-        seen.live.get(),
+        seen.live.load(Relaxed),
         0,
         "the Vm did not give back every byte it allocated ({mode:?}, jit {jit})\n{src}"
     );

@@ -4,8 +4,8 @@
 //! emergency (an allocation refused once), and that collection must find
 //! them.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 use luna_core::__private::VmJitState;
 use luna_jit::jit_backend::__jit_tls_ptrs;
@@ -18,7 +18,7 @@ use luna_jit::vm::Vm;
 /// compiled code): the stack's, among others.
 struct RefuseOutside {
     from: usize,
-    seen: Rc<Cell<usize>>,
+    seen: Arc<AtomicUsize>,
 }
 
 impl MemoryPolicy for RefuseOutside {
@@ -27,8 +27,8 @@ impl MemoryPolicy for RefuseOutside {
         if !outside || kind != BlockKind::Other || new <= old || new < 4096 {
             return true;
         }
-        let n = self.seen.get() + 1;
-        self.seen.set(n);
+        let n = self.seen.load(Relaxed) + 1;
+        self.seen.store(n, Relaxed);
         n != self.from
     }
 }
@@ -47,7 +47,7 @@ for _ = 1, 3 do s = s + walk({0}, 2500) end
 return s";
 
 fn run(from: usize) -> (String, usize, usize) {
-    let seen = Rc::new(Cell::new(0));
+    let seen = Arc::new(AtomicUsize::new(0));
     let policy = RefuseOutside {
         from,
         seen: seen.clone(),
@@ -63,7 +63,11 @@ fn run(from: usize) -> (String, usize, usize) {
         },
         Err(e) => format!("error: {}", vm.error_text(&e)),
     };
-    (out, seen.get(), luna_jit::jit::cache_entry_count(&vm))
+    (
+        out,
+        seen.load(Relaxed),
+        luna_jit::jit::cache_entry_count(&vm),
+    )
 }
 
 #[test]
