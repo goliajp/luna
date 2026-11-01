@@ -58,8 +58,7 @@ impl Count {
     /// sees every earlier owner's writes (as `Arc`'s drop).
     #[inline(always)]
     pub(super) fn sub(&self, d: usize) -> usize {
-        let n = self.n.fetch_sub(d, std::sync::atomic::Ordering::AcqRel) - d;
-        n
+        self.n.fetch_sub(d, std::sync::atomic::Ordering::AcqRel) - d
     }
 }
 
