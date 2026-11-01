@@ -2,12 +2,45 @@
 //! policy, and the bytes they count.
 
 use std::alloc::Layout;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
+use super::MemoryPolicy;
 use super::ctx::{BlockKind, MemCtx, Mode, RawAllocFn};
 
+/// What the contexts made from one [`MemOwner`](super::MemOwner) share:
+/// every Vm given a clone of the owner allocates against one budget.
+pub(super) struct Budget {
+    /// the host function and its `ud` (`Mode::Raw`); `lua_setallocf`
+    /// replaces them
+    pub(super) raw: Cell<Option<(RawAllocFn, *mut c_void)>>,
+    /// the policy asked before each allocation (`Mode::Policy`)
+    pub(super) policy: Option<RefCell<Box<dyn MemoryPolicy>>>,
+    /// bytes allocated and not freed by all the contexts, kept outside
+    /// `Mode::System`
+    pub(super) total: Cell<usize>,
+    /// contexts using the budget; the last one frees it
+    pub(super) users: Cell<usize>,
+}
+
+impl Budget {
+    fn policy(&self) -> std::cell::RefMut<'_, Box<dyn MemoryPolicy>> {
+        self.policy
+            .as_ref()
+            .expect("a policy context has a policy")
+            .borrow_mut()
+    }
+}
+
 impl MemCtx {
+    #[inline(always)]
+    pub(super) fn budget(&self) -> &Budget {
+        // SAFETY: a context holds one use of its budget, which is freed only
+        // after its last user
+        unsafe { self.budget.as_ref() }
+    }
+
     #[inline(never)]
     pub(super) fn alloc_slow(&self, layout: Layout, kind: BlockKind) -> Option<NonNull<u8>> {
         let size = layout.size();
@@ -19,15 +52,16 @@ impl MemCtx {
                 // new block
                 NonNull::new(unsafe { self.call_raw(std::ptr::null_mut(), code, size) })?
             }
-            Mode::Policy(p) => {
-                if !p.borrow_mut().allow(0, size, kind, self.total.get()) {
+            Mode::Policy => {
+                let b = self.budget();
+                if !b.policy().allow(0, size, kind, b.total.get()) {
                     return None;
                 }
                 // SAFETY: the size is not 0
                 NonNull::new(unsafe { std::alloc::alloc(layout) })?
             }
         };
-        self.total.set(self.total.get() + size);
+        self.budget().total.set(self.budget().total.get() + size);
         Some(p)
     }
 
@@ -44,23 +78,22 @@ impl MemCtx {
             // SAFETY: `p` is a live block of `old` bytes from this function
             // or one it replaced, which PUC requires to accept it
             Mode::Raw => NonNull::new(unsafe { self.call_raw(p.as_ptr(), old, new) })?,
-            Mode::Policy(pol) => {
-                if new > old
-                    && !pol
-                        .borrow_mut()
-                        .allow(old, new, BlockKind::Other, self.total.get())
-                {
+            Mode::Policy => {
+                let b = self.budget();
+                if new > old && !b.policy().allow(old, new, BlockKind::Other, b.total.get()) {
                     return None;
                 }
                 // SAFETY: the caller's contract
                 let q = NonNull::new(unsafe { std::alloc::realloc(p.as_ptr(), layout, new) })?;
                 if new < old {
-                    pol.borrow_mut().freed(old - new);
+                    b.policy().freed(old - new);
                 }
                 q
             }
         };
-        self.total.set(self.total.get() - old + new);
+        self.budget()
+            .total
+            .set(self.budget().total.get() - old + new);
         Some(q)
     }
 
@@ -73,19 +106,25 @@ impl MemCtx {
                 // function (or one it replaced); a free returns null
                 unsafe { self.call_raw(p.as_ptr(), layout.size(), 0) };
             }
-            Mode::Policy(pol) => {
+            Mode::Policy => {
                 // SAFETY: the caller's contract
                 unsafe { std::alloc::dealloc(p.as_ptr(), layout) };
-                pol.borrow_mut().freed(layout.size());
+                self.budget().policy().freed(layout.size());
             }
         }
-        self.total.set(self.total.get() - layout.size());
+        self.budget()
+            .total
+            .set(self.budget().total.get() - layout.size());
     }
 
     /// # Safety
     /// As the host's `lua_Alloc` requires of `ptr` and the sizes.
     unsafe fn call_raw(&self, ptr: *mut u8, osize: usize, nsize: usize) -> *mut u8 {
-        let (f, ud) = self.raw.get().expect("a raw context has a function");
+        let (f, ud) = self
+            .budget()
+            .raw
+            .get()
+            .expect("a raw context has a function");
         // SAFETY: the caller's contract
         unsafe { f(ud, ptr.cast(), osize, nsize).cast() }
     }
@@ -95,7 +134,7 @@ impl MemCtx {
     pub fn in_use(&self) -> Option<usize> {
         match self.mode {
             Mode::System => None,
-            _ => Some(self.total.get()),
+            _ => Some(self.budget().total.get()),
         }
     }
 
@@ -103,12 +142,12 @@ impl MemCtx {
     /// on the Vm's behalf (the C API's state records), so the count
     /// covers them as PUC's does.
     pub fn add_external(&self, n: usize) {
-        self.total.set(self.total.get() + n);
+        self.budget().total.set(self.budget().total.get() + n);
     }
 
     /// The host function and its `ud`, when the context has one.
     pub fn raw_alloc(&self) -> Option<(RawAllocFn, *mut c_void)> {
-        self.raw.get()
+        self.budget().raw.get()
     }
 
     /// Replace the host function (PUC `lua_setallocf`): blocks allocated
@@ -121,6 +160,6 @@ impl MemCtx {
             matches!(self.mode, Mode::Raw),
             "the context has a host function"
         );
-        self.raw.set(Some((f, ud)));
+        self.budget().raw.set(Some((f, ud)));
     }
 }

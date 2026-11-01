@@ -5,7 +5,6 @@ use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use super::MemoryPolicy;
 pub(super) use super::kind::{BlockKind, KINDS};
 
 /// A host allocation function with PUC's `lua_Alloc` contract: a new
@@ -19,27 +18,31 @@ pub type RawAllocFn = unsafe extern "C" fn(
     nsize: usize,
 ) -> *mut c_void;
 
+#[derive(Clone, Copy)]
 pub(super) enum Mode {
     System,
     Raw,
-    Policy(RefCell<Box<dyn MemoryPolicy>>),
+    Policy,
 }
 
 /// Where a Vm's memory comes from, shared by every container of the Vm
 /// through a [`MemRef`]. Owned jointly by the heap and the Vm
 /// ([`MemOwner`](super::MemOwner)), so it outlives every container either
-/// of them holds.
+/// of them holds. A context serves one heap: Vms given clones of one
+/// owner each get a context of their own, sharing the owner's budget.
 pub struct MemCtx {
     pub(super) mode: Mode,
-    /// the host function and its `ud` (`Mode::Raw`); `lua_setallocf`
-    /// replaces them
-    pub(super) raw: Cell<Option<(RawAllocFn, *mut c_void)>>,
+    /// the host function or policy, and the bytes counted, which the
+    /// contexts made from one owner share
+    pub(super) budget: NonNull<super::budget::Budget>,
     pub(super) codes: [u8; KINDS],
-    /// bytes allocated and not freed, kept outside `Mode::System`
-    pub(super) total: Cell<usize>,
     pub(super) owners: Cell<usize>,
+    /// whether a heap has taken the context; another heap given it makes a
+    /// context of its own
+    pub(super) claimed: Cell<bool>,
     /// the fixed "not enough memory" string a memory error carries (PUC
-    /// `memerrmsg`); null until the heap has made it
+    /// `memerrmsg`), made by the heap that claimed the context; null before
+    /// it is made and after that heap is dropped
     pub(super) memerr: Cell<*mut crate::runtime::LuaStr>,
     /// memory errors raised so far, for telling a memory error from a
     /// program's error with the same text
@@ -180,9 +183,14 @@ impl MemCtx {
     }
 
     /// Set the string memory errors carry; the heap fixes it so it is never
-    /// collected.
+    /// collected, and calls [`MemCtx::forget_memerr`] before it frees it.
     pub(crate) fn set_memerr(&self, s: crate::runtime::Gc<crate::runtime::LuaStr>) {
         self.memerr.set(s.as_ptr());
+    }
+
+    /// The heap that made the memory error's string is freeing it.
+    pub(crate) fn forget_memerr(&self) {
+        self.memerr.set(std::ptr::null_mut());
     }
 
     /// A memory error is being raised: count it and give its message.
@@ -193,8 +201,8 @@ impl MemCtx {
             !p.is_null(),
             "the heap makes its memory error message first"
         );
-        // SAFETY: `memerr` is a string the heap made and fixed, which lives
-        // as long as the heap and so as long as this context's owners
+        // SAFETY: `memerr` is a string the context's one heap made and
+        // fixed, which lives until that heap forgets it before freeing it
         unsafe { crate::runtime::Gc::from_ptr(p) }
     }
 
