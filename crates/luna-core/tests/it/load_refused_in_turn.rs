@@ -2,8 +2,8 @@
 //! in turn: the outcome is always the memory error, nothing is left
 //! behind, and the vm goes on working.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use crate::sync_cell::SyncCell;
+use std::sync::Arc;
 
 use luna_core::runtime::Value;
 use luna_core::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
@@ -17,12 +17,12 @@ use super::load_memory_errors::source;
 /// back.
 #[derive(Default)]
 struct Nth {
-    left: Cell<Option<usize>>,
-    refused: Cell<bool>,
-    live: Cell<isize>,
+    left: SyncCell<Option<usize>>,
+    refused: SyncCell<bool>,
+    live: SyncCell<isize>,
 }
 
-struct RefuseNth(Rc<Nth>);
+struct RefuseNth(Arc<Nth>);
 
 impl MemoryPolicy for RefuseNth {
     fn allow(&mut self, old: usize, new: usize, _kind: BlockKind, _in_use: usize) -> bool {
@@ -79,7 +79,7 @@ fn a_load_refused_at_each_allocation_in_turn_leaks_nothing() {
         LuaVersion::Lua54,
         LuaVersion::Lua55,
     ] {
-        let nth = Rc::new(Nth::default());
+        let nth = Arc::new(Nth::default());
         let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(RefuseNth(nth.clone()))));
         let src = source(v);
         let run = |vm: &mut Vm| {
@@ -167,7 +167,7 @@ fn a_reader_refused_at_each_allocation_in_turn_gives_the_memory_error() {
         LuaVersion::Lua54,
         LuaVersion::Lua55,
     ] {
-        let nth = Rc::new(Nth::default());
+        let nth = Arc::new(Nth::default());
         let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(RefuseNth(nth.clone()))));
         let chunk = vm
             .load(

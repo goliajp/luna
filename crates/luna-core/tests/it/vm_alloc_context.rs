@@ -1,10 +1,10 @@
 //! A Vm whose memory comes from a host allocation function or a memory
 //! policy: what the function sees, and what the Vm reports.
 
+use crate::sync_cell::SyncCell;
 use std::alloc::Layout;
-use std::cell::Cell;
 use std::ffi::c_void;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use luna_core::runtime::Value;
 use luna_core::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
@@ -13,10 +13,10 @@ use luna_core::vm::Vm;
 
 #[derive(Default)]
 struct Seen {
-    live: Cell<usize>,
-    news: Cell<usize>,
+    live: SyncCell<usize>,
+    news: SyncCell<usize>,
     /// new blocks by the `osize` they came with
-    kinds: [Cell<usize>; 12],
+    kinds: [SyncCell<usize>; 12],
 }
 
 unsafe extern "C" fn counting(
@@ -104,7 +104,7 @@ fn objects_come_from_the_host_function_and_go_back_to_it() {
 }
 
 /// How many growths a policy was asked about, and the largest one.
-struct Watch(Rc<(Cell<usize>, Cell<usize>)>);
+struct Watch(Arc<(SyncCell<usize>, SyncCell<usize>)>);
 
 impl MemoryPolicy for Watch {
     fn allow(&mut self, old: usize, new: usize, _kind: BlockKind, _in_use: usize) -> bool {
@@ -117,7 +117,7 @@ impl MemoryPolicy for Watch {
 
 #[test]
 fn a_policy_sees_every_growth_and_the_vm_counts_it() {
-    let seen = Rc::new((Cell::new(0), Cell::new(0)));
+    let seen = Arc::new((SyncCell::new(0), SyncCell::new(0)));
     let mem = MemOwner::policy(Box::new(Watch(seen.clone())));
     let mut vm = Vm::new_with_mem(LuaVersion::Lua54, mem);
     let before = vm.memory_in_use().unwrap();

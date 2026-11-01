@@ -8,6 +8,7 @@ use super::MemoryPolicy;
 use super::budget::Budget;
 use super::ctx::{MemCtx, MemRef, Mode, RawAllocFn};
 use super::kind::kind_codes;
+use super::sync::{Count, Lock, Once, Slot};
 use crate::version::LuaVersion;
 
 /// One owner of a [`MemCtx`]; the context is freed with its last owner.
@@ -41,10 +42,10 @@ impl MemOwner {
         v: LuaVersion,
     ) -> MemOwner {
         let budget = Box::new(Budget {
-            raw: Cell::new(raw),
-            policy: policy.map(RefCell::new),
-            total: Cell::new(0),
-            users: Cell::new(0),
+            raw: Slot::new(raw),
+            policy: policy.map(Lock::new),
+            total: Count::new(0),
+            users: Count::new(0),
         });
         MemOwner::on(mode, NonNull::from(Box::leak(budget)), kind_codes(v))
     }
@@ -55,8 +56,8 @@ impl MemOwner {
             mode,
             budget,
             codes,
-            owners: Cell::new(1),
-            claimed: Cell::new(false),
+            owners: Count::new(1),
+            claimed: Once::new(),
             memerr: Cell::new(std::ptr::null_mut()),
             oom_raised: Cell::new(0),
             pool: RefCell::default(),
@@ -68,7 +69,7 @@ impl MemOwner {
             ctx.arena.open();
         }
         let b = ctx.budget();
-        b.users.set(b.users.get() + 1);
+        b.users.add(1);
         MemOwner(MemRef(NonNull::from(Box::leak(ctx))))
     }
 
@@ -85,6 +86,8 @@ impl MemOwner {
     /// `ud` until the last owner of this context, and of every context a
     /// Vm given a clone of it makes, is dropped; those drops free through
     /// it every block still allocated.
+    /// With the `send` feature, `f` and `ud` can be called on any thread
+    /// the Vm, or any Vm sharing the budget, is moved to.
     pub unsafe fn raw(f: RawAllocFn, ud: *mut c_void, v: LuaVersion) -> MemOwner {
         MemOwner::with_mode(Mode::Raw, Some((f, ud)), None, v)
     }
@@ -111,12 +114,11 @@ impl MemOwner {
     /// one heap's.
     pub(crate) fn for_heap(self) -> MemOwner {
         let c = self.0.ctx();
-        if !c.claimed.get() {
-            c.claimed.set(true);
+        if c.claimed.take() {
             return self;
         }
         let own = MemOwner::on(c.mode, c.budget, c.codes);
-        own.0.ctx().claimed.set(true);
+        own.0.ctx().claimed.take();
         own
     }
 }
@@ -130,7 +132,7 @@ impl std::fmt::Debug for MemOwner {
 impl Clone for MemOwner {
     fn clone(&self) -> MemOwner {
         let c = self.0.ctx();
-        c.owners.set(c.owners.get() + 1);
+        c.owners.add(1);
         MemOwner(self.0)
     }
 }
@@ -138,18 +140,14 @@ impl Clone for MemOwner {
 impl Drop for MemOwner {
     fn drop(&mut self) {
         let c = self.0.ctx();
-        let n = c.owners.get() - 1;
-        c.owners.set(n);
-        if n == 0 {
+        if c.owners.sub(1) == 0 {
             // the budget outlives the context, which holds a use of it
             let (budget, b) = (c.budget, c.budget());
             // SAFETY: the context came from `Box::leak` in `on`, and this
             // was its last owner: every container holding a handle has been
             // dropped by now (the owners outlive them)
             drop(unsafe { Box::from_raw(self.0.0.as_ptr()) });
-            let users = b.users.get() - 1;
-            b.users.set(users);
-            if users == 0 {
+            if b.users.sub(1) == 0 {
                 // SAFETY: the budget came from `Box::leak` in `with_mode`,
                 // and no context uses it any more
                 drop(unsafe { Box::from_raw(budget.as_ptr()) });

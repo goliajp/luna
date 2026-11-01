@@ -22,11 +22,11 @@ fn deep_table_chain_marks_iteratively() {
 }
 
 /// Refuses every growth once armed.
-struct Refuse(std::rc::Rc<std::cell::Cell<bool>>);
+struct Refuse(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 impl crate::runtime::mem::MemoryPolicy for Refuse {
     fn allow(&mut self, _: usize, _: usize, _: crate::runtime::mem::BlockKind, _: usize) -> bool {
-        !self.0.get()
+        !self.0.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -35,7 +35,7 @@ fn a_gray_stack_that_cannot_grow_still_marks_everything() {
     // a wide, deep graph: marking it needs a gray stack far larger than the
     // one a fresh heap has; with every allocation refused the marker finds
     // the objects it could not stack by walking the object list
-    let armed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mem = crate::runtime::mem::MemOwner::policy(Box::new(Refuse(armed.clone())));
     let mut heap = Heap::with_mem(mem, 1);
     let root = heap.new_table();
@@ -58,7 +58,7 @@ fn a_gray_stack_that_cannot_grow_still_marks_everything() {
         heap.new_table();
     }
     let before = heap.live_objects();
-    armed.set(true);
+    armed.store(true, std::sync::atomic::Ordering::Relaxed);
     assert_eq!(heap.collect(&[Value::Table(root)]), garbage);
     assert_eq!(heap.live_objects(), before - garbage);
     assert!(heap.live_objects() >= kept);
@@ -70,7 +70,7 @@ fn a_gray_stack_that_cannot_grow_still_marks_everything() {
         };
         cur = t.get_int(1);
     }
-    armed.set(false);
+    armed.store(false, std::sync::atomic::Ordering::Relaxed);
     assert_eq!(heap.collect(&[]), before - garbage - 1);
 }
 

@@ -3,8 +3,8 @@
 //! guard on the way (the fast loop's unguarded call, a protected call, a
 //! hook's window, a metamethod, a coroutine) turns it into anything else.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use crate::sync_cell::SyncCell;
+use std::sync::Arc;
 
 use luna_core::runtime::Value;
 use luna_core::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
@@ -17,11 +17,11 @@ use luna_core::__private::VmCApiValues;
 /// While armed, refuses every growth from the `n`th on.
 #[derive(Default)]
 struct FromNth {
-    left: Cell<Option<usize>>,
-    refused: Cell<bool>,
+    left: SyncCell<Option<usize>>,
+    refused: SyncCell<bool>,
 }
 
-struct Refuse(Rc<FromNth>);
+struct Refuse(Arc<FromNth>);
 
 impl MemoryPolicy for Refuse {
     fn allow(&mut self, _old: usize, _new: usize, _kind: BlockKind, _in_use: usize) -> bool {
@@ -41,7 +41,7 @@ impl MemoryPolicy for Refuse {
 }
 
 std::thread_local! {
-    static NATIVE_NTH: std::cell::RefCell<Option<Rc<FromNth>>> = const { std::cell::RefCell::new(None) };
+    static NATIVE_NTH: std::cell::RefCell<Option<Arc<FromNth>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Load a chunk with every allocation of the load from the `n`th on
@@ -88,7 +88,7 @@ fn nat_load_nth_mm(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
 /// Run `body` (which sets `r` from `n`) in a loop over `n` until the load
 /// succeeds, checking every failure is the memory error.
 fn refused_until_ok(v: LuaVersion, prelude: &str, body: &str) {
-    let nth = Rc::new(FromNth::default());
+    let nth = Arc::new(FromNth::default());
     NATIVE_NTH.with(|c| *c.borrow_mut() = Some(nth.clone()));
     let mut vm = Vm::new_with_mem(v, MemOwner::policy(Box::new(Refuse(nth.clone()))));
     let f = vm.native(nat_load_nth);

@@ -39,10 +39,10 @@ pub struct MemCtx {
     /// contexts made from one owner share
     pub(super) budget: NonNull<super::budget::Budget>,
     pub(super) codes: [u8; KINDS],
-    pub(super) owners: Cell<usize>,
+    pub(super) owners: super::sync::Count,
     /// whether a heap has taken the context; another heap given it makes a
     /// context of its own
-    pub(super) claimed: Cell<bool>,
+    pub(super) claimed: super::sync::Once,
     /// the fixed "not enough memory" string a memory error carries (PUC
     /// `memerrmsg`), made by the heap that claimed the context; null before
     /// it is made and after that heap is dropped

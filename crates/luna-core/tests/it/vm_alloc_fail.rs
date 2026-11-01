@@ -4,8 +4,8 @@
 //! dialects retry allocations made through the collector after an emergency
 //! collection, while 5.3–5.5 string buffers fail at once).
 
-use std::cell::Cell;
-use std::rc::Rc;
+use crate::sync_cell::SyncCell;
+use std::sync::Arc;
 
 use luna_core::__private::VmHostInternals;
 use luna_core::runtime::mem::{BlockKind, MemOwner, MemoryPolicy};
@@ -17,9 +17,9 @@ use luna_core::vm::Vm;
 /// `once` is false) or only the one numbered `from` (when it is true).
 #[derive(Clone, Default)]
 struct Plan {
-    armed: Rc<Cell<bool>>,
-    seen: Rc<Cell<u64>>,
-    from: Rc<Cell<u64>>,
+    armed: Arc<SyncCell<bool>>,
+    seen: Arc<SyncCell<u64>>,
+    from: Arc<SyncCell<u64>>,
     once: bool,
 }
 
@@ -132,7 +132,7 @@ fn memory_message(v: LuaVersion, msg: &str) -> bool {
 /// The growths a successful run makes, and its result.
 fn baseline(v: LuaVersion, src: &str, protected: bool) -> (u64, String) {
     let plan = Plan {
-        from: Rc::new(Cell::new(u64::MAX)),
+        from: Arc::new(SyncCell::new(u64::MAX)),
         ..Plan::default()
     };
     match run(v, &plan, src, protected) {
@@ -161,7 +161,7 @@ fn refusing_from_n_on_is_always_the_memory_error() {
                 let (total, want) = baseline(v, src, protected);
                 for n in points(total) {
                     let plan = Plan {
-                        from: Rc::new(Cell::new(n)),
+                        from: Arc::new(SyncCell::new(n)),
                         ..Plan::default()
                     };
                     match run(v, &plan, src, protected) {
@@ -197,7 +197,7 @@ fn a_single_refusal_retries_where_puc_does() {
             let mut retried = 0;
             for n in points(total) {
                 let plan = Plan {
-                    from: Rc::new(Cell::new(n)),
+                    from: Arc::new(SyncCell::new(n)),
                     once: true,
                     ..Plan::default()
                 };

@@ -211,3 +211,60 @@ fn send_vm_interp_only_loop_runs_correctly() {
     // 1000 * 1001 / 2 == 500500
     assert!(matches!(r[0], Value::Int(500500)));
 }
+
+/// Counts every byte the Vms sharing it allocate and free.
+struct Tally(Arc<std::sync::atomic::AtomicIsize>);
+
+impl luna_core::runtime::mem::MemoryPolicy for Tally {
+    fn allow(
+        &mut self,
+        old: usize,
+        new: usize,
+        _: luna_core::runtime::mem::BlockKind,
+        _: usize,
+    ) -> bool {
+        self.0
+            .fetch_add(new as isize - old as isize, Ordering::Relaxed);
+        true
+    }
+    fn freed(&mut self, size: usize) {
+        self.0.fetch_sub(size as isize, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn vms_on_threads_share_one_budget() {
+    use luna_core::runtime::mem::MemOwner;
+    use luna_core::vm::Vm;
+    let seen = Arc::new(std::sync::atomic::AtomicIsize::new(0));
+    let o = MemOwner::policy(Box::new(Tally(seen.clone())));
+    let vms: Vec<_> = (0..4)
+        .map(|_| SendVm::from_vm(Vm::new_with_mem(LuaVersion::Lua54, o.clone())))
+        .collect();
+    let runs: Vec<_> = vms
+        .into_iter()
+        .map(|s| {
+            thread::spawn(move || {
+                for _ in 0..20 {
+                    s.eval("local t = {} for i = 1, 2000 do t[i] = {i} end")
+                        .unwrap();
+                }
+                drop(s);
+            })
+        })
+        .collect();
+    // read the shared count, and make and drop owners, while the Vms run
+    while !runs.iter().all(|r| r.is_finished()) {
+        let _ = o.ctx().in_use();
+        drop(o.clone());
+    }
+    for r in runs {
+        r.join().unwrap();
+    }
+    assert_eq!(o.ctx().in_use(), Some(0), "every Vm's blocks given back");
+    assert_eq!(
+        seen.load(Ordering::Relaxed),
+        0,
+        "the policy saw each block go"
+    );
+}
