@@ -152,8 +152,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     let base = match vm.jit_last_lua_frame() {
         Some(f) => f.base,
         None => {
-            let e = vm.runtime_error("JIT op_closure: no Lua frame");
-            vm.set_jit_pending_err(e);
+            vm.park_jit_error("JIT op_closure: no Lua frame");
             return 0;
         }
     };

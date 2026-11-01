@@ -30,8 +30,7 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) -> i
     // a deopt request and let the dispatcher re-run the call through the
     // interpreter so __newindex / raw-set semantics are honoured.
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: table has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: table has metatable");
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety); `g` is not dereferenced again
@@ -74,8 +73,7 @@ pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64,
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: table has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: table has metatable");
         return 0;
     }
     // SAFETY: (`tag`, `raw_bits`) is one value's tag and payload (# Safety)
@@ -127,8 +125,7 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: table has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: table has metatable");
         return;
     }
     // SAFETY: `key_ptr` is an interned string (# Safety)
@@ -158,8 +155,7 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
 fn refused(vm: &mut luna_core::vm::Vm, r: Result<(), luna_core::runtime::TableError>) -> bool {
     match r {
         Err(luna_core::runtime::TableError::ReadOnly) => {
-            let e = vm.runtime_error("JIT deopt: table is read-only");
-            vm.set_jit_pending_err(e);
+            vm.park_jit_error("JIT deopt: table is read-only");
             true
         }
         Err(luna_core::runtime::TableError::Memory(_)) => {
@@ -223,8 +219,7 @@ pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: table has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: table has metatable");
         return;
     }
     // SAFETY: `g` is a live table of the Vm lent to this call (# Safety); no reference to the table
@@ -259,8 +254,7 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(
     // SAFETY: `t` is a live table (# Safety)
     let g = unsafe { table_arg(t) };
     if g.metatable().is_some() {
-        let e = vm.runtime_error("JIT deopt: table has metatable");
-        vm.set_jit_pending_err(e);
+        vm.park_jit_error("JIT deopt: table has metatable");
         return 0;
     }
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
@@ -276,8 +270,7 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(
             0
         }
         Err(_) => {
-            let e = vm.runtime_error("JIT deopt: invalid table key");
-            vm.set_jit_pending_err(e);
+            vm.park_jit_error("JIT deopt: invalid table key");
             0
         }
     }

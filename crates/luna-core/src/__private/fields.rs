@@ -6,7 +6,6 @@ pub use crate::runtime::function::jit_state::{JIT_NEXT_NONE, JitProtoState};
 use crate::runtime::mem::{LAny, LVec};
 use crate::runtime::{Coro, Value, function::Proto};
 use crate::vm::Vm;
-use crate::vm::error::LuaError;
 use crate::vm::jit_state::{JitCounters, JitState};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -48,8 +47,9 @@ pub trait VmJitState {
     fn jit_storage_mut(&mut self) -> &mut dyn JitStorage;
     /// The JIT's event counters.
     fn jit_counters_mut(&mut self) -> &mut JitCounters;
-    /// Raises `e` once the running JIT code returns to the interpreter.
-    fn set_jit_pending_err(&mut self, e: LuaError);
+    /// Raises a runtime error with `msg` once the running JIT code returns
+    /// to the interpreter, which then runs the op again.
+    fn park_jit_error(&mut self, msg: &str);
     /// Back-edge visits before a loop is recorded.
     fn set_trace_hot_threshold(&mut self, n: u32);
     /// Calls before a function is recorded or compiled.
@@ -77,8 +77,8 @@ impl VmJitState for Vm {
         &mut self.jit.counters
     }
 
-    #[inline(always)]
-    fn set_jit_pending_err(&mut self, e: LuaError) {
+    fn park_jit_error(&mut self, msg: &str) {
+        let e = self.runtime_error(msg);
         self.jit.pending_err = Some(e);
     }
 

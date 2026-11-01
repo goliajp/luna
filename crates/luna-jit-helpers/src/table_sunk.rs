@@ -119,8 +119,7 @@ unsafe fn materialize(
     let g = match unsafe { vm.heap_mut() }.try_new_table_presized(b, c, k) {
         Ok(Some(g)) => g,
         Ok(None) => {
-            let e = vm.runtime_error("table overflow");
-            vm.set_jit_pending_err(e);
+            vm.park_jit_error("table overflow");
             return None;
         }
         Err(_) => {
