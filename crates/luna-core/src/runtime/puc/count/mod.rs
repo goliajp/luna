@@ -9,7 +9,11 @@ mod defer;
 mod objects;
 mod total;
 
+pub(in crate::runtime::puc) use aside::LoadsAside;
 pub(crate) use defer::Deferred;
+pub(in crate::runtime) use objects::{FIXED_EXT, PucKind};
+pub(in crate::runtime::puc) use total::Count;
+pub(crate) use total::{CountingMark, CountingOff, GC_LIMIT_OFFSET};
 
 /// A token that must be handed back (`CountingOff`, a load's span) was
 /// dropped without it: reported in the builds that check.
@@ -18,7 +22,3 @@ pub(in crate::runtime::puc) fn unpaired(what: &str) {
         panic!("{what} dropped without its end");
     }
 }
-pub(in crate::runtime::puc) use aside::LoadsAside;
-pub(in crate::runtime) use objects::{FIXED_EXT, PucKind};
-pub(in crate::runtime::puc) use total::Count;
-pub(crate) use total::{CountingMark, CountingOff, GC_LIMIT_OFFSET};

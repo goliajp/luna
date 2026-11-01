@@ -1,5 +1,5 @@
 //! The replay of PUC's parser: the arrays and tables it makes, set aside and
-//! counted where PUC makes them.
+//! counted where PUC makes them, and the strings it pins.
 
 use super::super::*;
 use crate::runtime::dialect::Dialect;

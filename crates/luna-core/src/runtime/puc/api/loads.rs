@@ -1,6 +1,8 @@
 //! The loads under way as the model sees them: the parser frames a
 //! collection step runs in the middle of, the message of the last one that
-//! failed, and the flags a load's run leaves for the next.
+//! failed, and the flags a load's run leaves for the next; and what a
+//! marker borrows (`Lent`: the parser frames with 5.1's environment
+//! records).
 
 use super::super::*;
 use crate::runtime::puc::Lent;
@@ -61,9 +63,7 @@ impl Heap {
     pub(in crate::runtime::puc) fn restore_parse_frames(&mut self, m: ParseMark) {
         self.puc.loads.parse.truncate(m.0);
     }
-}
 
-impl Heap {
     /// Mark the parser objects of the loads a collection step runs in the
     /// middle of: above their C functions' slots on PUC's stack.
     pub(crate) fn mark_load_slots(&self, m: &mut Marker) {
@@ -163,9 +163,7 @@ impl Heap {
     pub(crate) fn mark_load_msg(&self, m: &mut Marker) {
         m.mark_strings(self.puc.loads.load_msg.iter());
     }
-}
 
-impl Heap {
     /// What a marker borrows: the loads' parser frames, with 5.1's
     /// environment records (`Lent`).
     pub(in crate::runtime::puc) fn lend_model(&mut self) -> Lent {
