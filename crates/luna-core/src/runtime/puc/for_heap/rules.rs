@@ -105,6 +105,9 @@ pub(in crate::runtime) struct HeapRules {
     /// 5.3 caches a new closure in its prototype only when the prototype
     /// is not black; 5.2 caches it with a barrier (`luaC_barrierproto`)
     pub(in crate::runtime) cache_only_if_not_black: bool,
+    /// `lua_setmetatable` on a table: `luaC_objbarriert` (back) up to 5.2,
+    /// `luaC_objbarrier` (forward) from 5.3
+    pub(in crate::runtime) metatable_barrier_back: bool,
 }
 
 impl HeapRules {
@@ -162,6 +165,7 @@ impl HeapRules {
                 _ => ptr::null_mut(),
             },
             cache_only_if_not_black: d == Dialect::L53,
+            metatable_barrier_back: matches!(d, Dialect::L51 | Dialect::L52),
             closed_upval_mark: if d == Dialect::L53 {
                 crate::runtime::heap::HELD
             } else {

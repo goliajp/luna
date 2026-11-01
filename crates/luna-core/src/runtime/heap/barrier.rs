@@ -122,10 +122,10 @@ impl Heap {
         t: Gc<crate::runtime::table::Table>,
         mt: Gc<crate::runtime::table::Table>,
     ) {
-        use crate::runtime::dialect::Dialect;
-        match self.dialect() {
-            Dialect::L51 | Dialect::L52 => self.barrier_store(t, &[Value::Table(mt)]),
-            _ => self.barrier_forward(t, Value::Table(mt)),
+        if self.puc_rules().metatable_barrier_back {
+            self.barrier_store(t, &[Value::Table(mt)]);
+        } else {
+            self.barrier_forward(t, Value::Table(mt));
         }
     }
 
