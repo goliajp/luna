@@ -12,9 +12,11 @@ for i = 1, 10000 do
 end
 collectgarbage()
 print(math.floor(collectgarbage("count")))
--- a whole cycle: a count taken mid-cycle depends on where the steps
--- stopped, and that moves with the string hash seed
-repeat until collectgarbage("step", 0)
+-- fifty steps into a cycle, then a full collection ends it: a count taken
+-- mid-cycle depends on where the steps stopped, which moves with the string
+-- hash seed, and stepping to the cycle's end takes thousands of steps
+for _ = 1, 50 do collectgarbage("step", 0) end
+collectgarbage()
 print(math.floor(collectgarbage("count")))
 collectgarbage()
 print(math.floor(collectgarbage("count")))
