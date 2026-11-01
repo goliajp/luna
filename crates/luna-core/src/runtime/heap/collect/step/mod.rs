@@ -73,7 +73,7 @@ impl Heap {
         self.grayagain = super::super::mark::GrayStack::default();
         // the sweep, keeping every object: the white has not flipped
         self.phase = GcPhase::Sweep;
-        self.sweep_begins();
+        self.sweep_starts();
         let white = self.current_white;
         // SAFETY: the lists link allocated objects, none freed here; only
         // headers are written and the model's hooks of a kept object run
