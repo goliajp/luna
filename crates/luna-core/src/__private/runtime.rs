@@ -146,7 +146,7 @@ pub trait TableInternals {
         key: Value,
         val: Value,
     ) -> Result<(), TableError>;
-    /// `Table::set_int` without the read-only test and the barrier; see
+    /// `TableStores::store_int` without the read-only test and the barrier; see
     /// `Self::set_unguarded`.
     ///
     /// # Safety

@@ -55,8 +55,9 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
 /// `t[key] = val` with an integer key; see `checked_store`.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table, and
-/// `val_tag` and `val_raw` are one value's tag and payload.
+/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
+/// the Vm the window lends, its values that Vm's, and `val_tag` and `val_raw` are one value's tag
+/// and payload.
 // SAFETY: no other item in the link is named `luna_jit_table_set_int_checked`: only this crate
 // defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -74,8 +75,9 @@ pub unsafe extern "C" fn luna_jit_table_set_int_checked(
 /// `t[key] = val` with an interned string key; see `checked_store`.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table,
-/// `key_ptr` an interned string, and `val_tag` and `val_raw` one value's tag and payload.
+/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
+/// the Vm the window lends, its values that Vm's, `key_ptr` an interned string, and `val_tag` and
+/// `val_raw` one value's tag and payload.
 // SAFETY: no other item in the link is named `luna_jit_table_set_field_checked`: only this crate
 // defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
@@ -96,8 +98,9 @@ pub unsafe extern "C" fn luna_jit_table_set_field_checked(
 /// `checked_store`.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table, and
-/// each of (`key_tag`, `key_raw`) and (`val_tag`, `val_raw`) is one value's tag and payload.
+/// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
+/// the Vm the window lends, its values that Vm's, and each of (`key_tag`, `key_raw`) and
+/// (`val_tag`, `val_raw`) is one value's tag and payload.
 // SAFETY: no other item in the link is named `luna_jit_table_set_checked`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]

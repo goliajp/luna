@@ -111,3 +111,18 @@ jobs:
             -p luna-core --lib \
             --no-default-features \
             -- --nocapture "$@"
+
+  doctests-nightly:
+    name: luna-core doctests on nightly (compile_fail error codes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install nightly
+        run: rustup toolchain install nightly --profile minimal
+
+      # stable rustdoc runs a compile_fail doctest without checking its
+      # error code; nightly checks it, so a doctest that stops compiling for
+      # another reason than the one it names fails here
+      - name: cargo +nightly test --doc -p luna-core
+        run: cargo +nightly test --doc -p luna-core

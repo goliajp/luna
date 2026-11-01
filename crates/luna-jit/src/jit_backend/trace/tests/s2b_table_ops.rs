@@ -1,6 +1,5 @@
 use super::*;
 use crate::jit_backend::enter_jit;
-use luna_core::__private::TableStores;
 use luna_core::__private::VmCApiLoad;
 use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
@@ -151,7 +150,8 @@ fn metatable_on_set_i_exits_at_the_store() {
     let plain = vm.heap_mut().new_table();
     let t = vm.heap_mut().new_table();
     let mt = vm.heap_mut().new_table();
-    set_metatable(&mut vm, t, mt);
+    vm.set_metatable(luna_core::runtime::Value::Table(t), Some(mt))
+        .unwrap();
 
     // R[0][1] = R[1]; R[2][1] = R[1]
     let mut rec = closed_record(
@@ -192,7 +192,8 @@ fn metatable_on_get_i_parks_pending_err() {
     let p = load_proto(&mut vm, WIDE_SRC);
     let t = vm.heap_mut().new_table();
     let mt = vm.heap_mut().new_table();
-    set_metatable(&mut vm, t, mt);
+    vm.set_metatable(luna_core::runtime::Value::Table(t), Some(mt))
+        .unwrap();
 
     // Trace: R[1] = R[0][1].
     let mut rec = closed_record(p, 0, &[Inst::iabc(Op::GetI, 1, 0, 1, false)]);
@@ -217,7 +218,8 @@ fn metatable_on_len_exits_at_the_len() {
     let plain = vm.heap_mut().new_table();
     let t = vm.heap_mut().new_table();
     let mt = vm.heap_mut().new_table();
-    set_metatable(&mut vm, t, mt);
+    vm.set_metatable(luna_core::runtime::Value::Table(t), Some(mt))
+        .unwrap();
 
     // R[0][1] = R[1]; R[3] = #R[2]
     let mut rec = closed_record(
@@ -283,9 +285,4 @@ fn len_table_reg_out_of_bounds_bails() {
     let p = load_proto(&mut vm, WIDE_SRC);
     let rec = closed_record(p, 0, &[Inst::iabc(Op::Len, 0, 200, 0, false)]);
     assert!(try_compile_trace(vm.jit_mut().storage.as_mut(), &rec).is_none());
-}
-
-fn set_metatable(vm: &mut Vm, t: Gc<luna_core::runtime::Table>, mt: Gc<luna_core::runtime::Table>) {
-    // SAFETY: both tables were just made in `vm`'s heap and nothing else refers to `t`
-    unsafe { t.store_metatable(vm.heap_mut(), Some(mt)) };
 }

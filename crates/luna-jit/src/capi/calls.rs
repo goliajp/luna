@@ -225,7 +225,8 @@ pub(super) fn yieldk(api: &mut Api, nresults: c_int, k: Option<KFn>, ctx: isize)
 
 /// PUC `lua_callk`.
 ///
-/// # Safety `L` is a live thread of an open state, the innermost API call on it;
+/// # Safety
+/// `L` is a live thread of an open state, the innermost API call on it;
 /// called by the C wrapper, which throws what this raises.
 // SAFETY: no other item in the link is named `luna_capi_lua_callk`; the C
 // wrapper `luna_c_lua_callk` is its only caller
