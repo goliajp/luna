@@ -5,7 +5,7 @@
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
-use luna_core::runtime::{Heap, Value};
+use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 use luna_core::vm::isa::{Inst, Op};
@@ -20,7 +20,7 @@ const VERSIONS: [LuaVersion; 5] = [
 
 fn compile_main(src: &str, v: LuaVersion) -> Vec<Inst> {
     let ast = parse(src.as_bytes(), v).expect("parse");
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let proto = compile_chunk(&ast, v, b"=cond", &mut heap).expect("compile");
     proto.code.to_vec()
 }
@@ -194,7 +194,7 @@ fn repeat_conditions_jump_without_a_value() {
 fn returns_that_must_close_carry_k() {
     let ks = |src: &str, v: LuaVersion| -> Vec<bool> {
         let ast = parse(src.as_bytes(), v).expect("parse");
-        let mut heap = Heap::new();
+        let mut heap = luna_core::__private::new_heap();
         let proto = compile_chunk(&ast, v, b"=ret", &mut heap).expect("compile");
         let f = &proto.protos[0];
         f.code

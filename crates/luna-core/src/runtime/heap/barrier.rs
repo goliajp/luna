@@ -10,7 +10,7 @@ impl Heap {
     /// (parent is gray or white — the mutator never sees a BLACK object live
     /// outside an incremental cycle).
     #[inline(always)]
-    pub fn barrier_forward<T: GcObject>(&mut self, parent: Gc<T>, child: Value) {
+    pub(crate) fn barrier_forward<T: GcObject>(&mut self, parent: Gc<T>, child: Value) {
         // SAFETY: `parent` is a handle, so its object is allocated, and a `GcObject` starts with its header
         unsafe { self.barrier_forward_header(parent.header(), child) }
     }
@@ -80,7 +80,7 @@ impl Heap {
     /// subsequent stores until the next propagate finishes — much cheaper for
     /// tables than per-child forward barriers. No-op outside Propagate.
     #[inline(always)]
-    pub fn barrier_back<T: GcObject>(&mut self, parent: Gc<T>) {
+    pub(crate) fn barrier_back<T: GcObject>(&mut self, parent: Gc<T>) {
         // SAFETY: `parent` is a handle, so its object is allocated, and a `GcObject` starts with its header
         unsafe { self.barrier_back_obj(parent.header()) }
     }

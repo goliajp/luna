@@ -47,7 +47,8 @@ unsafe fn checked_store(t: i64, key: luna_core::runtime::Value, val_raw: i64, va
         vm.jit_mut().counters.deopt += 1;
         return 0;
     }
-    barrier_for(vm, g, key, val);
+    // SAFETY: `g` is a live table of the Vm lent to this call and `val` one of its values (# Safety)
+    unsafe { barrier_for(vm, g, key, val) };
     1
 }
 

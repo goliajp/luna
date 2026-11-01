@@ -2,7 +2,6 @@
 //! as C sees it, and raising an error for the C side to throw.
 
 use super::*;
-use luna_core::__private::VmHeap;
 use luna_core::runtime::{NativeClosure, Table};
 
 mod raise;
@@ -46,9 +45,8 @@ impl<'a> Api<'a> {
     /// The context of an API call on `l`.
     ///
     /// # Safety
-    /// `l` is a live thread of an open state, and this call is the
-    /// innermost API call running on the state; the result is dropped
-    /// before the call returns.
+    /// `l` is a live thread of an open state, and this call is the innermost API call running on
+    /// the state; the result is dropped before the call returns.
     pub(super) unsafe fn new(l: *mut LuaState) -> Api<'a> {
         // SAFETY: the caller's contract: `l`'s global record is live and its
         // `vm` field is the pointer the innermost Rust caller of C handed
@@ -117,15 +115,15 @@ impl<'a> Api<'a> {
         (self.top() - self.base()) as c_int
     }
 
-    /// Push `v` into the room the stack keeps for pushes (`MINSTACK` when
-    /// C gets the thread or a C function starts, more after
-    /// `lua_checkstack`): as in PUC, a push needs no memory, and pushing
-    /// past that room is the host's error (the process ends when the
-    /// memory for it cannot be had).
+    /// Push `v` into the room the stack keeps for pushes (`MINSTACK` when C gets the thread or a C
+    /// function starts, more after `lua_checkstack`): as in PUC, a push needs no memory, and
+    /// pushing past that room is the host's error (the process ends when the memory for it cannot
+    /// be had).
     pub(super) fn push(&mut self, v: Value) {
         self.stack_mut().push_or_abort(v);
         let co = self.thread();
-        self.vm.heap_mut().barrier_back(co);
+        // SAFETY: `co` is a thread of this Vm, live while its state is in use
+        unsafe { self.vm.heap_mut().barrier_back(co) };
     }
 
     /// Push `vs`, values that may be held by nothing else (results taken
@@ -134,7 +132,8 @@ impl<'a> Api<'a> {
     pub(super) fn push_all(&mut self, vs: &[Value]) -> Result<(), LuaError> {
         self.stack_mut().extend_from_slice(vs)?;
         let co = self.thread();
-        self.vm.heap_mut().barrier_back(co);
+        // SAFETY: `co` is a thread of this Vm, live while its state is in use
+        unsafe { self.vm.heap_mut().barrier_back(co) };
         Ok(())
     }
 
@@ -143,7 +142,8 @@ impl<'a> Api<'a> {
     pub(super) fn push_all_in_room(&mut self, vs: &[Value]) {
         self.stack_mut().extend_from_slice_or_abort(vs);
         let co = self.thread();
-        self.vm.heap_mut().barrier_back(co);
+        // SAFETY: `co` is a thread of this Vm, live while its state is in use
+        unsafe { self.vm.heap_mut().barrier_back(co) };
     }
 
     /// Make room for `n` more values on the stack, collecting in an
@@ -256,7 +256,8 @@ impl<'a> Api<'a> {
             Slot::Stack(i) => {
                 self.stack_mut()[i] = v;
                 let co = self.thread();
-                self.vm.heap_mut().barrier_back(co);
+                // SAFETY: `co` is a thread of this Vm, live while its state is in use
+                unsafe { self.vm.heap_mut().barrier_back(co) };
             }
             Slot::Upvalue(n) if n >= 1 => {
                 if let Some(nc) = self.running_c()
@@ -266,14 +267,16 @@ impl<'a> Api<'a> {
                     // call's stack slot; no other reference into it is live, and
                     // the borrow covers one store
                     unsafe { nc.as_mut() }.upvals[C_UPVALS + n - 1] = v;
-                    self.vm.heap_mut().barrier_back(nc);
+                    // SAFETY: `nc` is the running C function's closure, live in this Vm
+                    unsafe { self.vm.heap_mut().barrier_back(nc) };
                 }
             }
             Slot::Environ => {
                 if let (Some(nc), Value::Table(_)) = (self.running_c(), v) {
                     // SAFETY: as for an upvalue above
                     unsafe { nc.as_mut() }.upvals[1] = v;
-                    self.vm.heap_mut().barrier_back(nc);
+                    // SAFETY: `nc` is the running C function's closure, live in this Vm
+                    unsafe { self.vm.heap_mut().barrier_back(nc) };
                 }
             }
             Slot::Globals => {

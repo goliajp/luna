@@ -28,19 +28,24 @@ optimization.
   they could free objects the VM still used. Use the VM's methods instead:
   `vm.heap.intern(b)` → `vm.intern(b)`; `vm.heap.new_table()` →
   `vm.new_table().build()`; `t.set(&mut vm.heap, k, v)` →
-  `vm.raw_set(t, k, v)?`; the heap's byte and object counts →
-  `vm.memory_in_use()` / `vm.memory_used()`.
+  `vm.raw_set(t, k, v)?`; the heap's byte counts →
+  `vm.memory_in_use()` / `vm.memory_used()`, and its object count →
+  `luna_core::vm::inspect::heap_walk(&vm).total_objects`.
 - `Vm::intern_str(&str)` is now `Vm::intern(impl AsRef<[u8]>)`, which also
   takes bytes that are not UTF-8; `SendVm::intern_str` is `SendVm::intern`
   likewise.
 - `Vm::raw_set(t, key, value)` is public: `rawset` without its argument
   checks, with the write barrier and `rawset`'s errors.
-- A table's stores are methods of its handle, `Gc<Table>`, and take the
-  write barrier themselves: `unsafe { t.as_mut() }.set(&mut heap, k, v)`
-  → `t.set(heap, k, v)`, likewise `set_int`, `try_set_existing` (which
-  now takes the heap) and `set_metatable` (which takes the heap and the
-  barrier each dialect's `lua_setmetatable` takes). A caller no longer
-  fires `Heap::barrier_back` after them.
+- `Table::set`, `set_int`, `try_set_existing` and `set_metatable`, and
+  `Heap`'s constructors (`Heap::new`, `with_seed`, `with_mem`,
+  `try_with_mem`, `Default`) and write barriers (`barrier_forward`,
+  `barrier_back`), are gone from the public API: given another heap than
+  the one that made the table, they could free objects the VM still used.
+  A host writes a table through the VM: `t.set(&mut heap, k, v)` →
+  `vm.raw_set(t, k, v)?` (an integer key is `Value::Int(i)`), or builds it
+  with `vm.new_table().with(k, v).build()`; a metatable is set by calling
+  Lua's `setmetatable` (`vm.call_value(vm.get_global("setmetatable"),
+  &[t, mt])?`).
 
 - `package.path` defaults to PUC's default outside Windows too
   (`/usr/local/share/lua/5.x/`, `/usr/local/lib/lua/5.x/` and `./`, in

@@ -2,7 +2,6 @@
 //! the thread.
 
 use super::*;
-use luna_core::__private::VmHeap;
 
 /// PUC `LUA_EXTRASPACE`: raw memory just below the `lua_State` pointer,
 /// for the host (`lua_getextraspace`).
@@ -112,7 +111,8 @@ pub(in crate::capi) fn try_state_of(vm: &mut Vm, co: Gc<Coro>) -> Option<*mut Lu
         unsafe { co.as_mut() }
             .host_stack_mut()
             .push_or_abort(co.body);
-        vm.heap_mut().barrier_back(co);
+        // SAFETY: `co` is a thread of this Vm, live while its state is in use
+        unsafe { vm.heap_mut().barrier_back(co) };
     }
     Some(l)
 }

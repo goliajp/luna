@@ -5,7 +5,6 @@ use std::path::Path;
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
-use luna_core::runtime::Heap;
 use luna_core::version::LuaVersion;
 use luna_core::vm::dump;
 
@@ -28,7 +27,7 @@ pub(super) fn compile_to_dump(
         ))
     })?;
 
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let chunk_name = source_path
         .file_name()
         .and_then(|n| n.to_str())

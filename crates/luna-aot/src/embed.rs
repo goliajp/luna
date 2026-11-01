@@ -36,7 +36,6 @@ use std::path::{Path, PathBuf};
 
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
-use luna_core::runtime::Heap;
 use luna_core::version::LuaVersion;
 use luna_core::vm::dump;
 
@@ -103,7 +102,7 @@ pub fn embed_bytecode(
     // drop it after dumping (the Proto's interned strings are
     // serialised into the dump bytes, the heap itself isn't needed
     // beyond this scope).
-    let mut heap = Heap::new();
+    let mut heap = luna_core::__private::new_heap();
     let chunk_name = source_path
         .file_name()
         .and_then(|n| n.to_str())

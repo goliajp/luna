@@ -11,7 +11,6 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use luna_core::runtime::heap::Heap;
 use luna_core::version::LuaVersion;
 use luna_core::vm::dump;
 
@@ -31,7 +30,7 @@ fuzz_target!(|data: &[u8]| {
     // detected by version byte, PUC fallback otherwise). Each iteration
     // gets a fresh Heap so cross-call state pollution can't mask bugs.
     for &ver in VERSIONS {
-        let mut heap = Heap::new();
+        let mut heap = luna_core::__private::new_heap();
         let _ = dump::undump(data, &mut heap, ver, true);
     }
 });

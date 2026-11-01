@@ -8,14 +8,12 @@ use crate::runtime::mem::LVec;
 ///
 /// # Threading model
 ///
-/// `Vm` is **`!Send + !Sync`**. The GC uses `Gc<T> = NonNull<T>` over
-/// an intrusive mark-sweep heap (not `Rc<RefCell<T>>`), and the trace
-/// JIT side-table uses `Rc<CompiledTrace>` — both single-threaded by
-/// design. Embedders that want concurrency spawn one `Vm` per OS
-/// thread (or per single-thread Tokio worker) and exchange data via
-/// channels. See [`docs/threading.md`](../../docs/threading.md) for
-/// canonical embedding patterns including Tokio `current_thread`,
-/// `LocalSet` on multi-thread, and `Vm`-per-OS-thread + channels.
+/// `Vm` is **`!Send + !Sync`**. The GC uses `Gc<T> = NonNull<T>` over an intrusive mark-sweep heap
+/// (not `Rc<RefCell<T>>`), and the trace JIT side-table uses `Rc<CompiledTrace>` — both
+/// single-threaded by design. Embedders that want concurrency spawn one `Vm` per OS thread (or per
+/// single-thread Tokio worker) and exchange data via channels. See
+/// [`docs/threading.md`](../../docs/threading.md) for canonical embedding patterns including Tokio
+/// `current_thread`, `LocalSet` on multi-thread, and `Vm`-per-OS-thread + channels.
 ///
 /// The constraint is enforced at compile time:
 ///
@@ -24,21 +22,15 @@ use crate::runtime::mem::LVec;
 /// must_be_send::<luna_core::vm::Vm>(); // error[E0277]: `Vm` cannot be sent between threads safely
 /// ```
 ///
+/// The same bound on a type that is `Send` compiles:
+/// ```
+/// fn must_be_send<T: Send>() {}
+/// must_be_send::<luna_core::version::LuaVersion>();
+/// ```
+///
 /// With the `send` feature, `luna_core::vm::SendVm` wraps a `Vm` for
 /// embedders that move one between threads.
 ///
-/// The heap is the VM's own: an embedder reaches it only through the VM's
-/// methods, so it cannot free what the VM still uses.
-///
-/// ```compile_fail,E0616
-/// let mut vm = luna_core::vm::Vm::new(luna_core::version::LuaVersion::Lua54);
-/// let _ = &mut vm.heap; // error[E0616]: field `heap` of struct `Vm` is private
-/// ```
-///
-/// ```compile_fail,E0599
-/// let mut heap = luna_core::runtime::Heap::new();
-/// heap.collect(&[]); // error[E0599]: no method `collect` on `Heap`
-/// ```
 // fixed field order: the interpreter's hot paths are tuned to this layout
 // (stack, frames and the call counters near the front), and letting the
 // compiler reorder it after an unrelated field change costs instructions
@@ -173,20 +165,16 @@ pub struct Vm {
     /// are. GC roots.
     pub(crate) host_light: std::collections::HashMap<usize, Value>,
 
-    /// MacroLua compile-time macro registry.
-    /// Pre-populated with built-in macros (`@quote` / `@unquote` /
-    /// `@if` / `@gensym`) at construction time when `version ==
-    /// LuaVersion::MacroLua`; embedders register custom macros via
-    /// [`Vm::define_macro`]. The expander runs once per `load()` call
-    /// between lexing and parsing (only when `is_macro_lua()`).
+    /// MacroLua compile-time macro registry. Pre-populated with built-in macros (`@quote` /
+    /// `@unquote` / `@if` / `@gensym`) at construction time when `version == LuaVersion::MacroLua`;
+    /// embedders register custom macros via [`Vm::define_macro`]. The expander runs once per
+    /// `load()` call between lexing and parsing (only when `is_macro_lua()`).
     pub(crate) macro_registry: crate::frontend::macro_expander::MacroRegistry,
 
-    /// Per-Vm cache of `Gc<Table>` metatables keyed
-    /// by `TypeId::of::<T>()` for embedder types implementing
-    /// [`crate::vm::userdata_trait::LuaUserdata`]. Populated lazily by
-    /// [`Vm::register_userdata`]; metatables are pinned via
-    /// [`Vm::pin_host`] at registration time so the entry's
-    /// `Gc<Table>` stays live for the rest of the Vm's lifetime.
+    /// Per-Vm cache of `Gc<Table>` metatables keyed by `TypeId::of::<T>()` for embedder types
+    /// implementing [`crate::vm::userdata_trait::LuaUserdata`]. Populated lazily by
+    /// [`Vm::register_userdata`]; metatables are pinned via [`Vm::pin_host`] at registration time
+    /// so the entry's `Gc<Table>` stays live for the rest of the Vm's lifetime.
     pub(crate) userdata_metatables:
         std::collections::HashMap<std::any::TypeId, Gc<crate::runtime::table::Table>>,
     /// shared metatable for all strings (populated by the string lib)
@@ -203,10 +191,10 @@ pub struct Vm {
     /// identity object for the main thread, returned by `coroutine.running`
     /// (the main thread's context lives in the VM fields / `main_ctx`, not here)
     pub(super) main_coro: Option<Gc<Coro>>,
-    /// `collectgarbage("param", name [,value])` pacing parameters. The collector
-    /// is still stop-the-world, so these are stored/returned for API fidelity
-    /// (PUC round-trips them via `setparam`/`getparam`). Defaults mirror PUC's
-    /// `LUAI_GC*` knobs: pause=200, stepmul=100, stepsize=13.
+    /// `collectgarbage("param", name [,value])` pacing parameters. The collector is still
+    /// stop-the-world, so these are stored/returned for API fidelity (PUC round-trips them via
+    /// `setparam`/`getparam`). Defaults mirror PUC's `LUAI_GC*` knobs: pause=200, stepmul=100,
+    /// stepsize=13.
     pub(super) gc_pause: i64,
     pub(super) gc_stepmul: i64,
     pub(super) gc_stepsize: i64,
@@ -222,12 +210,11 @@ pub struct Vm {
     /// is asked for more, so a feeder loop of gigabytes (`heavy.lua`'s
     /// `loadrep`) fails cleanly. [`Vm::set_loader_input_budget`] widens it.
     pub(crate) loader_input_budget: usize,
-    /// PUC's `LUA_REGISTRYINDEX` table — a single Lua table the debug library
-    /// exposes via `debug.getregistry`. Used to hold `_HOOKKEY` (the weak-key
-    /// table PUC's `db_sethook` keys per-thread hooks under). luna stores hook
-    /// state directly in `Vm.hook`/`Coro.hook`, so the entry is largely a
-    /// shape stub for db.lua :328; if other registry-keyed APIs land later
-    /// they can share this table.
+    /// PUC's `LUA_REGISTRYINDEX` table — a single Lua table the debug library exposes via
+    /// `debug.getregistry`. Used to hold `_HOOKKEY` (the weak-key table PUC's `db_sethook` keys
+    /// per-thread hooks under). luna stores hook state directly in `Vm.hook`/`Coro.hook`, so the
+    /// entry is largely a shape stub for db.lua :328; if other registry-keyed APIs land later they
+    /// can share this table.
     pub(crate) registry: Option<Gc<Table>>,
     /// Frames below this index are out of reach of the error handler of
     /// an `xpcall` (PUC `L->errfunc`): a protected call made from Rust — a

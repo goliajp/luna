@@ -241,7 +241,6 @@ fn loads_getglobal_chunk_and_rewrites_to_gettabup() {
 /// we can see the bytecode the translator emitted.
 #[test]
 fn structural_getglobal_rewrite() {
-    use luna_core::runtime::heap::Heap;
     // We can't call the per-dialect translator directly (it's
     // `pub(in crate::vm::dump)`), but `dump::undump` with `allow_puc=true`
     // routes through the magic-byte dispatcher to the same code path,
@@ -257,7 +256,7 @@ fn structural_getglobal_rewrite() {
     // (GETGLOBAL → GetTabUp + _ENV synth + correct upval count) is left
     // to a follow-up that exposes a Proto-inspection accessor in
     // luna-core's test surface.
-    let _heap = Heap::new();
+    let _heap = luna_core::__private::new_heap();
     // Compile-only check: confirm the chunk parses end-to-end and the
     // resulting Vm doesn't immediately reject the loaded chunk. The
     // actual dispatch-time correctness is exercised by `e2e_programs.rs`
