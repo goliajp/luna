@@ -7,23 +7,44 @@
 //! before writing them; the others start as `RegKind::StackHeld`, whose
 //! value is the one on vm.stack.
 //!
-//! A looping trace checks, besides, every register its body writes. After
-//! the first pass such a register no longer matches the stack, yet an exit
-//! taken before the body writes it again would leave the stack's stale
-//! value; checked on entry, it keeps the kind it has on every pass. (Working
-//! out where those exits resume and whether the register is dead there
-//! cost more compile time than the check saves.)
+//! A looping trace's body may write a register it does not read first: a
+//! temporary. On the first pass the stack holds whatever the register held
+//! before (a value of an earlier run, or the nil a collection cleared it
+//! to), which the trace must neither check nor write back; on the later
+//! passes the register holds what the pass before wrote, which an exit
+//! before the body writes it again must write back. So the ops up to the
+//! last temporary's first write are lowered twice (`lower/peel.rs`): once
+//! for the first pass, the temporaries held on the stack, and once in the
+//! loop, the temporaries of the kind the first pass leaves them. A
+//! register a looping body writes only on some ways (a `TestSet`, the loop
+//! registers, an inlined call's results) is checked on entry instead, and
+//! keeps the kind it has on every pass. So is every register a side trace
+//! writes.
 
 use super::slots::rw_ranges;
 use super::*;
 use luna_core::__private::CompiledTraceInternals;
 use luna_core::__private::ProtoTraceInternals;
 
+/// The head frame's registers as the trace takes them on entry.
+pub(super) struct HeadRegs {
+    /// Per register, whether the trace takes its value (and so its tag)
+    /// from the entry.
+    pub(super) live: Vec<bool>,
+    /// Per register, whether it is a temporary of a looping body.
+    pub(super) temps: Vec<bool>,
+    /// The ops before this one are lowered for the first pass apart: the
+    /// op after the last temporary's first write; 0 without temporaries.
+    pub(super) peel_end: usize,
+}
+
 /// For each of the head frame's `max_stack` registers, whether the trace
-/// takes its value (and so its tag) from the entry. Only the ops the
-/// lowering emits count: those before `end` and the terminator at `end`.
-/// `parent_exit` is the exit a side trace starts from: the side trace can
-/// only leave a register to the stack where that exit did.
+/// takes its value (and so its tag) from the entry, and the temporaries of
+/// a looping body. Only the ops the lowering emits count: those before
+/// `end` and the terminator at `end`. `parent_exit` is the exit a side
+/// trace starts from: the side trace can only leave a register to the stack
+/// where that exit did. `also_live`: registers checked on entry whatever
+/// the ops do.
 pub(super) fn entry_live(
     record: &TraceRecord,
     op_offsets: &[u32],
@@ -32,9 +53,15 @@ pub(super) fn entry_live(
     max_stack: usize,
     may_loop: bool,
     parent_exit: Option<&[ExitTag]>,
-) -> Vec<bool> {
+    also_live: &[u32],
+) -> HeadRegs {
+    let mut regs = HeadRegs {
+        live: vec![true; max_stack],
+        temps: vec![false; max_stack],
+        peel_end: 0,
+    };
     if record.side_trace_parent.is_some() && parent_exit.is_none() {
-        return vec![true; max_stack];
+        return regs;
     }
     let ops = &record.ops[..(end + 1).min(record.ops.len())];
     let mut live = vec![false; max_stack];
@@ -43,6 +70,8 @@ pub(super) fn entry_live(
     let mut defined = vec![false; max_stack];
     // what some op may leave with a value the stack does not have
     let mut written = vec![false; max_stack];
+    // the op that first writes a register on every path
+    let mut first_def = vec![usize::MAX; max_stack];
     for (i, rop) in ops.iter().enumerate() {
         let off = op_offsets.get(i).copied().unwrap_or(0) as usize;
         let inst = rop.inst;
@@ -83,7 +112,10 @@ pub(super) fn entry_live(
         let mut write = |s: usize| {
             if s < max_stack {
                 written[s] = true;
-                defined[s] |= sure;
+                if sure && !defined[s] {
+                    defined[s] = true;
+                    first_def[s] = i;
+                }
             }
         };
         for &(lo, n) in &writes {
@@ -109,13 +141,29 @@ pub(super) fn entry_live(
             }
         }
     }
-    if may_loop {
-        // the body leaves its own value behind; checked on entry instead
-        for (s, l) in live.iter_mut().enumerate() {
-            *l |= written[s];
+    for &r in also_live {
+        if let Some(l) = live.get_mut(r as usize) {
+            *l = true;
         }
     }
-    live
+    if may_loop {
+        let root = record.side_trace_parent.is_none();
+        for s in 0..max_stack {
+            if !written[s] || live[s] {
+                continue;
+            }
+            if root && defined[s] {
+                regs.temps[s] = true;
+                regs.peel_end = regs.peel_end.max(first_def[s] + 1);
+            } else {
+                // the body leaves its own value behind; checked on entry
+                live[s] = true;
+            }
+        }
+    }
+    regs.peel_end = regs.peel_end.min(end);
+    regs.live = live;
+    regs
 }
 
 /// The exit tags of the parent trace's exit a side trace starts from, from

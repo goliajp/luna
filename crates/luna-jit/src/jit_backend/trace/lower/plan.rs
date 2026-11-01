@@ -3,6 +3,7 @@ use super::*;
 mod cmp_table_checks;
 mod frames;
 mod op_checks;
+mod peel_point;
 mod scan;
 mod trace_ends;
 mod validate;
@@ -10,6 +11,7 @@ mod value_checks;
 use cmp_table_checks::*;
 use frames::*;
 use op_checks::*;
+use peel_point::*;
 use scan::*;
 use trace_ends::*;
 use validate::*;
@@ -68,8 +70,7 @@ pub(super) struct Plan<'r> {
     pub(super) downrec_idx_opt: Option<(usize, u32, usize, u8)>,
     pub(super) do_internal_loop: bool,
     pub(super) head_live: Vec<bool>,
-    /// The temporaries of a looping body: registers it writes on every
-    /// path before it reads them.
+    /// The temporaries of a looping body (see `entry_live`).
     pub(super) temps: Vec<bool>,
     /// The ops before this one are lowered for the first pass apart (see
     /// `peel`); 0 when the trace has no temporaries.
@@ -196,7 +197,12 @@ pub(super) fn plan_trace<'r>(
     // `entry_live`); the others start held on the stack.
     let parent_exit_tags = side_parent_exit_tags(record);
     let alt_paths = alt_path::find_alt_paths(record, effective_end, head_proto);
-    let mut head_live = entry_live(
+    let alt_written = alt_path::alt_written(&alt_paths);
+    let HeadRegs {
+        live: head_live,
+        temps,
+        peel_end,
+    } = entry_live(
         record,
         &op_offsets,
         &inline_writes,
@@ -204,27 +210,9 @@ pub(super) fn plan_trace<'r>(
         max_stack,
         do_internal_loop,
         parent_exit_tags.as_deref(),
+        &alt_written,
     );
-    for r in alt_path::alt_written(&alt_paths) {
-        if let Some(l) = head_live.get_mut(r as usize) {
-            *l = true;
-        }
-    }
-    let active_accum: Option<BufferedAccum> = escape
-        .accum_sites
-        .iter()
-        .find(|s| s.state == BufferState::Bufferable)
-        // the buffer reads both as strings on the entry check's word
-        .filter(|s| head_live[s.accum_slot as usize] && head_live[s.piece_slot as usize])
-        .map(|s| BufferedAccum {
-            accum_slot: s.accum_slot,
-            piece_slot: s.piece_slot,
-            pre1_idx: s.op_idx - 2,
-            pre2_idx: s.op_idx - 1,
-            concat_idx: s.op_idx,
-            post_idx: s.has_post.then_some(s.op_idx + 1),
-        });
-
+    let active_accum = buffered_accum(&escape, &head_live, &temps);
     let (consumed_by_cmp, cmp_dirs) = validate_ops(
         record,
         &vconsts,
@@ -241,6 +229,15 @@ pub(super) fn plan_trace<'r>(
         &alt_paths,
         for_loop_idx_opt,
         opts.pre53 && !float_only,
+    );
+    let peel_end = peel_point(
+        record,
+        peel_end,
+        effective_end,
+        &math_folds,
+        active_accum.as_ref(),
+        &consumed_by_cmp,
+        &alt_paths,
     );
     validate_trace_ends(
         record,
@@ -280,8 +277,8 @@ pub(super) fn plan_trace<'r>(
             downrec_idx_opt,
             do_internal_loop,
             head_live,
-            temps: vec![false; max_stack],
-            peel_end: 0,
+            temps,
+            peel_end,
             active_accum,
             consumed_by_cmp,
             cmp_dirs,
