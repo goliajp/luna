@@ -30,6 +30,9 @@ pub(super) enum Mode {
 /// ([`MemOwner`](super::MemOwner)), so it outlives every container either
 /// of them holds. A context serves one heap: Vms given clones of one
 /// owner each get a context of their own, sharing the owner's budget.
+// laid out in declaration order: with the kept-block lists at offset 0 the
+// allocation path spends two more instructions indexing them
+#[repr(C)]
 pub struct MemCtx {
     pub(super) mode: Mode,
     /// the host function or policy, and the bytes counted, which the
