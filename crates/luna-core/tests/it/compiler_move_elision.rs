@@ -69,10 +69,9 @@ fn eval_table_get_int(src: &str) -> i64 {
 
 #[test]
 fn retarget_arith_add_local_local_one_emits_no_move() {
-    // The token_bucket pc 33 shape — `refilled = refilled + 1`. Without
-    // the peephole the chunk would emit `Add temp, refilled, 1` + `Move
-    // refilled, temp`. With it, the Add's A field is patched to
-    // refilled directly and the Move drops.
+    // The token_bucket pc 33 shape — `refilled = refilled + 1`. Without the peephole the chunk
+    // would emit `Add temp, refilled, 1` + `Move refilled, temp`. With it, the Add's A field is
+    // patched to refilled directly and the Move drops.
     let src = r#"
         local refilled = 0
         refilled = refilled + 1
