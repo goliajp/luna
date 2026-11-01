@@ -179,3 +179,36 @@ fn a_policy_that_panicked_once_is_asked_again() {
     let r = vm.eval("local t = {} for i = 1, 100 do t[i] = {i} end return #t");
     assert!(matches!(r.unwrap()[0], Value::Int(100)));
 }
+
+// the Vm runs on another thread meanwhile, which takes the `send` feature
+#[cfg(feature = "send")]
+#[test]
+fn a_chunk_on_a_clone_a_vm_was_given_allocates_apart_from_it() {
+    use luna_core::frontend::ast::{Chunk, ExprId};
+    use luna_core::vm::SendVm;
+    use std::thread;
+    let o = MemOwner::system();
+    let s = SendVm::from_vm(Vm::new_with_mem(LuaVersion::Lua54, o.clone()));
+    let run = thread::spawn(move || {
+        for _ in 0..20 {
+            s.eval("local t = {} for i = 1, 2000 do t[i] = {i} end")
+                .unwrap();
+        }
+    });
+    // grows and frees the chunk's vectors while the Vm allocates: a
+    // context shared with the Vm's heap would be used on two threads
+    let mut c = Chunk::new(o.clone());
+    // the chunk's context is its own (an owner prints its context's address)
+    assert_ne!(format!("{:?}", c.mem_owner()), format!("{o:?}"));
+    for n in 0.. {
+        if run.is_finished() {
+            break;
+        }
+        let l = c.push_list(&[ExprId(7); 64]);
+        assert_eq!(c.list(l).len(), 64);
+        if n % 64 == 63 {
+            c = Chunk::new(o.clone());
+        }
+    }
+    run.join().unwrap();
+}
