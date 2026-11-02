@@ -66,11 +66,9 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // Every loop variable restores as nil: the key is nil, and
     // the value slots hold what the iterator's last call left
     // (nil in the helper path), which the loop no longer reads.
-    let tag_side_local_2 = lw.per_exit_kinds.push(
-        rop.pc + 1,
-        &lw.current_kinds[..max_stack],
-        Box::new(TCellPtr::null()),
-    );
+    let tag_side_local_2 = lw
+        .per_exit_kinds
+        .push(rop.pc + 1, &lw.current_kinds[..max_stack]);
     let nil_snapshot = lw.per_exit_kinds.kinds_mut(tag_side_local_2);
     let n = nil_snapshot.len();
     for k in nil_snapshot[first.min(n)..(first + nvars).min(n)].iter_mut() {

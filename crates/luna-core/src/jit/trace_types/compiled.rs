@@ -85,15 +85,15 @@ pub struct CompiledTraceParts {
     /// other tag arrays' cheap-clone idiom.
     pub entry_tags: TArc<[u8]>,
     /// Per side-exit `exit_tags`. Each entry is
-    /// `(continuation_pc, exit_tags)`; when the trace returns a PC
-    /// matching an entry, the dispatcher uses that vector instead of
+    /// `(continuation_pc, exit_tags)`; when the trace returns the index
+    /// of an entry, the dispatcher uses its tags instead of
     /// the clean-tail `exit_tags`. This makes side-exits that fire
     /// **before** later writers (`GetUpval` is the today motivator)
     /// restore the affected slot as `Untouched` (carry entry tag)
     /// rather than pack with a tag the slot hasn't actually become.
     /// Empty when no side-exit needs a different vector than the
     /// clean tail (e.g. plain numeric loops with no GetUpval).
-    pub per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]>,
+    pub per_exit_tags: ExitTagTable,
     /// Per inline side-exit metadata, indexed by
     /// `site_idx`. Each entry carries the side-exit's `cont_pc`,
     /// the per-slot `exit_tags` snapshot (sized to `window_size` so
@@ -145,8 +145,9 @@ pub struct CompiledTraceParts {
     /// `emit_store_back_and_return_pc` callsite (immediately after
     /// `per_exit_kinds.push`) bakes this cell's heap address. Same
     /// semantics as [`InlineSideExit::side_trace_ptr`] but with
-    /// `kind = SIDE_SENT_KIND_TAG` and `local = tag_idx`.
-    pub tags_side_trace_ptrs: TArc<[Box<TCellPtr>]>,
+    /// `kind = SIDE_SENT_KIND_TAG` and `local = tag_idx`. The slice is
+    /// never resized, so each cell keeps its address while the trace lives.
+    pub tags_side_trace_ptrs: Box<[TCellPtr]>,
     /// Singleton cell shared by every GLOBAL-kind
     /// callsite (clean-tail return, Call truncation, ForLoop /
     /// TForLoop exits, generic err deopts, etc.). All such sites'

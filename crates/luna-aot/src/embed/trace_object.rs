@@ -113,14 +113,14 @@ pub(super) fn lower_and_encode_meta(
         let exit_tags_vec: Vec<u8> = ct.exit_tags().iter().copied().map(pack_exit_tag).collect();
         // v2 tail — per-cont_pc typed-register side-exit shapes.
         // Each entry's `tags_packed` mirrors the JIT-time
-        // `(cont_pc, Rc<[ExitTag]>)` pair, packed through
+        // `(cont_pc, tags)` exit, packed through
         // `pack_exit_tag` so the deploy-side reader unpacks via the
         // same byte → ExitTag mapping.
         let per_exit_tags_entries: Vec<PerExitTagsEntry> = ct
             .per_exit_tags()
             .iter()
             .map(|(cont_pc, tags)| PerExitTagsEntry {
-                cont_pc: *cont_pc,
+                cont_pc,
                 tags_packed: tags.iter().copied().map(pack_exit_tag).collect(),
             })
             .collect();

@@ -187,10 +187,12 @@ pub struct DecodedExit<'a> {
 /// - `[inline.len()..inline.len() + tags.len())` — per_exit_tags,
 ///   by the index the exit returns.
 /// - Last slot — global / clean-tail fallback.
+// every exit decodes through it: out of line it costs a call per exit
+#[inline(always)]
 pub fn decode_exit_shape<'a>(
     raw_ret: u64,
     per_exit_inline: &'a [InlineSideExit],
-    per_exit_tags: &'a [(u32, TArc<[ExitTag]>)],
+    per_exit_tags: &'a ExitTagTable,
     exit_tags: &'a [ExitTag],
 ) -> DecodedExit<'a> {
     let site_field = ((raw_ret >> 32) & EXIT_SITE_MASK) as u32;
@@ -198,12 +200,16 @@ pub fn decode_exit_shape<'a>(
     let inline_n = per_exit_inline.len();
     if raw_ret & EXIT_TAGS_INDEX_BIT != 0 {
         let i = site_field as usize;
-        debug_assert_eq!(per_exit_tags[i].0, cont_pc, "per_exit_tags entry's pc");
+        debug_assert_eq!(
+            per_exit_tags.cont_pc(i),
+            cont_pc,
+            "per_exit_tags entry's pc"
+        );
         return DecodedExit {
             cont_pc,
             site_id: 0,
             exit_hit_idx: inline_n + i,
-            exit_tags_for_pc: &per_exit_tags[i].1,
+            exit_tags_for_pc: per_exit_tags.tags(i),
             using_global_exit_tags: false,
         };
     }

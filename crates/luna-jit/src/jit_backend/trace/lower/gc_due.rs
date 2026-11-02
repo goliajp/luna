@@ -122,9 +122,7 @@ fn steps_in_place<E: Emit>(lw: &Lower<E>, pl: &Plan<'_>, i: usize, check: u32) -
 /// steps; the trace leaves through that exit only when the helper says.
 fn step_in_place<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, next_pc: u32, check: u32) {
     let n = pl.max_stack;
-    let tags = lw
-        .per_exit_kinds
-        .push(next_pc, &lw.current_kinds[..n], Box::new(TCellPtr::null()));
+    let tags = lw.per_exit_kinds.push(next_pc, &lw.current_kinds[..n]);
     for (idx, v) in lw.entry.regs_full[..n].iter().copied().enumerate() {
         let val = use_var_resolved(&mut lw.bcx, v);
         if lw.stored[idx] != Some(val) {

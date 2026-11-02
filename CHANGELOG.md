@@ -376,6 +376,22 @@ optimization.
   plain `fn`, and an `IntChunkCompiler::enter` implementation now only
   stores the Vm pointer it gets (luna-jit-helpers' `enter_jit_ptr` does
   that) instead of dereferencing it.
+- A compiled trace keeps the register tags of its typed side exits in one
+  block, `ExitTagTable` (in `luna_core::jit::trace_types`), instead of one
+  shared slice per exit, so a Vm taking up a trace another Vm compiled
+  allocates them once, not once per exit.
+  `CompiledTraceParts::per_exit_tags` is an `ExitTagTable` (it was
+  `TArc<[(u32, TArc<[ExitTag]>)]>`) and `CompiledTrace::per_exit_tags`
+  returns `&ExitTagTable`; `decode_exit_shape` and
+  `CompiledTrace::from_aot_meta` take it the same way.
+  `CompiledTraceParts::tags_side_trace_ptrs` is a `Box<[TCellPtr]>` (it
+  was `TArc<[Box<TCellPtr>]>`) and its reader returns `&[TCellPtr]`.
+  Migration: iterate with `for (pc, tags) in ct.per_exit_tags()` (each
+  item is `(u32, &[ExitTag])`), index with `table.cont_pc(i)` and
+  `table.tags(i)` (or `table.get(i)`), and build one with
+  `ExitTagTable::from_exits(exits.iter().map(|(pc, t)| (*pc, &t[..])))`;
+  make the side-trace cells with
+  `(0..n).map(|_| TCellPtr::null()).collect()`.
 
 ### Changed
 

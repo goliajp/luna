@@ -100,11 +100,9 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             trace_fn_sig_ref,
         );
     } else {
-        let tag_side_local = lw.per_exit_kinds.push(
-            side_exit_pc,
-            &lw.current_kinds[..max_stack],
-            Box::new(TCellPtr::null()),
-        );
+        let tag_side_local = lw
+            .per_exit_kinds
+            .push(side_exit_pc, &lw.current_kinds[..max_stack]);
         let mat_count = emit_materialize_live_sunk(
             &mut lw.bcx,
             mat_sunk_id,

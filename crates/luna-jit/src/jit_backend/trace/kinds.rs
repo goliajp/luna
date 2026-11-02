@@ -178,16 +178,11 @@ pub(super) fn k_op(current_kinds: &[RegKind], reg: u32) -> RegKind {
 }
 
 /// The kinds each tagged exit leaves with, in one buffer: `(pc, at, len)`
-/// per exit, its kinds at `kinds[at..at + len]`, and the cell its side
-/// trace goes in (the code holds the cell's address, so it never moves).
+/// per exit, its kinds at `kinds[at..at + len]`.
 #[derive(Default)]
 pub(super) struct ExitKinds {
     kinds: Vec<RegKind>,
     exits: Vec<(u32, u32, u32)>,
-    // boxed: compiled code holds each cell's address, which a growing
-    // `Vec<TCellPtr>` would move
-    #[allow(clippy::vec_box)]
-    cells: Vec<Box<TCellPtr>>,
 }
 
 impl ExitKinds {
@@ -196,16 +191,14 @@ impl ExitKinds {
         ExitKinds {
             kinds: Vec::with_capacity(exits * width),
             exits: Vec::with_capacity(exits),
-            cells: Vec::with_capacity(exits),
         }
     }
 
     /// Records an exit to `pc` leaving with `kinds`; its index.
-    pub(super) fn push(&mut self, pc: u32, kinds: &[RegKind], cell: Box<TCellPtr>) -> u32 {
+    pub(super) fn push(&mut self, pc: u32, kinds: &[RegKind]) -> u32 {
         let at = self.kinds.len() as u32;
         self.kinds.extend_from_slice(kinds);
         self.exits.push((pc, at, kinds.len() as u32));
-        self.cells.push(cell);
         (self.exits.len() - 1) as u32
     }
 
@@ -220,12 +213,6 @@ impl ExitKinds {
         self.exits
             .iter()
             .map(|&(pc, at, len)| (pc, &self.kinds[at as usize..(at + len) as usize]))
-    }
-
-    /// The side-trace cells, in exit order.
-    #[allow(clippy::vec_box)]
-    pub(super) fn into_cells(self) -> Vec<Box<TCellPtr>> {
-        self.cells
     }
 }
 
