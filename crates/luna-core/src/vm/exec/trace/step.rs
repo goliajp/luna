@@ -20,6 +20,8 @@ pub(crate) struct TraceStep {
     /// The trace left after its step: the stack is as the interpreter
     /// finds it, and the exit writes nothing back.
     pub(crate) synced_exit: bool,
+    /// Set while hot counting pauses after a collection exit.
+    pub(crate) quiet: Option<super::gc_quiet::GcQuiet>,
 }
 
 /// What [`Vm::trace_step_enter`] replaced.
@@ -32,9 +34,16 @@ impl Vm {
         &mut self,
         ct: &crate::jit::trace::CompiledTrace,
     ) -> RunningTrace {
+        self.trace_step_enter_at(ct as *const _ as usize)
+    }
+
+    /// [`Vm::trace_step_enter`] of the trace at address `ct`.
+    pub(in crate::vm::exec) fn trace_step_enter_at(&mut self, ct: usize) -> RunningTrace {
         let st = &mut self.jit.step;
+        // entering any trace ends a pause a collection exit started
+        st.quiet = None;
         let prev = (st.ct, st.frames);
-        st.ct = ct as *const _ as usize;
+        st.ct = ct;
         st.frames = self.frames.len() as u32;
         prev
     }

@@ -8,6 +8,10 @@ mod closure;
 
 use crate::jit::abi::{JIT_GC_CALL, JIT_GC_PREV};
 
+/// `Vm::jit_gc_due`'s op for an exit whose resuming op checks for the
+/// collection itself: the exit adds no check.
+pub(crate) const JIT_GC_OWN: u32 = u32::MAX - 2;
+
 impl Vm {
     #[inline(never)]
     pub(super) fn run_frame_op(&mut self, inst: Inst) -> Result<(), LuaError> {
@@ -236,10 +240,13 @@ impl Vm {
     /// Compiled code left with a step due after the op at `op_pc`
     /// ([`JIT_GC_PREV`]: the one before the running frame's pc;
     /// [`JIT_GC_CALL`]: the call that entered the running frame, which 5.2
-    /// checks with the frame's top): the check that op makes.
+    /// checks with the frame's top; [`JIT_GC_OWN`]: none): the check that op
+    /// makes.
     pub(crate) fn checkpoint_after_jit(&mut self, op_pc: u32) -> Result<(), LuaError> {
-        if op_pc == JIT_GC_CALL {
-            return self.checkpoint(self.frame_top());
+        match op_pc {
+            JIT_GC_CALL => return self.checkpoint(self.frame_top()),
+            JIT_GC_OWN => return Ok(()),
+            _ => {}
         }
         let (cl, base) = (self.top_frame().closure, self.top_frame().base);
         let pc = if op_pc == JIT_GC_PREV {

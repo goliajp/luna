@@ -9,6 +9,7 @@ pub(in crate::vm::exec) mod close;
 pub(in crate::vm::exec) mod dispatch;
 pub(in crate::vm::exec) mod exit;
 pub(in crate::vm::exec) mod fail_memory;
+pub(in crate::vm::exec) mod gc_quiet;
 pub(in crate::vm::exec) mod record;
 pub(in crate::vm::exec) mod restore;
 pub(in crate::vm::exec) mod start;
