@@ -83,21 +83,17 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
     let global_tag_res_kind = classify_exit_tags(&exit_tags_vec);
     let exit_tags: TArc<[ExitTag]> = exit_tags_vec.into();
     // `per_exit_tags` for the dispatcher, and the parallel
-    // `tags_side_trace_ptrs` cells the close handler writes to (the code
-    // holds each cell's address, so the boxes move but the cells do not)
-    let mut last = None;
-    let per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]> = per_exit_kinds
+    // `tags_side_trace_ptrs` cells the close handler writes to. Each
+    // exit's tags keep the length its emit site pushed (caller window at
+    // depth 0, the full window deeper): the dispatcher walks
+    // `exit_tags_for_pc.len()` either way.
+    let tag_vecs: Vec<(u32, Vec<ExitTag>)> = per_exit_kinds
         .iter()
-        .map(|(pc, kinds)| {
-            // The cmp emit site pushed the right slice
-            // length (caller-window for depth=0, full window for
-            // depth>0). Hand it through verbatim — the dispatcher
-            // iterates `exit_tags_for_pc.len()` and walks both
-            // shapes uniformly.
-            (pc, shared_exit_tags(kinds, &mut last))
-        })
+        .map(|(pc, kinds)| (pc, kinds_to_exit_tags(kinds)))
         .collect();
-    let tags_side_trace_ptrs: TArc<[Box<TCellPtr>]> = per_exit_kinds.into_cells().into();
+    let per_exit_tags = ExitTagTable::from_exits(tag_vecs.iter().map(|(pc, t)| (*pc, &t[..])));
+    let tags_side_trace_ptrs: Box<[TCellPtr]> =
+        (0..per_exit_tags.len()).map(|_| TCellPtr::null()).collect();
     let mut last = None;
     let inline_tags: Vec<TArc<[ExitTag]>> = per_exit_inline_vec
         .iter()
@@ -161,9 +157,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         exit_hit_counts,
         exit_side_trace_ptrs,
         // per-TAG-entry side-trace cells (parallel
-        // to per_exit_tags) + the GLOBAL singleton cell. Both
-        // collected from Boxes allocated AT each emit callsite so
-        // the IR has baked the right heap address.
+        // to per_exit_tags) + the GLOBAL singleton cell
         tags_side_trace_ptrs,
         global_side_trace_ptr: global_side_trace_box,
         per_exit_inline,

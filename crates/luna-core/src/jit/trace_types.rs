@@ -16,6 +16,7 @@ pub(crate) mod compiled;
 mod compiled_aot;
 pub(crate) mod content;
 mod exit;
+mod exit_table;
 pub(crate) mod installed;
 pub(crate) mod options;
 mod outcome;
@@ -27,6 +28,7 @@ pub(crate) use adopt::{AdoptRequest, AdoptedTrace};
 pub(crate) use compiled::CompiledTraceParts;
 pub use compiled::TraceFn;
 pub use exit::*;
+pub use exit_table::ExitTagTable;
 pub(crate) use installed::CompiledTrace;
 pub(crate) use options::CompileOptions;
 pub use outcome::{

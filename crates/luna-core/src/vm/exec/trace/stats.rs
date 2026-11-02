@@ -257,7 +257,7 @@ impl Vm {
     /// - `[0..per_exit_inline.len())` → `InlineSideExit` (cont_pc +
     ///   window-sized exit_tags).
     /// - `[per_exit_inline.len()..inline.len() + per_exit_tags.len())`
-    ///   → `per_exit_tags[i]` (per-cont_pc caller-window tags).
+    ///   → `per_exit_tags.tags(i)` (per-cont_pc caller-window tags).
     /// - Last slot → global clean-tail (cont_pc = `head_pc`,
     ///   exit_tags = `ct.exit_tags`).
     pub fn hot_exit_iter(
@@ -286,8 +286,11 @@ impl Vm {
                         let ent = &ct.per_exit_inline[idx];
                         (ent.cont_pc, ent.exit_tags.clone())
                     } else if idx < inline_n + tags_n {
-                        let (pc, tags) = &ct.per_exit_tags[idx - inline_n];
-                        (*pc, tags.clone())
+                        let i = idx - inline_n;
+                        (
+                            ct.per_exit_tags.cont_pc(i),
+                            TArc::from(ct.per_exit_tags.tags(i)),
+                        )
                     } else {
                         (ct.head_pc, ct.exit_tags.clone())
                     };

@@ -29,11 +29,11 @@ readers! {
     exit_tags: &TArc<[ExitTag]> = borrow;
     global_tag_res_kind: TagResKind = copy;
     entry_tags: &TArc<[u8]> = borrow;
-    per_exit_tags: &TArc<[(u32, TArc<[ExitTag]>)]> = borrow;
+    per_exit_tags: &ExitTagTable = borrow;
     per_exit_inline: &[InlineSideExit] = borrow;
     exit_hit_counts: &[TCellU32] = borrow;
     exit_side_trace_ptrs: &[TCellPtr] = borrow;
-    tags_side_trace_ptrs: &[Box<TCellPtr>] = borrow;
+    tags_side_trace_ptrs: &[TCellPtr] = borrow;
     global_side_trace_ptr: &TCellPtr = borrow;
     is_inline_abort_close: bool = copy;
     dispatch_off_reason: Option<&'static str> = copy;

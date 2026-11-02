@@ -53,11 +53,9 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
             lw.bcx.ins().brif(is_library, ok_blk, &[], exit_blk, &[]);
             lw.bcx.switch_to_block(exit_blk);
             lw.bcx.seal_block(exit_blk);
-            let tags_idx = lw.per_exit_kinds.push(
-                record.head_pc,
-                &lw.current_kinds[..max_stack],
-                Box::new(TCellPtr::null()),
-            );
+            let tags_idx = lw
+                .per_exit_kinds
+                .push(record.head_pc, &lw.current_kinds[..max_stack]);
             emit_tagged_exit(
                 &mut lw.bcx,
                 suppress_admit_id,

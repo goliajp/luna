@@ -42,7 +42,7 @@ impl CompiledTrace {
         entry_tags: TArc<[u8]>,
         exit_tags: TArc<[ExitTag]>,
         global_tag_res_kind: TagResKind,
-        per_exit_tags: Vec<(u32, TArc<[ExitTag]>)>,
+        per_exit_tags: ExitTagTable,
         per_exit_inline: Vec<crate::jit::trace_types::InlineSideExit>,
     ) -> Self {
         // `inline_n` > 0 for inlined side exits at depth > 0: the chains the
@@ -63,18 +63,14 @@ impl CompiledTrace {
             let v: Vec<TCellPtr> = (0..total_slots).map(|_| TCellPtr::null()).collect();
             v.into()
         };
-        // Parallel `tags_side_trace_ptrs` slice — one Box per
+        // Parallel `tags_side_trace_ptrs` slice — one cell per
         // per_exit_tags entry, all null. The AOT install never wires
         // a side trace (no recorder fires on this parent), so the
         // cells stay null for the binary's lifetime; sizing matches
         // the dispatcher's `per_exit_kinds.len() == tags_side_trace
         // _ptrs.len()` invariant the close handler asserts.
-        let tags_side_trace_ptrs: TArc<[Box<TCellPtr>]> = {
-            let v: Vec<Box<TCellPtr>> = (0..per_exit_tags.len())
-                .map(|_| Box::new(TCellPtr::null()))
-                .collect();
-            v.into()
-        };
+        let tags_side_trace_ptrs: Box<[TCellPtr]> =
+            (0..per_exit_tags.len()).map(|_| TCellPtr::null()).collect();
         let parts = CompiledTraceParts {
             head_pc,
             entry,
@@ -84,7 +80,7 @@ impl CompiledTrace {
             exit_tags,
             global_tag_res_kind,
             entry_tags,
-            per_exit_tags: TArc::from(per_exit_tags),
+            per_exit_tags,
             per_exit_inline: TArc::from(per_exit_inline),
             exit_hit_counts,
             exit_side_trace_ptrs,

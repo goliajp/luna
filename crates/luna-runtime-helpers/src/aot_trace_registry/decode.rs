@@ -2,8 +2,7 @@
 
 use luna_core::__private::InlineSideExit;
 use luna_core::jit::aot_meta::{PerExitTagsEntry, unpack_exit_tag};
-use luna_core::jit::send_compat::TArc;
-use luna_core::jit::trace_types::ExitTag;
+use luna_core::jit::trace_types::{ExitTag, ExitTagTable};
 
 /// The tags of `packed`; `None` when a byte is no tag.
 pub(super) fn unpack_tags(packed: &[u8]) -> Option<Vec<ExitTag>> {
@@ -12,11 +11,14 @@ pub(super) fn unpack_tags(packed: &[u8]) -> Option<Vec<ExitTag>> {
 
 /// Each typed side exit's continuation pc and tags; `None` when a byte is
 /// no tag.
-pub(super) fn per_exit_tags(entries: &[PerExitTagsEntry]) -> Option<Vec<(u32, TArc<[ExitTag]>)>> {
-    entries
+pub(super) fn per_exit_tags(entries: &[PerExitTagsEntry]) -> Option<ExitTagTable> {
+    let exits = entries
         .iter()
-        .map(|e| Some((e.cont_pc, unpack_tags(&e.tags_packed)?.into())))
-        .collect()
+        .map(|e| Some((e.cont_pc, unpack_tags(&e.tags_packed)?)))
+        .collect::<Option<Vec<_>>>()?;
+    Some(ExitTagTable::from_exits(
+        exits.iter().map(|(pc, t)| (*pc, &t[..])),
+    ))
 }
 
 /// Rebuild the v3 `per_exit_inline` side exits of one trace. `None`

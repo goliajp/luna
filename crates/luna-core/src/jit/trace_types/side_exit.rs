@@ -248,7 +248,7 @@ impl CompiledTrace {
         if exit_idx < inline_n {
             &self.per_exit_inline[exit_idx].exit_tags
         } else if exit_idx < inline_n + tags_n {
-            &self.per_exit_tags[exit_idx - inline_n].1
+            self.per_exit_tags.tags(exit_idx - inline_n)
         } else {
             &self.exit_tags
         }

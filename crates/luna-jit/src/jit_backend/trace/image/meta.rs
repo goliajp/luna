@@ -12,7 +12,7 @@ pub(crate) struct Meta {
     exit_tags: Box<[ExitTag]>,
     global_tag_res_kind: TagResKind,
     pub(crate) entry_tags: Box<[u8]>,
-    per_exit_tags: Box<[(u32, Box<[ExitTag]>)]>,
+    per_exit_tags: ExitTagTable,
     per_exit_inline: Box<[(u32, u32, Box<[ExitTag]>, Box<[FrameMaterializeInfo]>)]>,
     is_inline_abort_close: bool,
     dispatch_off_reason: Option<&'static str>,
@@ -39,11 +39,7 @@ impl Meta {
             exit_tags: ct.exit_tags.iter().copied().collect(),
             global_tag_res_kind: ct.global_tag_res_kind,
             entry_tags: ct.entry_tags.iter().copied().collect(),
-            per_exit_tags: ct
-                .per_exit_tags
-                .iter()
-                .map(|(pc, t)| (*pc, t.iter().copied().collect()))
-                .collect(),
+            per_exit_tags: ct.per_exit_tags.clone(),
             per_exit_inline: ct
                 .per_exit_inline
                 .iter()
@@ -80,11 +76,6 @@ impl Meta {
     #[inline(never)]
     pub(crate) fn instantiate(&self, tiered: bool, calls_at: u32) -> CompiledTraceParts {
         let arc = |t: &[ExitTag]| -> TArc<[ExitTag]> { TArc::from(t) };
-        let per_exit_tags: Vec<(u32, TArc<[ExitTag]>)> = self
-            .per_exit_tags
-            .iter()
-            .map(|(pc, t)| (*pc, arc(t)))
-            .collect();
         let per_exit_inline: Vec<InlineSideExit> = self
             .per_exit_inline
             .iter()
@@ -96,7 +87,7 @@ impl Meta {
                 side_trace_ptr: Box::new(TCellPtr::null()),
             })
             .collect();
-        let total = per_exit_inline.len() + per_exit_tags.len() + 1;
+        let total = per_exit_inline.len() + self.per_exit_tags.len() + 1;
         let tier_up = self
             .tier_at
             .filter(|_| !tiered)
@@ -110,11 +101,10 @@ impl Meta {
             exit_tags: arc(&self.exit_tags),
             global_tag_res_kind: self.global_tag_res_kind,
             entry_tags: TArc::from(&self.entry_tags[..]),
-            tags_side_trace_ptrs: (0..per_exit_tags.len())
-                .map(|_| Box::new(TCellPtr::null()))
-                .collect::<Vec<_>>()
-                .into(),
-            per_exit_tags: per_exit_tags.into(),
+            tags_side_trace_ptrs: (0..self.per_exit_tags.len())
+                .map(|_| TCellPtr::null())
+                .collect(),
+            per_exit_tags: self.per_exit_tags.clone(),
             per_exit_inline: per_exit_inline.into(),
             exit_hit_counts: (0..total)
                 .map(|_| TCellU32::new(0))

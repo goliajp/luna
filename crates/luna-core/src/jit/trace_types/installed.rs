@@ -86,11 +86,11 @@ pub struct CompiledTrace {
     pub(crate) exit_tags: TArc<[ExitTag]>,
     pub(crate) global_tag_res_kind: TagResKind,
     pub(crate) entry_tags: TArc<[u8]>,
-    pub(crate) per_exit_tags: TArc<[(u32, TArc<[ExitTag]>)]>,
+    pub(crate) per_exit_tags: ExitTagTable,
     pub(crate) per_exit_inline: TArc<[InlineSideExit]>,
     pub(crate) exit_hit_counts: TArc<[TCellU32]>,
     pub(crate) exit_side_trace_ptrs: TArc<[TCellPtr]>,
-    pub(crate) tags_side_trace_ptrs: TArc<[Box<TCellPtr>]>,
+    pub(crate) tags_side_trace_ptrs: Box<[TCellPtr]>,
     pub(crate) global_side_trace_ptr: Box<TCellPtr>,
     /// The exit index (as `exit_hit_counts`) of each side trace wired to
     /// this trace, by the sentinel code the IR would OR into a side
@@ -159,10 +159,11 @@ impl CompiledTrace {
     ///   dispatcher moves registers in and out by them unchecked), that
     ///   lives as long as any Vm the trace is installed on.
     /// - The cells whose addresses that code holds are the ones `parts`
-    ///   owns: `exit_side_trace_ptrs`, `tags_side_trace_ptrs`,
-    ///   `global_side_trace_ptr`, the `side_trace_ptr` and `chain` of each
-    ///   of `per_exit_inline`, and the `tier_up` count; the side-trace
-    ///   cells are null.
+    ///   owns: `exit_side_trace_ptrs`, the cells of the
+    ///   `tags_side_trace_ptrs` slice (it is never resized, so they stay
+    ///   where they are), `global_side_trace_ptr`, the `side_trace_ptr`
+    ///   and `chain` of each of `per_exit_inline`, and the `tier_up` count;
+    ///   the side-trace cells are null.
     /// - The `tier_up` source, if any, was made for this trace by the
     ///   backend that compiled it, in the JIT storage of the Vm it is
     ///   installed on.

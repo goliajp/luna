@@ -9,7 +9,7 @@ use luna_core::__private::{CompiledTrace, CompiledTraceParts, ProtoTraceInternal
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
 use luna_core::jit::send_compat::{TArc, TCellPtr, TCellU32};
-use luna_core::jit::trace::{ExitTag, TagResKind};
+use luna_core::jit::trace::{ExitTag, ExitTagTable, TagResKind};
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
@@ -38,11 +38,11 @@ fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
         exit_tags,
         global_tag_res_kind: global_kind,
         entry_tags,
-        per_exit_tags: TArc::from(Vec::<(u32, TArc<[ExitTag]>)>::new()),
+        per_exit_tags: ExitTagTable::default(),
         per_exit_inline: TArc::from(Vec::new()),
         exit_hit_counts: TArc::from(vec![TCellU32::new(0u32)]),
         exit_side_trace_ptrs: TArc::from(vec![TCellPtr::null()]),
-        tags_side_trace_ptrs: TArc::from(Vec::new()),
+        tags_side_trace_ptrs: Box::new([]),
         global_side_trace_ptr: Box::new(TCellPtr::null()),
         is_inline_abort_close: false,
         dispatch_off_reason: None,
