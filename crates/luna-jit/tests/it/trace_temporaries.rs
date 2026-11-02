@@ -250,10 +250,11 @@ fn a_temporary_string_survives_a_collection_in_the_loop() {
     }
 }
 
-/// The first ops store into a table held in a temporary, which tests the
-/// table's read-only bit: the loop's copy of those ops goes on into the
-/// rest as the first pass's does, so one entry runs the whole loop.
-const STORE_BEFORE_THE_JOIN: &str = r#"
+/// The body stores into a table held in a temporary, which tests the
+/// table's read-only bit: the loop head's copy of the body tests it again
+/// and loops back as the first pass's does, so one entry runs the whole
+/// loop.
+const STORE_THROUGH_A_TEMPORARY: &str = r#"
 return function(n)
     local o = {t = {}}
     local last = 0
@@ -271,10 +272,10 @@ fn a_store_in_the_first_ops_does_not_stop_the_loop() {
     for v in DIALECTS {
         let mut vm = jit(v);
         let args = vec![vec![Value::Int(500)]; 3];
-        let got = calls(&mut vm, STORE_BEFORE_THE_JOIN, &args);
+        let got = calls(&mut vm, STORE_THROUGH_A_TEMPORARY, &args);
         let before = vm.trace_dispatched_count();
-        let again = calls(&mut vm, STORE_BEFORE_THE_JOIN, &args[..1]);
-        let want = calls(&mut Vm::new(v), STORE_BEFORE_THE_JOIN, &args);
+        let again = calls(&mut vm, STORE_THROUGH_A_TEMPORARY, &args[..1]);
+        let want = calls(&mut Vm::new(v), STORE_THROUGH_A_TEMPORARY, &args);
         assert_eq!(
             (got, again[0].clone()),
             (want.clone(), want[0].clone()),

@@ -1,17 +1,17 @@
 use super::*;
 
+mod buffered;
 mod cmp_table_checks;
 mod frames;
 mod op_checks;
-mod peel_point;
 mod scan;
 mod trace_ends;
 mod validate;
 mod value_checks;
+use buffered::*;
 use cmp_table_checks::*;
 use frames::*;
 use op_checks::*;
-use peel_point::*;
 use scan::*;
 use trace_ends::*;
 use validate::*;
@@ -70,11 +70,9 @@ pub(super) struct Plan<'r> {
     pub(super) downrec_idx_opt: Option<(usize, u32, usize, u8)>,
     pub(super) do_internal_loop: bool,
     pub(super) head_live: Vec<bool>,
-    /// The temporaries of a looping body (see `entry_live`).
+    /// The temporaries of a looping body (see `entry_live`): with any, the
+    /// first pass is lowered apart (see `peel`).
     pub(super) temps: Vec<bool>,
-    /// The ops before this one are lowered for the first pass apart (see
-    /// `peel`); 0 when the trace has no temporaries.
-    pub(super) peel_end: usize,
     pub(super) active_accum: Option<BufferedAccum>,
     pub(super) consumed_by_cmp: Vec<bool>,
     pub(super) cmp_dirs: Vec<Option<CmpDir>>,
@@ -201,7 +199,6 @@ pub(super) fn plan_trace<'r>(
     let HeadRegs {
         live: head_live,
         temps,
-        peel_end,
     } = entry_live(
         record,
         &op_offsets,
@@ -229,15 +226,6 @@ pub(super) fn plan_trace<'r>(
         &alt_paths,
         for_loop_idx_opt,
         opts.pre53 && !float_only,
-    );
-    let peel_end = peel_point(
-        record,
-        peel_end,
-        effective_end,
-        &math_folds,
-        active_accum.as_ref(),
-        &consumed_by_cmp,
-        &alt_paths,
     );
     validate_trace_ends(
         record,
@@ -278,7 +266,6 @@ pub(super) fn plan_trace<'r>(
             do_internal_loop,
             head_live,
             temps,
-            peel_end,
             active_accum,
             consumed_by_cmp,
             cmp_dirs,

@@ -211,7 +211,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
 }
 
 /// The edge back to the loop head, leaving the head-frame registers of
-/// kinds `tail`: the kinds the loop's copy of the first pass starts with
+/// kinds `tail`: the kinds the loop head's copy of the body starts with
 /// (see `peel`). With an iteration count to keep, the trace leaves at its
 /// head once the count is reached; the dispatcher then moves it to the
 /// optimizing tier.
