@@ -175,10 +175,12 @@ fn install(
         .collect::<Option<_>>()?;
     let code: Option<&Code> = optimized.or(img.code.as_ref().map(|(_, c)| c));
     if let Some(code) = code {
-        let vals: Vec<i64> = relocs.iter().map(|r| r.1).collect();
-        let bytes = code.relocated(&vals);
-        let entry = cs.baseline_code.place(&bytes).ok()?;
-        super::code_dump::dump_len("image", ct.head_pc, entry, bytes.len());
+        let n = code.bytes.len();
+        let entry = cs
+            .baseline_code
+            .place_with(n, |out| code.write_to(out, |k| relocs[k].1))
+            .ok()?;
+        super::code_dump::dump_len("image", ct.head_pc, entry, n);
         // SAFETY: the code is a copy of a trace compiled for code of this
         // content, with the `TraceFn` ABI, and this Vm's addresses written
         // where it held the compiling Vm's; it stays mapped until this Vm

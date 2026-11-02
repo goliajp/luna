@@ -28,13 +28,13 @@ pub(crate) struct Code {
 }
 
 impl Code {
-    /// The code with relocation `n` holding `vals[n]`.
-    pub(crate) fn relocated(&self, vals: &[i64]) -> Vec<u8> {
-        let mut out = self.bytes.to_vec();
+    /// Writes the code into `out` (of its length) with relocation `n`
+    /// holding `val(n)`.
+    pub(crate) fn write_to(&self, out: &mut [u8], val: impl Fn(usize) -> i64) {
+        out.copy_from_slice(&self.bytes);
         for &s in self.sites.iter() {
-            patch(&mut out, s, vals[s.n as usize]);
+            patch(out, s, val(s.n as usize));
         }
-        out
     }
 }
 

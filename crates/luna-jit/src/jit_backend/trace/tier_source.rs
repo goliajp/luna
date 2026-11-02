@@ -79,10 +79,12 @@ pub(crate) fn clif_tier_up(
 ) -> Option<TraceFn> {
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     if let Some(code) = src.image.as_ref().and_then(|i| i.optimized.get()) {
-        let vals: Vec<i64> = src.relocs.iter().map(|r| r.1).collect();
-        let bytes = code.relocated(&vals);
-        let entry = cs.baseline_code.place(&bytes).ok()?;
-        super::code_dump::dump_len("tier-up-image", head_pc, entry, bytes.len());
+        let n = code.bytes.len();
+        let entry = cs
+            .baseline_code
+            .place_with(n, |out| code.write_to(out, |k| src.relocs[k].1))
+            .ok()?;
+        super::code_dump::dump_len("tier-up-image", head_pc, entry, n);
         // SAFETY: as in `install`: the optimizing tier's code for this
         // trace, with this Vm's addresses written in
         return Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) });

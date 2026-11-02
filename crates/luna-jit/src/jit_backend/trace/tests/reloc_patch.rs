@@ -52,7 +52,9 @@ fn relocated_code_holds_the_new_addresses() {
     let (entry, code) = lir::assemble(&l, &mut arena, true).expect("baseline");
     let code: Code = code.expect("captured");
     assert_eq!(run(entry), want(A));
-    let placed = arena.place(&code.relocated(&B)).expect("place");
+    let placed = arena
+        .place_with(code.bytes.len(), |out| code.write_to(out, |k| B[k]))
+        .expect("place");
     assert_eq!(run(placed), want(B), "baseline code");
 
     // the optimizing tier's code, compiled from the same instructions
@@ -64,6 +66,8 @@ fn relocated_code_holds_the_new_addresses() {
     let (len, sites) = reloc::take_sites().expect("sites");
     // SAFETY: `f..f + len` is the function just finalized in `module`
     let code = unsafe { reloc::copy_code(f, len, sites) };
-    let placed = arena.place(&code.relocated(&B)).expect("place");
+    let placed = arena
+        .place_with(code.bytes.len(), |out| code.write_to(out, |k| B[k]))
+        .expect("place");
     assert_eq!(run(placed), want(B), "Cranelift code");
 }
