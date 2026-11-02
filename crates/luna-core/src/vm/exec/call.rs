@@ -58,7 +58,7 @@ macro_rules! lua_call {
         //
         // Gated on `trace_jit_enabled`, so the default
         // dispatch pays a single not-taken branch.
-        if $vm.jit.trace_enabled {
+        if $vm.jit.trace_enabled && !$vm.hot_paused_at(cl.proto, 0) {
             let proto = cl.proto;
             let c = proto.call_hot_count.get();
             if c < u32::MAX / 2 {

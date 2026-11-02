@@ -34,9 +34,11 @@ pub(crate) fn str_sub(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<L
 
 /// [`str_sub`] for compiled code of 5.1 and 5.2: also `None`, without a
 /// deopt, when they would collect before `lua_pushlstring` makes the
-/// string, for the interpreter to make the call.
+/// string, for the interpreter to make the call. That exit is for the
+/// collection, no guard failing: the call it resumes at makes the check.
 pub(crate) fn str_sub_checked(vm: &mut Vm, s: Gc<LuaStr>, i: i64, j: i64) -> Option<Gc<LuaStr>> {
     if vm.step_due() {
+        vm.jit.gc_exit = Some(crate::vm::exec::JIT_GC_OWN);
         return None;
     }
     str_sub(vm, s, i, j)

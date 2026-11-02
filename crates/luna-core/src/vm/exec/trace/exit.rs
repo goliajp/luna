@@ -52,6 +52,9 @@ impl Vm {
     ) {
         let synced = std::mem::take(&mut self.jit.step.synced_exit);
         let head_pc_val = ct.head_pc;
+        if synced || self.jit.gc_exit.is_some() {
+            self.gc_quiet_from(pre_frames, head_pc_val);
+        }
         let per_exit_inline = &ct.per_exit_inline;
         let global_tag_res_kind = ct.global_tag_res_kind;
         let max_stack = cl.proto.max_stack as usize;

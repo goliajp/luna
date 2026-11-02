@@ -65,6 +65,7 @@ mod state;
 mod state_guards;
 mod strings;
 mod tostring;
+pub(crate) use frame_ops::JIT_GC_OWN;
 pub(crate) use trace::step::TraceStep;
 pub(crate) mod host;
 pub(crate) mod jit;

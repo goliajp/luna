@@ -234,14 +234,9 @@ macro_rules! fast_loop_arms {
                 // recording at the body once the count reaches the
                 // threshold.
                 if $trace_on && $npc != $pc + 1 {
-                    let proto = cl!().proto;
-                    let c = proto.trace_hot_count.get();
-                    if c < u32::MAX / 2 {
-                        proto.trace_hot_count.set(c + 1);
-                    }
                     // the back-edge target is the body's first op
                     let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
-                    if $vm.jit.loop_hot_tick(&proto, target) {
+                    if $vm.back_edge_hot(cl!().proto, target) {
                         save!();
                         slow |= $vm.trace_start_at_back_edge(cl!(), base!(), target, None);
                     }
@@ -323,14 +318,9 @@ macro_rules! fast_loop_arms {
                     // numeric one; an iterator that returned nothing
                     // takes no back-edge
                     if $trace_on {
-                        let proto = cl!().proto;
-                        let c = proto.trace_hot_count.get();
-                        if c < u32::MAX / 2 {
-                            proto.trace_hot_count.set(c + 1);
-                        }
                         // the body's first op, right after TForPrep
                         let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
-                        if $vm.jit.loop_hot_tick(&proto, target) {
+                        if $vm.back_edge_hot(cl!().proto, target) {
                             save!();
                             $vm.trace_start_at_back_edge(cl!(), base!(), target, Some((a, $d var as u32)));
                         }

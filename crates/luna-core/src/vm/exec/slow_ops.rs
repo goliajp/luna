@@ -39,13 +39,8 @@ impl Vm {
                 self.add_pc(off);
                 // a loop's back-edge counts toward recording it, as a `Jmp`'s
                 if off < 0 && self.jit.trace_enabled {
-                    let proto = cl.proto;
-                    let c = proto.trace_hot_count.get();
-                    if c < u32::MAX / 2 {
-                        proto.trace_hot_count.set(c + 1);
-                    }
                     let target = self.pc_of_top();
-                    if self.jit.loop_hot_tick(&proto, target) {
+                    if self.back_edge_hot(cl.proto, target) {
                         self.trace_start_at_back_edge(cl, base, target, None);
                     }
                 }
