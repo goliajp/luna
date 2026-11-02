@@ -35,8 +35,18 @@ const MAX_SPARE: usize = 8;
 impl CodeArena {
     /// Copies `code` to fresh pages and makes them executable.
     pub(crate) fn place(&mut self, code: &[u8]) -> Result<*const u8, &'static str> {
+        self.place_with(code.len(), |out| out.copy_from_slice(code))
+    }
+
+    /// [`CodeArena::place`] for `n` bytes of code that `write` writes into
+    /// the pages (all `n` of them) before they turn executable.
+    pub(crate) fn place_with(
+        &mut self,
+        n: usize,
+        write: impl FnOnce(&mut [u8]),
+    ) -> Result<*const u8, &'static str> {
         let page = region::page::size();
-        let len = code.len().next_multiple_of(page);
+        let len = n.next_multiple_of(page);
         if len > self.left {
             let spare = if len <= CHUNK {
                 SPARE_CHUNKS
@@ -58,12 +68,12 @@ impl CodeArena {
         }
         let p = self.next as *mut u8;
         // SAFETY: `p..p + len` is writable memory of the last chunk that
-        // nothing has been placed in yet
+        // nothing has been placed in yet, and `n <= len`
         unsafe {
-            std::ptr::copy_nonoverlapping(code.as_ptr(), p, code.len());
+            write(std::slice::from_raw_parts_mut(p, n));
             region::protect(p, len, region::Protection::READ_EXECUTE)
                 .map_err(|_| "protecting code memory")?;
-            crate::jit_backend::code_memory::sync_icache(p as usize, code.len());
+            crate::jit_backend::code_memory::sync_icache(p as usize, n);
         }
         self.next += len;
         self.left -= len;
