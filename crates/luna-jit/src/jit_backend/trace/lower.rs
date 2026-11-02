@@ -213,6 +213,8 @@ fn emit_trace<E: Emit>(
     if let Some(lc) = loop_copy {
         emit_loop_copy(lw, pl, lc)?;
     }
+    // every back edge is emitted: the loop head has all its predecessors
+    lw.bcx.seal_block(lw.body_loop);
     let Lower {
         entry,
         bcx,

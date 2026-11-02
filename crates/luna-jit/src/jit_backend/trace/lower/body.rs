@@ -14,8 +14,8 @@ pub(super) struct BodyCx {
 
 /// The emit pass over the body: enters the loop head and lowers each
 /// recorded op up to `effective_end`; with temporaries, the first pass's
-/// copy of the first ops and the rest, leaving the loop head's copy for
-/// after the tail (see `peel`).
+/// copy of the body, leaving the loop head's copy for after the tail (see
+/// `peel`).
 pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<Option<LoopCopy>> {
     let n_regs = lw.entry.regs_full.len();
     let mut cx = BodyCx {
@@ -24,20 +24,26 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<Opt
         rewritten: rewritten_before_sync(n_regs, pl.record, pl, pl.effective_end),
     };
     checkpoint("pre:main-emit-loop");
-    let rest = match lw.peel {
-        Some(peel) => Some(emit_first_pass(lw, pl, cx, peel)?),
+    match lw.peel {
+        Some(peel) => emit_first_pass(lw, pl, cx, peel).map(Some),
         None => {
             lw.bcx.switch_to_block(lw.body_loop);
             // not sealed: the tail's back edge adds a second predecessor
-            commit_start(lw, pl);
-            emit_ops(lw, pl, &mut cx, 0..pl.effective_end)?;
-            None
+            emit_pass(lw, pl, &mut cx)?;
+            Some(None)
         }
-    };
+    }
+}
+
+/// Lowers every op of the body into the current block, from the commit at
+/// its start to the one at its end.
+pub(super) fn emit_pass<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, cx: &mut BodyCx) -> Option<()> {
+    commit_start(lw, pl);
+    emit_ops(lw, pl, cx, 0..pl.effective_end)?;
     commit_end(lw, pl, pl.effective_end);
     alt_join(lw, pl.effective_end);
     debug_assert!(lw.alt_joins.is_empty(), "every skip joins a recorded op");
-    Some(rest)
+    Some(())
 }
 
 /// Lowers the recorded ops `ops`.

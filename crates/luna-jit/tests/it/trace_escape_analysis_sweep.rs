@@ -126,10 +126,11 @@ fn callee_local_table_with_scalar_return_stays_sinkable() {
 /// that exit two of the trace's exits rebuild `t`.
 ///
 /// `u`'s register is a temporary (the body writes it before it reads
-/// it), so the ops up to its first write are lowered once more for the
-/// first pass, where it holds whatever it held before the loop: that copy
-/// has one exit of its own that rebuilds `t`, which leaves `u`'s register
-/// untouched, where the loop's copy writes back the pass before's `u`.
+/// it), so the body is lowered once more for the first pass, where it
+/// holds whatever it held before the loop: each copy has the three exits
+/// that rebuild `t`, and only the first pass's exit before `u` is first
+/// written leaves `u`'s register untouched, where the loop's copy writes
+/// back the pass before's `u`.
 #[test]
 fn sunk_table_is_rebuilt_at_the_exit_after_the_last_op() {
     use luna_core::jit::trace::ExitTag;
@@ -163,12 +164,13 @@ fn sunk_table_is_rebuilt_at_the_exit_after_the_last_op() {
         .map(|(_, tags)| &tags[..])
         .filter(|tags| tags[t_reg] == ExitTag::Table)
         .collect();
-    let first_pass = rebuilt
+    let u_untouched = rebuilt
         .iter()
         .filter(|tags| tags[u_reg] == ExitTag::Untouched)
         .count();
-    assert_eq!((rebuilt.len() - first_pass, first_pass), (3, 1));
-    assert_eq!(vm.trace_materialize_emit_count(), 3 + 1);
+    // the loop's copy and the first pass's
+    assert_eq!((rebuilt.len(), u_untouched), (3 + 3, 1));
+    assert_eq!(vm.trace_materialize_emit_count(), 3 + 3);
 }
 
 /// The exits a collection check takes are no failing guards: however
