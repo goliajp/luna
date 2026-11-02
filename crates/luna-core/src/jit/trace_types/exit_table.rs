@@ -7,9 +7,9 @@ use super::ExitTag;
 /// through [`tags(i)`](Self::tags).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExitTagTable {
-    /// `(cont_pc, end of this exit's tags in `tags`)` per exit; an exit's
-    /// tags start where the previous one's end.
-    index: Box<[(u32, u32)]>,
+    /// `(cont_pc, start, end)` per exit: its tags are `tags[start..end]`
+    /// (both bounds kept, so the dispatcher reads them in one go).
+    index: Box<[(u32, u32, u32)]>,
     tags: Box<[ExitTag]>,
 }
 
@@ -22,9 +22,10 @@ impl ExitTagTable {
         let mut index = Vec::new();
         let mut tags = Vec::new();
         for (pc, t) in exits {
+            let start = tags.len() as u32;
             tags.extend_from_slice(t);
             let end = u32::try_from(tags.len()).expect("exit tags past u32::MAX");
-            index.push((pc, end));
+            index.push((pc, start, end));
         }
         ExitTagTable {
             index: index.into(),
@@ -59,7 +60,8 @@ impl ExitTagTable {
     /// If `i >= self.len()`.
     #[inline]
     pub fn tags(&self, i: usize) -> &[ExitTag] {
-        &self.tags[self.start(i)..self.index[i].1 as usize]
+        let (_, start, end) = self.index[i];
+        &self.tags[start as usize..end as usize]
     }
 
     /// Exit `i`'s `(cont_pc, tags)`, or `None` past the end.
@@ -71,14 +73,6 @@ impl ExitTagTable {
     /// Each exit's `(cont_pc, tags)`, in order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (u32, &[ExitTag])> + '_ {
         self.into_iter()
-    }
-
-    #[inline]
-    fn start(&self, i: usize) -> usize {
-        match i {
-            0 => 0,
-            _ => self.index[i - 1].1 as usize,
-        }
     }
 }
 
