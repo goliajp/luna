@@ -22,7 +22,7 @@ public API) see [`security.md`](security.md) §5.
 | Metric | Count | Notes |
 |---|---:|---|
 | `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1907** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
-| of which in tests, benches and examples | 263 | files under a `tests/`, `benches/` or `examples/` directory, or whose name contains `tests` |
+| of which in tests, benches and examples | 261 | files under a `tests/`, `benches/` or `examples/` directory, or whose name contains `tests` |
 | **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; thirty-four more in `luna_core::__private`, which is not public API, see §5 |
 | **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
 | **`unsafe impl Send` / `Sync`** | 13 | see §5 |
@@ -32,7 +32,7 @@ the pattern CI counts (§4). Several `unsafe` blocks on one line count
 once; a block spread over several lines counts once; a comment that
 quotes the pattern counts too.
 
-Changes since the 1801 snapshot (net 98 more):
+Changes since the 1801 snapshot (net 106 more):
 
 - the stores into a table go through the table's handle (`Gc<Table>::set`,
   `set_int`, `try_set_existing`, `set_metatable`), which borrows the table
@@ -99,6 +99,17 @@ Changes since the 1801 snapshot (net 98 more):
   from safe code, so a storage vouches that clearing it leaves its code
   mapped; the null, Cranelift and LLVM storages are `unsafe impl`s (3),
   and a doc example shows one (1)
+- the optimizing tier compiles a looping trace as two functions, the
+  first pass and the loop, and the baseline code's back edge calls the
+  loop through the trace's loop cell: `__private::set_tier_up_loop`, which
+  writes that cell, is an `unsafe fn` (1), as is the backend's `set_loop`,
+  which calls it (2, with its block); the Cranelift tier-up calls
+  `set_loop` for a trace compiled now and for one taken from a shared
+  image (2) and copies the loop's code out for the image (1); the LLVM
+  tier calls it for its own loop (1); a Vm adopting a shared image writes
+  the image's loop into the cell (1). The block that writes a parent
+  trace's exit cell at tier-up moved from `dispatch.rs` to `counting.rs`
+  (no change)
 
 ## 2. Distribution by crate and module
 
@@ -111,7 +122,7 @@ Changes since the 1801 snapshot (net 98 more):
 | | `runtime/puc` | 138 | the model of PUC's allocations: the records it keeps over raw object headers (the parser's tables and frames a collection step marks, 5.1's environment records, the objects PUC makes and luna does not yet, the strings a load sets aside), its marking and sweeping of them, the 5.5 sizer |
 | | `__private` (`luna_core::__private`) | 66 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, the two table stores that leave the read-only test and the write barrier to the JIT's helpers, the table stores and write barriers that must be given the object's own heap, the VM's heap and the JIT state borrowed mutably, the tier-up source put back on a trace, the optimizing tier's loop function written into a trace's loop cell, the method entry a background compile hands over, the containers made on a context, the JIT entries that take register words (`jit_concat_regs`, `jit_gc_step`) or a string buffer (`jit_str_buf_acquire`), and the JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
 | | `runtime/table*` | 54 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
-| | `runtime/mem` | 92 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix, a push into room the caller made, the host's allocation function read without a lock (`send`) |
+| | `runtime/mem` | 93 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix, a push into room the caller made, the host's allocation function read without a lock (`send`) |
 | | `runtime` (other) | 43 | string headers and their trailing bytes, the value tag/payload encoding (and its copy as a tag byte and a payload word between references), closure upvalue storage |
 | | `vm/lib_*` | 32 | `Gc` handle mutation in the standard library (io handles, `table`, `debug`), the table writes that build each library, and on Windows the `ReadFile` call that reads a console as the MSVC C library does, the `CreateFileW`, `DeleteFileW` and `MoveFileExW` calls that open, remove and rename files as it does, the `MultiByteToWideChar` and `WideCharToMultiByte` calls that take names and environment text through the ANSI code page as it does, and the `File` made of the standard input handle for seeking it |
 | | `vm` (other) | 38 | userdata trampolines, typed natives, SendVm, async natives, call-stack walks |
@@ -119,7 +130,7 @@ Changes since the 1801 snapshot (net 98 more):
 | | `native_stack.rs` | 12 | reading the stack pointer register (x86_64, aarch64); reading the running thread's stack bounds from the OS (`pthread_getattr_np`, `pthread_get_stackaddr_np`, `GetCurrentThreadStackLimits`, and on glibc's and musl's main thread `getrlimit`, on glibc also `__libc_stack_end`) |
 | | `jit`, `frontend` | 26 | trace metadata handed to the backend; the backend traits a backend implements with `unsafe impl`, the constructors of a compiled trace from its parts, and the doc examples of both; the `isb` that lets a thread run code another thread wrote (aarch64); interned-name text |
 | | unit-test files under `src/` | 16 | tests that inspect raw layouts; a test `lua_Alloc` |
-| | `tests/` | 82 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc` (swapped from another thread too), the environment variables of the Windows file-name test |
+| | `tests/` | 80 | integration tests: a poisoning global allocator, async wakers, userdata internals, a raw write into a read-only table, the host C library's `%p`, a counting `lua_Alloc` (swapped from another thread too), the environment variables of the Windows file-name test |
 | `luna-jit` | `capi*` (not `capi/unit_tests.rs`) | 404 | the C API: raw `lua_State` pointers, C strings, `lua_Debug` and `luaL_Buffer` structs and C function pointers across the boundary (§3.7) |
 | | `jit_backend` (not its test files) | 79 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, `Send` and `Sync` for the record a baseline trace keeps to be lowered again for the optimizing tier, copying compiled code out to share it between Vms (the optimizing tier's loop function as well as its first pass), writing the optimizing tier's loop function into the trace's loop cell, which the baseline code reads at its back edge, the debug dump of a trace's machine code |
 | | unit-test files under `src/` (`capi/unit_tests.rs`, `jit_backend/chunk_tests_basic.rs`, `jit_backend/trace/tests/`) | 70 | tests that call compiled code or the `extern "C"` helpers directly |
