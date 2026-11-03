@@ -117,3 +117,22 @@ fn the_pause_ends_when_a_trace_is_entered() {
     assert!(vm.jit.step.quiet.is_none());
     vm.trace_step_leave(prev);
 }
+
+// during the pause the loop counts are parked untouched and the stand-in
+// table stays at the threshold in every slot; the end of the pause puts
+// them back
+#[test]
+fn the_loop_counts_are_parked_during_a_pause() {
+    let mut vm = vm();
+    let f = vm
+        .load(format!("mark(-1) {LOOP} return quiet()").as_bytes(), b"=t")
+        .unwrap();
+    let r = vm.call_value(Value::Closure(f), &[]).unwrap();
+    assert!(matches!(r[0], Value::Bool(true)));
+    assert!(vm.jit.loop_hot.iter().all(|&c| c == u32::MAX));
+    let parked = vm.jit.step.parked_hot.as_ref().expect("parked");
+    assert!(parked.iter().all(|&c| c == 0));
+    let prev = vm.trace_step_enter_at(1);
+    vm.trace_step_leave(prev);
+    assert!(vm.jit.loop_hot.iter().all(|&c| c == 0));
+}
