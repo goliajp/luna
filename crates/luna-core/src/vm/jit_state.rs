@@ -309,14 +309,11 @@ pub struct JitCounters {
     /// admit-by-`downrec_link` gate re-enters the trace (bounded by
     /// the dispatcher's `stitch_depth_remaining` checkpoint).
     pub downrec_dispatched: u64,
-    /// Number of times the dispatcher's
-    /// `is_downrec_sentinel` arm observed a guard MISS (the trace
-    /// invocation returned with `downrec_link.is_some()` but the
-    /// returned sentinel was NOT `SIDE_SENT_DOWNREC_CODE` — i.e.
-    /// the lowerer's `deopt_blk` arm fired, returning `head_pc` via
-    /// the GLOBAL sentinel). Bumped on the dispatcher side via the
-    /// post-invoke check so the caller-pc guard miss-rate can be
-    /// measured via `downrec_dispatched + downrec_deopt`.
+    /// Number of times a down-recursion trace went back to the
+    /// interpreter instead of stitching: its stitch return came after
+    /// the `stitch_depth_remaining` budget was spent, or a helper it
+    /// called raised. A caller-pc guard miss leaves through the
+    /// lowerer's `deopt_blk` as a plain exit and is not counted here.
     pub downrec_deopt: u64,
     /// Number of compiled traces whose
     /// `CompiledTrace.downrec_multi_way_count >= 2`. Bumped at the

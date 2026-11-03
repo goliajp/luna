@@ -67,10 +67,10 @@ impl Vm {
 
     /// See
     /// [`crate::vm::jit_state::JitCounters::downrec_deopt`]. Number of
-    /// times the dispatcher entered a `downrec_link`-bearing trace and
-    /// the trace returned via the lowerer's deopt block (caller-pc
-    /// guard MISS), or the dispatcher itself force-deopted via the
-    /// stitch-cycle checkpoint.
+    /// times a `downrec_link`-bearing trace went back to the
+    /// interpreter at its stitch: a helper it called raised, or the
+    /// dispatcher force-deopted via the stitch-cycle checkpoint (a
+    /// caller-pc guard miss returns as a plain exit, not counted).
     pub fn trace_downrec_deopt_count(&self) -> u64 {
         self.jit.counters.downrec_deopt
     }

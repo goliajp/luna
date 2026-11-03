@@ -41,9 +41,8 @@ pub(crate) use record::{FieldIcSnapshot, RecordedOp, TraceRecord};
 pub use self_link::SelfRecKind;
 pub(crate) use self_link::{DownRecClose, RetfRecord};
 pub use side_exit::{
-    DOWNREC_MULTI_WAY_GUARD_MAX, HOTEXIT_THRESHOLD, SIDE_SENT_DOWNREC_CODE, SIDE_SENT_KIND_DOWNREC,
-    SIDE_SENT_KIND_GLOBAL, SIDE_SENT_KIND_INLINE, SIDE_SENT_KIND_TAG, encode_side_sentinel,
-    is_downrec_sentinel, v2c_probe_enabled,
+    DOWNREC_MULTI_WAY_GUARD_MAX, HOTEXIT_THRESHOLD, SIDE_SENT_DOWNREC_CODE, is_downrec_sentinel,
+    v2c_probe_enabled,
 };
 pub(crate) use side_exit::{FrameMaterializeInfo, HotExitInfo, InlineSideExit};
 

@@ -15,8 +15,8 @@
 //!    dispatcher decodes through the side-trace marker and routes
 //!    via `CompiledTrace.downrec_link`.
 //!
-//! 3. A deopt path (store back caller window + return `head_pc` via
-//!    the GLOBAL sentinel).
+//! 3. A deopt path (store back caller window + return `head_pc` as a
+//!    plain exit).
 //!
 //! The lowerer populates `CompiledTrace.downrec_link =
 //! Some((0, record.head_pc))`. With a single candidate it keeps

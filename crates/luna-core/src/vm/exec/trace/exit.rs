@@ -61,12 +61,8 @@ impl Vm {
         let max_stack = cl.proto.max_stack as usize;
         let base_us = base as usize;
         // the exit's shape (`decode_exit_shape`): the upper 32 bits are the
-        // inline side exit's site + 1 (0 for any other exit). Bit 63 marks
-        // a return from a side trace the parent tail-called, bits 56..=62
-        // its key in `side_trace_cache`: the low bits are then decoded
-        // with the child's shapes, not the parent's
+        // inline side exit's site + 1 (0 for any other exit)
         let raw_ret = continuation_pc as u64;
-        let from_side_trace = (raw_ret >> 63) & 1 == 1;
         let src = self.trace_exit_source(cl, ct, raw_ret, &mut reg_state, base_us, &entry_tags);
         if src.ran && src.off > 0 {
             self.trace_exit_restore_inner(
@@ -188,8 +184,8 @@ impl Vm {
             CallFrame::Lua(fmut) => {
                 if crate::jit::trace::v2c_probe_enabled() {
                     eprintln!(
-                        "[v2c-set-pc] from_side={} sentinel_or_raw={:#018x} prev_pc={} new_cont_pc={} site_id={} frames.len={} pre_frames={} max_stack={}",
-                        from_side_trace,
+                        "[v2c-set-pc] side_ran={} raw={:#018x} prev_pc={} new_cont_pc={} site_id={} frames.len={} pre_frames={} max_stack={}",
+                        child_ran,
                         raw_ret,
                         fmut.pc,
                         cont_pc,

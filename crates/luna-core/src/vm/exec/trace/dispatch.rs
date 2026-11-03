@@ -118,10 +118,10 @@ impl Vm {
                     self.jit.counters.downrec_deopt += 1;
                     self.jit.suppress_downrec_admit_once = true;
                 }
-            } else if is_downrec_entry && downrec_close_exit(continuation_pc, head_pc_val) {
+            } else if is_downrec_entry && downrec_close_exit(continuation_pc) {
                 // a due step leaves through an exit, never the close
                 debug_assert!(self.jit.gc_exit.is_none());
-                self.trace_downrec_classify(continuation_pc, pre_frames);
+                self.trace_downrec_classify(pre_frames);
                 self.jit.reg_state_buf = reg_state;
                 self.jit.entry_tags_buf = entry_tags;
                 return true;

@@ -205,8 +205,7 @@ optimization.
   arguments of a vararg function a trace inlined), and is 16 bytes;
   `Vm::jit_push_inlined_frame` takes it as a fifth argument. AOT trace
   metadata is version 4. `CompiledTrace` has the fields `side_children`
-  (the side traces wired to its exits) and `inline_kinds`;
-  `side_trace_cache` maps a sentinel to an exit index.
+  (the side traces wired to its exits) and `inline_kinds`.
   `AdoptRequest::side_parent` and `AdoptedTrace::side_parent` carry the
   parent's prototype. `TraceCompiler` has the hidden methods
   `failure_known` and `publish_failure`. `TraceRecord` has the field
@@ -394,6 +393,11 @@ optimization.
   (with their `CompiledTrace` readers) and `InlineSideExit::side_trace_ptr`.
   A side trace wired to an exit is found through `exit_side_trace_ptrs`.
   Migration: drop those fields where the parts are built.
+- `jit::encode_side_sentinel` and `SIDE_SENT_KIND_INLINE`, `_TAG`,
+  `_GLOBAL` and `_DOWNREC` are gone: compiled code no longer returns
+  through a side trace, so the only return with bit 63 set is a
+  down-recursion stitch, whose code is `SIDE_SENT_DOWNREC_CODE` (test it
+  with `is_downrec_sentinel`).
 
 ### Changed
 

@@ -85,31 +85,10 @@ impl Vm {
                 t.parent_cell.set(cell as *const _ as *const u8);
             }
         }
-        // the exit's kind and index within it, laid out as
-        // `exit_hit_counts`: inline exits first, then per_exit_tags, then
-        // the global tail slot
-        let inline_n = parent_ct.per_exit_inline.len();
-        let tags_n = parent_ct.per_exit_tags.len();
-        let (sent_kind, sent_local) = if parent_exit_idx < inline_n {
-            (
-                crate::jit::trace::SIDE_SENT_KIND_INLINE,
-                parent_exit_idx as u32,
-            )
-        } else if parent_exit_idx < inline_n + tags_n {
-            let local = parent_exit_idx - inline_n;
-            (crate::jit::trace::SIDE_SENT_KIND_TAG, local as u32)
-        } else {
-            (crate::jit::trace::SIDE_SENT_KIND_GLOBAL, 0)
-        };
         self.jit.counters.side_trace_compiled += 1;
         // the dispatcher decodes the parent's exits for a side trace to run
         // from now on
         parent_ct.has_any_side_wired.set(true);
-        let sentinel = crate::jit::trace::encode_side_sentinel(sent_kind, sent_local);
-        parent_ct
-            .side_trace_cache
-            .borrow_mut()
-            .insert(sentinel, parent_exit_idx as u32);
         Some((parent_ct.clone(), parent_exit_idx as u32))
     }
 }

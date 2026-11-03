@@ -33,9 +33,8 @@ pub(super) fn emit_downrec_tail<E: Emit>(
     //      inlined frame and tail-call into the stitched child
     //      trace.
     //   4. brif ne → deopt_blk: safe deopt-tail — store
-    //      back caller window + return `head_pc` through the
-    //      GLOBAL sentinel; the dispatcher resumes interp at
-    //      head_pc.
+    //      back caller window + return `head_pc` as a plain
+    //      exit; the dispatcher resumes interp at head_pc.
     debug_assert!(
         dr_return_pc != 0,
         "DownRec recorder should never trip on a PC=0 Op::Return — Op::Return's PC is past the prologue"
@@ -117,10 +116,10 @@ pub(super) fn emit_downrec_tail<E: Emit>(
     //   raw_ret = (1u64 << 63)             // side-trace marker
     //           | ((DOWNREC_CODE as u64) << 56)
     //           | (record.head_pc as u64)
-    // (bit 63 set so the dispatcher's `from_side_trace` branch
-    // at `exec.rs:6354+` decodes through the sentinel switch).
+    // (bit 63 set: no other return sets it, so the dispatcher's
+    // `downrec_close_exit` tells the stitch from every exit).
     // The dispatcher's stitch arm reads `parent_ct.downrec_link` for the
-    // stitch target rather than looking up via `side_trace_cache`.
+    // stitch target.
     lw.bcx.switch_to_block(stitch_blk);
     lw.bcx.seal_block(stitch_blk);
     let raw_ret = (1u64 << 63) | ((SIDE_SENT_DOWNREC_CODE as u64) << 56) | (record.head_pc as u64);

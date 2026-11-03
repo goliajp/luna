@@ -205,7 +205,7 @@ pub struct CompiledTraceParts {
     /// emits a caller-pc guard at the close site that, on guard hit,
     /// returns the [`SIDE_SENT_DOWNREC_CODE`] sentinel — and on guard
     /// miss, falls back to the safe deopt-tail (store back caller
-    /// window + return `head_pc` via GLOBAL sentinel).
+    /// window + return `head_pc` as a plain exit).
     ///
     /// Field semantics:
     /// - `.0` = placeholder trace id. At compile time the trace
@@ -231,19 +231,18 @@ pub struct CompiledTraceParts {
     // `iconst(I64, _)` constants — none of these reach the runtime as
     // a pointer dereference. The stitch HIT path returns the DOWNREC
     // sentinel (a constant `u64`) and the deopt path stores back the
-    // caller window + returns via the GLOBAL sentinel; neither path
-    // dereferences any external trace's mcode. `downrec_link =
-    // Some((0, head_pc))` is a `(u32, u32)` pair, `Copy`. No
-    // `Box<Cell<*const u8>>` (the InlineSideExit / TAG / GLOBAL slot
-    // shape) is involved.
+    // caller window and returns the head pc; neither path dereferences
+    // any external trace's mcode. `downrec_link = Some((0, head_pc))` is
+    // a `(u32, u32)` pair, `Copy`. No cell holding a code address is
+    // involved.
     //
     // Consequence: this trace's mcode lifetime is governed solely by
     // its own `Rc<CompiledTrace>` strong-count (held by `proto.traces`
     // for as long as the proto lives). There is no cross-trace mcode
     // dependency, so the "child trace fn-ptr stale after parent
     // recompile" hazard doesn't apply — it would surface only if a
-    // tail-call-into-target stitch wired `Rc<CompiledTrace>` /
-    // `Weak<CompiledTrace>` into `parent_ct.side_trace_cache`.
+    // tail-call-into-target stitch held an `Rc<CompiledTrace>` /
+    // `Weak<CompiledTrace>` of its target.
     /// Number of distinct caller_pc candidates the
     /// lowerer baked into the multi-way guard at the
     /// `TraceEnd::DownRec` close. `0` for every trace that doesn't
