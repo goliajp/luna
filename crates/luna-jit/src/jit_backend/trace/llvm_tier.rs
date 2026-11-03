@@ -136,24 +136,7 @@ pub(crate) fn tier_up_llvm(
 ) -> Option<TraceFn> {
     let source = luna_core::__private::take_tier_source(ct)?;
     let source = match source.downcast::<Pending>() {
-        Ok(mut p) => {
-            if p.ready.load(Ordering::Acquire) {
-                let c = p.done.lock().expect(POISON).take()?;
-                // written on the compile thread
-                luna_core::jit::code_fence();
-                let entry = install_tier(storage, ct, c)?;
-                super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
-                return Some(entry);
-            }
-            if p.due.load(Ordering::Relaxed)
-                && let Some(src) = p.source.take()
-            {
-                hand_over(storage, &p, src, std::time::Instant::now());
-            }
-            // SAFETY: the pending compile of the source just taken from `ct`
-            unsafe { luna_core::__private::put_tier_source(ct, p) };
-            return None;
-        }
+        Ok(p) => return pending(storage, ct, p),
         Err(s) => s.downcast::<share::TierSource>().ok()?,
     };
     let Some(delay) = delay else {
@@ -185,6 +168,32 @@ pub(crate) fn tier_up_llvm(
     // SAFETY: the pending compile of the source taken from `ct` above
     unsafe { luna_core::__private::put_tier_source(ct, Box::new(p)) };
     entry
+}
+
+/// A later entry of a trace whose LLVM compile is pending: LLVM's code
+/// once it is ready, else `None` (handing the source to the compile thread
+/// once `delay` has passed).
+fn pending(
+    storage: &mut dyn luna_core::__private::JitStorage,
+    ct: &CompiledTrace,
+    mut p: Box<Pending>,
+) -> Option<TraceFn> {
+    if p.ready.load(Ordering::Acquire) {
+        let c = p.done.lock().expect(POISON).take()?;
+        // written on the compile thread
+        luna_core::jit::code_fence();
+        let entry = install_tier(storage, ct, c)?;
+        super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
+        return Some(entry);
+    }
+    if p.due.load(Ordering::Relaxed)
+        && let Some(src) = p.source.take()
+    {
+        hand_over(storage, &p, src, std::time::Instant::now());
+    }
+    // SAFETY: the pending compile of the source just taken from `ct`
+    unsafe { luna_core::__private::put_tier_source(ct, p) };
+    None
 }
 
 /// Has the compile thread compile `src` for `p`.
