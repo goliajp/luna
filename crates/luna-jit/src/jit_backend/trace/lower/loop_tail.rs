@@ -73,7 +73,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         float_only,
         ..
     } = *pl;
-    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
+    let reg_state = lw.entry.reg_state;
     // the index, the count or limit, the step, and the loop variable when
     // it is a copy of the index
     let v55 = rop.inst.op().plain_for_loop() == Op::ForLoop55;
@@ -146,9 +146,6 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         reg_state,
         rop.pc + 1,
         lw.flush_ctx.as_ref(),
-        0i64,
-        trace_fn_sig_ref,
-        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
     );
 
     // continue branch: step the index and go back.
@@ -202,9 +199,6 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
             reg_state,
             body_pc,
             lw.flush_ctx.as_ref(),
-            0i64,
-            trace_fn_sig_ref,
-            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     }
     Some(())

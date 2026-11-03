@@ -84,7 +84,6 @@ impl Meta {
                 head_resume_pc: *head_resume_pc,
                 exit_tags: arc(tags),
                 chain: TArc::from(&chain[..]),
-                side_trace_ptr: Box::new(TCellPtr::null()),
             })
             .collect();
         let total = per_exit_inline.len() + self.per_exit_tags.len() + 1;
@@ -101,9 +100,6 @@ impl Meta {
             exit_tags: arc(&self.exit_tags),
             global_tag_res_kind: self.global_tag_res_kind,
             entry_tags: TArc::from(&self.entry_tags[..]),
-            tags_side_trace_ptrs: (0..self.per_exit_tags.len())
-                .map(|_| TCellPtr::null())
-                .collect(),
             per_exit_tags: self.per_exit_tags.clone(),
             per_exit_inline: per_exit_inline.into(),
             exit_hit_counts: (0..total)
@@ -114,7 +110,6 @@ impl Meta {
                 .map(|_| TCellPtr::null())
                 .collect::<Vec<_>>()
                 .into(),
-            global_side_trace_ptr: Box::new(TCellPtr::null()),
             is_inline_abort_close: self.is_inline_abort_close,
             dispatch_off_reason: self.dispatch_off_reason,
             sinkable_sites_seen: self.sinkable_sites_seen,

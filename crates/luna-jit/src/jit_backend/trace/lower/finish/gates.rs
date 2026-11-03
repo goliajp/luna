@@ -10,13 +10,7 @@ pub(super) fn apply_tail_kinds_and_gates(
     mut current_kinds: Vec<RegKind>,
     mut dispatchable: bool,
     mut dispatch_off_reason: Option<&'static str>,
-    per_exit_inline_vec: &[(
-        u32,
-        u32,
-        Vec<RegKind>,
-        TArc<[FrameMaterializeInfo]>,
-        Box<TCellPtr>,
-    )],
+    per_exit_inline_vec: &[(u32, u32, Vec<RegKind>, TArc<[FrameMaterializeInfo]>)],
     sunk_alloc_seen: u32,
 ) -> (Vec<RegKind>, bool, Option<&'static str>) {
     let Plan {

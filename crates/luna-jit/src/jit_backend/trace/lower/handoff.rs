@@ -99,8 +99,5 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         reg_state,
         record.head_pc,
         lw.flush_ctx.as_ref(),
-        0i64,
-        sig,
-        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
     );
 }

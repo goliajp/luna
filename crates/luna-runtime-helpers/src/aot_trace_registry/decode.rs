@@ -65,7 +65,6 @@ pub(super) fn per_exit_inline(
             head_resume_pc: ent.head_resume_pc,
             exit_tags: tags.into(),
             chain: chain_vec.into(),
-            side_trace_ptr: Box::new(luna_core::jit::send_compat::TCellPtr::null()),
         });
     }
     if !inline_ok {

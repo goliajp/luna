@@ -4,7 +4,6 @@ use super::*;
 pub(super) struct EntryRegs {
     pub(super) reg_state: Value,
     pub(super) trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
-    pub(super) global_side_trace_box: Box<TCellPtr>,
     pub(super) regs_full: Vec<Variable>,
     pub(super) tforcall_tag_var: Variable,
     pub(super) tforcall_val_tag_var: Variable,
@@ -57,14 +56,6 @@ pub(super) fn emit_entry<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> EntryRegs {
         sig.returns.push(AbiParam::new(types::I64));
         bcx.import_signature(sig)
     };
-    // singleton GLOBAL side-trace cell shared by
-    // every non-INLINE / non-TAG callsite (clean-tail, Call
-    // truncation, ForLoop / TForLoop exits, generic deopts). Each
-    // such callsite bakes this Box's heap address into its IR.
-    // Transported into [`CompiledTraceParts::global_side_trace_ptr`] at
-    // emit end without moving (Box's heap allocation stays put).
-    let global_side_trace_box: Box<TCellPtr> = Box::new(TCellPtr::null());
-    let _global_side_trace_cell_addr = (&*global_side_trace_box) as *const TCellPtr as i64;
 
     // `regs_full` is sized to `window_size_us`, big
     // enough for every inlined frame's register window. Slots
@@ -141,7 +132,6 @@ pub(super) fn emit_entry<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> EntryRegs {
     EntryRegs {
         reg_state,
         trace_fn_sig_ref,
-        global_side_trace_box,
         regs_full,
         tforcall_tag_var,
         tforcall_val_tag_var,

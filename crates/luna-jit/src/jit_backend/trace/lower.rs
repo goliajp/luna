@@ -259,7 +259,6 @@ fn emit_trace<E: Emit>(
             materialize_emit_count,
             closure_seen,
             escape,
-            global_side_trace_box: entry.global_side_trace_box,
             downrec_link_for_compiled,
             downrec_multi_way_count_for_compiled,
             tier_count,

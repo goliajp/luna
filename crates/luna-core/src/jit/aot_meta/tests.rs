@@ -229,7 +229,6 @@ fn v3_per_exit_inline_round_trip_from_live() {
             vec![ExitTag::Int, ExitTag::Float, ExitTag::Untouched].into_boxed_slice(),
         ),
         chain: crate::jit::send_compat::TArc::from(chain.into_boxed_slice()),
-        side_trace_ptr: Box::new(crate::jit::send_compat::TCellPtr::null()),
     };
     let entry = PerExitInlineEntry::from_inline_side_exit(&live);
     assert_eq!(entry.cont_pc, 42);

@@ -18,7 +18,7 @@ pub(super) fn emit_tail<E: Emit>(
         do_internal_loop,
         ..
     } = *pl;
-    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
+    let reg_state = lw.entry.reg_state;
     let Lower { body_loop, .. } = *lw;
     // --- tail.
     //
@@ -69,9 +69,6 @@ pub(super) fn emit_tail<E: Emit>(
             reg_state,
             record.ops[call_idx].pc,
             lw.flush_ctx.as_ref(),
-            0i64,
-            trace_fn_sig_ref,
-            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     } else if let Some(inline_abort_idx) = inline_abort_idx_opt {
         // InlineAbort: emit-up-to-i, then store back
@@ -85,9 +82,6 @@ pub(super) fn emit_tail<E: Emit>(
             reg_state,
             record.ops[inline_abort_idx].pc,
             lw.flush_ctx.as_ref(),
-            0i64,
-            trace_fn_sig_ref,
-            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     } else if let Some(return_idx) = return_idx_opt {
         // Return0/Return1 at depth=0: caller frame
@@ -102,9 +96,6 @@ pub(super) fn emit_tail<E: Emit>(
             reg_state,
             record.ops[return_idx].pc,
             lw.flush_ctx.as_ref(),
-            0i64,
-            trace_fn_sig_ref,
-            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     } else if let Some(for_loop_idx) = for_loop_idx_opt {
         emit_loop_tail(lw, pl, for_loop_idx)?;
@@ -119,9 +110,6 @@ pub(super) fn emit_tail<E: Emit>(
             reg_state,
             record.head_pc,
             lw.flush_ctx.as_ref(),
-            0i64,
-            trace_fn_sig_ref,
-            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     }
     // Seal the loop head now that both predecessors are emitted

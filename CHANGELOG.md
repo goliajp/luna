@@ -383,15 +383,17 @@ optimization.
   `CompiledTraceParts::per_exit_tags` is an `ExitTagTable` (it was
   `TArc<[(u32, TArc<[ExitTag]>)]>`) and `CompiledTrace::per_exit_tags`
   returns `&ExitTagTable`; `decode_exit_shape` and
-  `CompiledTrace::from_aot_meta` take it the same way.
-  `CompiledTraceParts::tags_side_trace_ptrs` is a `Box<[TCellPtr]>` (it
-  was `TArc<[Box<TCellPtr>]>`) and its reader returns `&[TCellPtr]`.
+  `CompiledTrace::from_aot_meta` take it the same way. Its iterator is
+  `ExitTagIter`, exported beside it.
   Migration: iterate with `for (pc, tags) in ct.per_exit_tags()` (each
   item is `(u32, &[ExitTag])`), index with `table.cont_pc(i)` and
   `table.tags(i)` (or `table.get(i)`), and build one with
-  `ExitTagTable::from_exits(exits.iter().map(|(pc, t)| (*pc, &t[..])))`;
-  make the side-trace cells with
-  `(0..n).map(|_| TCellPtr::null()).collect()`.
+  `ExitTagTable::from_exits(exits.iter().map(|(pc, t)| (*pc, &t[..])))`.
+- The side-trace cells no compiled code read are gone:
+  `CompiledTraceParts::tags_side_trace_ptrs` and `global_side_trace_ptr`
+  (with their `CompiledTrace` readers) and `InlineSideExit::side_trace_ptr`.
+  A side trace wired to an exit is found through `exit_side_trace_ptrs`.
+  Migration: drop those fields where the parts are built.
 
 ### Changed
 

@@ -15,7 +15,7 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
         window_size_us,
         ..
     } = *pl;
-    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
+    let reg_state = lw.entry.reg_state;
     let RuntimeHelpers {
         suppress_admit_id,
         materialize_id,
@@ -67,15 +67,9 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             &mut lw.defined_aot_data,
         );
         lw.materialize_emit_count += mat_count;
-        let side_box: Box<TCellPtr> = Box::new(TCellPtr::null());
         let chain_for_helper = chain_rc.clone();
-        lw.per_exit_inline_vec.push((
-            side_exit_pc,
-            head_resume_pc,
-            kinds_snapshot,
-            chain_rc,
-            side_box,
-        ));
+        lw.per_exit_inline_vec
+            .push((side_exit_pc, head_resume_pc, kinds_snapshot, chain_rc));
         let n_arg = lw.bcx.ins().iconst(types::I64, chain_len);
         let ptr_arg = emit_chain_ptr_arg(
             &mut lw.bcx,
@@ -96,8 +90,6 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             site_idx,
             side_exit_pc,
             lw.flush_ctx.as_ref(),
-            0i64,
-            trace_fn_sig_ref,
         );
     } else {
         let tag_side_local = lw
@@ -128,7 +120,6 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             record.head_pc,
             tag_side_local,
             lw.flush_ctx.as_ref(),
-            trace_fn_sig_ref,
         );
     }
 }

@@ -140,22 +140,6 @@ pub struct CompiledTraceParts {
     /// `Proto.traces: RefCell<Vec<CompiledTrace>>` on the runtime
     /// path). Adding this field doesn't tighten that.
     pub exit_side_trace_ptrs: TArc<[TCellPtr]>,
-    /// Per-`per_exit_tags`-entry side-trace cell.
-    /// Same length as `per_exit_tags`; the IR at the corresponding
-    /// `emit_store_back_and_return_pc` callsite (immediately after
-    /// `per_exit_kinds.push`) bakes this cell's heap address. Same
-    /// semantics as [`InlineSideExit::side_trace_ptr`] but with
-    /// `kind = SIDE_SENT_KIND_TAG` and `local = tag_idx`. The slice is
-    /// never resized, so each cell keeps its address while the trace lives.
-    pub tags_side_trace_ptrs: Box<[TCellPtr]>,
-    /// Singleton cell shared by every GLOBAL-kind
-    /// callsite (clean-tail return, Call truncation, ForLoop /
-    /// TForLoop exits, generic err deopts, etc.). All such sites'
-    /// IR bakes the same heap address; the close handler writes
-    /// the child entry ptr here for `parent_exit_idx ==
-    /// per_exit_inline.len() + per_exit_tags.len()` (the
-    /// `exit_hit_counts` layout's last slot).
-    pub global_side_trace_ptr: Box<TCellPtr>,
     /// `true` iff this trace closes at a
     /// `TraceEnd::InlineAbort` (depth>0 op the lowerer can't
     /// continue past: depth past `MAX_INLINE_DEPTH`, non-self

@@ -48,11 +48,7 @@ pub(super) fn emit_step_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;
-    let (reg_state, trace_fn_sig_ref, body_loop) = (
-        lw.entry.reg_state,
-        lw.entry.trace_fn_sig_ref,
-        lw.body_start(),
-    );
+    let (reg_state, body_loop) = (lw.entry.reg_state, lw.body_start());
     lw.bcx.switch_to_block(block);
     lw.bcx.seal_block(block);
     let entry_stored = entry_values(lw);
@@ -79,7 +75,6 @@ pub(super) fn emit_step_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         record.head_pc,
         tags_idx,
         lw.flush_ctx.as_ref(),
-        trace_fn_sig_ref,
     );
 }
 

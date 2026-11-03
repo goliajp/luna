@@ -27,19 +27,6 @@ pub struct InlineSideExit {
     /// is overwritten to the side-exit PC at compile time so the
     /// helper stays PC-agnostic.
     pub chain: TArc<[FrameMaterializeInfo]>,
-    /// Raw `*const u8` (entry fn pointer of a child
-    /// side trace) for THIS inline cmp@d>0 side-exit. The IR at the
-    /// `emit_store_back_and_return_site` call site loads this cell
-    /// BEFORE the encoded-return path: non-null → store-back +
-    /// `call_indirect` into the child + OR sentinel(INLINE, site_idx)
-    /// into bits 56..=63 of the child's return + return; null → run
-    /// the existing encoded-return path.
-    ///
-    /// `Box<Cell<*const u8>>` (not embedded Cell) so the cell's HEAP
-    /// address is stable for the IR's `iconst`-baked load. Moving
-    /// the Box (e.g. into `Rc<[]>` via `.collect`) doesn't move the
-    /// cell. Single-threaded Vm so `Cell` is sound.
-    pub side_trace_ptr: Box<TCellPtr>,
 }
 
 /// Hot side-exit detection threshold. Exits whose hit

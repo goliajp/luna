@@ -9,7 +9,7 @@ impl CompiledTrace {
     ///
     /// Builds a [`CompiledTrace`] from the fields the AOT meta blob
     /// carries plus a deploy-resolved trace fn pointer.
-    /// `per_exit_inline`, `tags_side_trace_ptrs`,
+    /// `per_exit_inline`,
     /// `side_trace_cache`, `body_writes` default to empty / null;
     /// `exit_hit_counts` / `exit_side_trace_ptrs` are sized to
     /// `per_exit_tags.len() + 1` (each typed-exit slot + the global
@@ -63,14 +63,6 @@ impl CompiledTrace {
             let v: Vec<TCellPtr> = (0..total_slots).map(|_| TCellPtr::null()).collect();
             v.into()
         };
-        // Parallel `tags_side_trace_ptrs` slice — one cell per
-        // per_exit_tags entry, all null. The AOT install never wires
-        // a side trace (no recorder fires on this parent), so the
-        // cells stay null for the binary's lifetime; sizing matches
-        // the dispatcher's `per_exit_kinds.len() == tags_side_trace
-        // _ptrs.len()` invariant the close handler asserts.
-        let tags_side_trace_ptrs: Box<[TCellPtr]> =
-            (0..per_exit_tags.len()).map(|_| TCellPtr::null()).collect();
         let parts = CompiledTraceParts {
             head_pc,
             entry,
@@ -84,8 +76,6 @@ impl CompiledTrace {
             per_exit_inline: TArc::from(per_exit_inline),
             exit_hit_counts,
             exit_side_trace_ptrs,
-            tags_side_trace_ptrs,
-            global_side_trace_ptr: Box::new(TCellPtr::null()),
             is_inline_abort_close: false,
             dispatch_off_reason: None,
             sinkable_sites_seen: 0,
