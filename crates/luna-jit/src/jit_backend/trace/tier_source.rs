@@ -87,36 +87,14 @@ pub(crate) fn clif_tier_up(
     if let Some(img) = &src.image
         && let Some(code) = img.optimized.get()
     {
-        let place = |cs: &mut CraneliftJitStorage, code: &reloc::Code| {
-            cs.baseline_code
-                .place_with(code.bytes.len(), |out| {
-                    code.write_to(out, |k| src.relocs[k].1)
-                })
-                .ok()
-        };
-        if at_loop {
-            let p = place(cs, img.optimized_loop.get()?)?;
-            // SAFETY: the image's optimizing tier's loop of this trace, with
-            // this Vm's addresses written in
-            unsafe { set_loop(ct, p) };
-        }
-        let entry = place(cs, code)?;
-        super::code_dump::dump_len("tier-up-image", head_pc, entry, code.bytes.len());
-        // SAFETY: as in `install`: the optimizing tier's code for this
-        // trace, with this Vm's addresses written in
-        return Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) });
+        return from_image(cs, src, img, code, ct);
     }
     let (lir, relocs) = src.optimizing_lir();
     // the loop first, each function in a module of its own
     let looped = match at_loop {
-        true => Some(compile_one(cs, &lir, &relocs, lir::Start::Loop, head_pc)?),
+        true => Some(compile_loop(cs, &lir, &relocs, ct)?),
         false => None,
     };
-    if let Some((p, _)) = looped {
-        // SAFETY: the loop `define_clif` compiled for this trace, in the
-        // module the storage now keeps
-        unsafe { set_loop(ct, p) };
-    }
     let start = if at_loop {
         lir::Start::FirstPass
     } else {
@@ -133,21 +111,80 @@ pub(crate) fn clif_tier_up(
             Some((p, Some((n, s)))) => Some(unsafe { reloc::copy_code(p, n, s) }),
             _ => None,
         };
-        let size = code.bytes.len() + lcode.as_ref().map_or(0, |c| c.bytes.len());
-        let ok = match lcode {
-            Some(l) => img.optimized_loop.set(l).is_ok(),
-            None => !at_loop,
-        };
-        if ok
-            && img.optimized.set(code).is_ok()
-            && let Some(engine) = &cs.engine
-        {
-            engine.cache().grew(size);
-        }
+        publish(cs, img, code, lcode, at_loop);
     }
     // SAFETY: `define_clif` declares the `TraceFn` signature, `(i64) -> i64`
     // in the platform calling convention, and `storage` now owns the module
     Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) })
+}
+
+/// The optimizing tier's code a shared image already holds for the trace
+/// `src` holds, placed in this Vm's code memory: the entry, and the loop
+/// into `ct`'s loop cell for a trace with one.
+fn from_image(
+    cs: &mut CraneliftJitStorage,
+    src: &TierSource,
+    img: &TraceImage,
+    code: &reloc::Code,
+    ct: &CompiledTrace,
+) -> Option<TraceFn> {
+    let head_pc = ct.head_pc();
+    let at_loop = src.lir.loop_entry.is_some();
+    let place = |cs: &mut CraneliftJitStorage, code: &reloc::Code| {
+        cs.baseline_code
+            .place_with(code.bytes.len(), |out| {
+                code.write_to(out, |k| src.relocs[k].1)
+            })
+            .ok()
+    };
+    if at_loop {
+        let p = place(cs, img.optimized_loop.get()?)?;
+        // SAFETY: the image's optimizing tier's loop of this trace, with
+        // this Vm's addresses written in
+        unsafe { set_loop(ct, p) };
+    }
+    let entry = place(cs, code)?;
+    super::code_dump::dump_len("tier-up-image", head_pc, entry, code.bytes.len());
+    // SAFETY: as in `install`: the optimizing tier's code for this
+    // trace, with this Vm's addresses written in
+    Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) })
+}
+
+/// The optimizing tier's code just compiled, and the loop beside it, kept
+/// in the shared image `img` for other Vms to take up.
+fn publish(
+    cs: &CraneliftJitStorage,
+    img: &TraceImage,
+    code: reloc::Code,
+    lcode: Option<reloc::Code>,
+    at_loop: bool,
+) {
+    let size = code.bytes.len() + lcode.as_ref().map_or(0, |c| c.bytes.len());
+    let ok = match lcode {
+        Some(l) => img.optimized_loop.set(l).is_ok(),
+        None => !at_loop,
+    };
+    if ok
+        && img.optimized.set(code).is_ok()
+        && let Some(engine) = &cs.engine
+    {
+        engine.cache().grew(size);
+    }
+}
+
+/// The optimizing tier's loop of the trace `ct`, compiled from `lir` in a
+/// module `cs` keeps and put in `ct`'s loop cell.
+fn compile_loop(
+    cs: &mut CraneliftJitStorage,
+    lir: &lir::Lir,
+    relocs: &[(RelocKind, i64)],
+    ct: &CompiledTrace,
+) -> Option<(*const u8, Option<(usize, Vec<reloc::Site>)>)> {
+    let l = compile_one(cs, lir, relocs, lir::Start::Loop, ct.head_pc())?;
+    // SAFETY: the loop `define_clif` compiled for this trace, in the module
+    // the storage now keeps
+    unsafe { set_loop(ct, l.0) };
+    Some(l)
 }
 
 /// The function `start` names compiled by Cranelift from `lir` in a module
