@@ -160,7 +160,7 @@ fn sunk_table_is_rebuilt_at_the_exit_after_the_last_op() {
     let exits = traces[0].per_exit_tags();
     let rebuilt: Vec<&[ExitTag]> = exits
         .iter()
-        .map(|(_, tags)| &tags[..])
+        .map(|(_, tags)| tags)
         .filter(|tags| tags[t_reg] == ExitTag::Table)
         .collect();
     let first_pass = rebuilt
