@@ -129,6 +129,7 @@ pub(crate) fn clif_tier_up(
         // the storage keeps mapped; so is the loop's
         let code = unsafe { reloc::copy_code(ptr, len, sites) };
         let lcode = match looped {
+            // SAFETY: as for `code`: the loop's function, just finalized too
             Some((p, Some((n, s)))) => Some(unsafe { reloc::copy_code(p, n, s) }),
             _ => None,
         };

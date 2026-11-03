@@ -143,7 +143,9 @@ pub unsafe fn put_tier_source(
 /// The cell holding the optimizing tier's loop of the trace `t` moves on
 /// (null until compiled), whose address the baseline code reads at its
 /// back edge.
-pub fn tier_up_loop_cell(t: &crate::jit::trace_types::tier_up::TierUp) -> &crate::jit::send_compat::TCellPtr {
+pub fn tier_up_loop_cell(
+    t: &crate::jit::trace_types::tier_up::TierUp,
+) -> &crate::jit::send_compat::TCellPtr {
     &t.looped
 }
 
