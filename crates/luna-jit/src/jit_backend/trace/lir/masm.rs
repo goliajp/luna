@@ -186,3 +186,28 @@ pub(crate) trait Masm {
     /// The buffers back, `bytes` holding the code.
     fn finish(self) -> Bufs;
 }
+
+/// The single ALU instruction an integer [`BinOp`] is.
+pub(super) fn alu_of(op: BinOp) -> Alu {
+    match op {
+        BinOp::Add => Alu::Add,
+        BinOp::Sub => Alu::Sub,
+        BinOp::Mul => Alu::Mul,
+        BinOp::And => Alu::And,
+        BinOp::Or => Alu::Or,
+        BinOp::Xor => Alu::Xor,
+        BinOp::Shl => Alu::Shl,
+        BinOp::Ushr => Alu::Lshr,
+        BinOp::Sshr => Alu::Ashr,
+        BinOp::Sdiv => Alu::Sdiv,
+        BinOp::Udiv => Alu::Udiv,
+        BinOp::Umulhi => Alu::Umulhi,
+        BinOp::Smin | BinOp::Smax | BinOp::Fadd | BinOp::Fsub | BinOp::Fmul | BinOp::Fdiv => {
+            unreachable!("not a single ALU instruction")
+        }
+    }
+}
+
+pub(super) fn is_float_op(op: BinOp) -> bool {
+    matches!(op, BinOp::Fadd | BinOp::Fsub | BinOp::Fmul | BinOp::Fdiv)
+}
