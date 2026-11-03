@@ -1,6 +1,7 @@
 use super::*;
 
 mod cmp_table_checks;
+mod edges;
 mod frames;
 mod next_pc;
 mod op_checks;
@@ -10,6 +11,7 @@ mod trace_ends;
 mod validate;
 mod value_checks;
 use cmp_table_checks::*;
+use edges::*;
 use frames::*;
 use next_pc::*;
 use op_checks::*;

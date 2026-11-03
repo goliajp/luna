@@ -55,6 +55,9 @@ pub(super) fn is_whitelisted_op(op: Op) -> bool {
             | Op::ForLoopF
             | Op::ForLoop55
             | Op::ForLoop55F
+            // a loop entered inside a linked side trace
+            | Op::ForPrep
+            | Op::ForPrep55
             | Op::LoadI
             | Op::LoadF
             | Op::LoadK

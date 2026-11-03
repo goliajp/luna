@@ -104,6 +104,7 @@ pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) 
         Op::ForLoop | Op::ForLoopF | Op::ForLoop55 | Op::ForLoop55F => {
             emit_mid_for_loop(lw, pl, oc)
         }
+        Op::ForPrep | Op::ForPrep55 => emit_mid_for_prep(lw, pl, oc),
         // generic-for prep is the leading pc-bump
         // before body_top. Recorder enters at body_top, so this
         // arm is defensive only — pre-emit pass bails before we

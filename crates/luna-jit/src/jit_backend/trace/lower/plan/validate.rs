@@ -95,49 +95,8 @@ fn validate_op(
     let _ = head_proto;
     let head_proto = rop.proto;
     let op = rop.inst.op();
-    // self-recursive Op::Call inside the inline
-    // path emits no IR (the next op shifts to the callee window
-    // via op_offsets). It's not in `is_whitelisted_op`, so
-    // accept it explicitly when depth>0 OR when the next op is
-    // at depth+1 (the recorder's self-recursive marker).
-    if matches!(op, Op::Call) {
-        // The terminator pass already let this Op::Call past as
-        // a self-recursive call. Skip the whitelist check.
-        return Some(());
-    }
-    // Op::Return0 / Op::Return1 at depth>0 are
-    // the inline path's unwind ops. They're not in the
-    // whitelist (it only covers depth=0 ops with no return
-    // semantics); admit them when depth>0.
-    if rop.inline_depth > 0 && matches!(op, Op::Return0 | Op::Return1 | Op::Return) {
-        // the values returned sit in the frame (`inline_calls` fixed the
-        // count of a `Return`)
-        let n = match op {
-            Op::Return0 => 0,
-            Op::Return1 => 1,
-            _ if rop.inst.b() > 0 => rop.inst.b() - 1,
-            _ => 1,
-        };
-        if (rop.inst.a() + n) as usize > max_stack {
-            checkpoint("bail:cmp-dirs-Return1-a-oob");
-            return None;
-        }
-        return Some(());
-    }
-    // a vararg expansion in a vararg function the trace inlined: the extra
-    // arguments sit below the frame's registers, as many as the call
-    // passed (the head frame's are on the stack, which the trace does not
-    // read)
-    if matches!(op, Op::Vararg) {
-        let fits = rop.inline_depth > 0 && rop.proto.is_vararg && {
-            let n = rop.inst.c().saturating_sub(1);
-            (rop.inst.a() + n) as usize <= max_stack
-        };
-        if !fits {
-            checkpoint("bail:vararg-outside-inlined-frame");
-            return None;
-        }
-        return Some(());
+    if let Some(done) = validate_frame_op(rop, max_stack) {
+        return done;
     }
     if !is_whitelisted_op(op) {
         checkpoint("bail:cmp-dirs-op-not-whitelisted");
@@ -188,17 +147,14 @@ fn validate_op(
         Op::Call => {
             unreachable!("Op::Call only appears at effective_end (truncation guarded above)")
         }
-        // a loop edge inside a linked side trace (the trace's end elsewhere)
-        Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F => {
-            assert!(
-                rop.inline_depth == 0 && record.link_pc.is_some(),
-                "Op::ForLoop only appears at effective_end (loop-end guarded above)"
-            );
-            if a + 3 >= max_stack {
-                checkpoint("bail:mid-for-loop-regs");
-                return None;
-            }
-        }
+        // a loop edge or a loop entered inside a linked side trace (the
+        // trace's end elsewhere)
+        Op::ForLoop
+        | Op::ForLoop55
+        | Op::ForLoopF
+        | Op::ForLoop55F
+        | Op::ForPrep
+        | Op::ForPrep55 => validate_mid_loop_op(record, rop, a, max_stack)?,
         Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => unreachable!(
             "Op::TForLoop only appears at effective_end (close-on-back-edge guarded above)"
         ),
