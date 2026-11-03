@@ -19,6 +19,7 @@ use inkwell::values::{
     PhiValue, PointerValue,
 };
 
+mod arith;
 mod body;
 mod mem;
 mod ops;
