@@ -11,7 +11,7 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         opts,
         ..
     } = *pl;
-    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
+    let reg_state = lw.entry.reg_state;
     let Lower { precheck, .. } = *lw;
     let body_loop = lw.body_start();
     let RuntimeHelpers {
@@ -66,7 +66,6 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
                 record.head_pc,
                 tags_idx,
                 lw.flush_ctx.as_ref(),
-                trace_fn_sig_ref,
             );
             lw.bcx.switch_to_block(ok_blk);
             lw.bcx.seal_block(ok_blk);

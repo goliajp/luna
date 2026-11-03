@@ -24,7 +24,7 @@ mod read;
 /// fn keep(ct: &CompiledTrace) -> bool { take_tier_source(ct).is_some() }
 /// // the side-trace cells are read, not rewired
 /// fn cells(ct: &CompiledTrace) -> bool {
-///     ct.global_side_trace_ptr().get().is_null() && ct.exit_side_trace_ptrs().is_empty()
+///     ct.exit_side_trace_ptrs().iter().all(|c| c.get().is_null())
 /// }
 /// // SAFETY: the caller vouches for the source
 /// unsafe fn back(ct: &CompiledTrace) {
@@ -51,7 +51,7 @@ mod read;
 ///
 /// ```compile_fail,E0616
 /// fn cell(ct: &luna_core::__private::CompiledTrace) {
-///     let _ = &ct.global_side_trace_ptr; // error[E0616]: field `global_side_trace_ptr` is private
+///     let _ = &ct.exit_side_trace_ptrs; // error[E0616]: field `exit_side_trace_ptrs` is private
 /// }
 /// ```
 ///
@@ -90,8 +90,6 @@ pub struct CompiledTrace {
     pub(crate) per_exit_inline: TArc<[InlineSideExit]>,
     pub(crate) exit_hit_counts: TArc<[TCellU32]>,
     pub(crate) exit_side_trace_ptrs: TArc<[TCellPtr]>,
-    pub(crate) tags_side_trace_ptrs: Box<[TCellPtr]>,
-    pub(crate) global_side_trace_ptr: Box<TCellPtr>,
     /// The exit index (as `exit_hit_counts`) of each side trace wired to
     /// this trace, by the sentinel code the IR would OR into a side
     /// trace's return (bits 56..=62). Read with [`Self::side_children`].
@@ -163,18 +161,15 @@ impl CompiledTrace {
     ///   stores the registers the loop head reads first and returns what
     ///   the loop returns.
     /// - The cells whose addresses that code holds are the ones `parts`
-    ///   owns: `exit_side_trace_ptrs`, the cells of the
-    ///   `tags_side_trace_ptrs` slice (it is never resized, so they stay
-    ///   where they are), `global_side_trace_ptr`, the `side_trace_ptr`
-    ///   and `chain` of each of `per_exit_inline`, and the `tier_up` count;
-    ///   the side-trace cells are null.
+    ///   owns: the `chain` of each of `per_exit_inline`, and the count and
+    ///   the loop cell of `tier_up`; `exit_side_trace_ptrs` are null.
     /// - The `tier_up` source, if any, was made for this trace by the
     ///   backend that compiled it, in the JIT storage of the Vm it is
     ///   installed on.
     pub unsafe fn from_parts(parts: CompiledTraceParts) -> Self {
         moved!(parts => head_pc, entry, n_ops, dispatchable, window_size, exit_tags,
             global_tag_res_kind, entry_tags, per_exit_tags, per_exit_inline, exit_hit_counts,
-            exit_side_trace_ptrs, tags_side_trace_ptrs, global_side_trace_ptr,
+            exit_side_trace_ptrs,
             is_inline_abort_close, dispatch_off_reason, sinkable_sites_seen,
             accum_bufferable_seen, sunk_alloc_seen, materialize_emit_count, closure_seen,
             inline_kinds, inline_depth, body_writes, downrec_link, downrec_multi_way_count,

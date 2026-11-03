@@ -105,68 +105,6 @@ pub(super) fn emit_flush_buf<E: Emit>(bcx: &mut E, ctx: &FlushCtx, regs: &[Varia
     bcx.ins().call(ctx.release_ref, &[buf_ptr]);
 }
 
-/// emit the indirect-call-or-return gate. Loads
-/// the cell at `side_trace_cell_addr`; if non-null, tail-calls the
-/// child fn via `call_indirect`, ORs sentinel bits 56..=63 into the
-/// child's i64 return, and returns. Otherwise runs the caller's
-/// `normal_return` closure. The caller must have ALREADY written the
-/// reg_state slots before calling this (the child reads them via its
-/// entry block).
-pub(super) fn emit_side_trace_or_return<E: Emit>(
-    bcx: &mut E,
-    reg_state: Value,
-    side_trace_cell_addr: i64,
-    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
-    sentinel_code: u32,
-    normal_return: impl FnOnce(&mut E),
-) {
-    // `side_trace_cell_addr == 0` is the "no-gate"
-    // sentinel: emit the normal return only, skipping the load +
-    // icmp + brif + call_indirect IR. The gate is a net perf loss
-    // when it fires at every dispatch site (19 callsites × `load +
-    // icmp + brif` per parent dispatch > amortization from rare
-    // side-trace fires), so only the TAG callsites (3), where hot
-    // exits actually live, get a cell; the 14 GLOBAL + 2 INLINE
-    // callsites pass 0 here and avoid the overhead. The
-    // close-handler still writes child entry ptrs to the legacy `exit_side_trace_ptrs` + the per-kind cells so the
-    // counters stay populated; only the IR gate emission is gated.
-    if side_trace_cell_addr == 0 {
-        normal_return(bcx);
-        return;
-    }
-    let cell_addr = bcx.ins().iconst(types::I64, side_trace_cell_addr);
-    let fn_ptr = bcx
-        .ins()
-        .load(types::I64, MemFlagsData::trusted(), cell_addr, 0);
-    let null = bcx.ins().iconst(types::I64, 0);
-    let has_side = bcx.ins().icmp(IntCC::NotEqual, fn_ptr, null);
-    let do_side_blk = bcx.create_block();
-    let do_exit_blk = bcx.create_block();
-    bcx.ins().brif(has_side, do_side_blk, &[], do_exit_blk, &[]);
-
-    // Side block: indirect call into the child trace. ABI matches
-    // the parent's own (`(I64) -> I64`); pass the same reg_state
-    // pointer so the child sees the just-stored slots. OR sentinel
-    // bits 56..=63 into the child's i64 return so the dispatcher
-    // re-decodes via the SIDE TRACE's shape inputs.
-    bcx.switch_to_block(do_side_blk);
-    bcx.seal_block(do_side_blk);
-    let call_inst = bcx
-        .ins()
-        .call_indirect(trace_fn_sig_ref, fn_ptr, &[reg_state]);
-    let body = bcx.inst_results(call_inst)[0];
-    let mask_u64: u64 = (1u64 << 63) | ((sentinel_code as u64 & 0x7F) << 56);
-    let mask_v = bcx.ins().iconst(types::I64, mask_u64 as i64);
-    let masked = bcx.ins().bor(body, mask_v);
-    bcx.ins().return_(&[masked]);
-
-    // Exit block: caller-provided normal return path (plain
-    // encoded-return semantics).
-    bcx.switch_to_block(do_exit_blk);
-    bcx.seal_block(do_exit_blk);
-    normal_return(bcx);
-}
-
 pub(super) fn emit_store_back_and_return_pc<E: Emit>(
     bcx: &mut E,
     regs: &[Variable],
@@ -174,21 +112,8 @@ pub(super) fn emit_store_back_and_return_pc<E: Emit>(
     reg_state: Value,
     pc: u32,
     flush_ctx: Option<&FlushCtx>,
-    side_trace_cell_addr: i64,
-    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
-    sentinel_code: u32,
 ) {
-    emit_store_back_and_return(
-        bcx,
-        regs,
-        stored,
-        reg_state,
-        i64::from(pc),
-        flush_ctx,
-        side_trace_cell_addr,
-        trace_fn_sig_ref,
-        sentinel_code,
-    );
+    emit_store_back_and_return(bcx, regs, stored, reg_state, i64::from(pc), flush_ctx);
 }
 
 /// [`emit_store_back_and_return_pc`] returning `ret`, an encoded exit
@@ -200,9 +125,6 @@ pub(super) fn emit_store_back_and_return<E: Emit>(
     reg_state: Value,
     ret: i64,
     flush_ctx: Option<&FlushCtx>,
-    side_trace_cell_addr: i64,
-    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
-    sentinel_code: u32,
 ) {
     if let Some(ctx) = flush_ctx {
         emit_flush_buf(bcx, ctx, regs);
@@ -217,17 +139,8 @@ pub(super) fn emit_store_back_and_return<E: Emit>(
         let offset = (idx as i32) * 8;
         bcx.ins().store(MemFlagsData::new(), val, reg_state, offset);
     }
-    emit_side_trace_or_return(
-        bcx,
-        reg_state,
-        side_trace_cell_addr,
-        trace_fn_sig_ref,
-        sentinel_code,
-        |bcx| {
-            let ret_val = bcx.ins().iconst(types::I64, ret);
-            bcx.ins().return_(&[ret_val]);
-        },
-    );
+    let ret_val = bcx.ins().iconst(types::I64, ret);
+    bcx.ins().return_(&[ret_val]);
 }
 
 /// `use_var` seen through aliases: past a merge the SSA builder can hand
@@ -277,7 +190,6 @@ pub(super) fn emit_tagged_exit<E: Emit>(
     head_pc: u32,
     tags_idx: u32,
     flush_ctx: Option<&FlushCtx>,
-    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
 ) {
     if pc == head_pc {
         let r = bcx.import_func(suppress_admit_id);
@@ -286,17 +198,7 @@ pub(super) fn emit_tagged_exit<E: Emit>(
     let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
         | (u64::from(tags_idx) << 32)
         | u64::from(pc);
-    emit_store_back_and_return(
-        bcx,
-        regs,
-        stored,
-        reg_state,
-        ret as i64,
-        flush_ctx,
-        0i64,
-        trace_fn_sig_ref,
-        encode_side_sentinel(SIDE_SENT_KIND_TAG, tags_idx),
-    );
+    emit_store_back_and_return(bcx, regs, stored, reg_state, ret as i64, flush_ctx);
 }
 
 /// The resume pc of a trace's return value, whichever exit encoding it
@@ -321,8 +223,6 @@ pub(super) fn emit_store_back_and_return_site<E: Emit>(
     site_idx: u32,
     cont_pc: u32,
     flush_ctx: Option<&FlushCtx>,
-    side_trace_cell_addr: i64,
-    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
 ) {
     if let Some(ctx) = flush_ctx {
         emit_flush_buf(bcx, ctx, regs);
@@ -337,17 +237,7 @@ pub(super) fn emit_store_back_and_return_site<E: Emit>(
         let offset = (idx as i32) * 8;
         bcx.ins().store(MemFlagsData::new(), val, reg_state, offset);
     }
-    let sentinel = encode_side_sentinel(SIDE_SENT_KIND_INLINE, site_idx);
-    emit_side_trace_or_return(
-        bcx,
-        reg_state,
-        side_trace_cell_addr,
-        trace_fn_sig_ref,
-        sentinel,
-        |bcx| {
-            let encoded = (((site_idx as u64) + 1) << 32) | (cont_pc as u64);
-            let v = bcx.ins().iconst(types::I64, encoded as i64);
-            bcx.ins().return_(&[v]);
-        },
-    );
+    let encoded = (((site_idx as u64) + 1) << 32) | (cont_pc as u64);
+    let v = bcx.ins().iconst(types::I64, encoded as i64);
+    bcx.ins().return_(&[v]);
 }

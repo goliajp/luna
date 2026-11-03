@@ -238,9 +238,7 @@ pub struct PerExitTagsEntry {
 
 /// One per-site inline cmp@d>0 side-exit entry serialized into the v3
 /// tail of a meta blob. Mirrors `CompiledTraceParts::per_exit_inline`'s
-/// [`crate::jit::trace_types::InlineSideExit`] shape minus the
-/// runtime-only `side_trace_ptr` cell (always defaults null on AOT
-/// install). The `chain` field carries [`FrameMaterializeInfo`]
+/// [`crate::jit::trace_types::InlineSideExit`] shape. The `chain` field carries [`FrameMaterializeInfo`]
 /// records as raw bytes — `FrameMaterializeInfo` is `repr(C)` with
 /// three 32-bit fields = exactly 12 bytes per entry on every
 /// supported target, so the wire layout is stable.

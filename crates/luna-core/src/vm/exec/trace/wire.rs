@@ -77,39 +77,28 @@ impl Vm {
         if !(runnable && shape_matches) {
             return None;
         }
-        // a child that may move to the optimizing tier updates these cells
-        // then
-        let remember = |k: usize, cell: &crate::jit::send_compat::TCellPtr| {
-            if let Some(t) = &ct.tier_up {
-                t.parent_cells[k].set(cell as *const _ as *const u8);
-            }
-        };
         if let Some(cell) = parent_ct.exit_side_trace_ptrs.get(parent_exit_idx) {
             cell.set(entry_ptr);
-            remember(0, cell);
+            // a child that may move to the optimizing tier updates the cell
+            // then
+            if let Some(t) = &ct.tier_up {
+                t.parent_cell.set(cell as *const _ as *const u8);
+            }
         }
-        // the per-kind cell, laid out as `exit_hit_counts`: inline exits
-        // first, then per_exit_tags, then the global tail slot
+        // the exit's kind and index within it, laid out as
+        // `exit_hit_counts`: inline exits first, then per_exit_tags, then
+        // the global tail slot
         let inline_n = parent_ct.per_exit_inline.len();
         let tags_n = parent_ct.per_exit_tags.len();
         let (sent_kind, sent_local) = if parent_exit_idx < inline_n {
-            let cell = &parent_ct.per_exit_inline[parent_exit_idx].side_trace_ptr;
-            cell.set(entry_ptr);
-            remember(1, cell);
             (
                 crate::jit::trace::SIDE_SENT_KIND_INLINE,
                 parent_exit_idx as u32,
             )
         } else if parent_exit_idx < inline_n + tags_n {
             let local = parent_exit_idx - inline_n;
-            if let Some(b) = parent_ct.tags_side_trace_ptrs.get(local) {
-                b.set(entry_ptr);
-                remember(1, b);
-            }
             (crate::jit::trace::SIDE_SENT_KIND_TAG, local as u32)
         } else {
-            parent_ct.global_side_trace_ptr.set(entry_ptr);
-            remember(1, &parent_ct.global_side_trace_ptr);
             (crate::jit::trace::SIDE_SENT_KIND_GLOBAL, 0)
         };
         self.jit.counters.side_trace_compiled += 1;

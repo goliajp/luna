@@ -16,9 +16,8 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
         do_internal_loop,
         ..
     } = *pl;
-    let (reg_state, trace_fn_sig_ref, tforcall_tag_var, tforcall_val_tag_var) = (
+    let (reg_state, tforcall_tag_var, tforcall_val_tag_var) = (
         lw.entry.reg_state,
-        lw.entry.trace_fn_sig_ref,
         lw.entry.tforcall_tag_var,
         lw.entry.tforcall_val_tag_var,
     );
@@ -84,7 +83,6 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
         record.head_pc,
         tag_side_local_2,
         lw.flush_ctx.as_ref(),
-        trace_fn_sig_ref,
     );
 
     lw.bcx.switch_to_block(not_nil_blk);
@@ -119,9 +117,6 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
         reg_state,
         (luna_core::jit::trace_types::EXIT_KEEP_TFOR_VARS | u64::from(rop.pc)) as i64,
         lw.flush_ctx.as_ref(),
-        0i64,
-        trace_fn_sig_ref,
-        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
     );
 
     // Continue: R[A+2] = R[A+4] (ctrl writeback) +
@@ -167,9 +162,6 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
             reg_state,
             body_pc,
             lw.flush_ctx.as_ref(),
-            0i64,
-            trace_fn_sig_ref,
-            encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     }
     Some(())

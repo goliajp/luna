@@ -62,15 +62,8 @@ pub(super) struct Lower<E: Emit> {
     /// emitted, so a later writer does not change what the exit restores.
     pub(super) per_exit_kinds: ExitKinds,
     /// Each side exit of an inlined comparison: its pc, its encoded site,
-    /// the kinds, the frames to rebuild and the cell whose address the
-    /// exit's code holds (boxed, so it stays put).
-    pub(super) per_exit_inline_vec: Vec<(
-        u32,
-        u32,
-        Vec<RegKind>,
-        TArc<[FrameMaterializeInfo]>,
-        Box<TCellPtr>,
-    )>,
+    /// the kinds and the frames to rebuild.
+    pub(super) per_exit_inline_vec: Vec<(u32, u32, Vec<RegKind>, TArc<[FrameMaterializeInfo]>)>,
     /// The inlined self-recursive calls being lowered, innermost last:
     /// the frames an exit inside them rebuilds.
     pub(super) call_chain: Vec<FrameMaterializeInfo>,

@@ -159,7 +159,6 @@ fn step_in_place<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, next_pc: u32, check:
         pl.record.head_pc,
         tags,
         None,
-        lw.entry.trace_fn_sig_ref,
     );
     lw.bcx.switch_to_block(cont);
     lw.bcx.seal_block(cont);

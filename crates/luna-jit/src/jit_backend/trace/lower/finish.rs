@@ -10,18 +10,11 @@ pub(super) struct Emitted {
     pub(super) dispatchable: bool,
     pub(super) dispatch_off_reason: Option<&'static str>,
     pub(super) per_exit_kinds: ExitKinds,
-    pub(super) per_exit_inline_vec: Vec<(
-        u32,
-        u32,
-        Vec<RegKind>,
-        TArc<[FrameMaterializeInfo]>,
-        Box<TCellPtr>,
-    )>,
+    pub(super) per_exit_inline_vec: Vec<(u32, u32, Vec<RegKind>, TArc<[FrameMaterializeInfo]>)>,
     pub(super) sunk_alloc_seen: u32,
     pub(super) materialize_emit_count: u32,
     pub(super) closure_seen: u32,
     pub(super) escape: EscapeAnalysis,
-    pub(super) global_side_trace_box: Box<TCellPtr>,
     pub(super) downrec_link_for_compiled: Option<(u32, u32)>,
     pub(super) downrec_multi_way_count_for_compiled: u8,
     pub(super) tier_count: Option<Box<TierUp>>,
@@ -39,7 +32,6 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         materialize_emit_count,
         closure_seen,
         escape,
-        global_side_trace_box,
         downrec_link_for_compiled,
         downrec_multi_way_count_for_compiled,
         tier_count,
@@ -82,9 +74,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
     }
     let global_tag_res_kind = classify_exit_tags(&exit_tags_vec);
     let exit_tags: TArc<[ExitTag]> = exit_tags_vec.into();
-    // `per_exit_tags` for the dispatcher, and the parallel
-    // `tags_side_trace_ptrs` cells the close handler writes to. Each
-    // exit's tags keep the length its emit site pushed (caller window at
+    // `per_exit_tags` for the dispatcher. Each exit's tags keep the length its emit site pushed (caller window at
     // depth 0, the full window deeper): the dispatcher walks
     // `exit_tags_for_pc.len()` either way.
     let tag_vecs: Vec<(u32, Vec<ExitTag>)> = per_exit_kinds
@@ -92,23 +82,20 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         .map(|(pc, kinds)| (pc, kinds_to_exit_tags(kinds)))
         .collect();
     let per_exit_tags = ExitTagTable::from_exits(tag_vecs.iter().map(|(pc, t)| (*pc, &t[..])));
-    let tags_side_trace_ptrs: Box<[TCellPtr]> =
-        (0..per_exit_tags.len()).map(|_| TCellPtr::null()).collect();
     let mut last = None;
     let inline_tags: Vec<TArc<[ExitTag]>> = per_exit_inline_vec
         .iter()
-        .map(|(_, _, kinds, _, _)| shared_exit_tags(kinds, &mut last))
+        .map(|(_, _, kinds, _)| shared_exit_tags(kinds, &mut last))
         .collect();
     let per_exit_inline: TArc<[InlineSideExit]> = per_exit_inline_vec
         .into_iter()
         .zip(inline_tags)
         .map(
-            |((cont_pc, head_resume_pc, _, chain, side_trace_ptr), exit_tags)| InlineSideExit {
+            |((cont_pc, head_resume_pc, _, chain), exit_tags)| InlineSideExit {
                 cont_pc,
                 head_resume_pc,
                 exit_tags,
                 chain,
-                side_trace_ptr,
             },
         )
         .collect();
@@ -158,8 +145,6 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         exit_side_trace_ptrs,
         // per-TAG-entry side-trace cells (parallel
         // to per_exit_tags) + the GLOBAL singleton cell
-        tags_side_trace_ptrs,
-        global_side_trace_ptr: global_side_trace_box,
         per_exit_inline,
         // diagnostic only; counts Sinkable sites from the
         // pre-emit sweep. Vm sums these into

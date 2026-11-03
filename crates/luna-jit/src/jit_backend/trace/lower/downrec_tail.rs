@@ -14,7 +14,7 @@ pub(super) fn emit_downrec_tail<E: Emit>(
         window_size_us,
         ..
     } = *pl;
-    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
+    let reg_state = lw.entry.reg_state;
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;
@@ -141,9 +141,6 @@ pub(super) fn emit_downrec_tail<E: Emit>(
         reg_state,
         record.head_pc,
         lw.flush_ctx.as_ref(),
-        0i64,
-        trace_fn_sig_ref,
-        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
     );
 
     // Populate downrec_link with the placeholder
@@ -188,7 +185,7 @@ pub(super) fn emit_self_link_tail<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let Plan {
         record, max_stack, ..
     } = *pl;
-    let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
+    let reg_state = lw.entry.reg_state;
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;
@@ -238,9 +235,6 @@ pub(super) fn emit_self_link_tail<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         reg_state,
         record.head_pc,
         lw.flush_ctx.as_ref(),
-        0i64,
-        trace_fn_sig_ref,
-        encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
     );
     lw.dispatchable = false;
     lw.dispatch_off_reason = lw.dispatch_off_reason.or(Some("self-link-retf-r1"));
