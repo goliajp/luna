@@ -39,9 +39,7 @@ pub(crate) fn define<M: Module>(
     let mut an = live::Analysis::default();
     live::analyze_from(lir, &mut an, start);
     let reads = match (entry_at, start) {
-        (Some(e), Start::Loop) => {
-            Some((e, entry::live_in_vars(lir, &an, e)?))
-        }
+        (Some(e), Start::Loop) => Some((e, entry::live_in_vars(lir, &an, e)?)),
         _ => None,
     };
     let call_conv = module.isa().default_call_conv();
@@ -142,6 +140,7 @@ pub(crate) fn define<M: Module>(
             hoist(&mut r, &an, relocs, read_cost);
             if let Some((e, (reads, _))) = &reads {
                 r.read_regs(&e.regs, reads);
+                r.own_reg_state();
             }
         }
         // a block no branch reaches (the entry, or the hot exit of a
