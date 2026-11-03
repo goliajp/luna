@@ -3,6 +3,7 @@
 //! from `reg_state` the registers the loop reads before writing them.
 
 use super::*;
+use cranelift_codegen::ir::{StackSlotData, StackSlotKind};
 
 /// What the loop's function, starting at `e.block`, reads before writing on
 /// some path (the replay's paths: a `TierCount` goes on to its continuation
@@ -28,7 +29,10 @@ pub(crate) fn live_in_vars(
     let (mut gen_, mut kill) = (vec![0u64; n * words], vec![0u64; n * words]);
     for (j, &b) in an.order.iter().enumerate() {
         slot[b as usize] = j as u32;
-        let (g, k) = (&mut gen_[j * words..][..words], &mut kill[j * words..][..words]);
+        let (g, k) = (
+            &mut gen_[j * words..][..words],
+            &mut kill[j * words..][..words],
+        );
         let (lo, hi) = an.block_at[b as usize];
         for c in lo..hi {
             let i = &lir.insts[an.code[c as usize] as usize];
@@ -107,13 +111,29 @@ impl Replay<'_, '_> {
         let reg_state = self.v(self.lir.arg0);
         for (i, &var) in regs.iter().enumerate() {
             if reads[var as usize] {
-                let x = self
-                    .b
-                    .ins()
-                    .load(types::I64, MemFlagsData::new(), reg_state, (i as i32) * 8);
+                let x =
+                    self.b
+                        .ins()
+                        .load(types::I64, MemFlagsData::new(), reg_state, (i as i32) * 8);
                 self.b.def_var(self.vars[var as usize], x);
             }
         }
+    }
+
+    /// Gives the loop `reg_state` as a value of its own, read back from a
+    /// stack slot after the registers are read. The argument comes in a
+    /// fixed register; the allocator splits its range where the loop
+    /// head's code does not use it, and every turn of the loop then moves
+    /// it between two registers on the back edge. The value read back has
+    /// no fixed register and keeps one through the loop.
+    pub(super) fn own_reg_state(&mut self) {
+        let reg_state = self.v(self.lir.arg0);
+        let slot =
+            self.b
+                .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+        self.b.ins().stack_store(types::I64, reg_state, slot, 0);
+        let own = self.b.ins().stack_load(types::I64, types::I64, slot, 0);
+        self.vals[self.lir.arg0 as usize] = Some(own);
     }
 
     /// Notes the variable each value `taken` names was taken from, and the
@@ -178,7 +198,10 @@ pub(crate) fn idoms(lir: &Lir, an: &live::Analysis) -> Vec<u32> {
             Some(i) if matches!(i.op, Op::TierCount { .. }) => [i.c, NONE],
             _ => live::succs(lir, b),
         };
-        for t in s.into_iter().filter(|&t| t != NONE && rpo[t as usize] != NONE) {
+        for t in s
+            .into_iter()
+            .filter(|&t| t != NONE && rpo[t as usize] != NONE)
+        {
             preds[t as usize].push(b);
         }
     }
