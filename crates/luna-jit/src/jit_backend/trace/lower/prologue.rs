@@ -224,33 +224,8 @@ pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> HeadBlocks 
         ..
     } = *pl;
     let math_folds = &pl.math_folds;
-    // Nothing in the trace can reassign `math.<fn>` unless it stores a
-    // field of that name or `math` itself, or stores under a key it does
-    // not know (SetTable); calls end the trace and the table helpers
-    // deopt on `__newindex`. Without such a store the math folds are
-    // checked once, in `precheck` before the loop head, rather than on
-    // every iteration.
-    let fold_check_once = !record.ops[..effective_end].iter().any(|rop| {
-        let key = |k: u32| match rop.proto.consts.get(k as usize) {
-            Some(luna_core::runtime::Value::Str(s)) => Some(s.as_bytes()),
-            _ => None,
-        };
-        match rop.inst.op() {
-            Op::SetTable => true,
-            // the key is K[B] for both
-            Op::SetField | Op::SetTabUp => match key(rop.inst.b()) {
-                Some(name) => {
-                    name == b"math"
-                        || name == b"string"
-                        || math_folds.iter().any(|f| f.fn_name.as_bytes() == name)
-                }
-                None => true,
-            },
-            _ => false,
-        }
-    });
     // Filled in below, once the exit bookkeeping exists.
-    let precheck = (fold_check_once && !math_folds.is_empty()).then(|| bcx.create_block());
+    let precheck = (!math_folds.is_empty() && folds_checked_once(pl)).then(|| bcx.create_block());
     // the read-only tests before the loop head (see `readonly`)
     let ro_precheck = record.ops[..effective_end]
         .iter()
@@ -280,4 +255,32 @@ pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> HeadBlocks 
         peel,
         body_loop,
     }
+}
+
+/// Whether the math folds are checked once, before the loop head. Nothing
+/// in the trace can reassign `math.<fn>` unless it stores a field of that
+/// name or `math` itself, or stores under a key it does not know
+/// (SetTable); calls end the trace and the table helpers deopt on
+/// `__newindex`. Without such a store the math folds are checked once, in
+/// `precheck` before the loop head, rather than on every iteration.
+fn folds_checked_once(pl: &Plan<'_>) -> bool {
+    !pl.record.ops[..pl.effective_end].iter().any(|rop| {
+        let key = |k: u32| match rop.proto.consts.get(k as usize) {
+            Some(luna_core::runtime::Value::Str(s)) => Some(s.as_bytes()),
+            _ => None,
+        };
+        match rop.inst.op() {
+            Op::SetTable => true,
+            // the key is K[B] for both
+            Op::SetField | Op::SetTabUp => match key(rop.inst.b()) {
+                Some(name) => {
+                    name == b"math"
+                        || name == b"string"
+                        || pl.math_folds.iter().any(|f| f.fn_name.as_bytes() == name)
+                }
+                None => true,
+            },
+            _ => false,
+        }
+    })
 }
