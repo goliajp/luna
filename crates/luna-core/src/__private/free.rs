@@ -153,10 +153,12 @@ pub fn tier_up_loop_cell(t: &crate::jit::trace_types::tier_up::TierUp) -> &crate
 /// or when it installs the trace.
 ///
 /// # Safety
-/// `looped` is the optimizing tier's loop of the code `t` belongs to,
-/// compiled against its tags, window and cells: entered with `reg_state`
-/// holding the registers the loop head reads, as that code's back edge
-/// calls it, it returns as that code does.
+/// `looped` is the optimizing tier's loop compiled for this trace's
+/// `loop_entry` (the code `t` belongs to): against its tags and window,
+/// sharing its exits and the cells their addresses name (side-trace cells,
+/// frame chains, the iteration count, this loop cell). Entered with
+/// `reg_state` holding the registers the loop head reads, as that code's
+/// back edge calls it, it returns as that code does.
 pub unsafe fn set_tier_up_loop(
     t: &crate::jit::trace_types::tier_up::TierUp,
     looped: crate::jit::trace::TraceFn,
