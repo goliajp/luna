@@ -18,7 +18,7 @@ mod entry;
 mod ops;
 pub(crate) use define::define;
 #[cfg(feature = "llvm-jit")]
-pub(crate) use entry::live_in_vars;
+pub(crate) use entry::{dominates, idoms, live_in_vars};
 use ops::hoist;
 
 fn cty(t: Ty) -> Type {
@@ -59,9 +59,13 @@ struct Replay<'a, 'f> {
     hoisted: Vec<Option<Value>>,
     start: live::Start,
     /// In the loop's function, per value the loop head takes from the back
-    /// edges (see `LoopEntry::inherit`): the variable the replay carries it
-    /// in, which `loop_entry` sets from the variable it was taken from.
-    ivars: Vec<Option<Variable>>,
+    /// edges (see `LoopEntry::inherit`): the variable it was taken from, and
+    /// the block the replay defined it in (`NONE` before).
+    ivars: Vec<Option<(Variable, u32)>>,
+    /// Those values as the replay defined them.
+    defs: Vec<Option<Value>>,
+    /// Per block, its immediate dominator (the loop's function only).
+    idom: Vec<u32>,
 }
 
 /// The most relocations read in the entry block ([`ops::hoist`]).

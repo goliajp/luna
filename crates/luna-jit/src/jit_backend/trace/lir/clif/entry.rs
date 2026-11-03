@@ -116,55 +116,121 @@ impl Replay<'_, '_> {
         }
     }
 
-    /// Gives each value `taken` names a variable of its own.
-    pub(super) fn inherit_vars(&mut self, taken: &[(u32, u32)]) {
+    /// Notes the variable each value `taken` names was taken from, and the
+    /// blocks' immediate dominators in the loop's function.
+    pub(super) fn inherit_vars(&mut self, taken: &[(u32, u32)], an: &live::Analysis) {
         self.ivars = vec![None; self.lir.value_ty.len()];
-        for &(_, v) in taken {
-            let t = cty(self.lir.value_ty[v as usize]);
-            self.ivars[v as usize] = Some(self.b.declare_var(t));
-        }
-    }
-
-    /// At the end of `loop_entry`: each inherited value from the variable
-    /// the loop head took it from.
-    pub(super) fn take_inherited(&mut self, taken: &[(u32, u32)]) {
         for &(k, v) in taken {
-            let x = self.b.use_var(self.vars[k as usize]);
-            let iv = self.ivars[v as usize].expect("declared");
-            self.b.def_var(iv, x);
+            self.ivars[v as usize] = Some((self.vars[k as usize], NONE));
         }
+        self.idom = idoms(self.lir, an);
     }
 
-    /// Reads the inherited values `i` reads from their variables.
-    pub(super) fn inherited_uses(&mut self, i: &Inst) {
+    /// Reads each inherited value `i` (in block `blk`) reads from the
+    /// variable it was taken from, unless the block its definition was
+    /// replayed in dominates `blk`: elsewhere (the loop head's code, which
+    /// took it from the back edges, and what only that code reaches) the
+    /// variable still holds it, as the lowerer read it in its place.
+    pub(super) fn inherited_uses(&mut self, i: &Inst, blk: u32) {
         let nv = self.lir.value_ty.len() as u32;
-        let mut uses: [u32; 8] = [NONE; 8];
-        let mut n = 0;
-        let mut more = Vec::new();
+        let mut uses = Vec::new();
         live::for_uses(self.lir, i, |x| {
             if x < nv && self.ivars[x as usize].is_some() {
-                if n < 8 {
-                    uses[n] = x;
-                    n += 1;
-                } else {
-                    more.push(x);
-                }
+                uses.push(x);
             }
         });
-        for x in uses[..n].iter().chain(&more) {
-            let iv = self.ivars[*x as usize].expect("declared");
-            let v = self.b.use_var(iv);
-            self.vals[*x as usize] = Some(v);
+        for x in uses {
+            let Some((var, at)) = self.ivars[x as usize] else {
+                continue;
+            };
+            if at == NONE || !dominates(&self.idom, at, blk) {
+                let v = self.b.use_var(var);
+                self.vals[x as usize] = Some(v);
+            } else if let Some(d) = self.defs[x as usize] {
+                self.vals[x as usize] = Some(d);
+            }
         }
     }
 
-    /// Writes an inherited value `i` defines to its variable.
-    pub(super) fn inherited_def(&mut self, i: &Inst) {
+    /// Notes where the replay defined an inherited value `i` defines.
+    pub(super) fn inherited_def(&mut self, i: &Inst, blk: u32) {
         if i.dst != NONE
-            && let Some(iv) = self.ivars[i.dst as usize]
+            && let Some(Some((_, at))) = self.ivars.get_mut(i.dst as usize)
         {
-            let v = self.v(i.dst);
-            self.b.def_var(iv, v);
+            *at = blk;
+            self.defs[i.dst as usize] = self.vals[i.dst as usize];
         }
+    }
+}
+
+/// Per block, its immediate dominator among the blocks `an` lays out
+/// (`NONE` for the first and the others), the replay's paths: a
+/// `TierCount` goes on to its continuation only.
+pub(crate) fn idoms(lir: &Lir, an: &live::Analysis) -> Vec<u32> {
+    let mut rpo = vec![NONE; lir.blocks.len()];
+    for (j, &b) in an.order.iter().enumerate() {
+        rpo[b as usize] = j as u32;
+    }
+    let mut preds: Vec<Vec<u32>> = vec![Vec::new(); lir.blocks.len()];
+    for &b in &an.order {
+        let last = lir.blocks[b as usize].last;
+        let s = match lir.insts.get(last as usize) {
+            Some(i) if matches!(i.op, Op::TierCount { .. }) => [i.c, NONE],
+            _ => live::succs(lir, b),
+        };
+        for t in s.into_iter().filter(|&t| t != NONE && rpo[t as usize] != NONE) {
+            preds[t as usize].push(b);
+        }
+    }
+    let mut idom = vec![NONE; lir.blocks.len()];
+    let Some(&root) = an.order.first() else {
+        return idom;
+    };
+    idom[root as usize] = root;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &b in &an.order[1..] {
+            let mut new = NONE;
+            for &p in &preds[b as usize] {
+                if idom[p as usize] == NONE {
+                    continue;
+                }
+                new = match new {
+                    NONE => p,
+                    mut a => {
+                        let mut c = p;
+                        while a != c {
+                            while rpo[a as usize] > rpo[c as usize] {
+                                a = idom[a as usize];
+                            }
+                            while rpo[c as usize] > rpo[a as usize] {
+                                c = idom[c as usize];
+                            }
+                        }
+                        a
+                    }
+                };
+            }
+            if new != idom[b as usize] {
+                idom[b as usize] = new;
+                changed = true;
+            }
+        }
+    }
+    idom
+}
+
+/// Whether block `a` dominates block `b` by `idom`.
+pub(crate) fn dominates(idom: &[u32], a: u32, mut b: u32) -> bool {
+    loop {
+        if a == b {
+            return true;
+        }
+        let up = idom[b as usize];
+        if up == NONE || up == b {
+            return false;
+        }
+        b = up;
     }
 }
