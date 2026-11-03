@@ -22,6 +22,34 @@ impl<'c> Gen<'c, '_> {
             self.blocks[blk as usize] = Some(self.ctx.append_basic_block(self.f, ""));
         }
         self.b.position_at_end(entry);
+        self.homes()?;
+        if let Some(e) = e {
+            self.read_entry(an, e, reads, taken)?;
+        }
+        let first = self.blocks[root as usize].ok_or("llvm:no-entry-block")?;
+        b(self.b.build_unconditional_branch(first))?;
+        self.block_params(an, root)?;
+        for &blk in &an.order {
+            let bb = self.blocks[blk as usize].expect("laid out");
+            self.b.position_at_end(bb);
+            let (lo, hi) = an.block_at[blk as usize];
+            for c in lo..hi {
+                let i = lir.insts[an.code[c as usize] as usize];
+                if e.is_some() {
+                    self.inherited_uses(&i, blk)?;
+                }
+                self.inst(&i)?;
+                if e.is_some() {
+                    self.inherited_def(&i, blk);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The variables' and stack slots' homes, and the function's parameter.
+    fn homes(&mut self) -> R<()> {
+        let lir = self.lir;
         // a variable read on a path that never wrote it is zero, as in
         // Cranelift
         for &t in &lir.var_ty {
@@ -39,47 +67,45 @@ impl<'c> Gen<'c, '_> {
             let p = self.f.get_nth_param(0).ok_or("llvm:builder")?;
             self.vals[lir.arg0 as usize] = Some(p);
         }
-        if let Some(e) = e {
-            self.inherit = vec![None; lir.value_ty.len()];
-            for &(k, v) in taken {
-                self.inherit[v as usize] = Some((k, NONE, None));
-            }
-            self.idom = super::super::clif::idoms(lir, an);
-            for (i, &var) in e.regs.iter().enumerate() {
-                if reads.get(var as usize).copied().unwrap_or(false) {
-                    let p = self.addr(self.iv(lir.arg0), (i as i32) * 8)?;
-                    let x = self.load(self.ctx.i64_type().into(), p)?;
-                    b(self.b.build_store(self.vars[var as usize], x))?;
-                }
+        Ok(())
+    }
+
+    /// In the loop's function: notes the values the loop head takes from
+    /// the variables, and reads the registers `reads` marks from
+    /// `reg_state` into their variables.
+    fn read_entry(
+        &mut self,
+        an: &live::Analysis,
+        e: &LoopEntry,
+        reads: &[bool],
+        taken: &[(u32, u32)],
+    ) -> R<()> {
+        let lir = self.lir;
+        self.inherit = vec![None; lir.value_ty.len()];
+        for &(k, v) in taken {
+            self.inherit[v as usize] = Some((k, NONE, None));
+        }
+        self.idom = super::super::clif::idoms(lir, an);
+        for (i, &var) in e.regs.iter().enumerate() {
+            if reads.get(var as usize).copied().unwrap_or(false) {
+                let p = self.addr(self.iv(lir.arg0), (i as i32) * 8)?;
+                let x = self.load(self.ctx.i64_type().into(), p)?;
+                b(self.b.build_store(self.vars[var as usize], x))?;
             }
         }
-        let first = self.blocks[root as usize].ok_or("llvm:no-entry-block")?;
-        b(self.b.build_unconditional_branch(first))?;
-        for &blk in &an.order {
-            if blk == root {
-                continue;
-            }
+        Ok(())
+    }
+
+    /// A phi for each parameter of each block but `root`.
+    fn block_params(&mut self, an: &live::Analysis, root: u32) -> R<()> {
+        let lir = self.lir;
+        for &blk in an.order.iter().filter(|&&blk| blk != root) {
             let bb = self.blocks[blk as usize].expect("laid out");
             self.b.position_at_end(bb);
             for &p in lir.block_params(blk) {
                 let phi = b(self.b.build_phi(self.ty(lir.value_ty[p as usize]), ""))?;
                 self.vals[p as usize] = Some(phi.as_basic_value());
                 self.phis[blk as usize].push(phi);
-            }
-        }
-        for &blk in &an.order {
-            let bb = self.blocks[blk as usize].expect("laid out");
-            self.b.position_at_end(bb);
-            let (lo, hi) = an.block_at[blk as usize];
-            for c in lo..hi {
-                let i = lir.insts[an.code[c as usize] as usize];
-                if e.is_some() {
-                    self.inherited_uses(&i, blk)?;
-                }
-                self.inst(&i)?;
-                if e.is_some() {
-                    self.inherited_def(&i, blk);
-                }
             }
         }
         Ok(())
