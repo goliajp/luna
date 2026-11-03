@@ -48,6 +48,7 @@ impl Ins for Lir {
         if inherit.0 != NONE {
             if sealed {
                 self.restore(inherit);
+                self.inherited.push((bi, inherit));
             } else {
                 self.pending_inherit = Some((bi, inherit));
             }
@@ -63,6 +64,7 @@ impl Ins for Lir {
             && pb == bi
         {
             self.restore(snap);
+            self.inherited.push((bi, snap));
         }
     }
     fn append_block_param(&mut self, b: Block, ty: Type) -> Value {

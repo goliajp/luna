@@ -15,17 +15,21 @@
 
 use super::*;
 
-/// Creates `loop_entry` for a trace that may loop and moves on to the
-/// optimizing tier, leaving the current block as it was.
-pub(super) fn emit_loop_entry<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()> {
-    if lw.tier_count.is_none() || !pl.do_internal_loop {
+/// Creates `loop_entry` for a trace whose back edge moves on to the
+/// optimizing tier, once everything else is lowered: emitted before, its
+/// branch into the loop head would leave the head's code nothing known
+/// from the back edges, which the baseline code would then read from the
+/// variables' homes (the replay starts from it the values the loop's code
+/// took from the back edges: see `LoopEntry::inherit`).
+pub(super) fn emit_loop_entry<E: Emit>(lw: &mut Lower<E>) -> Option<()> {
+    if !lw.loops {
         return Some(());
     }
     let at = lw.bcx.create_block();
     lw.bcx.switch_to_block(at);
     lw.bcx.seal_block(at);
     if let Some(var) = lw.due_words {
-        let w = emit_due_words(&mut lw.bcx, pl)?.expect("the entry read it");
+        let w = read_due_words(&mut lw.bcx)?;
         lw.bcx.def_var(var, w);
     }
     if let Some(ctx) = &lw.flush_ctx {
@@ -52,7 +56,7 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         record, max_stack, ..
     } = *pl;
     let (reg_state, sig) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
-    if let (Some(t), Some(_)) = (&lw.tier_count, lw.loop_entry) {
+    if let Some(t) = &lw.tier_count {
         let cell_addr =
             luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64;
         let count_addr = t.count() as *const TCellU32 as i64;

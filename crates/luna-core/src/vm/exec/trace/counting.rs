@@ -67,23 +67,14 @@ impl Vm {
         // `source`: ask again at the next entry when the trace runs the
         // optimizing tier's code, which does not count iterations, else once
         // the baseline code's count reaches `at` anew
-        let installed = !t.optimized.get().is_null() || !t.looped.get().is_null();
         if t.source.borrow().is_some() {
-            let counting = entry.is_none() && !installed;
+            let counting = entry.is_none() && t.optimized.get().is_null();
             t.count
                 .set(if counting { 0 } else { t.at.saturating_sub(1) });
             t.tried.set(false);
         }
         let Some(entry) = entry else { return };
         let p = entry as *const () as *const u8;
-        if t.at_loop {
-            // the baseline code's back edge reaches `at` on its next pass
-            // and goes on in the loop: on the pass under way, if one is
-            t.looped.set(p);
-            t.count.set(t.at.saturating_sub(1));
-            self.jit.counters.tiered_up += 1;
-            return;
-        }
         t.optimized.set(p);
         for cell in &t.parent_cells {
             let c = cell.get() as *const crate::jit::send_compat::TCellPtr;

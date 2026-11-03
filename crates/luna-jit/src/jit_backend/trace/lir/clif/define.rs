@@ -2,43 +2,51 @@
 
 use super::*;
 
-/// The blocks the replay of `i` branches to (only the continuation of a
-/// `TierCount`, which Cranelift code does not count).
-fn targets(i: &Inst) -> [Option<u32>; 2] {
+/// The blocks the replay of `i` branches to (of a `TierCount`, which
+/// Cranelift code does not count, the continuation only, or the hot block
+/// only in `Start::FirstPass`).
+fn targets(i: &Inst, start: Start) -> [Option<u32>; 2] {
     match i.op {
         Op::Jump => [Some(i.a), None],
         Op::Brif(_) => [Some(i.b), Some(i.c)],
+        Op::TierCount { .. } if start == Start::FirstPass => [Some(i.b), None],
         Op::TierCount { .. } => [Some(i.c), None],
         _ => [None, None],
     }
 }
 
-/// Defines the trace function in `module` from `lir`, or with `at_loop`
-/// the optimizing tier's loop (see `lower::handoff`; `None` when `lir` has
-/// none, or one the replay cannot start).
+/// Defines the function `start` names in `module` from `lir`: the trace,
+/// or the optimizing tier's first pass or loop of a trace whose back edge
+/// calls the loop (see `lower::handoff`; `None` when `lir` has no loop
+/// entry, or one the replay cannot start from).
 /// `relocs`: the addresses the relocations stand for in the Vm the code is
 /// for.
 pub(crate) fn define<M: Module>(
     lir: &Lir,
     relocs: &[(crate::jit_backend::trace::RelocKind, i64)],
     module: &mut M,
-    at_loop: bool,
+    start: Start,
 ) -> Option<FuncId> {
-    let (root, regs): (u32, &[u32]) = match &lir.loop_entry {
-        Some((b, regs)) if at_loop => (*b, regs),
-        _ if at_loop => return None,
-        _ => (0, &[]),
+    let entry_at = match (&lir.loop_entry, start) {
+        (_, Start::Whole) => None,
+        (Some(e), _) => Some(e),
+        (None, _) => return None,
+    };
+    let root = match (entry_at, start) {
+        (Some(e), Start::Loop) => e.block,
+        _ => 0,
     };
     let mut an = live::Analysis::default();
-    live::analyze_from(lir, &mut an, root);
-    let reads = if at_loop {
-        let r = entry::live_in_vars(lir, &an, root, regs);
-        if r.is_none() && std::env::var_os("LUNA_B41_DIAG").is_some() {
-            eprintln!("B41 loop-entry refused");
+    live::analyze_from(lir, &mut an, start);
+    let reads = match (entry_at, start) {
+        (Some(e), Start::Loop) => {
+            let r = entry::live_in_vars(lir, &an, e);
+            if r.is_none() && std::env::var_os("LUNA_B41_DIAG").is_some() {
+                eprintln!("B41 loop-entry refused");
+            }
+            Some((e, r?))
         }
-        Some(r?)
-    } else {
-        None
+        _ => None,
     };
     let call_conv = module.isa().default_call_conv();
     let read_cost = ops::read_in_place_cost(module.isa().triple().architecture);
@@ -46,7 +54,15 @@ pub(crate) fn define<M: Module>(
     sig.params.push(AbiParam::new(types::I64));
     sig.returns.push(AbiParam::new(types::I64));
     let fn_id = module
-        .declare_function("luna_jit_trace", Linkage::Local, &sig)
+        .declare_function(
+            match start {
+                // one module holds both functions of the optimizing tier
+                Start::Loop => "luna_jit_trace_loop",
+                _ => "luna_jit_trace",
+            },
+            Linkage::Local,
+            &sig,
+        )
         .ok()?;
     let mut ctx = module.make_context();
     ctx.func.signature = sig;
@@ -106,7 +122,12 @@ pub(crate) fn define<M: Module>(
         call_conv,
         hoisted: vec![None; relocs.len()],
         reloc_gv,
+        start,
+        ivars: Vec::new(),
     };
+    if let Some((_, (_, taken))) = &reads {
+        r.inherit_vars(taken);
+    }
     // each block is sealed once its last predecessor branches to it: with
     // every block left open until the end, Cranelift's SSA construction
     // gives loop heads and merges a parameter for each variable read there,
@@ -116,7 +137,7 @@ pub(crate) fn define<M: Module>(
     for &blk in &an.order {
         let (lo, hi) = an.block_at[blk as usize];
         for c in lo..hi {
-            for t in targets(&lir.insts[an.code[c as usize] as usize])
+            for t in targets(&lir.insts[an.code[c as usize] as usize], start)
                 .into_iter()
                 .flatten()
             {
@@ -129,8 +150,8 @@ pub(crate) fn define<M: Module>(
         r.b.switch_to_block(cb);
         if blk == root {
             hoist(&mut r, &an, relocs, read_cost);
-            if let Some(reads) = &reads {
-                r.read_regs(regs, reads);
+            if let Some((e, (reads, _))) = &reads {
+                r.read_regs(&e.regs, reads);
             }
         }
         // a block no branch reaches (the entry, or the hot exit of a
@@ -142,8 +163,17 @@ pub(crate) fn define<M: Module>(
         let (lo, hi) = an.block_at[blk as usize];
         for c in lo..hi {
             let i = lir.insts[an.code[c as usize] as usize];
+            if let Some((_, (_, taken))) = &reads {
+                if blk == root && c + 1 == hi {
+                    r.take_inherited(taken);
+                }
+                r.inherited_uses(&i);
+            }
             r.inst(&i);
-            for t in targets(&i).into_iter().flatten() {
+            if reads.is_some() {
+                r.inherited_def(&i);
+            }
+            for t in targets(&i, start).into_iter().flatten() {
                 preds[t as usize] -= 1;
                 if preds[t as usize] == 0 {
                     r.b.seal_block(r.blocks[t as usize].expect("laid out"));

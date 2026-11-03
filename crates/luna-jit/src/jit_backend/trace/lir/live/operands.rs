@@ -75,3 +75,30 @@ pub(crate) fn succs(lir: &Lir, b: u32) -> [u32; 2] {
         _ => [NONE, NONE],
     }
 }
+
+/// Which function of a trace's instructions is compiled: the trace, or one
+/// of the two the optimizing tier makes of a looping one (see
+/// `lower::handoff`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Start {
+    Whole,
+    /// From `loop_entry`, each `TierCount` going on to its continuation.
+    Loop,
+    /// From the entry, each `TierCount` going to its hot block, which calls
+    /// the loop.
+    FirstPass,
+}
+
+/// The blocks `b` goes on to, a `TierCount` to its hot block only with
+/// `hot_only`.
+pub(super) fn succs_of(lir: &Lir, b: u32, hot_only: bool) -> [u32; 2] {
+    let s = succs(lir, b);
+    let last = lir.blocks[b as usize].last;
+    match lir.insts.get(last as usize) {
+        Some(Inst {
+            op: Op::TierCount { .. },
+            ..
+        }) if hot_only => [s[0], NONE],
+        _ => s,
+    }
+}

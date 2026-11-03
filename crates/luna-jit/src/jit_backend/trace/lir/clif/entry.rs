@@ -4,12 +4,19 @@
 
 use super::*;
 
-/// Per variable, whether the function starting at `root` reads it before
-/// writing it on some path (the replay's paths: a `TierCount` goes on to
-/// its continuation only). `None` when it reads a value no instruction
-/// there defines (but `reg_state`), or such a variable that is not one of
-/// the registers `regs` names: nothing can set those up.
-pub(crate) fn live_in_vars(lir: &Lir, an: &live::Analysis, root: u32, regs: &[u32]) -> Option<Vec<bool>> {
+/// What the loop's function, starting at `e.block`, reads before writing on
+/// some path (the replay's paths: a `TierCount` goes on to its continuation
+/// only): per variable, whether it is read so, and the values of
+/// `e.inherit` read so, which the loop takes from their variables at the
+/// end of `e.block`. `None` when it reads so a value no instruction there
+/// defines (but `reg_state` and those of `e.inherit`), or a variable that
+/// is not one of the registers `e.regs` names: nothing can set those up.
+pub(crate) fn live_in_vars(
+    lir: &Lir,
+    an: &live::Analysis,
+    e: &LoopEntry,
+) -> Option<(Vec<bool>, Vec<(u32, u32)>)> {
+    let (root, regs) = (e.block, &e.regs[..]);
     let nv = lir.value_ty.len();
     let nreg = nv + lir.var_ty.len();
     let words = nreg.div_ceil(64);
@@ -63,22 +70,34 @@ pub(crate) fn live_in_vars(lir: &Lir, an: &live::Analysis, root: u32, regs: &[u3
             }
         }
     }
-    let at = &live[slot[root as usize] as usize * words..][..words];
+    let rj = slot[root as usize] as usize;
+    let (at, root_kill) = (&live[rj * words..][..words], &kill[rj * words..][..words]);
     let mut reads = vec![false; lir.var_ty.len()];
+    let mut taken = Vec::new();
     for x in (0..nreg as u32).filter(|&x| has(at, x)) {
-        if (x as usize) < nv {
-            if x != lir.arg0 {
+        let var = if (x as usize) < nv {
+            if x == lir.arg0 {
+                continue;
+            }
+            let &(k, v) = e.inherit.iter().find(|&&(_, v)| v == x)?;
+            if !an.code.iter().any(|&c| lir.insts[c as usize].dst == v) {
                 return None;
             }
-            continue;
-        }
-        let var = x - nv as u32;
+            taken.push((k, v));
+            // read at the end of `root`, after what it writes
+            if has(root_kill, (nv as u32) + k) {
+                continue;
+            }
+            k
+        } else {
+            x - nv as u32
+        };
         if !regs.contains(&var) {
             return None;
         }
         reads[var as usize] = true;
     }
-    Some(reads)
+    Some((reads, taken))
 }
 
 impl Replay<'_, '_> {
@@ -94,6 +113,58 @@ impl Replay<'_, '_> {
                     .load(types::I64, MemFlagsData::new(), reg_state, (i as i32) * 8);
                 self.b.def_var(self.vars[var as usize], x);
             }
+        }
+    }
+
+    /// Gives each value `taken` names a variable of its own.
+    pub(super) fn inherit_vars(&mut self, taken: &[(u32, u32)]) {
+        self.ivars = vec![None; self.lir.value_ty.len()];
+        for &(_, v) in taken {
+            let t = cty(self.lir.value_ty[v as usize]);
+            self.ivars[v as usize] = Some(self.b.declare_var(t));
+        }
+    }
+
+    /// At the end of `loop_entry`: each inherited value from the variable
+    /// the loop head took it from.
+    pub(super) fn take_inherited(&mut self, taken: &[(u32, u32)]) {
+        for &(k, v) in taken {
+            let x = self.b.use_var(self.vars[k as usize]);
+            let iv = self.ivars[v as usize].expect("declared");
+            self.b.def_var(iv, x);
+        }
+    }
+
+    /// Reads the inherited values `i` reads from their variables.
+    pub(super) fn inherited_uses(&mut self, i: &Inst) {
+        let nv = self.lir.value_ty.len() as u32;
+        let mut uses: [u32; 8] = [NONE; 8];
+        let mut n = 0;
+        let mut more = Vec::new();
+        live::for_uses(self.lir, i, |x| {
+            if x < nv && self.ivars[x as usize].is_some() {
+                if n < 8 {
+                    uses[n] = x;
+                    n += 1;
+                } else {
+                    more.push(x);
+                }
+            }
+        });
+        for x in uses[..n].iter().chain(&more) {
+            let iv = self.ivars[*x as usize].expect("declared");
+            let v = self.b.use_var(iv);
+            self.vals[*x as usize] = Some(v);
+        }
+    }
+
+    /// Writes an inherited value `i` defines to its variable.
+    pub(super) fn inherited_def(&mut self, i: &Inst) {
+        if i.dst != NONE
+            && let Some(iv) = self.ivars[i.dst as usize]
+        {
+            let v = self.v(i.dst);
+            self.b.def_var(iv, v);
         }
     }
 }

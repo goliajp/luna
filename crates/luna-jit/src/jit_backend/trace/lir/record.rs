@@ -247,7 +247,23 @@ impl Emit for Lir {
         unreachable!("only AOT lowering declares data, and it builds Cranelift IR")
     }
     fn set_loop_entry(&mut self, at: Block, regs: &[cranelift_frontend::Variable]) {
-        self.loop_entry = Some((at.as_u32(), regs.iter().map(|r| r.as_u32()).collect()));
+        let block = at.as_u32();
+        // the loop head `block` jumps to, and what its code took from the
+        // back edges
+        let last = self.blocks[block as usize].last;
+        let head = self.insts[last as usize].a;
+        let inherit = match self.inherited.iter().find(|(b, _)| *b == head) {
+            Some(&(_, (at, n))) => (0..n)
+                .map(|k| (k, self.snaps[(at + k) as usize]))
+                .filter(|&(_, v)| v != NONE)
+                .collect(),
+            None => Vec::new(),
+        };
+        self.loop_entry = Some(LoopEntry {
+            block,
+            regs: regs.iter().map(|r| r.as_u32()).collect(),
+            inherit,
+        });
     }
     fn tier_count(&mut self, cell: i64, at: u32, hot: Block, cont: Block) {
         self.edge(hot);

@@ -217,7 +217,6 @@ fn emit_trace<E: Emit>(
     // commits everything anyway, and the exits store more
     lower.at_exits = at_exits && (0..pl.effective_end).all(|i| !syncs_before(pl.record, pl, i));
     let lw = &mut lower;
-    emit_loop_entry(lw, pl)?;
     emit_fold_precheck(lw, pl);
     emit_readonly_precheck(lw, pl);
     emit_step_precheck(lw, pl);
@@ -226,6 +225,8 @@ fn emit_trace<E: Emit>(
     if let Some(lc) = loop_copy {
         emit_loop_copy(lw, pl, lc)?;
     }
+    // last, so that it takes nothing from the blocks lowered before it
+    emit_loop_entry(lw)?;
     let Lower {
         entry,
         bcx,
@@ -238,18 +239,13 @@ fn emit_trace<E: Emit>(
         materialize_emit_count,
         closure_seen,
         escape,
-        mut tier_count,
+        tier_count,
         loop_entry,
-        loops,
         ..
     } = lower;
     let mut bcx = bcx;
-    match (&mut tier_count, loop_entry) {
-        (Some(t), Some(at)) if loops => {
-            luna_core::__private::set_tier_up_at_loop(t, None);
-            bcx.set_loop_entry(at, &entry.regs_full);
-        }
-        _ => {}
+    if let Some(at) = loop_entry {
+        bcx.set_loop_entry(at, &entry.regs_full);
     }
     Some((
         bcx,

@@ -11,6 +11,7 @@ use cranelift_codegen::ir::{
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Linkage, Module};
+use live::Start;
 
 mod define;
 mod entry;
@@ -56,6 +57,11 @@ struct Replay<'a, 'f> {
     /// a string key or a function checked against read anew at each use
     /// inside the loop ([`HOISTED`]).
     hoisted: Vec<Option<Value>>,
+    start: live::Start,
+    /// In the loop's function, per value the loop head takes from the back
+    /// edges (see `LoopEntry::inherit`): the variable the replay carries it
+    /// in, which `loop_entry` sets from the variable it was taken from.
+    ivars: Vec<Option<Variable>>,
 }
 
 /// The most relocations read in the entry block ([`ops::hoist`]).
@@ -203,10 +209,15 @@ impl Replay<'_, '_> {
                 let o0 = self.v(i.a);
                 self.b.ins().brif(o0, tb, &ta, eb, &ea);
             }
-            // only the baseline tier counts iterations
+            // only the baseline tier counts iterations; the first pass's
+            // function goes on in the loop's (see `lower::handoff`)
             Op::TierCount { .. } => {
-                let cont = self.blocks[i.c as usize].expect("reachable");
-                self.b.ins().jump(cont, &[]);
+                let to = match self.start {
+                    live::Start::FirstPass => i.b,
+                    _ => i.c,
+                };
+                let to = self.blocks[to as usize].expect("reachable");
+                self.b.ins().jump(to, &[]);
             }
             Op::Call | Op::CallIndirect => {
                 let (callee, target) = match i.op {

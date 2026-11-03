@@ -81,8 +81,12 @@ pub(crate) struct TraceImage {
     pub(crate) side_parent: Option<(u32, usize, u64)>,
     /// `None` for a trace nothing can enter, which keeps no code.
     pub(crate) code: Option<(Tier, Code)>,
-    /// The optimizing tier's code, once some Vm compiled it.
+    /// The optimizing tier's code, once some Vm compiled it: for a trace
+    /// whose back edge calls the optimizing tier's loop, its first pass,
+    /// set after `optimized_loop`.
     pub(crate) optimized: std::sync::OnceLock<Code>,
+    /// The optimizing tier's loop of such a trace.
+    pub(crate) optimized_loop: std::sync::OnceLock<Code>,
     /// The baseline code's instructions, for a Vm that moves the trace to
     /// the optimizing tier before any other did.
     pub(crate) lir: Option<std::sync::Arc<lir::Lir>>,
@@ -141,6 +145,7 @@ pub(crate) fn build(
         side_parent,
         code: cap.code,
         optimized: std::sync::OnceLock::new(),
+        optimized_loop: std::sync::OnceLock::new(),
         lir: cap.lir,
         size,
     })

@@ -20,16 +20,12 @@ pub struct TierUp {
     /// rather than run once, and the trace moves after
     /// `at / TIER_UP_REUSED_DIVISOR` iterations and entries.
     pub(crate) calls_at: u32,
-    /// The optimizing tier's entry once compiled (null before), for a
-    /// trace whose code does not enter it at the loop.
+    /// The optimizing tier's entry once compiled (null before).
     pub(crate) optimized: TCellPtr,
     /// The optimizing tier's loop once compiled (null before), for a trace
-    /// whose code enters it at the loop: the baseline code's back edge
-    /// calls it with the loop head's registers in `reg_state`, once its
-    /// count reaches `at`.
+    /// whose code calls it from its back edge with the loop head's
+    /// registers in `reg_state` (see `__private::set_tier_up_loop`).
     pub(crate) looped: TCellPtr,
-    /// The optimizing tier's code is entered at the loop (`looped`).
-    pub(crate) at_loop: bool,
     /// Set once the optimizing tier was asked, whatever it answered.
     pub(crate) tried: TCellBool,
     /// For a side trace: the parent's exit cells holding this trace's entry
@@ -50,7 +46,6 @@ impl TierUp {
             calls_at,
             optimized: TCellPtr::null(),
             looped: TCellPtr::null(),
-            at_loop: false,
             tried: TCellBool::new(false),
             parent_cells: [TCellPtr::null(), TCellPtr::null()],
             source: TRefLock::new(None),

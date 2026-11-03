@@ -158,13 +158,10 @@ impl CompiledTrace {
     ///   the entry and exit tags and the window size `parts` states (the
     ///   dispatcher moves registers in and out by them unchecked), that
     ///   lives as long as any Vm the trace is installed on.
-    /// - A `tier_up` marked as entering the optimizing tier at the loop
-    ///   (`__private::set_tier_up_at_loop`) belongs to code whose back edge
-    ///   calls the loop its cell (`__private::tier_up_loop_cell`) holds,
-    ///   when that is not null, with the loop head's registers stored; the
-    ///   loop it was given, and the code the backend's tier-up returns for
-    ///   it, is a loop with the [`TraceFn`] ABI entered so, returning as
-    ///   the trace's code does.
+    /// - Code whose back edge calls the loop its `tier_up`'s loop cell
+    ///   (`__private::tier_up_loop_cell`) holds, when that is not null,
+    ///   stores the registers the loop head reads first and returns what
+    ///   the loop returns.
     /// - The cells whose addresses that code holds are the ones `parts`
     ///   owns: `exit_side_trace_ptrs`, the cells of the
     ///   `tags_side_trace_ptrs` slice (it is never resized, so they stay

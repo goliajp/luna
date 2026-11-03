@@ -147,20 +147,20 @@ pub fn tier_up_loop_cell(t: &crate::jit::trace_types::tier_up::TierUp) -> &crate
     &t.looped
 }
 
-/// Marks `t` as a trace whose code calls the optimizing tier's loop from
-/// its back edge (see [`tier_up_loop_cell`]): the code the backend's tier-up
-/// returns is that loop, entered with the loop head's registers, rather
-/// than an entry of the trace. `looped`: that loop, already compiled (the
-/// trace then moves no further). Only a trace not yet installed is marked;
-/// [`crate::jit::CompiledTrace::from_parts`] states what its code must be.
-pub fn set_tier_up_at_loop(
-    t: &mut crate::jit::trace_types::tier_up::TierUp,
-    looped: Option<crate::jit::trace::TraceFn>,
+/// Gives the trace `t` moves on the optimizing tier's loop its code's
+/// back edge calls (see [`tier_up_loop_cell`]), and asks for no further
+/// move: only the backend that compiled the trace does, from its tier-up
+/// or when it installs the trace.
+///
+/// # Safety
+/// `looped` is the optimizing tier's loop of the code `t` belongs to,
+/// compiled against its tags, window and cells: entered with `reg_state`
+/// holding the registers the loop head reads, as that code's back edge
+/// calls it, it returns as that code does.
+pub unsafe fn set_tier_up_loop(
+    t: &crate::jit::trace_types::tier_up::TierUp,
+    looped: crate::jit::trace::TraceFn,
 ) {
-    t.at_loop = true;
-    if let Some(f) = looped {
-        t.looped.set(f as *const () as *const u8);
-        t.count.set(t.at.saturating_sub(1));
-        t.tried.set(true);
-    }
+    t.looped.set(looped as *const () as *const u8);
+    t.tried.set(true);
 }
