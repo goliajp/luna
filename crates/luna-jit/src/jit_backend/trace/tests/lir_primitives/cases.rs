@@ -20,6 +20,7 @@ pub(super) enum IntOp {
     Smin,
     Smax,
     Sdiv,
+    Udiv,
     Umulhi,
 }
 
@@ -123,6 +124,7 @@ pub(super) fn emit<E: Sigs>(e: &mut E, case: &Case, p: Value) {
                 IntOp::Smin => e.smin(x, y),
                 IntOp::Smax => e.smax(x, y),
                 IntOp::Sdiv => e.sdiv(x, y),
+                IntOp::Udiv => e.udiv(x, y),
                 IntOp::Umulhi => e.umulhi(x, y),
             };
             out(e, p, 0, r);

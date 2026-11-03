@@ -237,6 +237,11 @@ fn integer_arithmetic_wraps_like_cranelift() {
         .filter(|&[x, y, ..]| y != 0 && !(x == i64::MIN && y == -1))
         .collect();
     check(&Case::Int(Sdiv, types::I64), &divisible);
+    let nonzero: Vec<_> = int_pairs()
+        .into_iter()
+        .filter(|&[_, y, ..]| y != 0)
+        .collect();
+    check(&Case::Int(Udiv, types::I64), &nonzero);
     check(&Case::Int(Umulhi, types::I64), &int_pairs());
 }
 

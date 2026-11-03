@@ -77,6 +77,7 @@ pub(crate) enum BinOp {
     Sub,
     Mul,
     Sdiv,
+    Udiv,
     Umulhi,
     Smin,
     Smax,
