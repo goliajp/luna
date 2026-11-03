@@ -102,7 +102,6 @@ impl Replay<'_, '_> {
     }
 
     fn inst(&mut self, i: &Inst) {
-        let lir = self.lir;
         let t = cty(i.ty);
         match i.op {
             Op::Iconst(n) => {
@@ -196,54 +195,12 @@ impl Replay<'_, '_> {
                     .ins()
                     .stack_store(types::I64, o0, self.slots[slot as usize], off);
             }
-            Op::Jump => {
-                let a = self.args(i);
-                let target = self.blocks[i.a as usize].expect("reachable");
-                let ba = self.block_args(&a);
-                self.b.ins().jump(target, &ba);
-            }
-            Op::Brif(n_then) => {
-                let a = self.args(i);
-                let (ta, ea) = a.split_at(n_then as usize);
-                let (tb, eb) = (
-                    self.blocks[i.b as usize].expect("reachable"),
-                    self.blocks[i.c as usize].expect("reachable"),
-                );
-                let (ta, ea) = (self.block_args(ta), self.block_args(ea));
-                let o0 = self.v(i.a);
-                self.b.ins().brif(o0, tb, &ta, eb, &ea);
-            }
-            // only the baseline tier counts iterations; the first pass's
-            // function goes on in the loop's (see `lower::handoff`)
-            Op::TierCount { .. } => {
-                let to = match self.start {
-                    live::Start::FirstPass => i.b,
-                    _ => i.c,
-                };
-                let to = self.blocks[to as usize].expect("reachable");
-                self.b.ins().jump(to, &[]);
-            }
-            Op::Call | Op::CallIndirect => {
-                let (callee, target) = match i.op {
-                    Op::Call => {
-                        let f = &lir.funcs[i.a as usize];
-                        (f, self.b.ins().iconst(types::I64, f.addr as i64))
-                    }
-                    _ => (&lir.sigs[i.b as usize], self.v(i.a)),
-                };
-                let sig = sig_of(lir, callee, self.call_conv);
-                let sref = self.b.import_signature(sig);
-                let a = self.args(i);
-                let call = self.b.ins().call_indirect(sref, target, &a);
-                if i.dst != NONE {
-                    let r = self.b.inst_results(call)[0];
-                    self.set(i.dst, r);
-                }
-            }
-            Op::Return => {
-                let r: Vec<Value> = (i.a != NONE).then(|| self.v(i.a)).into_iter().collect();
-                self.b.ins().return_(&r);
-            }
+            Op::Jump
+            | Op::Brif(_)
+            | Op::TierCount { .. }
+            | Op::Call
+            | Op::CallIndirect
+            | Op::Return => self.control(i),
             Op::VarRead => {
                 let v = self.b.use_var(self.vars[i.a as usize]);
                 self.set(i.dst, v);
