@@ -53,6 +53,9 @@ impl Vm {
         }) else {
             return false;
         };
+        if self.jit.active_trace.is_some() {
+            self.trace_link_at(cl.proto, pc);
+        }
         // `ct` is held across the dispatch, so its fields are borrowed
         let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
         let head_pc_val = ct.head_pc;
@@ -83,7 +86,7 @@ impl Vm {
         let mut ran = false;
         if dispatch_ok {
             debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
-            self.trace_reached_compiled(cl.proto, pc);
+            self.trace_drop_at_compiled();
             self.jit.pending_err = None;
             // an inline side exit pushes the inlined frames, which a deopt
             // pops
