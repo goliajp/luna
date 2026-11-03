@@ -67,7 +67,11 @@ impl Vm {
     pub(in crate::vm::exec) fn back_edge_paused(&mut self, proto: Gc<Proto>, target: u32) -> bool {
         // the stand-in slot the back-edge just started over
         self.jit.loop_hot.fill(u32::MAX);
-        if self.hot_paused_at(proto, target) {
+        let paused = match self.jit.step.quiet {
+            None => false,
+            Some(q) => self.hot_paused_slow(q, proto, target, true),
+        };
+        if paused {
             // nor in the function's count, which `back_edge_hot` raised
             let c = proto.trace_hot_count.get();
             proto.trace_hot_count.set(c.saturating_sub(1));
@@ -78,24 +82,31 @@ impl Vm {
 
     /// Whether a back-edge to, or a call reaching, `pc` of `proto` counts
     /// toward recording nothing: until the interpreter enters a trace,
-    /// returns from the frame the collection exit left, or reaches that
-    /// trace's head there, whichever comes first.
+    /// returns from the frame the collection exit left, reaches that
+    /// trace's head there, or takes another back-edge there, whichever
+    /// comes first.
     #[inline]
     pub(in crate::vm::exec) fn hot_paused_at(&mut self, proto: Gc<Proto>, pc: u32) -> bool {
         match self.jit.step.quiet {
             None => false,
-            Some(q) => self.hot_paused_slow(q, proto, pc),
+            Some(q) => self.hot_paused_slow(q, proto, pc, false),
         }
     }
 
+    /// A back-edge (`back_edge`) in the frame the exit left that goes
+    /// anywhere but the trace's head also ends the pause: a depth-0 loop
+    /// ends a trace, so no other back-edge of that frame lies inside it,
+    /// and reaching one means the trace's loop is over and the interpreter
+    /// runs what it would have run after the trace left normally.
     #[cold]
-    fn hot_paused_slow(&mut self, q: GcQuiet, proto: Gc<Proto>, pc: u32) -> bool {
+    fn hot_paused_slow(&mut self, q: GcQuiet, proto: Gc<Proto>, pc: u32, back_edge: bool) -> bool {
         let same_frame = matches!(
             self.frames.get(q.depth - 1),
             Some(CallFrame::Lua(f)) if f.base == q.base && f.closure.proto.ptr_eq(q.proto)
         );
+        let in_frame = same_frame && self.frames.len() == q.depth;
         let at_head = proto.ptr_eq(q.proto) && pc == q.head_pc;
-        if self.frames.len() < q.depth || !same_frame || at_head {
+        if self.frames.len() < q.depth || !same_frame || at_head || (back_edge && in_frame) {
             self.gc_quiet_end();
             return false;
         }
