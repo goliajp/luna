@@ -40,11 +40,7 @@ pub(crate) fn define<M: Module>(
     live::analyze_from(lir, &mut an, start);
     let reads = match (entry_at, start) {
         (Some(e), Start::Loop) => {
-            let r = entry::live_in_vars(lir, &an, e);
-            if r.is_none() && std::env::var_os("LUNA_B41_DIAG").is_some() {
-                eprintln!("B41 loop-entry refused");
-            }
-            Some((e, r?))
+            Some((e, entry::live_in_vars(lir, &an, e)?))
         }
         _ => None,
     };
@@ -54,15 +50,7 @@ pub(crate) fn define<M: Module>(
     sig.params.push(AbiParam::new(types::I64));
     sig.returns.push(AbiParam::new(types::I64));
     let fn_id = module
-        .declare_function(
-            match start {
-                // one module holds both functions of the optimizing tier
-                Start::Loop => "luna_jit_trace_loop",
-                _ => "luna_jit_trace",
-            },
-            Linkage::Local,
-            &sig,
-        )
+        .declare_function("luna_jit_trace", Linkage::Local, &sig)
         .ok()?;
     let mut ctx = module.make_context();
     ctx.func.signature = sig;
