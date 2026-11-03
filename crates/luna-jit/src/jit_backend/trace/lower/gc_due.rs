@@ -38,6 +38,11 @@ pub(super) fn emit_due_words<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> Option<Opti
     if !may_check(pl) {
         return Some(None);
     }
+    read_due_words(bcx).map(Some)
+}
+
+/// Calls `luna_jit_due_words` (see [`emit_due_words`]).
+pub(super) fn read_due_words<E: Emit>(bcx: &mut E) -> Option<Value> {
     let mut sig = bcx.make_signature();
     sig.returns.push(AbiParam::new(types::I64));
     let id = bcx
@@ -45,7 +50,7 @@ pub(super) fn emit_due_words<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> Option<Opti
         .ok()?;
     let f = bcx.import_func(id);
     let call = bcx.ins().call(f, &[]);
-    Some(Some(bcx.inst_results(call)[0]))
+    Some(bcx.inst_results(call)[0])
 }
 
 /// Whether the count has reached the point a step falls due at: no step

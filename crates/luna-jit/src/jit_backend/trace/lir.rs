@@ -26,6 +26,7 @@ mod a64;
 mod x64;
 
 pub(crate) use clif::define as define_clif;
+pub(crate) use live::Start;
 pub(crate) use code::{CodeArena, assemble};
 #[cfg(feature = "llvm-jit")]
 pub(crate) use llvm::compile as compile_llvm;
@@ -198,6 +199,18 @@ pub(crate) struct BlockData {
     pub(crate) inherit: (u32, u32),
 }
 
+/// Where the optimizing tier's loop starts: block `block`, which reads each
+/// register `regs` names (register `i`'s variable) from `reg_state`; it goes
+/// on to a loop head whose code took `inherit`, the value `(variable,
+/// value)` each variable held on every back edge, which the loop then reads
+/// in place of the variable.
+#[derive(Clone, Debug)]
+pub(crate) struct LoopEntry {
+    pub(crate) block: u32,
+    pub(crate) regs: Vec<u32>,
+    pub(crate) inherit: Vec<(u32, u32)>,
+}
+
 /// A function a trace calls, or the signature of one it calls indirectly.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Callee {
@@ -237,9 +250,11 @@ pub(crate) struct Lir {
     /// The values a block entered before being sealed inherits if it is
     /// sealed before anything is emitted into it.
     pub(crate) pending_inherit: Option<(u32, (u32, u32))>,
-    /// The block the optimizing tier's loop starts at, and the variable of
-    /// each register it reads from `reg_state` (see `lower::handoff`).
-    pub(crate) loop_entry: Option<(u32, Vec<u32>)>,
+    /// Where the optimizing tier's loop starts (see `lower::handoff`).
+    pub(crate) loop_entry: Option<LoopEntry>,
+    /// `(block, snapshot)` of each block that took the values its
+    /// predecessors agree on (see `Lir::edge`).
+    pub(crate) inherited: Vec<(u32, (u32, u32))>,
     /// A primitive the backend does not implement was emitted.
     pub(crate) unsupported: Option<&'static str>,
     /// The helpers declared by the first trace this `Lir` recorded, and how

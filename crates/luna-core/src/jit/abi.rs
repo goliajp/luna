@@ -182,11 +182,8 @@ pub unsafe trait TraceCompiler {
 
     /// Compiles `ct`, whose code came from a quicker, less optimizing code
     /// generator, again from its tier source (`__private::take_tier_source`);
-    /// the new entry behaves exactly like the old one. For a trace whose
-    /// tier-up is marked as entering at the loop
-    /// (`__private::set_tier_up_at_loop`), what this returns is the loop
-    /// its code's back edge calls instead. `None` when the backend has no
-    /// better code for it.
+    /// the new entry behaves exactly like the old one. `None` when the
+    /// backend has no better code for it.
     ///
     /// A backend that compiles better code in the background puts a source
     /// back (`__private::put_tier_source`; returning `None`, or quicker code

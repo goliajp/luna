@@ -15,7 +15,8 @@
 use super::*;
 
 mod operands;
-pub(crate) use operands::{for_defs, for_uses, succs};
+pub(crate) use operands::{Start, for_defs, for_uses, succs};
+use operands::succs_of;
 
 #[derive(Default)]
 pub(crate) struct Analysis {
@@ -50,6 +51,8 @@ pub(crate) struct Analysis {
     read: Vec<bool>,
     /// (loop head position, back edge position)
     pub(crate) loops: Vec<(u32, u32)>,
+    /// A `TierCount` goes on to its hot block only (see [`Start::FirstPass`]).
+    hot_only: bool,
     depth: Vec<i32>,
     writes: Vec<Vec<u32>>,
     /// `(value, variable, position)` of each variable read.
@@ -67,6 +70,7 @@ fn reset<T: Clone>(v: &mut Vec<T>, n: usize, x: T) {
 /// Reverse post-order of the blocks reachable from block `root`, into
 /// `an.order`.
 fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
+    let hot_only = an.hot_only;
     let n = lir.blocks.len();
     reset(&mut an.seen, n, false);
     an.order.clear();
@@ -81,7 +85,7 @@ fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
             continue;
         }
         top.1 += 1;
-        let s = succs(lir, b)[k as usize];
+        let s = succs_of(lir, b, hot_only)[k as usize];
         if s != NONE && !an.seen[s as usize] {
             an.seen[s as usize] = true;
             an.stack.push((s, 0));
@@ -92,11 +96,16 @@ fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
 
 /// Fills `an` for `lir`, reusing its buffers.
 pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
-    analyze_from(lir, an, 0);
+    analyze_from(lir, an, Start::Whole);
 }
 
-/// [`analyze`] for the function that starts at block `root`.
-pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, root: u32) {
+/// [`analyze`] for the function `start` names.
+pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, start: Start) {
+    an.hot_only = start == Start::FirstPass;
+    let root = match (start, &lir.loop_entry) {
+        (Start::Loop, Some(e)) => e.block,
+        _ => 0,
+    };
     let nv = lir.value_ty.len() as u32;
     let nreg = (nv as usize) + lir.var_ty.len();
     layout(lir, an, root);
@@ -117,7 +126,7 @@ pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, root: u32) {
     for &b in &an.order {
         let (lo, hi) = an.block_at[b as usize];
         if hi > lo {
-            for s in succs(lir, b) {
+            for s in succs_of(lir, b, an.hot_only) {
                 if s != NONE && an.block_at[s as usize].0 <= lo {
                     an.loops.push((2 * an.block_at[s as usize].0, 2 * hi - 1));
                 }

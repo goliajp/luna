@@ -1,42 +1,9 @@
 //! One recorded instruction as LLVM IR, with Cranelift's semantics.
 
 use super::*;
+use super::preds::{float_pred, int_pred};
 use inkwell::values::BasicValueEnum;
-use inkwell::{FloatPredicate, IntPredicate};
-
-fn int_pred(cc: IntCC) -> IntPredicate {
-    match cc {
-        IntCC::Equal => IntPredicate::EQ,
-        IntCC::NotEqual => IntPredicate::NE,
-        IntCC::SignedLessThan => IntPredicate::SLT,
-        IntCC::SignedGreaterThanOrEqual => IntPredicate::SGE,
-        IntCC::SignedGreaterThan => IntPredicate::SGT,
-        IntCC::SignedLessThanOrEqual => IntPredicate::SLE,
-        IntCC::UnsignedLessThan => IntPredicate::ULT,
-        IntCC::UnsignedGreaterThanOrEqual => IntPredicate::UGE,
-        IntCC::UnsignedGreaterThan => IntPredicate::UGT,
-        IntCC::UnsignedLessThanOrEqual => IntPredicate::ULE,
-    }
-}
-
-fn float_pred(cc: FloatCC) -> FloatPredicate {
-    match cc {
-        FloatCC::Ordered => FloatPredicate::ORD,
-        FloatCC::Unordered => FloatPredicate::UNO,
-        FloatCC::Equal => FloatPredicate::OEQ,
-        FloatCC::NotEqual => FloatPredicate::UNE,
-        FloatCC::OrderedNotEqual => FloatPredicate::ONE,
-        FloatCC::UnorderedOrEqual => FloatPredicate::UEQ,
-        FloatCC::LessThan => FloatPredicate::OLT,
-        FloatCC::LessThanOrEqual => FloatPredicate::OLE,
-        FloatCC::GreaterThan => FloatPredicate::OGT,
-        FloatCC::GreaterThanOrEqual => FloatPredicate::OGE,
-        FloatCC::UnorderedOrLessThan => FloatPredicate::ULT,
-        FloatCC::UnorderedOrLessThanOrEqual => FloatPredicate::ULE,
-        FloatCC::UnorderedOrGreaterThan => FloatPredicate::UGT,
-        FloatCC::UnorderedOrGreaterThanOrEqual => FloatPredicate::UGE,
-    }
-}
+use inkwell::IntPredicate;
 
 impl<'c> Gen<'c, '_> {
     /// A comparison's `i1` as the `i8` 0 / 1 Cranelift gives.
@@ -192,7 +159,7 @@ impl<'c> Gen<'c, '_> {
         })
     }
 
-    fn load(&self, ty: BasicTypeEnum<'c>, p: PointerValue<'c>) -> R<BasicValueEnum<'c>> {
+    pub(super) fn load(&self, ty: BasicTypeEnum<'c>, p: PointerValue<'c>) -> R<BasicValueEnum<'c>> {
         let v = b(self.b.build_load(ty, p, ""))?;
         if let Some(inst) = v.as_instruction_value() {
             inst.set_alignment(1).map_err(|_| "llvm:builder")?;
@@ -296,8 +263,14 @@ impl<'c> Gen<'c, '_> {
             }
             Op::Brif(n_then) => self.brif(i, n_then)?,
             // only the baseline tier counts iterations
+            // the first pass's function goes on in the loop's (see
+            // `lower::handoff`)
             Op::TierCount { .. } => {
-                let to = self.edge(i.c, &[])?;
+                let to = match self.start {
+                    super::super::Start::FirstPass => i.b,
+                    _ => i.c,
+                };
+                let to = self.edge(to, &[])?;
                 b(bb.build_unconditional_branch(to))?;
             }
             Op::Call | Op::CallIndirect => self.call(i)?,

@@ -19,6 +19,8 @@ use inkwell::values::{
     PhiValue, PointerValue,
 };
 
+mod body;
+mod preds;
 mod ops;
 
 pub(super) type R<T> = Result<T, &'static str>;
@@ -27,33 +29,36 @@ pub(super) fn b<T>(r: Result<T, BuilderError>) -> R<T> {
     r.map_err(|_| "llvm:builder")
 }
 
-/// The trace function compiled from `lir`, or with `at_loop` the
-/// optimizing tier's loop (see `lower::handoff`), and the pair that keeps
-/// its code mapped. `relocs`: the addresses the relocations stand for in
+/// The function `start` names (see `clif::define`) compiled from `lir`,
+/// and the pair that keeps its code mapped. `relocs`: the addresses the relocations stand for in
 /// the Vm the code is for.
 pub(crate) fn compile(
     lir: &Lir,
     relocs: &[(crate::jit_backend::trace::RelocKind, i64)],
-    at_loop: bool,
+    start: super::Start,
 ) -> R<(*const u8, luna_jit_llvm::EnginePair)> {
     if let Some(u) = lir.unsupported {
         return Err(u);
     }
-    let (root, regs): (u32, &[u32]) = match &lir.loop_entry {
-        Some((b, regs)) if at_loop => (*b, regs),
-        _ if at_loop => return Err("llvm:no-loop-entry"),
-        _ => (0, &[]),
+    let e = match (&lir.loop_entry, start) {
+        (_, super::Start::Whole) => None,
+        (Some(e), _) => Some(e),
+        (None, _) => return Err("llvm:no-loop-entry"),
     };
     let mut an = live::Analysis::default();
-    live::analyze_from(lir, &mut an, root);
-    let reads = match at_loop {
-        true => super::clif::live_in_vars(lir, &an, root, regs).ok_or("llvm:loop-entry-reads")?,
-        false => Vec::new(),
+    live::analyze_from(lir, &mut an, start);
+    let (root, e, (reads, taken)) = match (e, start) {
+        (Some(e), super::Start::Loop) => {
+            let r = super::clif::live_in_vars(lir, &an, e).ok_or("llvm:loop-entry-reads")?;
+            (e.block, Some(e), r)
+        }
+        _ => (0, None, (Vec::new(), Vec::new())),
     };
     luna_jit_llvm::compile_function(|ctx, module| {
         let builder = ctx.create_builder();
         let mut g = Gen::new(ctx, module, &builder, lir, relocs)?;
-        g.body(&an, root, regs, &reads)
+        g.start = start;
+        g.body(&an, root, e, (&reads, &taken))
     })
 }
 
@@ -70,6 +75,11 @@ pub(super) struct Gen<'c, 'a> {
     pub(super) phis: Vec<Vec<PhiValue<'c>>>,
     pub(super) vars: Vec<PointerValue<'c>>,
     pub(super) slots: Vec<PointerValue<'c>>,
+    /// The function compiled (see `clif::define`).
+    pub(super) start: super::Start,
+    /// In the loop's function, the home of each value the loop head takes
+    /// from the back edges (see `LoopEntry::inherit`).
+    pub(super) ihomes: Vec<Option<PointerValue<'c>>>,
 }
 
 impl<'c, 'a> Gen<'c, 'a> {
@@ -105,6 +115,8 @@ impl<'c, 'a> Gen<'c, 'a> {
             phis: vec![Vec::new(); lir.blocks.len()],
             vars: Vec::with_capacity(lir.var_ty.len()),
             slots: Vec::with_capacity(lir.slots.len()),
+            start: super::Start::Whole,
+            ihomes: Vec::new(),
         })
     }
 
@@ -138,74 +150,6 @@ impl<'c, 'a> Gen<'c, 'a> {
 
     pub(super) fn set(&mut self, dst: u32, v: impl BasicValue<'c>) {
         self.vals[dst as usize] = Some(v.as_basic_value_enum());
-    }
-
-    /// The function's code: a block making the variables' and stack slots'
-    /// homes, then the trace's blocks in layout order.
-    /// `root`: the block the function starts at; `reads`, per variable,
-    /// whether it is one of the registers `regs` names read from
-    /// `reg_state` first (see `clif::live_in_vars`).
-    fn body(&mut self, an: &live::Analysis, root: u32, regs: &[u32], reads: &[bool]) -> R<()> {
-        let lir = self.lir;
-        let entry = self.ctx.append_basic_block(self.f, "homes");
-        for &blk in &an.order {
-            self.blocks[blk as usize] = Some(self.ctx.append_basic_block(self.f, ""));
-        }
-        self.b.position_at_end(entry);
-        // a variable read on a path that never wrote it is zero, as in
-        // Cranelift
-        for &t in &lir.var_ty {
-            let ty = self.ty(t);
-            let home = b(self.b.build_alloca(ty, ""))?;
-            let zero: BasicValueEnum = match t {
-                Ty::F64 => self.ctx.f64_type().const_zero().into(),
-                _ => self.ity(t).const_zero().into(),
-            };
-            b(self.b.build_store(home, zero))?;
-            self.vars.push(home);
-        }
-        for &(size, align) in &lir.slots {
-            let ty = self.ctx.i8_type().array_type(size);
-            let slot = b(self.b.build_alloca(ty, ""))?;
-            let inst = slot.as_instruction().ok_or("llvm:builder")?;
-            inst.set_alignment(1 << align).map_err(|_| "llvm:builder")?;
-            self.slots.push(slot);
-        }
-        if lir.arg0 != NONE {
-            let p = self.f.get_nth_param(0).ok_or("llvm:builder")?;
-            self.vals[lir.arg0 as usize] = Some(p);
-        }
-        for (i, &var) in regs.iter().enumerate() {
-            if reads.get(var as usize).copied().unwrap_or(false) {
-                let p = self.addr(self.iv(lir.arg0), (i as i32) * 8)?;
-                let x = self.load(self.ctx.i64_type().into(), p)?;
-                b(self.b.build_store(self.vars[var as usize], x))?;
-            }
-        }
-        let first = self.blocks[root as usize].ok_or("llvm:no-entry-block")?;
-        b(self.b.build_unconditional_branch(first))?;
-        for &blk in &an.order {
-            if blk == root {
-                continue;
-            }
-            let bb = self.blocks[blk as usize].expect("laid out");
-            self.b.position_at_end(bb);
-            for &p in lir.block_params(blk) {
-                let phi = b(self.b.build_phi(self.ty(lir.value_ty[p as usize]), ""))?;
-                self.vals[p as usize] = Some(phi.as_basic_value());
-                self.phis[blk as usize].push(phi);
-            }
-        }
-        for &blk in &an.order {
-            let bb = self.blocks[blk as usize].expect("laid out");
-            self.b.position_at_end(bb);
-            let (lo, hi) = an.block_at[blk as usize];
-            for c in lo..hi {
-                let i = lir.insts[an.code[c as usize] as usize];
-                self.inst(&i)?;
-            }
-        }
-        Ok(())
     }
 
     /// The arguments of `i`.

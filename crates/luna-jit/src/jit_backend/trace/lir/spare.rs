@@ -33,6 +33,7 @@ impl Lir {
                 l.cur = NONE;
                 l.unsupported = None;
                 l.loop_entry = None;
+                l.inherited.clear();
                 l.pending_inherit = None;
                 l
             }

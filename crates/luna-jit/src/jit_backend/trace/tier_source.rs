@@ -2,6 +2,7 @@
 
 use super::image::TraceImage;
 use super::*;
+use crate::jit_backend::storage::CraneliftJitStorage;
 use std::sync::Arc;
 
 /// What a baseline trace moves to the optimizing tier from: its
@@ -68,23 +69,37 @@ pub(crate) fn tier_up(
 ) -> Option<TraceFn> {
     let source = luna_core::__private::take_tier_source(ct)?;
     let src = source.downcast::<TierSource>().ok()?;
-    clif_tier_up(storage, &src, ct.head_pc())
+    clif_tier_up(storage, &src, ct)
 }
 
-/// Cranelift's code for the trace `src` holds.
+/// Cranelift's code for the trace `src` holds. For a trace whose back edge
+/// calls the optimizing tier's loop (see `lower::handoff`), two functions:
+/// the loop, which goes into `ct`'s loop cell, and the first pass, which
+/// calls it and is returned as the entry.
 pub(crate) fn clif_tier_up(
     storage: &mut dyn luna_core::__private::JitStorage,
     src: &TierSource,
-    head_pc: u32,
+    ct: &CompiledTrace,
 ) -> Option<TraceFn> {
+    let head_pc = ct.head_pc();
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
-    if let Some(code) = src.image.as_ref().and_then(|i| i.optimized.get()) {
-        let n = code.bytes.len();
-        let entry = cs
-            .baseline_code
-            .place_with(n, |out| code.write_to(out, |k| src.relocs[k].1))
-            .ok()?;
-        super::code_dump::dump_len("tier-up-image", head_pc, entry, n);
+    let at_loop = src.lir.loop_entry.is_some();
+    if let Some(img) = &src.image
+        && let Some(code) = img.optimized.get()
+    {
+        let place = |cs: &mut CraneliftJitStorage, code: &reloc::Code| {
+            cs.baseline_code
+                .place_with(code.bytes.len(), |out| code.write_to(out, |k| src.relocs[k].1))
+                .ok()
+        };
+        if at_loop {
+            let p = place(cs, img.optimized_loop.get()?)?;
+            // SAFETY: the image's optimizing tier's loop of this trace, with
+            // this Vm's addresses written in
+            unsafe { set_loop(ct, p) };
+        }
+        let entry = place(cs, code)?;
+        super::code_dump::dump_len("tier-up-image", head_pc, entry, code.bytes.len());
         // SAFETY: as in `install`: the optimizing tier's code for this
         // trace, with this Vm's addresses written in
         return Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) });
@@ -92,24 +107,54 @@ pub(crate) fn clif_tier_up(
     let mut module =
         crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
     let (lir, relocs) = src.optimizing_lir();
-    // the loop only, when the baseline code calls it from its back edge
-    let at_loop = src.lir.loop_entry.is_some();
-    let fn_id = lir::define_clif(&lir, &relocs, &mut *module, at_loop)?;
+    let looped = match at_loop {
+        true => {
+            let id = lir::define_clif(&lir, &relocs, &mut *module, lir::Start::Loop);
+            if std::env::var_os("LUNA_B41_DIAG").is_some() {
+                eprintln!("B41 loop define {:?}", id.is_some());
+            }
+            let id = id?;
+            Some((id, reloc::take_sites()))
+        }
+        false => None,
+    };
+    let start = if at_loop { lir::Start::FirstPass } else { lir::Start::Whole };
+    let fn_id = lir::define_clif(&lir, &relocs, &mut *module, start);
+    if std::env::var_os("LUNA_B41_DIAG").is_some() {
+        eprintln!("B41 first define {:?} {:?}", start, fn_id.is_some());
+    }
+    let fn_id = fn_id?;
+    let sites = reloc::take_sites();
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);
     super::code_dump::dump("tier-up", head_pc, ptr);
-    let sites = reloc::take_sites();
+    let looped = looped.map(|(id, sites)| (module.get_finalized_function(id), sites));
+    if let Some((p, _)) = looped {
+        super::code_dump::dump("tier-up-loop", head_pc, p);
+        // SAFETY: the loop `define_clif` compiled for this trace, in the
+        // module the storage keeps below
+        unsafe { set_loop(ct, p) };
+    }
     cs.trace_handles.push(TraceHandle {
         _module: module.publish(),
         _entry_raw: ptr,
     });
     if let (Some(img), Some((len, sites))) = (&src.image, sites) {
         // SAFETY: `ptr..ptr + len` is the function just finalized, which
-        // the storage keeps mapped
+        // the storage keeps mapped; so is the loop's
         let code = unsafe { reloc::copy_code(ptr, len, sites) };
-        let size = code.bytes.len();
-        if img.optimized.set(code).is_ok()
+        let lcode = match looped {
+            Some((p, Some((n, s)))) => Some(unsafe { reloc::copy_code(p, n, s) }),
+            _ => None,
+        };
+        let size = code.bytes.len() + lcode.as_ref().map_or(0, |c| c.bytes.len());
+        let ok = match lcode {
+            Some(l) => img.optimized_loop.set(l).is_ok(),
+            None => !at_loop,
+        };
+        if ok
+            && img.optimized.set(code).is_ok()
             && let Some(engine) = &cs.engine
         {
             engine.cache().grew(size);
@@ -118,4 +163,19 @@ pub(crate) fn clif_tier_up(
     // SAFETY: `define_clif` declares the `TraceFn` signature, `(i64) -> i64`
     // in the platform calling convention, and `storage` now owns the module
     Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) })
+}
+
+/// Puts the optimizing tier's loop at `p` into `ct`'s loop cell.
+///
+/// # Safety
+/// `p` is the optimizing tier's loop of `ct`'s code, mapped as long as the
+/// Vm holds `ct`.
+pub(crate) unsafe fn set_loop(ct: &CompiledTrace, p: *const u8) {
+    if let Some(t) = ct.tier_up() {
+        // SAFETY: by the caller, with the `TraceFn` ABI the loop is compiled
+        // with (`lir::define_clif`, `lir::compile_llvm`)
+        unsafe {
+            luna_core::__private::set_tier_up_loop(t, std::mem::transmute::<*const u8, TraceFn>(p))
+        };
+    }
 }

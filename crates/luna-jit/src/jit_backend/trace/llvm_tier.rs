@@ -50,10 +50,37 @@ fn install(storage: &mut dyn luna_core::__private::JitStorage, c: Compiled) -> O
     Some(unsafe { std::mem::transmute::<usize, TraceFn>(entry) })
 }
 
-/// `at_loop`: the optimizing tier's loop of a baseline trace that calls it
-/// from its back edge (see `lower::handoff`), rather than the whole trace.
-fn compile(lir: &lir::Lir, relocs: &[(RelocKind, i64)], at_loop: bool) -> Compiled {
-    lir::compile_llvm(lir, relocs, at_loop).map(|(e, p)| (e as usize, p))
+fn compile(lir: &lir::Lir, relocs: &[(RelocKind, i64)], start: lir::Start) -> Compiled {
+    lir::compile_llvm(lir, relocs, start).map(|(e, p)| (e as usize, p))
+}
+
+/// The optimizing tier's code of a baseline trace: for one whose back edge
+/// calls the optimizing tier's loop (see `lower::handoff`), the loop and
+/// the first pass, else the whole trace.
+type Tiered = (Option<Compiled>, Compiled);
+
+fn compile_tier(lir: &lir::Lir, relocs: &[(RelocKind, i64)], at_loop: bool) -> Tiered {
+    match at_loop {
+        true => (
+            Some(compile(lir, relocs, lir::Start::Loop)),
+            compile(lir, relocs, lir::Start::FirstPass),
+        ),
+        false => (None, compile(lir, relocs, lir::Start::Whole)),
+    }
+}
+
+/// Installs `t` for `ct`: the loop into its loop cell, then the entry.
+fn install_tier(
+    storage: &mut dyn luna_core::__private::JitStorage,
+    ct: &CompiledTrace,
+    t: Tiered,
+) -> Option<TraceFn> {
+    if let Some(l) = t.0 {
+        let p = install(storage, l)?;
+        // SAFETY: LLVM's loop of this trace, kept mapped by the storage
+        unsafe { super::tier_source::set_loop(ct, p as *const u8) };
+    }
+    install(storage, t.1)
 }
 
 /// [`super::tiers::compile_trace_cranelift`] for the LLVM backend.
@@ -73,7 +100,7 @@ pub(super) fn compile_trace_llvm(
         lir.give();
         return Some(compiled);
     }
-    let c = compile(&lir, &lir.relocs, false);
+    let c = compile(&lir, &lir.relocs, lir::Start::Whole);
     lir.give();
     compiled.entry = install(storage, c)?;
     Some(compiled)
@@ -88,7 +115,7 @@ struct Pending {
     due: Arc<AtomicBool>,
     /// Set by the compile thread once `done` holds the result.
     ready: Arc<AtomicBool>,
-    done: Arc<Mutex<Option<Compiled>>>,
+    done: Arc<Mutex<Option<Tiered>>>,
 }
 
 /// [`super::tier_source::tier_up`] for the LLVM backend: the baseline trace `ct`
@@ -114,7 +141,7 @@ pub(crate) fn tier_up_llvm(
                 let c = p.done.lock().expect(POISON).take()?;
                 // written on the compile thread
                 luna_core::jit::code_fence();
-                let entry = install(storage, c)?;
+                let entry = install_tier(storage, ct, c)?;
                 super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
                 return Some(entry);
             }
@@ -132,11 +159,11 @@ pub(crate) fn tier_up_llvm(
     let Some(delay) = delay else {
         let (lir, relocs) = source.optimizing_lir();
         let at_loop = source.lir.loop_entry.is_some();
-        let entry = install(storage, compile(&lir, &relocs, at_loop))?;
+        let entry = install_tier(storage, ct, compile_tier(&lir, &relocs, at_loop))?;
         super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
         return Some(entry);
     };
-    let entry = super::tier_source::clif_tier_up(storage, &source, ct.head_pc());
+    let entry = super::tier_source::clif_tier_up(storage, &source, ct);
     let mut p = Pending {
         source: None,
         due: Arc::default(),
@@ -173,7 +200,7 @@ fn hand_over(
     let at_loop = src.lir.loop_entry.is_some();
     let ticket = crate::jit_backend::llvm_thread::submit(
         Box::new(move || {
-            *done.lock().expect(POISON) = Some(compile(&lir, &relocs, at_loop));
+            *done.lock().expect(POISON) = Some(compile_tier(&lir, &relocs, at_loop));
             ready.store(true, Ordering::Release);
         }),
         now,

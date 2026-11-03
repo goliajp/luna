@@ -161,13 +161,15 @@ fn install(
     for c in &img.protos[1..] {
         protos.push(find_proto(req.roots, c)?);
     }
-    // a baseline trace that calls the optimizing tier's loop from its back
-    // edge keeps its own code as the entry, the loop beside it
+    // a trace whose back edge calls the optimizing tier's loop keeps a tier
+    // move (its code reads the move's loop cell); its optimizing tier's code
+    // is the first pass, the loop beside it
     let at_loop = img.sources.contains(&Source::TierLoop);
     let optimized = img.optimized.get().or(match &img.code {
         Some((Tier::Optimizing, c)) => Some(c),
         _ => None,
     });
+    let looped = img.optimized_loop.get().filter(|_| at_loop && optimized.is_some());
     let mut ct = img
         .meta
         .instantiate(optimized.is_some() && !at_loop, req.proto.call_hot_count());
@@ -176,9 +178,9 @@ fn install(
         .iter()
         .map(|s| Some((kind_of(s), value_of(s, &protos, req, &ct)?)))
         .collect::<Option<_>>()?;
-    let code: Option<&Code> = match at_loop {
-        true => img.code.as_ref().map(|(_, c)| c),
-        false => optimized.or(img.code.as_ref().map(|(_, c)| c)),
+    let code: Option<&Code> = match (at_loop, looped) {
+        (true, None) => img.code.as_ref().map(|(_, c)| c),
+        _ => optimized.or(img.code.as_ref().map(|(_, c)| c)),
     };
     if let Some(code) = code {
         let entry = place(cs, code, &relocs)?;
@@ -189,27 +191,25 @@ fn install(
         // releases its code
         ct.entry = unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) };
         cs.images.insert(entry as usize, img.id);
-        let looped = match (at_loop, optimized) {
-            (true, Some(c)) => {
-                let p = place(cs, c, &relocs)?;
-                super::code_dump::dump_len("image-loop", ct.head_pc, p, c.bytes.len());
-                // SAFETY: as above, the optimizing tier's loop of this trace
-                Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(p) })
-            }
-            _ => None,
-        };
-        if let Some(t) = &mut ct.tier_up {
-            if at_loop {
-                luna_core::__private::set_tier_up_at_loop(t, looped);
-            }
-            if let (None, Some(lir)) = (optimized, &img.lir) {
-                *t.source_mut() = Some(Box::new(TierSource {
-                    lir: lir.clone(),
-                    relocs,
-                    image: Some(img.clone()),
-                    record: None,
-                }));
-            }
+        if let (Some(c), Some(t)) = (looped, &ct.tier_up) {
+            let p = place(cs, c, &relocs)?;
+            super::code_dump::dump_len("image-loop", ct.head_pc, p, c.bytes.len());
+            // SAFETY: as above, the optimizing tier's loop of this trace,
+            // which the first pass placed as the entry calls
+            unsafe {
+                luna_core::__private::set_tier_up_loop(
+                    t,
+                    std::mem::transmute::<*const u8, TraceFn>(p),
+                )
+            };
+        }
+        if let (None, Some(t), Some(lir)) = (looped.or(optimized.filter(|_| !at_loop)), &mut ct.tier_up, &img.lir) {
+            *t.source_mut() = Some(Box::new(TierSource {
+                lir: lir.clone(),
+                relocs,
+                image: Some(img.clone()),
+                record: None,
+            }));
         }
     }
     Some(AdoptedTrace {
