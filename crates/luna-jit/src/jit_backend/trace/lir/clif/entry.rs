@@ -131,6 +131,8 @@ impl Replay<'_, '_> {
         let slot =
             self.b
                 .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+        // through memory, not a copy: the allocator would merge a copy back
+        // into the argument's range and split it again by the fixed register
         self.b.ins().stack_store(types::I64, reg_state, slot, 0);
         let own = self.b.ins().stack_load(types::I64, types::I64, slot, 0);
         self.vals[self.lir.arg0 as usize] = Some(own);
