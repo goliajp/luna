@@ -102,6 +102,10 @@ pub(super) fn plain_trace_end(
                 }
                 break;
             }
+            // a side trace linked to the trace it reached goes on through
+            // its own frame's loop edges
+            Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F
+                if depth == 0 && record.link_pc.is_some() => {}
             Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F => {
                 if depth == 0 {
                     found = Some((i, TraceEnd::ForLoop));

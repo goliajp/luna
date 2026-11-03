@@ -100,6 +100,10 @@ pub(super) fn emit_op<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>) 
         }
         Op::Call | Op::Return0 | Op::Return1 | Op::Return | Op::Vararg => emit_call_op(lw, pl, oc),
         Op::TForCall | Op::TForCall53 | Op::TForCall55 => emit_tfor_call_op(lw, pl, oc),
+        // a loop edge inside a linked side trace; elsewhere the trace's end
+        Op::ForLoop | Op::ForLoopF | Op::ForLoop55 | Op::ForLoop55F => {
+            emit_mid_for_loop(lw, pl, oc)
+        }
         // generic-for prep is the leading pc-bump
         // before body_top. Recorder enters at body_top, so this
         // arm is defensive only — pre-emit pass bails before we
