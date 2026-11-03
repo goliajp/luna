@@ -1,6 +1,7 @@
 //! Code for each recorded instruction.
 
-use super::cg::{Alu, Cond, Gen, Masm, Width};
+use super::cg::{Cond, Gen, Masm, Width};
+use super::masm::{alu_of, is_float_op};
 use super::*;
 
 type R = Result<(), &'static str>;
@@ -18,30 +19,6 @@ fn pure(op: Op) -> bool {
             | Op::Return
             | Op::VarWrite
     )
-}
-
-fn alu_of(op: BinOp) -> Alu {
-    match op {
-        BinOp::Add => Alu::Add,
-        BinOp::Sub => Alu::Sub,
-        BinOp::Mul => Alu::Mul,
-        BinOp::And => Alu::And,
-        BinOp::Or => Alu::Or,
-        BinOp::Xor => Alu::Xor,
-        BinOp::Shl => Alu::Shl,
-        BinOp::Ushr => Alu::Lshr,
-        BinOp::Sshr => Alu::Ashr,
-        BinOp::Sdiv => Alu::Sdiv,
-        BinOp::Udiv => Alu::Udiv,
-        BinOp::Umulhi => Alu::Umulhi,
-        BinOp::Smin | BinOp::Smax | BinOp::Fadd | BinOp::Fsub | BinOp::Fmul | BinOp::Fdiv => {
-            unreachable!("not a single ALU instruction")
-        }
-    }
-}
-
-fn is_float_op(op: BinOp) -> bool {
-    matches!(op, BinOp::Fadd | BinOp::Fsub | BinOp::Fmul | BinOp::Fdiv)
 }
 
 impl<M: Masm> Gen<'_, M> {
