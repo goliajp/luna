@@ -13,16 +13,33 @@ fn targets(i: &Inst) -> [Option<u32>; 2] {
     }
 }
 
-/// Defines the trace function in `module` from `lir`.
+/// Defines the trace function in `module` from `lir`, or with `at_loop`
+/// the optimizing tier's loop (see `lower::handoff`; `None` when `lir` has
+/// none, or one the replay cannot start).
 /// `relocs`: the addresses the relocations stand for in the Vm the code is
 /// for.
 pub(crate) fn define<M: Module>(
     lir: &Lir,
     relocs: &[(crate::jit_backend::trace::RelocKind, i64)],
     module: &mut M,
+    at_loop: bool,
 ) -> Option<FuncId> {
+    let (root, regs): (u32, &[u32]) = match &lir.loop_entry {
+        Some((b, regs)) if at_loop => (*b, regs),
+        _ if at_loop => return None,
+        _ => (0, &[]),
+    };
     let mut an = live::Analysis::default();
-    live::analyze(lir, &mut an);
+    live::analyze_from(lir, &mut an, root);
+    let reads = if at_loop {
+        let r = entry::live_in_vars(lir, &an, root, regs);
+        if r.is_none() && std::env::var_os("LUNA_B41_DIAG").is_some() {
+            eprintln!("B41 loop-entry refused");
+        }
+        Some(r?)
+    } else {
+        None
+    };
     let call_conv = module.isa().default_call_conv();
     let read_cost = ops::read_in_place_cost(module.isa().triple().architecture);
     let mut sig = Signature::new(call_conv);
@@ -41,13 +58,13 @@ pub(crate) fn define<M: Module>(
         blocks[blk as usize] = Some(b.create_block());
     }
     let mut vals = vec![None; lir.value_ty.len()];
-    let entry = blocks[0].expect("the entry block");
+    let entry = blocks[root as usize].expect("the entry block");
     b.append_block_params_for_function_params(entry);
     if lir.arg0 != NONE {
         vals[lir.arg0 as usize] = Some(b.block_params(entry)[0]);
     }
     for &blk in &an.order {
-        if blk == 0 {
+        if blk == root {
             continue;
         }
         let cb = blocks[blk as usize].expect("laid out");
@@ -110,8 +127,11 @@ pub(crate) fn define<M: Module>(
     for &blk in &an.order {
         let cb = r.blocks[blk as usize].expect("laid out");
         r.b.switch_to_block(cb);
-        if blk == 0 {
+        if blk == root {
             hoist(&mut r, &an, relocs, read_cost);
+            if let Some(reads) = &reads {
+                r.read_regs(regs, reads);
+            }
         }
         // a block no branch reaches (the entry, or the hot exit of a
         // `TierCount`, which the replay does not take) is sealed as it starts

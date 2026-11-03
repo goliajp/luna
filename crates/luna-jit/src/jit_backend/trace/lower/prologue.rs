@@ -266,7 +266,7 @@ pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> HeadBlocks 
     // the step sign of a 5.3 integer loop (see `step_guard`)
     let step_precheck = pl.step_guard.is_some().then(|| bcx.create_block());
 
-    let peel = pl.temps.contains(&true).then(|| bcx.create_block());
+    let peel = (pl.peel_end > 0).then(|| bcx.create_block());
     let body_loop = bcx.create_block();
     bcx.ins().jump(
         precheck

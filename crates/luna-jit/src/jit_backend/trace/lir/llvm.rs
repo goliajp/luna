@@ -27,22 +27,33 @@ pub(super) fn b<T>(r: Result<T, BuilderError>) -> R<T> {
     r.map_err(|_| "llvm:builder")
 }
 
-/// The trace function compiled from `lir`, and the pair that keeps its code
-/// mapped. `relocs`: the addresses the relocations stand for in the Vm the
-/// code is for.
+/// The trace function compiled from `lir`, or with `at_loop` the
+/// optimizing tier's loop (see `lower::handoff`), and the pair that keeps
+/// its code mapped. `relocs`: the addresses the relocations stand for in
+/// the Vm the code is for.
 pub(crate) fn compile(
     lir: &Lir,
     relocs: &[(crate::jit_backend::trace::RelocKind, i64)],
+    at_loop: bool,
 ) -> R<(*const u8, luna_jit_llvm::EnginePair)> {
     if let Some(u) = lir.unsupported {
         return Err(u);
     }
+    let (root, regs): (u32, &[u32]) = match &lir.loop_entry {
+        Some((b, regs)) if at_loop => (*b, regs),
+        _ if at_loop => return Err("llvm:no-loop-entry"),
+        _ => (0, &[]),
+    };
     let mut an = live::Analysis::default();
-    live::analyze(lir, &mut an);
+    live::analyze_from(lir, &mut an, root);
+    let reads = match at_loop {
+        true => super::clif::live_in_vars(lir, &an, root, regs).ok_or("llvm:loop-entry-reads")?,
+        false => Vec::new(),
+    };
     luna_jit_llvm::compile_function(|ctx, module| {
         let builder = ctx.create_builder();
         let mut g = Gen::new(ctx, module, &builder, lir, relocs)?;
-        g.body(&an)
+        g.body(&an, root, regs, &reads)
     })
 }
 
@@ -131,7 +142,10 @@ impl<'c, 'a> Gen<'c, 'a> {
 
     /// The function's code: a block making the variables' and stack slots'
     /// homes, then the trace's blocks in layout order.
-    fn body(&mut self, an: &live::Analysis) -> R<()> {
+    /// `root`: the block the function starts at; `reads`, per variable,
+    /// whether it is one of the registers `regs` names read from
+    /// `reg_state` first (see `clif::live_in_vars`).
+    fn body(&mut self, an: &live::Analysis, root: u32, regs: &[u32], reads: &[bool]) -> R<()> {
         let lir = self.lir;
         let entry = self.ctx.append_basic_block(self.f, "homes");
         for &blk in &an.order {
@@ -157,14 +171,21 @@ impl<'c, 'a> Gen<'c, 'a> {
             inst.set_alignment(1 << align).map_err(|_| "llvm:builder")?;
             self.slots.push(slot);
         }
-        let first = self.blocks[0].ok_or("llvm:no-entry-block")?;
-        b(self.b.build_unconditional_branch(first))?;
         if lir.arg0 != NONE {
             let p = self.f.get_nth_param(0).ok_or("llvm:builder")?;
             self.vals[lir.arg0 as usize] = Some(p);
         }
+        for (i, &var) in regs.iter().enumerate() {
+            if reads.get(var as usize).copied().unwrap_or(false) {
+                let p = self.addr(self.iv(lir.arg0), (i as i32) * 8)?;
+                let x = self.load(self.ctx.i64_type().into(), p)?;
+                b(self.b.build_store(self.vars[var as usize], x))?;
+            }
+        }
+        let first = self.blocks[root as usize].ok_or("llvm:no-entry-block")?;
+        b(self.b.build_unconditional_branch(first))?;
         for &blk in &an.order {
-            if blk == 0 {
+            if blk == root {
                 continue;
             }
             let bb = self.blocks[blk as usize].expect("laid out");

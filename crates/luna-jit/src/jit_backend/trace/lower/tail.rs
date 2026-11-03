@@ -1,6 +1,6 @@
 use super::*;
 
-/// Emits the tail, the way the trace closes.
+/// Emits the tail, the way the trace closes, and seals the loop head.
 /// Returns the down-recursion link and guard count for `CompiledTrace`.
 pub(super) fn emit_tail<E: Emit>(
     lw: &mut Lower<E>,
@@ -19,6 +19,7 @@ pub(super) fn emit_tail<E: Emit>(
         ..
     } = *pl;
     let (reg_state, trace_fn_sig_ref) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
+    let Lower { body_loop, .. } = *lw;
     // --- tail.
     //
     // Four cases pick the clean-close shape:
@@ -123,6 +124,11 @@ pub(super) fn emit_tail<E: Emit>(
             encode_side_sentinel(SIDE_SENT_KIND_GLOBAL, 0),
         );
     }
+    // Seal the loop head now that both predecessors are emitted
+    // (entry → body_loop in the prelude; tail → body_loop from
+    // whichever block we ended up in for the clean-close case
+    // when internal loop is on).
+    lw.bcx.seal_block(body_loop);
     Some((
         downrec_link_for_compiled,
         downrec_multi_way_count_for_compiled,

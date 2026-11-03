@@ -216,3 +216,23 @@ pub(crate) unsafe fn copy_code(entry: *const u8, len: usize, sites: Vec<Site>) -
         sites: sites.into(),
     }
 }
+
+/// What a Vm-specific address in a trace's code stands for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RelocKind {
+    /// An interned string (a key or a constant of one of the trace's protos).
+    Str,
+    /// A function prototype an inlined call is checked against.
+    Proto,
+    /// The frame chain of inline side exit `n`.
+    Chain(u32),
+    /// The baseline tier's iteration count.
+    TierCell,
+    /// The cell holding the optimizing tier's loop (see `lower::handoff`).
+    TierLoop,
+}
+
+/// The name of the data symbol Cranelift code reads relocation `n` from.
+pub(crate) fn reloc_symbol(n: usize) -> String {
+    format!("__luna_reloc_{n}")
+}

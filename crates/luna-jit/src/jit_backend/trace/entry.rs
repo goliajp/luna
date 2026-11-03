@@ -12,10 +12,10 @@
 //! before (a value of an earlier run, or the nil a collection cleared it
 //! to), which the trace must neither check nor write back; on the later
 //! passes the register holds what the pass before wrote, which an exit
-//! before the body writes it again must write back. So the body is lowered
-//! twice (`lower/peel.rs`): once for the first pass, the temporaries held
-//! on the stack, and once in the loop, the temporaries of the kind the
-//! first pass leaves them. A
+//! before the body writes it again must write back. So the ops up to the
+//! last temporary's first write are lowered twice (`lower/peel.rs`): once
+//! for the first pass, the temporaries held on the stack, and once in the
+//! loop, the temporaries of the kind the first pass leaves them. A
 //! register a looping body writes only on some ways (a `TestSet`, the loop
 //! registers, an inlined call's results) is checked on entry instead, and
 //! keeps the kind it has on every pass. So is every register a side trace
@@ -33,6 +33,9 @@ pub(super) struct HeadRegs {
     pub(super) live: Vec<bool>,
     /// Per register, whether it is a temporary of a looping body.
     pub(super) temps: Vec<bool>,
+    /// The ops before this one are lowered for the first pass apart: the
+    /// op after the last temporary's first write; 0 without temporaries.
+    pub(super) peel_end: usize,
 }
 
 /// For each of the head frame's `max_stack` registers, whether the trace
@@ -55,6 +58,7 @@ pub(super) fn entry_live(
     let mut regs = HeadRegs {
         live: vec![true; max_stack],
         temps: vec![false; max_stack],
+        peel_end: 0,
     };
     if record.side_trace_parent.is_some() && parent_exit.is_none() {
         return regs;
@@ -66,6 +70,8 @@ pub(super) fn entry_live(
     let mut defined = vec![false; max_stack];
     // what some op may leave with a value the stack does not have
     let mut written = vec![false; max_stack];
+    // the op that first writes a register on every path
+    let mut first_def = vec![usize::MAX; max_stack];
     for (i, rop) in ops.iter().enumerate() {
         let off = op_offsets.get(i).copied().unwrap_or(0) as usize;
         let inst = rop.inst;
@@ -106,7 +112,10 @@ pub(super) fn entry_live(
         let mut write = |s: usize| {
             if s < max_stack {
                 written[s] = true;
-                defined[s] |= sure;
+                if sure && !defined[s] {
+                    defined[s] = true;
+                    first_def[s] = i;
+                }
             }
         };
         for &(lo, n) in &writes {
@@ -145,12 +154,14 @@ pub(super) fn entry_live(
             }
             if root && defined[s] {
                 regs.temps[s] = true;
+                regs.peel_end = regs.peel_end.max(first_def[s] + 1);
             } else {
                 // the body leaves its own value behind; checked on entry
                 live[s] = true;
             }
         }
     }
+    regs.peel_end = regs.peel_end.min(end);
     regs.live = live;
     regs
 }

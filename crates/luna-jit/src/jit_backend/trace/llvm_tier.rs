@@ -50,8 +50,10 @@ fn install(storage: &mut dyn luna_core::__private::JitStorage, c: Compiled) -> O
     Some(unsafe { std::mem::transmute::<usize, TraceFn>(entry) })
 }
 
-fn compile(lir: &lir::Lir, relocs: &[(RelocKind, i64)]) -> Compiled {
-    lir::compile_llvm(lir, relocs).map(|(e, p)| (e as usize, p))
+/// `at_loop`: the optimizing tier's loop of a baseline trace that calls it
+/// from its back edge (see `lower::handoff`), rather than the whole trace.
+fn compile(lir: &lir::Lir, relocs: &[(RelocKind, i64)], at_loop: bool) -> Compiled {
+    lir::compile_llvm(lir, relocs, at_loop).map(|(e, p)| (e as usize, p))
 }
 
 /// [`super::tiers::compile_trace_cranelift`] for the LLVM backend.
@@ -71,7 +73,7 @@ pub(super) fn compile_trace_llvm(
         lir.give();
         return Some(compiled);
     }
-    let c = compile(&lir, &lir.relocs);
+    let c = compile(&lir, &lir.relocs, false);
     lir.give();
     compiled.entry = install(storage, c)?;
     Some(compiled)
@@ -129,7 +131,8 @@ pub(crate) fn tier_up_llvm(
     };
     let Some(delay) = delay else {
         let (lir, relocs) = source.optimizing_lir();
-        let entry = install(storage, compile(&lir, &relocs))?;
+        let at_loop = source.lir.loop_entry.is_some();
+        let entry = install(storage, compile(&lir, &relocs, at_loop))?;
         super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
         return Some(entry);
     };
@@ -167,9 +170,10 @@ fn hand_over(
     let (ready, done) = (p.ready.clone(), p.done.clone());
     // lowered here: the record stays on the Vm's thread
     let (lir, relocs) = src.optimizing_lir();
+    let at_loop = src.lir.loop_entry.is_some();
     let ticket = crate::jit_backend::llvm_thread::submit(
         Box::new(move || {
-            *done.lock().expect(POISON) = Some(compile(&lir, &relocs));
+            *done.lock().expect(POISON) = Some(compile(&lir, &relocs, at_loop));
             ready.store(true, Ordering::Release);
         }),
         now,

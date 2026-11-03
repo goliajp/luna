@@ -64,15 +64,15 @@ fn reset<T: Clone>(v: &mut Vec<T>, n: usize, x: T) {
     v.resize(n, x);
 }
 
-/// Reverse post-order of the blocks reachable from the entry block, into
+/// Reverse post-order of the blocks reachable from block `root`, into
 /// `an.order`.
-fn layout(lir: &Lir, an: &mut Analysis) {
+fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
     let n = lir.blocks.len();
     reset(&mut an.seen, n, false);
     an.order.clear();
     an.stack.clear();
-    an.stack.push((0, 0));
-    an.seen[0] = true;
+    an.stack.push((root, 0));
+    an.seen[root as usize] = true;
     while let Some(top) = an.stack.last_mut() {
         let (b, k) = *top;
         if k == 2 {
@@ -92,9 +92,14 @@ fn layout(lir: &Lir, an: &mut Analysis) {
 
 /// Fills `an` for `lir`, reusing its buffers.
 pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
+    analyze_from(lir, an, 0);
+}
+
+/// [`analyze`] for the function that starts at block `root`.
+pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, root: u32) {
     let nv = lir.value_ty.len() as u32;
     let nreg = (nv as usize) + lir.var_ty.len();
-    layout(lir, an);
+    layout(lir, an, root);
     // each block's place in the layout from the blocks' lengths; the
     // instructions themselves are listed in the pass below
     reset(&mut an.block_at, lir.blocks.len(), (NONE, NONE));

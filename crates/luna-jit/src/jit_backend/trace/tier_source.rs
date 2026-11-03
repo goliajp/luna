@@ -92,7 +92,9 @@ pub(crate) fn clif_tier_up(
     let mut module =
         crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
     let (lir, relocs) = src.optimizing_lir();
-    let fn_id = lir::define_clif(&lir, &relocs, &mut *module)?;
+    // the loop only, when the baseline code calls it from its back edge
+    let at_loop = src.lir.loop_entry.is_some();
+    let fn_id = lir::define_clif(&lir, &relocs, &mut *module, at_loop)?;
     module.finalize_definitions().ok()?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     let ptr = module.get_finalized_function(fn_id);

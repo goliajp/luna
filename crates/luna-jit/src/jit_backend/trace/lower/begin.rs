@@ -60,6 +60,8 @@ pub(super) fn begin_body<E: Emit>(
         virt_held: Vec::new(),
         alt_joins: std::collections::HashMap::new(),
         tier_count: None,
+        loop_entry: None,
+        loops: false,
         due_words: None,
         gc_quiet: false,
         ro_invariant,

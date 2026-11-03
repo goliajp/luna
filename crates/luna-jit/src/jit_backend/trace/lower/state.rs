@@ -91,11 +91,15 @@ pub(super) struct Lower<E: Emit> {
     /// The table values tested since the last op that may have run host
     /// code.
     pub(super) ro_checked: Vec<Value>,
-    /// The iteration count the back edge keeps for tiering up, and the
-    /// count to leave at.
-    pub(super) tier_count: Option<(Box<TCellU32>, u32)>,
+    /// The trace's move to the optimizing tier, whose iteration count the
+    /// back edge keeps and whose loop it calls (see `handoff`).
+    pub(super) tier_count: Option<Box<TierUp>>,
+    /// The block the optimizing tier's loop starts at (see `handoff`).
+    pub(super) loop_entry: Option<Block>,
+    /// A back edge with an iteration count was emitted.
+    pub(super) loops: bool,
     /// The count's address, read on entry by a trace that may check (`gc_due`).
-    pub(super) due_words: Option<Value>,
+    pub(super) due_words: Option<Variable>,
     /// Every way to the op being lowered passed a check for a collection
     /// with nothing that may allocate since (see `gc_due`).
     pub(super) gc_quiet: bool,
