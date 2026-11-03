@@ -89,7 +89,9 @@ pub(crate) fn clif_tier_up(
     {
         let place = |cs: &mut CraneliftJitStorage, code: &reloc::Code| {
             cs.baseline_code
-                .place_with(code.bytes.len(), |out| code.write_to(out, |k| src.relocs[k].1))
+                .place_with(code.bytes.len(), |out| {
+                    code.write_to(out, |k| src.relocs[k].1)
+                })
                 .ok()
         };
         if at_loop {
@@ -115,7 +117,11 @@ pub(crate) fn clif_tier_up(
         // module the storage now keeps
         unsafe { set_loop(ct, p) };
     }
-    let start = if at_loop { lir::Start::FirstPass } else { lir::Start::Whole };
+    let start = if at_loop {
+        lir::Start::FirstPass
+    } else {
+        lir::Start::Whole
+    };
     let (ptr, sites) = compile_one(cs, &lir, &relocs, start, head_pc)?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     if let (Some(img), Some((len, sites))) = (&src.image, sites) {

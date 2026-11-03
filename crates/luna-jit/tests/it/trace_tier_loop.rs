@@ -65,7 +65,11 @@ fn a_long_loop_goes_on_in_the_optimizing_tier_within_one_call() {
     let (f, g) = (function(&mut vm, LONG_LOOP), function(&mut it, LONG_LOOP));
     same(&mut vm, f, &mut it, g, &[Value::Int(50_000)]);
     assert_eq!(vm.trace_tiered_up_count(), 1);
-    assert_eq!(moved_counts(f), [AT - 1], "the loop's passes after the move were counted");
+    assert_eq!(
+        moved_counts(f),
+        [AT - 1],
+        "the loop's passes after the move were counted"
+    );
 }
 
 /// Every later entry runs its first pass in the baseline code and moves on

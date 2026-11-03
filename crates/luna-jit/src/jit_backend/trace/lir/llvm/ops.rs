@@ -1,9 +1,9 @@
 //! One recorded instruction as LLVM IR, with Cranelift's semantics.
 
-use super::*;
 use super::preds::{float_pred, int_pred};
-use inkwell::values::BasicValueEnum;
+use super::*;
 use inkwell::IntPredicate;
+use inkwell::values::BasicValueEnum;
 
 impl<'c> Gen<'c, '_> {
     /// A comparison's `i1` as the `i8` 0 / 1 Cranelift gives.

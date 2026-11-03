@@ -26,8 +26,8 @@ mod a64;
 mod x64;
 
 pub(crate) use clif::define as define_clif;
-pub(crate) use live::Start;
 pub(crate) use code::{CodeArena, assemble};
+pub(crate) use live::Start;
 #[cfg(feature = "llvm-jit")]
 pub(crate) use llvm::compile as compile_llvm;
 

@@ -20,8 +20,8 @@ use inkwell::values::{
 };
 
 mod body;
-mod preds;
 mod ops;
+mod preds;
 
 pub(super) type R<T> = Result<T, &'static str>;
 
