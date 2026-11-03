@@ -7,17 +7,15 @@ impl Vm {
     /// Counts a back-edge to `target` of `proto`; `true` once the loop head
     /// has been crossed often enough to look at recording it (see
     /// `JitState::loop_hot_tick`). Nothing counts while hot counting
-    /// pauses after a collection exit.
+    /// pauses after a collection exit ([`Vm::back_edge_paused`]).
     #[inline]
     pub(in crate::vm::exec) fn back_edge_hot(&mut self, proto: Gc<Proto>, target: u32) -> bool {
-        if self.hot_paused_at(proto, target) {
-            return false;
-        }
         let c = proto.trace_hot_count.get();
         if c < u32::MAX / 2 {
             proto.trace_hot_count.set(c + 1);
         }
         self.jit.loop_hot_tick(&proto, target)
+            && (self.jit.step.quiet.is_none() || self.back_edge_paused(proto, target))
     }
 
     /// A loop head `target` crossed often enough (see

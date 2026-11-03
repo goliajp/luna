@@ -348,7 +348,7 @@ impl JitCounters {
 }
 
 /// Slots in [`JitState::loop_hot`].
-const LOOP_HOT_SLOTS: usize = 256;
+pub(crate) const LOOP_HOT_SLOTS: usize = 256;
 
 impl JitState {
     /// Count a back-edge to the loop head at pc `head` of `proto`; `true`

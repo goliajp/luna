@@ -22,6 +22,9 @@ pub(crate) struct TraceStep {
     pub(crate) synced_exit: bool,
     /// Set while hot counting pauses after a collection exit.
     pub(crate) quiet: Option<super::gc_quiet::GcQuiet>,
+    /// The loop counts [`crate::vm::JitState::loop_hot`] does not hold:
+    /// the real ones during a pause, else the stand-in it uses then.
+    pub(crate) parked_hot: Option<super::gc_quiet::HotTable>,
 }
 
 /// What [`Vm::trace_step_enter`] replaced.
@@ -39,9 +42,11 @@ impl Vm {
 
     /// [`Vm::trace_step_enter`] of the trace at address `ct`.
     pub(in crate::vm::exec) fn trace_step_enter_at(&mut self, ct: usize) -> RunningTrace {
-        let st = &mut self.jit.step;
         // entering any trace ends a pause a collection exit started
-        st.quiet = None;
+        if self.jit.step.quiet.is_some() {
+            self.gc_quiet_end();
+        }
+        let st = &mut self.jit.step;
         let prev = (st.ct, st.frames);
         st.ct = ct;
         st.frames = self.frames.len() as u32;
