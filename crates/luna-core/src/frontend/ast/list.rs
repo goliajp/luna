@@ -86,10 +86,20 @@ impl<T> std::fmt::Debug for List<T> {
 /// }
 /// ```
 ///
-/// ```compile_fail,E0061
+/// ```compile_fail,E0603
 /// use luna_core::frontend::ast::{Chunk, ListItem};
 /// fn swap<T: ListItem>(a: &mut Chunk, b: &mut Chunk) {
-///     std::mem::swap(T::items_mut(a), T::items_mut(b)); // error[E0061]
+///     let t = || luna_core::frontend::ast::list::Token(()); // error[E0603]
+///     std::mem::swap(T::items_mut(a, t()), T::items_mut(b, t()));
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// use luna_core::frontend::ast::{Chunk, ListItem};
+/// fn swap<T: ListItem>(a: &mut Chunk, b: &mut Chunk) {
+///     // the token proving the caller is in the crate cannot be made here
+///     let (x, y) = (Default::default(), Default::default());
+///     std::mem::swap(T::items_mut(a, x), T::items_mut(b, y)); // error[E0277]
 /// }
 /// ```
 pub trait ListItem: Copy + Sized + store::ListStore {
