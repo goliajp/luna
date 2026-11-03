@@ -204,8 +204,12 @@ pub(super) fn start_accum<E: Emit>(
 /// `peel`) and the loop head.
 pub(super) struct HeadBlocks {
     pub(super) precheck: Option<Block>,
+    /// The block before the loop head that tests the tables
+    /// `ro_invariant` names (see `readonly`).
     pub(super) ro_precheck: Option<Block>,
+    /// The block before the loop head that checks a 5.3 loop's step sign.
     pub(super) step_precheck: Option<Block>,
+    /// The first pass of a looping body with temporaries (see `peel`).
     pub(super) peel: Option<Block>,
     pub(super) body_loop: Block,
 }

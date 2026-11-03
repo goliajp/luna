@@ -24,10 +24,10 @@ pub(super) fn emit_body<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<Opt
         rewritten: rewritten_before_sync(n_regs, pl.record, pl, pl.effective_end),
     };
     checkpoint("pre:main-emit-loop");
-    let rest = match lw.peel {
+    let rest = match lw.blocks.peel {
         Some(peel) => Some(emit_first_pass(lw, pl, cx, peel)?),
         None => {
-            lw.bcx.switch_to_block(lw.body_loop);
+            lw.bcx.switch_to_block(lw.blocks.body_loop);
             // not sealed: the tail's back edge adds a second predecessor
             commit_start(lw, pl);
             emit_ops(lw, pl, &mut cx, 0..pl.effective_end)?;

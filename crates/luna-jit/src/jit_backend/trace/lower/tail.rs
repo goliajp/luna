@@ -19,7 +19,7 @@ pub(super) fn emit_tail<E: Emit>(
         ..
     } = *pl;
     let reg_state = lw.entry.reg_state;
-    let Lower { body_loop, .. } = *lw;
+    let body_loop = lw.blocks.body_loop;
     // --- tail.
     //
     // Four cases pick the clean-close shape:

@@ -179,9 +179,6 @@ fn emit_trace<E: Emit>(
     count_at: u32,
     at_exits: bool,
 ) -> Option<(E, Emitted)> {
-    // the AOT data this call has defined: `declare_data` gives one name
-    // the same `DataId` again, but `define_data` refuses a second definition
-    let defined_aot_data: std::collections::HashSet<DataId> = std::collections::HashSet::new();
     let head = emit_entry(&mut bcx, pl);
     // a variable: `loop_entry` reads the address again (see `handoff`)
     let due_words = emit_due_words(&mut bcx, pl)?.map(|w| {
@@ -193,17 +190,7 @@ fn emit_trace<E: Emit>(
     let sunk = alloc_sunk_sites(&mut bcx, pl, &mut escape);
     let flush_ctx = start_accum(&mut bcx, pl, h, &head.regs_full);
     let blocks = open_body_loop(&mut bcx, pl);
-    let mut lower = begin_body(
-        bcx,
-        pl,
-        h,
-        head,
-        escape,
-        defined_aot_data,
-        sunk,
-        flush_ctx,
-        blocks,
-    );
+    let mut lower = begin_body(bcx, pl, h, head, escape, sunk, flush_ctx, blocks);
     if count_at > 0 {
         let calls_at = pl.record.head_proto.call_hot_count();
         lower.tier_count = Some(Box::new(TierUp::new(
@@ -221,47 +208,11 @@ fn emit_trace<E: Emit>(
     emit_readonly_precheck(lw, pl);
     emit_step_precheck(lw, pl);
     let loop_copy = emit_body(lw, pl)?;
-    let (downrec_link_for_compiled, downrec_multi_way_count_for_compiled) = emit_tail(lw, pl)?;
+    let downrec = emit_tail(lw, pl)?;
     if let Some(lc) = loop_copy {
         emit_loop_copy(lw, pl, lc)?;
     }
     // last, so that it takes nothing from the blocks lowered before it
     emit_loop_entry(lw)?;
-    let Lower {
-        entry,
-        bcx,
-        current_kinds,
-        dispatchable,
-        dispatch_off_reason,
-        per_exit_kinds,
-        per_exit_inline_vec,
-        sunk_alloc_seen,
-        materialize_emit_count,
-        closure_seen,
-        escape,
-        tier_count,
-        loop_entry,
-        ..
-    } = lower;
-    let mut bcx = bcx;
-    if let Some(at) = loop_entry {
-        bcx.set_loop_entry(at, &entry.regs_full);
-    }
-    Some((
-        bcx,
-        Emitted {
-            current_kinds,
-            dispatchable,
-            dispatch_off_reason,
-            per_exit_kinds,
-            per_exit_inline_vec,
-            sunk_alloc_seen,
-            materialize_emit_count,
-            closure_seen,
-            escape,
-            downrec_link_for_compiled,
-            downrec_multi_way_count_for_compiled,
-            tier_count,
-        },
-    ))
+    Some(lower.into_emitted(downrec))
 }

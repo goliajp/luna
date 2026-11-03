@@ -43,7 +43,7 @@ pub(super) fn emit_loop_entry<E: Emit>(lw: &mut Lower<E>) -> Option<()> {
         let accum = lw.bcx.use_var(lw.entry.regs_full[slot]);
         lw.bcx.ins().call(extend, &[buf, accum]);
     }
-    lw.bcx.ins().jump(lw.body_loop, &[]);
+    lw.bcx.ins().jump(lw.blocks.body_loop, &[]);
     lw.loop_entry = Some(at);
     Some(())
 }

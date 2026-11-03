@@ -20,6 +20,50 @@ pub(super) struct Emitted {
     pub(super) tier_count: Option<Box<TierUp>>,
 }
 
+impl<E: Emit> Lower<E> {
+    /// The builder and what the emit pass decided, once the trace is
+    /// lowered; `downrec`: what `emit_tail` returned.
+    pub(super) fn into_emitted(self, downrec: (Option<(u32, u32)>, u8)) -> (E, Emitted) {
+        let Lower {
+            entry,
+            bcx,
+            current_kinds,
+            dispatchable,
+            dispatch_off_reason,
+            per_exit_kinds,
+            per_exit_inline_vec,
+            sunk_alloc_seen,
+            materialize_emit_count,
+            closure_seen,
+            escape,
+            tier_count,
+            loop_entry,
+            ..
+        } = self;
+        let mut bcx = bcx;
+        if let Some(at) = loop_entry {
+            bcx.set_loop_entry(at, &entry.regs_full);
+        }
+        (
+            bcx,
+            Emitted {
+                current_kinds,
+                dispatchable,
+                dispatch_off_reason,
+                per_exit_kinds,
+                per_exit_inline_vec,
+                sunk_alloc_seen,
+                materialize_emit_count,
+                closure_seen,
+                escape,
+                downrec_link_for_compiled: downrec.0,
+                downrec_multi_way_count_for_compiled: downrec.1,
+                tier_count,
+            },
+        )
+    }
+}
+
 /// Builds the `CompiledTrace` from the emit pass's bookkeeping.
 pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
     let Emitted {

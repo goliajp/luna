@@ -8,21 +8,13 @@ pub(super) fn begin_body<E: Emit>(
     h: Helpers,
     head: EntryRegs,
     escape: EscapeAnalysis,
-    defined_aot_data: std::collections::HashSet<DataId>,
     sunk: (Vec<Option<Vec<Variable>>>, Vec<Option<Vec<RegKind>>>, u32),
     flush_ctx: Option<FlushCtx>,
     blocks: HeadBlocks,
 ) -> Lower<E> {
     let (virt_vars, virt_kinds, sunk_alloc_seen) = sunk;
-    let HeadBlocks {
-        precheck,
-        ro_precheck,
-        step_precheck,
-        peel,
-        body_loop,
-    } = blocks;
     let current_kinds = entry_kinds(pl);
-    let ro_invariant = match ro_precheck {
+    let ro_invariant = match blocks.ro_precheck {
         Some(_) => readonly_invariants(pl, &current_kinds),
         None => vec![false; pl.window_size_us],
     };
@@ -30,14 +22,10 @@ pub(super) fn begin_body<E: Emit>(
         bcx,
         h,
         entry: head,
-        precheck,
-        ro_precheck,
-        step_precheck,
-        peel,
+        blocks,
         back_edge_kinds: None,
-        body_loop,
         head_kinds: current_kinds[..pl.max_stack].to_vec(),
-        defined_aot_data,
+        defined_aot_data: std::collections::HashSet::new(),
         escape,
         flush_ctx,
         virt_vars,
