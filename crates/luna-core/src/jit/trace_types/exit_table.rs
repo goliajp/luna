@@ -71,28 +71,28 @@ impl ExitTagTable {
     }
 
     /// Each exit's `(cont_pc, tags)`, in order.
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (u32, &[ExitTag])> + '_ {
+    pub fn iter(&self) -> ExitTagIter<'_> {
         self.into_iter()
     }
 }
 
 impl<'a> IntoIterator for &'a ExitTagTable {
     type Item = (u32, &'a [ExitTag]);
-    type IntoIter = Iter<'a>;
+    type IntoIter = ExitTagIter<'a>;
 
-    fn into_iter(self) -> Iter<'a> {
-        Iter { table: self, i: 0 }
+    fn into_iter(self) -> ExitTagIter<'a> {
+        ExitTagIter { table: self, i: 0 }
     }
 }
 
 /// The exits of an [`ExitTagTable`], in order.
 #[derive(Clone, Debug)]
-pub struct Iter<'a> {
+pub struct ExitTagIter<'a> {
     table: &'a ExitTagTable,
     i: usize,
 }
 
-impl<'a> Iterator for Iter<'a> {
+impl<'a> Iterator for ExitTagIter<'a> {
     type Item = (u32, &'a [ExitTag]);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -107,7 +107,10 @@ impl<'a> Iterator for Iter<'a> {
     }
 }
 
-impl ExactSizeIterator for Iter<'_> {}
+impl ExactSizeIterator for ExitTagIter<'_> {}
+
+// past the last exit `next` stays at `None` without moving
+impl std::iter::FusedIterator for ExitTagIter<'_> {}
 
 #[cfg(test)]
 mod tests {

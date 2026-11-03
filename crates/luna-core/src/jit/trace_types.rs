@@ -28,7 +28,7 @@ pub(crate) use adopt::{AdoptRequest, AdoptedTrace};
 pub(crate) use compiled::CompiledTraceParts;
 pub use compiled::TraceFn;
 pub use exit::*;
-pub use exit_table::ExitTagTable;
+pub use exit_table::{ExitTagIter, ExitTagTable};
 pub(crate) use installed::CompiledTrace;
 pub(crate) use options::CompileOptions;
 pub use outcome::{
