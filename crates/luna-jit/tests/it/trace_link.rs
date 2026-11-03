@@ -91,3 +91,53 @@ fn float_and_downward_loops_step_as_the_interpreter() {
         check(src);
     }
 }
+
+// the inner loop is prepared inside the side trace: steps other than one
+// either way, a float bound, an empty range and a zero step (an error from
+// 5.4 on) take the interpreter's way
+#[test]
+fn an_inner_loop_is_prepared_as_the_interpreter_does() {
+    for src in [
+        "local s, t = 0, 0
+         for i = 1, 300 do
+             for j = 1, 40 do s = s + j end
+             for k = i % 7, 5, (i % 3) + 1 do t = t + k end
+             t = t + 1
+         end
+         return s, t",
+        "local s, t = 0, 0
+         for i = 1, 300 do
+             for j = 1, 40 do s = s + j end
+             for k = 5, i % 4, -1 do t = t + k end
+             for x = 0.25, i % 3 do t = t + x end
+         end
+         return s, t",
+    ] {
+        for d in DIALECTS {
+            let (want, _, _) = run(d, src, false);
+            let (got, _, _) = run(d, src, true);
+            assert_eq!(format!("{got:?}"), format!("{want:?}"), "{d:?}: {src}");
+        }
+    }
+    // the error (or, before 5.4, the endless loop's first steps) of a zero
+    // step met only late
+    let src = "local s, t = 0, 0
+        local ok, e = pcall(function()
+            for i = 1, 300 do
+                for j = 1, 40 do s = s + j end
+                for k = 1, 2, (i > 250) and 0 or 1 do
+                    t = t + k
+                    if t > 1e6 then break end
+                end
+            end
+        end)
+        -- the message by its bytes: a string value prints as its address
+        local h = 0
+        for c in tostring(e):gmatch('.') do h = (h * 31 + c:byte()) % 1000003 end
+        return s, t, ok, h";
+    for d in DIALECTS {
+        let (want, _, _) = run(d, src, false);
+        let (got, _, _) = run(d, src, true);
+        assert_eq!(format!("{got:?}"), format!("{want:?}"), "{d:?}");
+    }
+}
