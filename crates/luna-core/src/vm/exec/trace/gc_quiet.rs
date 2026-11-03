@@ -16,13 +16,39 @@ use crate::vm::jit_state::LOOP_HOT_SLOTS;
 pub(crate) type HotTable = Box<[u32; LOOP_HOT_SLOTS]>;
 
 /// The trace a collection exit left: the frame it ran in (its depth, base
-/// and function) and its head.
+/// and function), its head, the last back-edge to that head (`None` when
+/// no back-edge of the function reaches it), and the back-edges the pause
+/// has held back so far.
 #[derive(Clone, Copy)]
 pub(crate) struct GcQuiet {
     depth: usize,
     base: u32,
     proto: Gc<Proto>,
     head_pc: u32,
+    loop_end: Option<u32>,
+    held: u32,
+}
+
+/// Where the back-edge `inst` at `pc` goes, if it is one.
+fn back_edge_target(inst: crate::vm::isa::Inst, pc: u32) -> Option<u32> {
+    let op = inst.op();
+    let off = if op.is_for_loop() || op.is_tfor_loop() {
+        -(inst.bx() as i64)
+    } else if matches!(op, Op::Jmp | Op::JmpClose | Op::JmpCloseBack) {
+        i64::from(inst.jump_offset())
+    } else {
+        return None;
+    };
+    (off < 0).then(|| (i64::from(pc) + 1 + off).max(0) as u32)
+}
+
+/// The pc of the last back-edge of `proto` that goes to `head`: the trace's
+/// loop runs from `head` to there.
+fn loop_end(proto: Gc<Proto>, head: u32) -> Option<u32> {
+    let code = &proto.code;
+    (0..code.len() as u32)
+        .rev()
+        .find(|&pc| back_edge_target(code[pc as usize], pc) == Some(head))
 }
 
 impl Vm {
@@ -38,6 +64,8 @@ impl Vm {
             base: f.base,
             proto: f.closure.proto,
             head_pc,
+            loop_end: loop_end(f.closure.proto, head_pc),
+            held: 0,
         };
         let step = &mut self.jit.step;
         if step.quiet.replace(q).is_none() {
@@ -75,6 +103,15 @@ impl Vm {
             // nor in the function's count, which `back_edge_hot` raised
             let c = proto.trace_hot_count.get();
             proto.trace_hot_count.set(c.saturating_sub(1));
+            // as many back-edges held back as make a loop hot end the
+            // pause: a long call the trace's loop makes counts again
+            let threshold = self.jit.trace_hot_threshold;
+            if let Some(q) = self.jit.step.quiet.as_mut() {
+                q.held += 1;
+                if q.held >= threshold {
+                    self.gc_quiet_end();
+                }
+            }
             return false;
         }
         self.jit.loop_hot_tick(&proto, target)
@@ -83,8 +120,9 @@ impl Vm {
     /// Whether a back-edge to, or a call reaching, `pc` of `proto` counts
     /// toward recording nothing: until the interpreter enters a trace,
     /// returns from the frame the collection exit left, reaches that
-    /// trace's head there, or takes another back-edge there, whichever
-    /// comes first.
+    /// trace's head there, takes another back-edge there, calls from there
+    /// outside the trace's loop, or has held back as many back-edges as
+    /// make a loop hot, whichever comes first.
     #[inline]
     pub(in crate::vm::exec) fn hot_paused_at(&mut self, proto: Gc<Proto>, pc: u32) -> bool {
         match self.jit.step.quiet {
@@ -97,7 +135,8 @@ impl Vm {
     /// anywhere but the trace's head also ends the pause: a depth-0 loop
     /// ends a trace, so no other back-edge of that frame lies inside it,
     /// and reaching one means the trace's loop is over and the interpreter
-    /// runs what it would have run after the trace left normally.
+    /// runs what it would have run after the trace left normally. So does
+    /// a call that frame makes from outside the trace's loop.
     #[cold]
     fn hot_paused_slow(&mut self, q: GcQuiet, proto: Gc<Proto>, pc: u32, back_edge: bool) -> bool {
         let same_frame = matches!(
@@ -106,7 +145,21 @@ impl Vm {
         );
         let in_frame = same_frame && self.frames.len() == q.depth;
         let at_head = proto.ptr_eq(q.proto) && pc == q.head_pc;
-        if self.frames.len() < q.depth || !same_frame || at_head || (back_edge && in_frame) {
+        // a call the frame makes: its pc is already past the call
+        let called_after_loop = !back_edge
+            && same_frame
+            && self.frames.len() == q.depth + 1
+            && !self.frames[q.depth - 1].lua().is_some_and(|f| {
+                let call_pc = f.pc.wrapping_sub(1);
+                q.loop_end
+                    .is_some_and(|end| (q.head_pc..=end).contains(&call_pc))
+            });
+        if self.frames.len() < q.depth
+            || !same_frame
+            || at_head
+            || (back_edge && in_frame)
+            || called_after_loop
+        {
             self.gc_quiet_end();
             return false;
         }
