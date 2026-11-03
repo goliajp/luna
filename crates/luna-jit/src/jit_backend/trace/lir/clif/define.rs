@@ -24,6 +24,7 @@ pub(crate) fn define<M: Module>(
     let mut an = live::Analysis::default();
     live::analyze(lir, &mut an);
     let call_conv = module.isa().default_call_conv();
+    let read_cost = ops::read_in_place_cost(module.isa().triple().architecture);
     let mut sig = Signature::new(call_conv);
     sig.params.push(AbiParam::new(types::I64));
     sig.returns.push(AbiParam::new(types::I64));
@@ -110,7 +111,7 @@ pub(crate) fn define<M: Module>(
         let cb = r.blocks[blk as usize].expect("laid out");
         r.b.switch_to_block(cb);
         if blk == 0 {
-            hoist(&mut r, &an, relocs);
+            hoist(&mut r, &an, relocs, read_cost);
         }
         // a block no branch reaches (the entry, or the hot exit of a
         // `TierCount`, which the replay does not take) is sealed as it starts
