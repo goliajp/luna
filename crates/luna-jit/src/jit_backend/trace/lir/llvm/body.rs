@@ -40,11 +40,11 @@ impl<'c> Gen<'c, '_> {
             self.vals[lir.arg0 as usize] = Some(p);
         }
         if let Some(e) = e {
-            self.ihomes = vec![None; lir.value_ty.len()];
-            for &(_, v) in taken {
-                let home = self.zeroed_home(lir.value_ty[v as usize])?;
-                self.ihomes[v as usize] = Some(home);
+            self.inherit = vec![None; lir.value_ty.len()];
+            for &(k, v) in taken {
+                self.inherit[v as usize] = Some((k, NONE, None));
             }
+            self.idom = super::super::clif::idoms(lir, an);
             for (i, &var) in e.regs.iter().enumerate() {
                 if reads.get(var as usize).copied().unwrap_or(false) {
                     let p = self.addr(self.iv(lir.arg0), (i as i32) * 8)?;
@@ -74,14 +74,11 @@ impl<'c> Gen<'c, '_> {
             for c in lo..hi {
                 let i = lir.insts[an.code[c as usize] as usize];
                 if e.is_some() {
-                    if blk == root && c + 1 == hi {
-                        self.take_inherited(taken)?;
-                    }
-                    self.inherited_uses(&i)?;
+                    self.inherited_uses(&i, blk)?;
                 }
                 self.inst(&i)?;
                 if e.is_some() {
-                    self.inherited_def(&i)?;
+                    self.inherited_def(&i, blk);
                 }
             }
         }
@@ -99,40 +96,39 @@ impl<'c> Gen<'c, '_> {
         Ok(home)
     }
 
-    /// At the end of `loop_entry`: each inherited value from the variable
-    /// the loop head took it from.
-    fn take_inherited(&mut self, taken: &[(u32, u32)]) -> R<()> {
-        for &(k, v) in taken {
-            let x = b(self.b.build_load(self.ty(self.lir.var_ty[k as usize]), self.vars[k as usize], ""))?;
-            b(self.b.build_store(self.ihomes[v as usize].expect("made"), x))?;
-        }
-        Ok(())
-    }
-
-    /// Reads the inherited values `i` reads from their homes.
-    fn inherited_uses(&mut self, i: &Inst) -> R<()> {
+    /// Reads each inherited value `i` (in block `blk`) reads from the
+    /// variable it was taken from where its definition does not dominate
+    /// `blk` (see `clif::Replay::inherited_uses`).
+    fn inherited_uses(&mut self, i: &Inst, blk: u32) -> R<()> {
         let nv = self.lir.value_ty.len() as u32;
         let mut uses = Vec::new();
         live::for_uses(self.lir, i, |x| {
-            if x < nv && self.ihomes[x as usize].is_some() {
+            if x < nv && self.inherit[x as usize].is_some() {
                 uses.push(x);
             }
         });
         for x in uses {
-            let home = self.ihomes[x as usize].expect("made");
-            let v = b(self.b.build_load(self.ty(self.lir.value_ty[x as usize]), home, ""))?;
-            self.vals[x as usize] = Some(v);
+            let Some((k, at, def)) = self.inherit[x as usize] else {
+                continue;
+            };
+            if at == NONE || !super::super::clif::dominates(&self.idom, at, blk) {
+                let ty = self.ty(self.lir.var_ty[k as usize]);
+                let v = b(self.b.build_load(ty, self.vars[k as usize], ""))?;
+                self.vals[x as usize] = Some(v);
+            } else if let Some(d) = def {
+                self.vals[x as usize] = Some(d);
+            }
         }
         Ok(())
     }
 
-    /// Writes an inherited value `i` defines to its home.
-    fn inherited_def(&mut self, i: &Inst) -> R<()> {
+    /// Notes where an inherited value `i` defines was defined.
+    fn inherited_def(&mut self, i: &Inst, blk: u32) {
         if i.dst != NONE
-            && let Some(home) = self.ihomes[i.dst as usize]
+            && let Some(Some((_, at, def))) = self.inherit.get_mut(i.dst as usize)
         {
-            b(self.b.build_store(home, self.v(i.dst)))?;
+            *at = blk;
+            *def = self.vals[i.dst as usize];
         }
-        Ok(())
     }
 }

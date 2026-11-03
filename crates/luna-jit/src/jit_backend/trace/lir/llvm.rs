@@ -77,9 +77,12 @@ pub(super) struct Gen<'c, 'a> {
     pub(super) slots: Vec<PointerValue<'c>>,
     /// The function compiled (see `clif::define`).
     pub(super) start: super::Start,
-    /// In the loop's function, the home of each value the loop head takes
-    /// from the back edges (see `LoopEntry::inherit`).
-    pub(super) ihomes: Vec<Option<PointerValue<'c>>>,
+    /// In the loop's function, per value the loop head takes from the back
+    /// edges (see `LoopEntry::inherit`): the variable it was taken from, the
+    /// block it was defined in (`NONE` before) and its definition.
+    pub(super) inherit: Vec<Option<(u32, u32, Option<BasicValueEnum<'c>>)>>,
+    /// Per block, its immediate dominator (the loop's function only).
+    pub(super) idom: Vec<u32>,
 }
 
 impl<'c, 'a> Gen<'c, 'a> {
@@ -116,7 +119,8 @@ impl<'c, 'a> Gen<'c, 'a> {
             vars: Vec::with_capacity(lir.var_ty.len()),
             slots: Vec::with_capacity(lir.slots.len()),
             start: super::Start::Whole,
-            ihomes: Vec::new(),
+            inherit: Vec::new(),
+            idom: Vec::new(),
         })
     }
 

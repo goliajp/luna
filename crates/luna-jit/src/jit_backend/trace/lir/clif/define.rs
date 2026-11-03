@@ -112,9 +112,11 @@ pub(crate) fn define<M: Module>(
         reloc_gv,
         start,
         ivars: Vec::new(),
+        defs: vec![None; lir.value_ty.len()],
+        idom: Vec::new(),
     };
     if let Some((_, (_, taken))) = &reads {
-        r.inherit_vars(taken);
+        r.inherit_vars(taken, &an);
     }
     // each block is sealed once its last predecessor branches to it: with
     // every block left open until the end, Cranelift's SSA construction
@@ -151,15 +153,12 @@ pub(crate) fn define<M: Module>(
         let (lo, hi) = an.block_at[blk as usize];
         for c in lo..hi {
             let i = lir.insts[an.code[c as usize] as usize];
-            if let Some((_, (_, taken))) = &reads {
-                if blk == root && c + 1 == hi {
-                    r.take_inherited(taken);
-                }
-                r.inherited_uses(&i);
+            if reads.is_some() {
+                r.inherited_uses(&i, blk);
             }
             r.inst(&i);
             if reads.is_some() {
-                r.inherited_def(&i);
+                r.inherited_def(&i, blk);
             }
             for t in targets(&i, start).into_iter().flatten() {
                 preds[t as usize] -= 1;
