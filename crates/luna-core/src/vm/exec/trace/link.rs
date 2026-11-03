@@ -15,11 +15,19 @@ impl Vm {
         let Some(rec) = self.jit.active_trace.as_mut() else {
             return;
         };
-        if rec.side_trace_parent.is_some()
-            && in_frame
-            && !rec.ops.is_empty()
-            && rec.head_proto.ptr_eq(proto)
+        if rec.side_trace_parent.is_none() || !in_frame || !rec.head_proto.ptr_eq(proto) {
+            return;
+        }
+        // the op at `pc` was recorded as the interpreter was about to run
+        // it, before the dispatcher looked: the trace runs it instead
+        if rec
+            .ops
+            .last()
+            .is_some_and(|o| o.pc == pc && o.inline_depth == 0 && o.proto.ptr_eq(proto))
         {
+            **rec = rec.truncated(rec.ops.len() - 1);
+        }
+        if !rec.ops.is_empty() {
             rec.link_pc = Some(pc);
             self.trace_close_recording();
         }
