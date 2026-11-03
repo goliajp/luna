@@ -143,6 +143,7 @@ mod trace_ipairs_inline_aget;
 mod trace_ipairs_val_tag_guard;
 mod trace_jit_audit;
 mod trace_jit_semantics;
+mod trace_link;
 mod trace_loadnil_whitelist;
 mod trace_loop_carried_kinds;
 mod trace_loop_carried_sunk;

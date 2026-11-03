@@ -69,11 +69,96 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         record,
         max_stack,
         do_internal_loop,
-        opts,
-        float_only,
         ..
     } = *pl;
     let reg_state = lw.entry.reg_state;
+    let fs = for_step(lw, pl, rop, a, true)?;
+    let cond = fs.cond;
+    let continue_blk = lw.bcx.create_block();
+    let exit_blk = lw.bcx.create_block();
+    lw.bcx.ins().brif(cond, continue_blk, &[], exit_blk, &[]);
+
+    // exit branch: side-exit at forloop.pc + 1.
+    lw.bcx.switch_to_block(exit_blk);
+    lw.bcx.seal_block(exit_blk);
+    emit_store_back_and_return_pc(
+        &mut lw.bcx,
+        // the caller window: see `emit_tail`
+        &lw.entry.regs_full[..max_stack],
+        &lw.stored,
+        reg_state,
+        rop.pc + 1,
+        lw.flush_ctx.as_ref(),
+    );
+
+    // continue branch: step the index and go back.
+    lw.bcx.switch_to_block(continue_blk);
+    lw.bcx.seal_block(continue_blk);
+    step_for(lw, &fs);
+    // ForLoop's continue branch jumps to the loop's
+    // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
+    // backward jump encoding), not record.head_pc.
+    // For trace shapes whose head_pc == body_start
+    // (the usual back-edge trace), they're equal.
+    // For side traces whose head_pc lands on the
+    // ForLoop op itself (head_pc=rop.pc) instead of
+    // the back-edge target — e.g. an outer ForLoop
+    // that got recorded as a side trace from an inner
+    // loop exit — returning record.head_pc would
+    // re-enter the ForLoop op and double-advance the
+    // counter. A trace headed at an inner loop (a
+    // `while` inside the for body) that closes at the
+    // outer ForLoop must not loop back to its own head
+    // either: that skips the body code before the inner
+    // loop. Compute the body start explicitly.
+    let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
+    let mut tail_kinds = lw.current_kinds[..max_stack].to_vec();
+    if let Some(r) = fs.r_var {
+        tail_kinds[r] = fs.index_kind;
+    }
+    if do_internal_loop
+        && body_pc == record.head_pc
+        && loop_kinds_match(&tail_kinds, &lw.head_kinds)
+    {
+        emit_back_edge(lw, pl, &tail_kinds);
+    } else {
+        emit_store_back_and_return_pc(
+            &mut lw.bcx,
+            // the caller window: see `emit_tail`
+            &lw.entry.regs_full[..max_stack],
+            &lw.stored,
+            reg_state,
+            body_pc,
+            lw.flush_ctx.as_ref(),
+        );
+    }
+    Some(())
+}
+
+/// A numeric `for` loop's test and next index ([`emit_for_loop_tail`]).
+pub(super) struct ForStep {
+    /// Whether the loop goes on.
+    pub(super) cond: Value,
+    next: Option<Value>,
+    cur: Value,
+    x: Value,
+    step: Value,
+    r_cur: usize,
+    r_x: usize,
+    pub(super) r_var: Option<usize>,
+    pub(super) index_kind: RegKind,
+}
+
+/// The test of the `ForLoop` `rop` (state registers from `a`). `ends`: it
+/// ends the trace, whose step guard (the sign checked before the loop
+/// head) is about this loop.
+pub(super) fn for_step<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    rop: &RecordedOp,
+    a: usize,
+    ends: bool,
+) -> Option<ForStep> {
     // the index, the count or limit, the step, and the loop variable when
     // it is a copy of the index
     let v55 = rop.inst.op().plain_for_loop() == Op::ForLoop55;
@@ -87,10 +172,11 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
         lw.current_kinds[r_x],
         lw.current_kinds[r_step],
     ];
-    let form = for_form(opts.pre53 && !v55, float_only, kinds)?;
+    let form = for_form(pl.opts.pre53 && !v55, pl.float_only, kinds)?;
     let cur = lw.bcx.use_var(lw.entry.regs_full[r_cur]);
     let x = lw.bcx.use_var(lw.entry.regs_full[r_x]);
     let step = lw.bcx.use_var(lw.entry.regs_full[r_step]);
+    let guard = pl.step_guard.filter(|&(r, _)| ends && r == r_step);
     let (cond, next) = match form {
         ForForm::IntCount => {
             let zero = lw.bcx.ins().iconst(types::I64, 0);
@@ -98,9 +184,9 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
             (lw.bcx.ins().icmp(IntCC::NotEqual, x, zero), None)
         }
         // the step's sign was checked before the loop head
-        ForForm::IntLimit if pl.step_guard.is_some_and(|(r, _)| r == r_step) => {
+        ForForm::IntLimit if guard.is_some() => {
             let next = lw.bcx.ins().iadd(cur, step);
-            let cc = match pl.step_guard {
+            let cc = match guard {
                 Some((_, true)) => IntCC::SignedLessThanOrEqual,
                 _ => IntCC::SignedGreaterThanOrEqual,
             };
@@ -129,79 +215,36 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
             (lw.bcx.ins().select(up, le, ge), Some(next))
         }
     };
+    Some(ForStep {
+        cond,
+        next,
+        cur,
+        x,
+        step,
+        r_cur,
+        r_x,
+        r_var,
+        index_kind: kinds[0],
+    })
+}
 
-    // the caller window: see `emit_tail`
-    let caller_regs: &[Variable] = &lw.entry.regs_full[..max_stack];
-    let continue_blk = lw.bcx.create_block();
-    let exit_blk = lw.bcx.create_block();
-    lw.bcx.ins().brif(cond, continue_blk, &[], exit_blk, &[]);
-
-    // exit branch: side-exit at forloop.pc + 1.
-    lw.bcx.switch_to_block(exit_blk);
-    lw.bcx.seal_block(exit_blk);
-    emit_store_back_and_return_pc(
-        &mut lw.bcx,
-        caller_regs,
-        &lw.stored,
-        reg_state,
-        rop.pc + 1,
-        lw.flush_ctx.as_ref(),
-    );
-
-    // continue branch: step the index and go back.
-    lw.bcx.switch_to_block(continue_blk);
-    lw.bcx.seal_block(continue_blk);
-    let next = match next {
+/// The loop going on: the index (and the loop variable) stepped, the count
+/// of an integer loop counted down.
+pub(super) fn step_for<E: Emit>(lw: &mut Lower<E>, fs: &ForStep) {
+    let next = match fs.next {
         Some(next) => next,
         None => {
-            let next = lw.bcx.ins().iadd(cur, step);
+            let next = lw.bcx.ins().iadd(fs.cur, fs.step);
             let one = lw.bcx.ins().iconst(types::I64, 1);
-            let count_new = lw.bcx.ins().isub(x, one);
-            lw.bcx.def_var(lw.entry.regs_full[r_x], count_new);
+            let count_new = lw.bcx.ins().isub(fs.x, one);
+            lw.bcx.def_var(lw.entry.regs_full[fs.r_x], count_new);
             next
         }
     };
-    lw.bcx.def_var(lw.entry.regs_full[r_cur], next);
-    if let Some(r) = r_var {
+    lw.bcx.def_var(lw.entry.regs_full[fs.r_cur], next);
+    if let Some(r) = fs.r_var {
         lw.bcx.def_var(lw.entry.regs_full[r], next);
     }
-    // ForLoop's continue branch jumps to the loop's
-    // BODY START (= (rop.pc + 1) - bx per OP_FORLOOP's
-    // backward jump encoding), not record.head_pc.
-    // For trace shapes whose head_pc == body_start
-    // (the usual back-edge trace), they're equal.
-    // For side traces whose head_pc lands on the
-    // ForLoop op itself (head_pc=rop.pc) instead of
-    // the back-edge target — e.g. an outer ForLoop
-    // that got recorded as a side trace from an inner
-    // loop exit — returning record.head_pc would
-    // re-enter the ForLoop op and double-advance the
-    // counter. A trace headed at an inner loop (a
-    // `while` inside the for body) that closes at the
-    // outer ForLoop must not loop back to its own head
-    // either: that skips the body code before the inner
-    // loop. Compute the body start explicitly.
-    let body_pc = ((rop.pc as i32) + 1 - rop.inst.bx() as i32).max(0) as u32;
-    let mut tail_kinds = lw.current_kinds[..max_stack].to_vec();
-    if let Some(r) = r_var {
-        tail_kinds[r] = kinds[0];
-    }
-    if do_internal_loop
-        && body_pc == record.head_pc
-        && loop_kinds_match(&tail_kinds, &lw.head_kinds)
-    {
-        emit_back_edge(lw, pl, &tail_kinds);
-    } else {
-        emit_store_back_and_return_pc(
-            &mut lw.bcx,
-            caller_regs,
-            &lw.stored,
-            reg_state,
-            body_pc,
-            lw.flush_ctx.as_ref(),
-        );
-    }
-    Some(())
 }
 
 /// The edge back to the loop head, leaving the head-frame registers of
