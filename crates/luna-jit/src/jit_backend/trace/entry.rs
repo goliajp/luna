@@ -64,16 +64,86 @@ pub(super) fn entry_live(
         return regs;
     }
     let ops = &record.ops[..(end + 1).min(record.ops.len())];
-    let mut live = vec![false; max_stack];
-    // what the lowering writes on every path, so a later read sees the
-    // trace's own value
-    let mut defined = vec![false; max_stack];
-    // what some op may leave with a value the stack does not have
-    let mut written = vec![false; max_stack];
-    // the op that first writes a register on every path
-    let mut first_def = vec![usize::MAX; max_stack];
-    for (i, rop) in ops.iter().enumerate() {
+    let mut scan = Scan {
+        live: vec![false; max_stack],
+        defined: vec![false; max_stack],
+        written: vec![false; max_stack],
+        first_def: vec![usize::MAX; max_stack],
+    };
+    for i in 0..ops.len() {
         let off = op_offsets.get(i).copied().unwrap_or(0) as usize;
+        scan.op(ops, i, off, inline_writes.get(i).copied());
+    }
+    if let Some(tags) = parent_exit {
+        for (s, l) in scan.live.iter_mut().enumerate() {
+            if !matches!(tags.get(s), Some(ExitTag::Untouched)) {
+                *l = true;
+            }
+        }
+    }
+    for &r in also_live {
+        if let Some(l) = scan.live.get_mut(r as usize) {
+            *l = true;
+        }
+    }
+    if may_loop {
+        classify_written(&mut scan, &mut regs, record.side_trace_parent.is_none());
+    }
+    regs.peel_end = regs.peel_end.min(end);
+    regs.live = scan.live;
+    regs
+}
+
+/// What the ops up to the terminator do to the head frame's registers.
+struct Scan {
+    /// Read before the lowering writes them on every path.
+    live: Vec<bool>,
+    /// What the lowering writes on every path, so a later read sees the
+    /// trace's own value.
+    defined: Vec<bool>,
+    /// What some op may leave with a value the stack does not have.
+    written: Vec<bool>,
+    /// The op that first writes a register on every path.
+    first_def: Vec<usize>,
+}
+
+impl Scan {
+    /// Notes what `ops[i]`, whose frame starts at register `off`, reads and
+    /// writes; `inline_write`: the registers it writes as an inlined call's
+    /// return or a vararg expansion.
+    fn op(&mut self, ops: &[RecordedOp], i: usize, off: usize, inline_write: Option<(u32, u32)>) {
+        let rop = &ops[i];
+        let inst = rop.inst;
+        let op = inst.op();
+        let writes = self.read_op(rop, off);
+        let inlined_call = matches!(op, Op::Call)
+            && ops
+                .get(i + 1)
+                .is_some_and(|n| n.inline_depth > rop.inline_depth);
+        let sure =
+            !(op == Op::TestSet || op.is_for_loop() || op.is_tfor_loop() || op.is_tfor_call())
+                && !inlined_call;
+        let mut write = |s: usize| self.write(s, i, sure);
+        for &(lo, n) in &writes {
+            (lo..lo + n).for_each(|w| write(off + w as usize));
+        }
+        // the values of a call inlined into the trace land in the caller's
+        // R[A] on at the callee's return; a vararg expansion writes R[A] on
+        if let Some((first, n)) = inline_write {
+            (first..first + n).for_each(|s| write(s as usize));
+        }
+        if let Some(lay) = op.for_layout().filter(|_| op.is_tfor_call()) {
+            let a = off + inst.a() as usize;
+            let first = a + lay.var() as usize;
+            [a + lay.control() as usize, first, first + 1]
+                .into_iter()
+                .for_each(write);
+        }
+    }
+
+    /// Notes the registers `rop`, whose frame starts at register `off`,
+    /// reads; returns the ranges it writes.
+    fn read_op(&mut self, rop: &RecordedOp, off: usize) -> [(u32, u32); 2] {
         let inst = rop.inst;
         let op = inst.op();
         let (reads, writes) = rw_ranges(inst);
@@ -82,8 +152,8 @@ pub(super) fn entry_live(
         let frame = rop.proto.max_stack as u32;
         let mut read = |r: u32| {
             let s = off + r as usize;
-            if r < frame && s < max_stack && !defined[s] {
-                live[s] = true;
+            if r < frame && s < self.live.len() && !self.defined[s] {
+                self.live[s] = true;
             }
         };
         for &(lo, n) in &reads {
@@ -102,68 +172,39 @@ pub(super) fn entry_live(
             op if op.is_tfor_call() => read(inst.a() + op.for_layout().map_or(0, |l| l.var()) + 1),
             _ => {}
         }
-        let inlined_call = matches!(op, Op::Call)
-            && ops
-                .get(i + 1)
-                .is_some_and(|n| n.inline_depth > rop.inline_depth);
-        let sure =
-            !(op == Op::TestSet || op.is_for_loop() || op.is_tfor_loop() || op.is_tfor_call())
-                && !inlined_call;
-        let mut write = |s: usize| {
-            if s < max_stack {
-                written[s] = true;
-                if sure && !defined[s] {
-                    defined[s] = true;
-                    first_def[s] = i;
-                }
-            }
-        };
-        for &(lo, n) in &writes {
-            (lo..lo + n).for_each(|w| write(off + w as usize));
-        }
-        // the values of a call inlined into the trace land in the caller's
-        // R[A] on at the callee's return; a vararg expansion writes R[A] on
-        if let Some(&(first, n)) = inline_writes.get(i) {
-            (first..first + n).for_each(|s| write(s as usize));
-        }
-        if let Some(lay) = op.for_layout().filter(|_| op.is_tfor_call()) {
-            let a = off + inst.a() as usize;
-            let first = a + lay.var() as usize;
-            [a + lay.control() as usize, first, first + 1]
-                .into_iter()
-                .for_each(write);
-        }
+        writes
     }
-    if let Some(tags) = parent_exit {
-        for (s, l) in live.iter_mut().enumerate() {
-            if !matches!(tags.get(s), Some(ExitTag::Untouched)) {
-                *l = true;
+
+    /// Notes that op `i` writes register `s`, on every path if `sure`.
+    fn write(&mut self, s: usize, i: usize, sure: bool) {
+        if s < self.written.len() {
+            self.written[s] = true;
+            if sure && !self.defined[s] {
+                self.defined[s] = true;
+                self.first_def[s] = i;
             }
         }
     }
-    for &r in also_live {
-        if let Some(l) = live.get_mut(r as usize) {
-            *l = true;
+}
+
+/// Sorts the registers a looping body writes without reading them first:
+/// in a root trace, those it writes on every path are temporaries, lowered
+/// for the first pass apart up to the op after their first write; the
+/// others (and every one a side trace writes) leave the body's own value
+/// behind and are checked on entry.
+fn classify_written(scan: &mut Scan, regs: &mut HeadRegs, root: bool) {
+    for s in 0..scan.live.len() {
+        if !scan.written[s] || scan.live[s] {
+            continue;
+        }
+        if root && scan.defined[s] {
+            regs.temps[s] = true;
+            regs.peel_end = regs.peel_end.max(scan.first_def[s] + 1);
+        } else {
+            // the body leaves its own value behind; checked on entry
+            scan.live[s] = true;
         }
     }
-    if may_loop {
-        let root = record.side_trace_parent.is_none();
-        for s in 0..max_stack {
-            if !written[s] || live[s] {
-                continue;
-            }
-            if root && defined[s] {
-                regs.temps[s] = true;
-                regs.peel_end = regs.peel_end.max(first_def[s] + 1);
-            } else {
-                // the body leaves its own value behind; checked on entry
-                live[s] = true;
-            }
-        }
-    }
-    regs.peel_end = regs.peel_end.min(end);
-    regs.live = live;
-    regs
 }
 
 /// The exit tags of the parent trace's exit a side trace starts from, from
