@@ -38,41 +38,13 @@ pub struct InlineSideExit {
 /// short workloads a chance to wire side traces.
 pub const HOTEXIT_THRESHOLD: u32 = 2;
 
-/// Sentinel kind tags for side-trace returns.
-/// When a parent trace's IR detects a wired child side-trace cell
-/// non-null at a side-exit and tail-calls into the child, it OR's
-/// a 7-bit sentinel into the upper bits of the child's return value
-/// (bit 63 = side-trace marker, bits 56..=62 = `encode_side_sentinel
-/// (kind, local)`). The dispatcher reads the marker to know it must
-/// re-decode the body using the SIDE TRACE's shape inputs, not the
-/// parent's. The kind is informational (debug + close-handler routes
-/// the right cell write); `local` disambiguates among multiple wired
-/// cells of the same kind (e.g. several inline cmp@d>0 sites).
-pub const SIDE_SENT_KIND_INLINE: u8 = 1;
-/// Sentinel kind for tag-cell side-traces (typed-register exits).
-pub const SIDE_SENT_KIND_TAG: u8 = 2;
-/// Sentinel kind for global-cell side-traces (env-table exits).
-pub const SIDE_SENT_KIND_GLOBAL: u8 = 3;
-/// Sentinel kind for down-recursion stitch
-/// returns. Emitted at the `TraceEnd::DownRec` close arm in
-/// `crates/luna-jit/src/jit_backend/trace.rs` `downrec_idx_opt`
-/// branch when the caller-pc guard hits (saved `[base-8]` matches
-/// the recorded `target_proto`'s expected return PC) so the
-/// dispatcher knows to walk the parent trace's RetfRecord
-/// chain to materialise the inlined frames and tail-call into the
-/// stitched child trace rather than falling back to interp at
-/// `head_pc`.
-pub const SIDE_SENT_KIND_DOWNREC: u8 = 4;
-
-/// Encoded sentinel value reserved for
-/// [`SIDE_SENT_KIND_DOWNREC`]. Picked as `0x10` (= 16) which sits
-/// in the (kind=0, local=0..=31) slice unused by existing kinds
-/// 1..=3 (those occupy encoded ranges 32..=127). DOWNREC has no
-/// `local` (only 1 stitch slot per trace today), so the value is
-/// a single constant rather than a function of `local`. Out-of-band
-/// vs the regular `((kind & 0x3) << 5) | (local & 0x1F)` layout —
-/// keeps existing kinds' encoding (and TAG local cap of 32) intact
-/// without widening the kind bits.
+/// The code a down-recursion trace's stitch return carries in bits 56..=62
+/// of its return value, with bit 63 set: the `TraceEnd::DownRec` close
+/// returns it when the caller-pc guard hits (saved `[base-8]` matches the
+/// recorded `target_proto`'s expected return PC), so the dispatcher walks
+/// the trace's RetfRecord chain to materialise the inlined frames and goes
+/// on in the stitched trace rather than in the interpreter at `head_pc`.
+/// No other return sets bit 63.
 pub const SIDE_SENT_DOWNREC_CODE: u32 = 0x10;
 
 /// Upper bound on the multi-way caller-pc guard
@@ -91,34 +63,6 @@ pub const SIDE_SENT_DOWNREC_CODE: u32 = 0x10;
 /// true` so the primary dispatcher arm hits the trace without going
 /// through the `downrec_link.is_some()` fallback admit clause.
 pub const DOWNREC_MULTI_WAY_GUARD_MAX: usize = 4;
-
-/// Encode a `(kind, local)` pair into a 7-bit
-/// sentinel code that fits in `raw_ret`'s bits 56..=62. Layout for
-/// kinds 1..=3: upper 2 bits = kind, lower 5 bits = local index.
-/// A local index `>= 32` is truncated; the close handler caps
-/// tag-cell allocation at 32 to avoid sentinel collisions. The
-/// dispatcher uses the full 7-bit value as the key into the
-/// parent's `side_trace_cache`.
-///
-/// Kind 4 ([`SIDE_SENT_KIND_DOWNREC`])
-/// is encoded out-of-band as [`SIDE_SENT_DOWNREC_CODE`] (= 0x10).
-/// DOWNREC has only one slot per trace (the stitch target lives on
-/// `CompiledTrace.downrec_link`, not in the side_trace_cache), so
-/// its `local` is asserted to be 0.
-pub fn encode_side_sentinel(kind: u8, local: u32) -> u32 {
-    debug_assert!(
-        (1..=4).contains(&kind),
-        "kind must be SIDE_SENT_KIND_* (1..=4)"
-    );
-    if kind == SIDE_SENT_KIND_DOWNREC {
-        debug_assert!(
-            local == 0,
-            "SIDE_SENT_KIND_DOWNREC requires local == 0 (single stitch slot per trace)"
-        );
-        return SIDE_SENT_DOWNREC_CODE;
-    }
-    ((kind as u32 & 0x3) << 5) | (local & 0x1F)
-}
 
 /// True iff the dispatcher's decoded
 /// `sentinel_code` (`(raw_ret >> 56) & 0x7F` at

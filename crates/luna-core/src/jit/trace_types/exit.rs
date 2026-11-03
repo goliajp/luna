@@ -169,8 +169,8 @@ pub struct DecodedExit<'a> {
 ///
 /// Pure function over the input slices — the dispatcher passes
 /// the parent's `per_exit_inline` / `per_exit_tags` / `exit_tags`,
-/// or the side trace's same fields when bit 63 of `raw_ret` is set
-/// (the side-trace sentinel).
+/// or the side trace's same fields when a side trace wired to the exit
+/// ran.
 ///
 /// A depth-0 side exit returns `EXIT_TAGS_INDEX_BIT | (i << 32) | cont_pc`
 /// and restores through `per_exit_tags[i]`: several exits can resume at

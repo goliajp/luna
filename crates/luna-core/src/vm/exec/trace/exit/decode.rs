@@ -5,9 +5,9 @@ use super::*;
 use crate::jit::trace::CompiledTrace;
 
 impl Vm {
-    /// Which trace's exit shapes decode `raw_ret`: a side trace's when the
-    /// parent tail-called one (or one is wired to the exit taken, which runs
-    /// here first), else the trace's own.
+    /// Which trace's exit shapes decode `raw_ret`: a side trace's when one
+    /// is wired to the exit taken (it runs here first), else the trace's
+    /// own.
     pub(in crate::vm::exec) fn trace_exit_source(
         &mut self,
         cl: Gc<LuaClosure>,
@@ -43,19 +43,6 @@ impl Vm {
             ran: false,
             off: 0,
         };
-        if (raw_ret >> 63) & 1 == 1 {
-            // the parent's code ran the side trace wired to one of its
-            // exits; the sentinel names the exit
-            let sentinel_code = ((raw_ret >> 56) & 0x7F) as u32;
-            let exit = ct.side_trace_cache.borrow().get(&sentinel_code).copied();
-            let child = exit.and_then(|e| ct.side_children.borrow().get(&e).cloned());
-            return ExitSource {
-                child,
-                body: raw_ret & 0x00FF_FFFF_FFFF_FFFFu64,
-                ran: true,
-                off: exit.map_or(0, |e| ct.exit_frame_offset(e as usize)),
-            };
-        }
         // a collection-check exit runs no side trace: the check is the op's
         if !ct.has_any_side_wired.get() || self.jit.gc_exit.is_some() {
             return parent_only;

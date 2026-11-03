@@ -90,10 +90,6 @@ pub struct CompiledTrace {
     pub(crate) per_exit_inline: TArc<[InlineSideExit]>,
     pub(crate) exit_hit_counts: TArc<[TCellU32]>,
     pub(crate) exit_side_trace_ptrs: TArc<[TCellPtr]>,
-    /// The exit index (as `exit_hit_counts`) of each side trace wired to
-    /// this trace, by the sentinel code the IR would OR into a side
-    /// trace's return (bits 56..=62). Read with [`Self::side_children`].
-    pub(crate) side_trace_cache: TRefLock<std::collections::HashMap<u32, u32>>,
     /// The side traces wired to this trace's exits, by exit index. Held
     /// here rather than looked up on a proto: a side trace started at an
     /// exit inside a function the trace inlined is cached on that
@@ -140,7 +136,6 @@ macro_rules! moved {
         let CompiledTraceParts { $($f),* } = $parts;
         Self {
             $($f,)*
-            side_trace_cache: TRefLock::new(std::collections::HashMap::new()),
             side_children: TRefLock::new(std::collections::HashMap::new()),
             has_any_side_wired: TCellBool::new(false),
         }

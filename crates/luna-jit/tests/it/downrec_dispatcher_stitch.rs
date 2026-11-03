@@ -15,12 +15,13 @@
 //!    reads it from `reg_state[window_size * 8]`.
 //!
 //! 3. **Sentinel post-invoke arm** — classifies the trace's return as
-//!    HIT (DOWNREC sentinel) or MISS (any other sentinel /
-//!    pending_err). HIT bumps `JitCounters.downrec_dispatched` and
-//!    decrements the `stitch_depth_remaining` cycle budget; MISS bumps
-//!    `downrec_deopt`. Both set `suppress_downrec_admit_once` so the
-//!    next interpreter loop iteration skips the downrec admit and runs
-//!    the natural op at `head_pc`, advancing `pc` past it.
+//!    HIT (DOWNREC sentinel) or deopt (pending_err, or a HIT past the
+//!    `stitch_depth_remaining` budget); a guard miss returns as a plain
+//!    exit. HIT bumps `JitCounters.downrec_dispatched` and decrements
+//!    the cycle budget; deopt bumps `downrec_deopt`. All three set
+//!    `suppress_downrec_admit_once` so the next interpreter loop
+//!    iteration skips the downrec admit and runs the natural op at
+//!    `head_pc`, advancing `pc` past it.
 //!
 //! 4. **Stitch-cycle safety** — `JitState::STITCH_DEPTH_DEFAULT = 1`
 //!    is the per-natural-entry HIT budget. The one-shot suppress flag

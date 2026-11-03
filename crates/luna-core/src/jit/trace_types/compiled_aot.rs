@@ -9,8 +9,7 @@ impl CompiledTrace {
     ///
     /// Builds a [`CompiledTrace`] from the fields the AOT meta blob
     /// carries plus a deploy-resolved trace fn pointer.
-    /// `per_exit_inline`,
-    /// `side_trace_cache`, `body_writes` default to empty / null;
+    /// `per_exit_inline`, `body_writes` default to empty / null;
     /// `exit_hit_counts` / `exit_side_trace_ptrs` are sized to
     /// `per_exit_tags.len() + 1` (each typed-exit slot + the global
     /// clean-tail). The deploy `Vm` never records side traces against
