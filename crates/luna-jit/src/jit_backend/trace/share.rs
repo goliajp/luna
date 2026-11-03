@@ -270,9 +270,12 @@ fn value_of(
             .tier_up
             .as_ref()
             .map_or(0, |t| t.count() as *const TCellU32 as i64),
-        Source::TierLoop => ct.tier_up.as_ref().map_or(0, |t| {
+        // only a trace that counts has a loop to hand over; without the
+        // cell its code would read address 0, so the image is not taken up
+        Source::TierLoop => {
+            let t = ct.tier_up.as_ref()?;
             luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64
-        }),
+        }
     })
 }
 
