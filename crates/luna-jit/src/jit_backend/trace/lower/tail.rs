@@ -103,12 +103,14 @@ pub(super) fn emit_tail<E: Emit>(
         let tail = lw.current_kinds[..max_stack].to_vec();
         emit_back_edge(lw, pl, &tail);
     } else {
+        // a side trace linked to the compiled trace it reached returns
+        // that trace's head
         emit_store_back_and_return_pc(
             &mut lw.bcx,
             caller_regs,
             &lw.stored,
             reg_state,
-            record.head_pc,
+            record.link_pc.unwrap_or(record.head_pc),
             lw.flush_ctx.as_ref(),
         );
     }

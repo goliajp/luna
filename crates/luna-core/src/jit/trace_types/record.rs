@@ -127,6 +127,11 @@ pub struct TraceRecord {
     /// recorded after that, short of returning past the head, is another
     /// call's (the host called in again).
     pub returned_from_head: bool,
+    /// For a side trace that closed where a compiled trace starts, in the
+    /// frame it was recorded in: that trace's head. The side trace goes
+    /// on through the loop edges it recorded and returns this pc, where
+    /// the dispatcher enters that trace.
+    pub link_pc: Option<u32>,
 }
 
 /// [`TraceRecord::index_slots`] for an op with none.
@@ -199,6 +204,7 @@ impl TraceRecord {
             for_step_up: None,
             closed_at_head: false,
             returned_from_head: false,
+            link_pc: None,
         }
     }
 
@@ -243,6 +249,7 @@ impl TraceRecord {
             for_step_up: None,
             closed_at_head: false,
             returned_from_head: false,
+            link_pc: None,
         }
     }
 

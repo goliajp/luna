@@ -83,17 +83,7 @@ impl Vm {
         let mut ran = false;
         if dispatch_ok {
             debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
-            // A recording in progress cannot see what the trace runs
-            // natively: it would resume after the trace with ops missing,
-            // and could close as a loop that never ran (a side trace of
-            // two ops returning its own head, entered forever). Dropped,
-            // and counted as a failure of that head, which would otherwise
-            // start the same recording again and again.
-            if let Some(rec) = self.jit.active_trace.take() {
-                self.jit.counters.aborted += 1;
-                self.jit.counters.bump_close_cause("reached-compiled-trace");
-                note_trace_compile_failure(&mut self.jit.counters, rec.head_proto, rec.head_pc);
-            }
+            self.trace_reached_compiled(cl.proto, pc);
             self.jit.pending_err = None;
             // an inline side exit pushes the inlined frames, which a deopt
             // pops
