@@ -14,7 +14,9 @@
 
 use super::*;
 
+mod intervals;
 mod operands;
+use intervals::{coalesce_var_reads, extend, number};
 use operands::succs_of;
 pub(crate) use operands::{Start, for_defs, for_uses, succs};
 
@@ -109,8 +111,28 @@ pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, start: Start) {
     let nv = lir.value_ty.len() as u32;
     let nreg = (nv as usize) + lir.var_ty.len();
     layout(lir, an, root);
+    place_loops(lir, an);
+    reset(&mut an.start, nreg, NONE);
+    reset(&mut an.end, nreg, 0);
+    reset(&mut an.uses, nv as usize, 0);
+    reset(&mut an.read, lir.var_ty.len(), false);
+    reset(&mut an.weight, nreg, 0);
+    an.writes.iter_mut().for_each(Vec::clear);
+    an.writes.resize_with(lir.var_ty.len(), Vec::new);
+    an.var_reads.clear();
+    an.calls.clear();
+    number(lir, an, nv);
+    extend(lir, an, nv);
+    an.n_values = nv;
+    coalesce_var_reads(an);
+}
+
+/// Each block's place in the layout, the loops (from the back edges: a
+/// successor laid out at or before the block) and, per position, how many
+/// loops are around it.
+fn place_loops(lir: &Lir, an: &mut Analysis) {
     // each block's place in the layout from the blocks' lengths; the
-    // instructions themselves are listed in the pass below
+    // instructions themselves are listed in `number`
     reset(&mut an.block_at, lir.blocks.len(), (NONE, NONE));
     let mut at = 0;
     for &b in &an.order {
@@ -120,8 +142,6 @@ pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, start: Start) {
     }
     an.code.clear();
     an.code.reserve(at as usize);
-    // the loops, from the back edges: a successor laid out at or before
-    // the block
     an.loops.clear();
     for &b in &an.order {
         let (lo, hi) = an.block_at[b as usize];
@@ -133,7 +153,6 @@ pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, start: Start) {
             }
         }
     }
-    // per position: how many loops are around it
     let n_pos = 2 * at as usize + 2;
     reset(&mut an.depth, n_pos + 1, 0);
     for &(h, e) in &an.loops {
@@ -144,141 +163,5 @@ pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, start: Start) {
     for x in an.depth.iter_mut() {
         d += *x;
         *x = d;
-    }
-    reset(&mut an.start, nreg, NONE);
-    reset(&mut an.end, nreg, 0);
-    reset(&mut an.uses, nv as usize, 0);
-    reset(&mut an.read, lir.var_ty.len(), false);
-    reset(&mut an.weight, nreg, 0);
-    an.writes.iter_mut().for_each(Vec::clear);
-    an.writes.resize_with(lir.var_ty.len(), Vec::new);
-    an.var_reads.clear();
-    an.calls.clear();
-    let Analysis {
-        order,
-        code,
-        start,
-        end,
-        uses,
-        calls,
-        entry_vars,
-        read,
-        loops,
-        depth,
-        weight,
-        writes,
-        var_reads,
-        ..
-    } = an;
-    #[inline(always)]
-    fn touch(start: &mut [u32], end: &mut [u32], weight: &mut [u32], r: u32, p: u32, w: u32) {
-        let r = r as usize;
-        if start[r] == NONE {
-            start[r] = p;
-        }
-        if p > end[r] {
-            end[r] = p;
-        }
-        weight[r] = weight[r].saturating_add(w);
-    }
-    for &b in order.iter() {
-        let mut ii = lir.blocks[b as usize].first;
-        while ii != NONE {
-            let k = code.len();
-            code.push(ii);
-            let p = 2 * k as u32;
-            let w = LOOP_WEIGHT.saturating_pow(depth[p as usize] as u32);
-            let inst = &lir.insts[ii as usize];
-            ii = inst.next;
-            for_uses(lir, inst, |r| {
-                if r < nv {
-                    uses[r as usize] += 1;
-                } else {
-                    read[(r - nv) as usize] = true;
-                }
-                touch(start, end, weight, r, p, w);
-            });
-            for_defs(lir, inst, |r| touch(start, end, weight, r, p + 1, w));
-            match inst.op {
-                Op::Call | Op::CallIndirect => calls.push(p),
-                Op::VarWrite => writes[inst.a as usize].push(p + 1),
-                Op::VarRead => var_reads.push((inst.dst, inst.a, p + 1)),
-                _ => {}
-            }
-        }
-    }
-    // the function's parameter arrives in the entry block
-    if lir.arg0 != NONE {
-        touch(start, end, weight, lir.arg0, 0, 0);
-    }
-    // a value nothing reads needs no register (its pure instruction is not
-    // emitted; a call's result is dropped)
-    for r in 0..nv as usize {
-        if uses[r] == 0 {
-            start[r] = NONE;
-        }
-    }
-    entry_vars.clear();
-    for (k, &r) in read.iter().enumerate() {
-        if r {
-            entry_vars.push(k as u32);
-            start[nv as usize + k] = 0;
-        }
-    }
-    // inner loops first, so an outer loop sees what they extended
-    loops.sort_unstable_by_key(|&(h, e)| e - h);
-    for &(h, e) in loops.iter() {
-        for r in 0..nreg {
-            let s = start[r];
-            if s == NONE || s > e || end[r] < h {
-                continue;
-            }
-            if r >= nv as usize {
-                start[r] = s.min(h);
-                end[r] = end[r].max(e);
-            } else if s < h {
-                end[r] = end[r].max(e);
-            }
-        }
-    }
-    an.n_values = nv;
-    coalesce_var_reads(an);
-}
-
-/// A value read from a variable that is not written while the value is
-/// live stays in the variable's home: the read is no copy, and the
-/// variable, now read wherever the value is, keeps a register more often
-/// (it takes the value's weight).
-fn coalesce_var_reads(an: &mut Analysis) {
-    let nv = an.n_values as usize;
-    let Analysis {
-        start,
-        end,
-        alias,
-        writes,
-        var_reads,
-        weight,
-        ..
-    } = an;
-    reset(alias, nv, NONE);
-    for &(dst, var, p) in var_reads.iter() {
-        let d = dst as usize;
-        if start[d] == NONE {
-            continue;
-        }
-        let w = &writes[var as usize];
-        // the first write after the read, in layout order: loops extended
-        // the value's interval over every write that can run while it lives
-        let next = w.partition_point(|&x| x <= p);
-        if w.get(next).is_some_and(|&x| x <= end[d]) {
-            continue;
-        }
-        let r = nv + var as usize;
-        end[r] = end[r].max(end[d]);
-        start[r] = start[r].min(start[d]);
-        start[d] = NONE;
-        alias[d] = r as u32;
-        weight[r] = weight[r].saturating_add(weight[d]);
-        weight[d] = 0;
     }
 }
