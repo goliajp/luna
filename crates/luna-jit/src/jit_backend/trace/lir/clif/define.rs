@@ -15,6 +15,10 @@ fn targets(i: &Inst, start: Start) -> [Option<u32>; 2] {
     }
 }
 
+/// The loop's function's entry: the loop entry, which of its registers it
+/// reads, and the values it takes from the back edges.
+type EntryReads<'e> = (&'e LoopEntry, (Vec<bool>, Vec<(u32, u32)>));
+
 /// Defines the function `start` names in `module` from `lir`: the trace,
 /// or the optimizing tier's first pass or loop of a trace whose back edge
 /// calls the loop (see `lower::handoff`; `None` when `lir` has no loop
@@ -55,28 +59,85 @@ pub(crate) fn define<M: Module>(
     ctx.func.name = UserFuncName::user(0, fn_id.as_u32());
     let mut fbc = FunctionBuilderContext::new();
     let mut b = FunctionBuilder::new(&mut ctx.func, &mut fbc);
-    let mut blocks = vec![None; lir.blocks.len()];
-    for &blk in &an.order {
-        blocks[blk as usize] = Some(b.create_block());
+    let reloc_gv = reloc_globals(module, &mut b, relocs.len())?;
+    let mut r = Replay::open(lir, b, &an, root, call_conv, start, reloc_gv);
+    if let Some((_, (_, taken))) = &reads {
+        r.inherit_vars(taken, &an);
     }
-    let mut vals = vec![None; lir.value_ty.len()];
-    let entry = blocks[root as usize].expect("the entry block");
-    b.append_block_params_for_function_params(entry);
-    if lir.arg0 != NONE {
-        vals[lir.arg0 as usize] = Some(b.block_params(entry)[0]);
+    replay_blocks(&mut r, &an, root, reads.as_ref(), relocs, read_cost);
+    r.b.finalize(module.target_config());
+    compile(module, fn_id, ctx, relocs)
+}
+
+/// The data symbols the relocations are read from, declared in `b`'s
+/// function.
+fn reloc_globals<M: Module>(
+    module: &mut M,
+    b: &mut FunctionBuilder<'_>,
+    n: usize,
+) -> Option<Vec<cranelift_codegen::ir::GlobalValue>> {
+    let mut reloc_gv = Vec::with_capacity(n);
+    for k in 0..n {
+        let name = crate::jit_backend::trace::reloc_symbol(k);
+        let id = module
+            .declare_data(&name, Linkage::Import, false, false)
+            .ok()?;
+        reloc_gv.push(module.declare_data_in_func(id, b.func));
     }
-    for &blk in &an.order {
-        if blk == root {
-            continue;
+    Some(reloc_gv)
+}
+
+impl<'a, 'f> Replay<'a, 'f> {
+    /// A replay of `lir` into `b`, with a block for each block `an` lays
+    /// out (`root` taking the function's parameter), a variable for each
+    /// LIR variable and a stack slot for each LIR slot.
+    fn open(
+        lir: &'a Lir,
+        mut b: FunctionBuilder<'f>,
+        an: &live::Analysis,
+        root: u32,
+        call_conv: CallConv,
+        start: Start,
+        reloc_gv: Vec<cranelift_codegen::ir::GlobalValue>,
+    ) -> Self {
+        let mut blocks = vec![None; lir.blocks.len()];
+        for &blk in &an.order {
+            blocks[blk as usize] = Some(b.create_block());
         }
-        let cb = blocks[blk as usize].expect("laid out");
-        for &p in lir.block_params(blk) {
-            vals[p as usize] = Some(b.append_block_param(cb, cty(lir.value_ty[p as usize])));
+        let mut vals = vec![None; lir.value_ty.len()];
+        let entry = blocks[root as usize].expect("the entry block");
+        b.append_block_params_for_function_params(entry);
+        if lir.arg0 != NONE {
+            vals[lir.arg0 as usize] = Some(b.block_params(entry)[0]);
+        }
+        for &blk in an.order.iter().filter(|&&blk| blk != root) {
+            let cb = blocks[blk as usize].expect("laid out");
+            for &p in lir.block_params(blk) {
+                vals[p as usize] = Some(b.append_block_param(cb, cty(lir.value_ty[p as usize])));
+            }
+        }
+        let vars = lir.var_ty.iter().map(|&t| b.declare_var(cty(t))).collect();
+        let slots = stack_slots(lir, &mut b);
+        Replay {
+            lir,
+            b,
+            vals,
+            vars,
+            blocks,
+            slots,
+            call_conv,
+            hoisted: vec![None; reloc_gv.len()],
+            reloc_gv,
+            start,
+            ivars: Vec::new(),
+            defs: vec![None; lir.value_ty.len()],
+            idom: Vec::new(),
         }
     }
-    let vars = lir.var_ty.iter().map(|&t| b.declare_var(cty(t))).collect();
-    let slots = lir
-        .slots
+}
+
+fn stack_slots(lir: &Lir, b: &mut FunctionBuilder<'_>) -> Vec<cranelift_codegen::ir::StackSlot> {
+    lir.slots
         .iter()
         .map(|&(size, align)| {
             b.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
@@ -85,43 +146,12 @@ pub(crate) fn define<M: Module>(
                 align,
             ))
         })
-        .collect();
-    let mut reloc_gv = Vec::with_capacity(relocs.len());
-    for n in 0..relocs.len() {
-        let id = module
-            .declare_data(
-                &crate::jit_backend::trace::reloc_symbol(n),
-                Linkage::Import,
-                false,
-                false,
-            )
-            .ok()?;
-        reloc_gv.push(module.declare_data_in_func(id, b.func));
-    }
-    let mut r = Replay {
-        lir,
-        b,
-        vals,
-        vars,
-        blocks,
-        slots,
-        call_conv,
-        hoisted: vec![None; relocs.len()],
-        reloc_gv,
-        start,
-        ivars: Vec::new(),
-        defs: vec![None; lir.value_ty.len()],
-        idom: Vec::new(),
-    };
-    if let Some((_, (_, taken))) = &reads {
-        r.inherit_vars(taken, &an);
-    }
-    // each block is sealed once its last predecessor branches to it: with
-    // every block left open until the end, Cranelift's SSA construction
-    // gives loop heads and merges a parameter for each variable read there,
-    // and the loop carries all of them
+        .collect()
+}
+
+/// Per block, how many branches the replay takes to it.
+fn count_preds(lir: &Lir, an: &live::Analysis, start: Start) -> Vec<u32> {
     let mut preds = vec![0u32; lir.blocks.len()];
-    let mut sealed = vec![false; lir.blocks.len()];
     for &blk in &an.order {
         let (lo, hi) = an.block_at[blk as usize];
         for c in lo..hi {
@@ -133,12 +163,32 @@ pub(crate) fn define<M: Module>(
             }
         }
     }
+    preds
+}
+
+/// Replays the blocks in `an`'s order, reading the relocations and (in the
+/// loop's function) the registers in `root`.
+fn replay_blocks(
+    r: &mut Replay<'_, '_>,
+    an: &live::Analysis,
+    root: u32,
+    reads: Option<&EntryReads<'_>>,
+    relocs: &[(crate::jit_backend::trace::RelocKind, i64)],
+    read_cost: u32,
+) {
+    let lir = r.lir;
+    // each block is sealed once its last predecessor branches to it: with
+    // every block left open until the end, Cranelift's SSA construction
+    // gives loop heads and merges a parameter for each variable read there,
+    // and the loop carries all of them
+    let mut preds = count_preds(lir, an, r.start);
+    let mut sealed = vec![false; lir.blocks.len()];
     for &blk in &an.order {
         let cb = r.blocks[blk as usize].expect("laid out");
         r.b.switch_to_block(cb);
         if blk == root {
-            hoist(&mut r, &an, relocs, read_cost);
-            if let Some((e, (reads, _))) = &reads {
+            hoist(r, an, relocs, read_cost);
+            if let Some((e, (reads, _))) = reads {
                 r.read_regs(&e.regs, reads);
                 r.own_reg_state();
             }
@@ -159,16 +209,31 @@ pub(crate) fn define<M: Module>(
             if reads.is_some() {
                 r.inherited_def(&i, blk);
             }
-            for t in targets(&i, start).into_iter().flatten() {
-                preds[t as usize] -= 1;
-                if preds[t as usize] == 0 {
-                    r.b.seal_block(r.blocks[t as usize].expect("laid out"));
-                    sealed[t as usize] = true;
-                }
-            }
+            branched(r, &i, &mut preds, &mut sealed);
         }
     }
-    r.b.finalize(module.target_config());
+}
+
+/// Counts the branches `i` takes, sealing each block whose last
+/// predecessor this is.
+fn branched(r: &mut Replay<'_, '_>, i: &Inst, preds: &mut [u32], sealed: &mut [bool]) {
+    for t in targets(i, r.start).into_iter().flatten() {
+        preds[t as usize] -= 1;
+        if preds[t as usize] == 0 {
+            r.b.seal_block(r.blocks[t as usize].expect("laid out"));
+            sealed[t as usize] = true;
+        }
+    }
+}
+
+/// Compiles the finished function into `module` with `relocs` as the
+/// relocations' values.
+fn compile<M: Module>(
+    module: &mut M,
+    fn_id: FuncId,
+    mut ctx: cranelift_codegen::Context,
+    relocs: &[(crate::jit_backend::trace::RelocKind, i64)],
+) -> Option<FuncId> {
     crate::jit_backend::trace::drop_unused_block_params(&mut ctx.func);
     // `LUNA_TRACE_IR_DUMP=1`, as for the lowerer's own Cranelift IR
     if std::env::var_os("LUNA_TRACE_IR_DUMP").is_some_and(|v| v == "1") {
