@@ -216,12 +216,7 @@ pub fn decode_exit_shape<'a>(
     let site_id = site_field;
     if site_id > 0 {
         let idx = (site_id - 1) as usize;
-        debug_assert!(
-            idx < inline_n,
-            "site_idx out of range (idx={} inline_n={})",
-            idx,
-            inline_n
-        );
+        debug_assert!(idx < inline_n, "site {idx} of {inline_n}");
         debug_assert_eq!(
             per_exit_inline[idx].cont_pc, cont_pc,
             "per_exit_inline entry's cont_pc mismatch with IR"
