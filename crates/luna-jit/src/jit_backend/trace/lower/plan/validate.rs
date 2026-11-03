@@ -188,8 +188,16 @@ fn validate_op(
         Op::Call => {
             unreachable!("Op::Call only appears at effective_end (truncation guarded above)")
         }
+        // a loop edge inside a linked side trace (the trace's end elsewhere)
         Op::ForLoop | Op::ForLoop55 | Op::ForLoopF | Op::ForLoop55F => {
-            unreachable!("Op::ForLoop only appears at effective_end (loop-end guarded above)")
+            assert!(
+                rop.inline_depth == 0 && record.link_pc.is_some(),
+                "Op::ForLoop only appears at effective_end (loop-end guarded above)"
+            );
+            if a + 3 >= max_stack {
+                checkpoint("bail:mid-for-loop-regs");
+                return None;
+            }
         }
         Op::TForLoop | Op::TForLoop53 | Op::TForLoop55 => unreachable!(
             "Op::TForLoop only appears at effective_end (close-on-back-edge guarded above)"
