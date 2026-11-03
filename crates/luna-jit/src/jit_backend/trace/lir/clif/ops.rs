@@ -50,16 +50,31 @@ impl Replay<'_, '_> {
     }
 }
 
+/// What reading a relocation where it is used costs, in instructions, on
+/// `arch`: a `movabs` on x86-64; elsewhere (AArch64) a literal load and
+/// the branch over the eight bytes it reads.
+pub(super) fn read_in_place_cost(arch: target_lexicon::Architecture) -> u32 {
+    match arch {
+        target_lexicon::Architecture::X86_64 => 1,
+        _ => 2,
+    }
+}
+
 /// Reads the relocations [`Replay::hoisted`] keeps, at the start of the
-/// entry block: string and function ones read at least twice inside a
-/// loop, the most read first, at most [`HOISTED`]. Each of those saves a
-/// read per iteration; one read once would only hold a register.
+/// entry block: string and function ones whose reads inside loops, each
+/// costing `read_cost` instructions there, cost more than one reload of
+/// a spilled register would, the most read first, at most [`HOISTED`].
+/// So x86-64 keeps those read at least twice, and AArch64, where a read
+/// in place is a load and a branch, every one a loop reads.
 pub(super) fn hoist(
     r: &mut Replay<'_, '_>,
     an: &live::Analysis,
     relocs: &[(crate::jit_backend::trace::RelocKind, i64)],
+    read_cost: u32,
 ) {
     use crate::jit_backend::trace::RelocKind;
+    // a reload: one load
+    const RELOAD: u32 = 1;
     let mut in_loops = vec![0u32; relocs.len()];
     for &(head, back) in &an.loops {
         for c in head / 2..=back / 2 {
@@ -69,7 +84,10 @@ pub(super) fn hoist(
         }
     }
     let mut keep: Vec<usize> = (0..relocs.len())
-        .filter(|&n| in_loops[n] >= 2 && matches!(relocs[n].0, RelocKind::Str | RelocKind::Proto))
+        .filter(|&n| {
+            in_loops[n] * read_cost > RELOAD
+                && matches!(relocs[n].0, RelocKind::Str | RelocKind::Proto)
+        })
         .collect();
     keep.sort_by_key(|&n| std::cmp::Reverse(in_loops[n]));
     for &n in keep.iter().take(HOISTED) {
