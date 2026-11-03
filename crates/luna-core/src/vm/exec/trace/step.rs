@@ -32,23 +32,19 @@ pub(in crate::vm::exec) type RunningTrace = (usize, u32);
 
 impl Vm {
     /// A root trace `ct` is about to run in the frame on top: what was
-    /// running before, to put back after it.
+    /// running before, to put back after it. Only `ct`'s address is kept,
+    /// to tell the running trace's exits apart; it is not read through.
     pub(in crate::vm::exec) fn trace_step_enter(
         &mut self,
-        ct: &crate::jit::trace::CompiledTrace,
+        ct: *const crate::jit::trace::CompiledTrace,
     ) -> RunningTrace {
-        self.trace_step_enter_at(ct as *const _ as usize)
-    }
-
-    /// [`Vm::trace_step_enter`] of the trace at address `ct`.
-    pub(in crate::vm::exec) fn trace_step_enter_at(&mut self, ct: usize) -> RunningTrace {
         // entering any trace ends a pause a collection exit started
         if self.jit.step.quiet.is_some() {
             self.gc_quiet_end();
         }
         let st = &mut self.jit.step;
         let prev = (st.ct, st.frames);
-        st.ct = ct;
+        st.ct = ct as usize;
         st.frames = self.frames.len() as u32;
         prev
     }

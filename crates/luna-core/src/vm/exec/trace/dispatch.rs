@@ -88,7 +88,7 @@ impl Vm {
                 eprintln!("luna-runtime-helpers: aot_trace_fired pc={head_pc_val}");
             }
             self.jit_ghosts_enter();
-            let running = self.trace_step_enter(&ct);
+            let running = self.trace_step_enter(&*ct);
             let continuation_pc = {
                 let vm_ptr: *mut Vm = self;
                 let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
