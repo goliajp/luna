@@ -37,6 +37,7 @@ impl<'c> Gen<'c, '_> {
             // the lowerer only divides by a divisor it has checked (or by a
             // constant other than 0 and -1)
             BinOp::Sdiv => b(bb.build_int_signed_div(x, y, ""))?,
+            BinOp::Udiv => b(bb.build_int_unsigned_div(x, y, ""))?,
             BinOp::Umulhi => {
                 let t = x.get_type();
                 let wide = self.ctx.i128_type();

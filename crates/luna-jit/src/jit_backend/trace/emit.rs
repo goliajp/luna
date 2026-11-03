@@ -42,6 +42,7 @@ pub(crate) trait Ins {
     fn isub(&mut self, x: Value, y: Value) -> Value;
     fn imul(&mut self, x: Value, y: Value) -> Value;
     fn sdiv(&mut self, x: Value, y: Value) -> Value;
+    fn udiv(&mut self, x: Value, y: Value) -> Value;
     /// The high 64 bits of the unsigned 128-bit product.
     fn umulhi(&mut self, x: Value, y: Value) -> Value;
     fn ineg(&mut self, x: Value) -> Value;
@@ -218,6 +219,7 @@ macro_rules! forward_ins {
         fn isub(&mut self, x: Value, y: Value) -> Value { self$(.$field)?.ins().isub(x, y) }
         fn imul(&mut self, x: Value, y: Value) -> Value { self$(.$field)?.ins().imul(x, y) }
         fn sdiv(&mut self, x: Value, y: Value) -> Value { self$(.$field)?.ins().sdiv(x, y) }
+        fn udiv(&mut self, x: Value, y: Value) -> Value { self$(.$field)?.ins().udiv(x, y) }
         fn umulhi(&mut self, x: Value, y: Value) -> Value { self$(.$field)?.ins().umulhi(x, y) }
         fn ineg(&mut self, x: Value) -> Value { self$(.$field)?.ins().ineg(x) }
         fn smin(&mut self, x: Value, y: Value) -> Value { self$(.$field)?.ins().smin(x, y) }
