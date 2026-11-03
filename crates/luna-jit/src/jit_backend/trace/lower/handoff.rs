@@ -57,8 +57,7 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     } = *pl;
     let (reg_state, sig) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     if let Some(t) = &lw.tier_count {
-        let cell_addr =
-            luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64;
+        let cell_addr = luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64;
         let count_addr = t.count() as *const TCellU32 as i64;
         let at = t.at();
         let cell = lw.bcx.reloc(RelocKind::TierLoop, cell_addr);
@@ -75,9 +74,7 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
             .bcx
             .ins()
             .iconst(types::I32, i64::from(at.saturating_sub(1)));
-        lw.bcx
-            .ins()
-            .store(MemFlagsData::trusted(), back, count, 0);
+        lw.bcx.ins().store(MemFlagsData::trusted(), back, count, 0);
         if let Some(ctx) = &lw.flush_ctx {
             emit_flush_buf(&mut lw.bcx, ctx, &lw.entry.regs_full);
         }

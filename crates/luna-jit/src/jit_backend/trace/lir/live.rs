@@ -15,8 +15,8 @@
 use super::*;
 
 mod operands;
-pub(crate) use operands::{Start, for_defs, for_uses, succs};
 use operands::succs_of;
+pub(crate) use operands::{Start, for_defs, for_uses, succs};
 
 #[derive(Default)]
 pub(crate) struct Analysis {

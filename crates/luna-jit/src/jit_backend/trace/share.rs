@@ -169,7 +169,10 @@ fn install(
         Some((Tier::Optimizing, c)) => Some(c),
         _ => None,
     });
-    let looped = img.optimized_loop.get().filter(|_| at_loop && optimized.is_some());
+    let looped = img
+        .optimized_loop
+        .get()
+        .filter(|_| at_loop && optimized.is_some());
     let mut ct = img
         .meta
         .instantiate(optimized.is_some() && !at_loop, req.proto.call_hot_count());
@@ -203,7 +206,11 @@ fn install(
                 )
             };
         }
-        if let (None, Some(t), Some(lir)) = (looped.or(optimized.filter(|_| !at_loop)), &mut ct.tier_up, &img.lir) {
+        if let (None, Some(t), Some(lir)) = (
+            looped.or(optimized.filter(|_| !at_loop)),
+            &mut ct.tier_up,
+            &img.lir,
+        ) {
             *t.source_mut() = Some(Box::new(TierSource {
                 lir: lir.clone(),
                 relocs,
@@ -271,7 +278,11 @@ fn value_of(
 
 /// `code` copied into this Vm's code memory with the addresses `relocs`
 /// written in.
-fn place(cs: &mut CraneliftJitStorage, code: &Code, relocs: &[(RelocKind, i64)]) -> Option<*const u8> {
+fn place(
+    cs: &mut CraneliftJitStorage,
+    code: &Code,
+    relocs: &[(RelocKind, i64)],
+) -> Option<*const u8> {
     cs.baseline_code
         .place_with(code.bytes.len(), |out| code.write_to(out, |k| relocs[k].1))
         .ok()
