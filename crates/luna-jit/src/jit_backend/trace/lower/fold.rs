@@ -12,7 +12,7 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         ..
     } = *pl;
     let reg_state = lw.entry.reg_state;
-    let Lower { precheck, .. } = *lw;
+    let precheck = lw.blocks.precheck;
     let body_loop = lw.body_start();
     let RuntimeHelpers {
         suppress_admit_id,
@@ -70,7 +70,11 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
             lw.bcx.switch_to_block(ok_blk);
             lw.bcx.seal_block(ok_blk);
         }
-        let next = lw.ro_precheck.or(lw.step_precheck).unwrap_or(body_loop);
+        let next = lw
+            .blocks
+            .ro_precheck
+            .or(lw.blocks.step_precheck)
+            .unwrap_or(body_loop);
         lw.bcx.ins().jump(next, &[]);
     }
 }
@@ -84,7 +88,7 @@ pub(super) fn emit_fold<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>
         opts,
         ..
     } = *pl;
-    let Lower { precheck, .. } = *lw;
+    let precheck = lw.blocks.precheck;
     let RuntimeHelpers {
         math_fn_check_id, ..
     } = lw.h.rt;

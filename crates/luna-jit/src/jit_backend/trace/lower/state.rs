@@ -9,21 +9,17 @@ pub(super) struct Lower<E: Emit> {
     pub(super) h: Helpers,
     /// What the entry block set up (see `emit_entry`).
     pub(super) entry: EntryRegs,
-    pub(super) precheck: Option<Block>,
-    /// The block before the loop head that tests the tables
-    /// `ro_invariant` names (see `readonly`).
-    pub(super) ro_precheck: Option<Block>,
-    /// The block before the loop head that checks a 5.3 loop's step sign.
-    pub(super) step_precheck: Option<Block>,
-    /// The first pass of a looping body with temporaries (see `peel`).
-    pub(super) peel: Option<Block>,
+    /// The blocks before the body and the loop head.
+    pub(super) blocks: HeadBlocks,
     /// The kinds the back edge leaves the head-frame registers with, once
     /// it is emitted.
     pub(super) back_edge_kinds: Option<Vec<RegKind>>,
-    pub(super) body_loop: Block,
     /// The kinds the body is lowered for: a back edge runs it again only
     /// when the caller window holds these (see `loop_kinds_match`).
     pub(super) head_kinds: Vec<RegKind>,
+    /// The AOT data this trace has defined: `declare_data` gives one name
+    /// the same `DataId` again, but `define_data` refuses a second
+    /// definition.
     pub(super) defined_aot_data: std::collections::HashSet<DataId>,
     pub(super) escape: EscapeAnalysis,
     pub(super) flush_ctx: Option<FlushCtx>,
@@ -102,7 +98,7 @@ impl<E: Emit> Lower<E> {
     /// Where the body starts after the prechecks.
     #[inline]
     pub(super) fn body_start(&self) -> Block {
-        self.peel.unwrap_or(self.body_loop)
+        self.blocks.peel.unwrap_or(self.blocks.body_loop)
     }
 
     /// The variable of register `i` (of the window and the inline frames).

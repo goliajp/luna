@@ -42,7 +42,7 @@ pub(super) fn emit_step_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let Plan {
         record, max_stack, ..
     } = *pl;
-    let (Some(block), Some((step, up))) = (lw.step_precheck, pl.step_guard) else {
+    let (Some(block), Some((step, up))) = (lw.blocks.step_precheck, pl.step_guard) else {
         return;
     };
     let RuntimeHelpers {

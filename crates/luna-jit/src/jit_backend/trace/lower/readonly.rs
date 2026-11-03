@@ -126,7 +126,7 @@ pub(super) fn emit_readonly_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) 
         record, max_stack, ..
     } = *pl;
     let reg_state = lw.entry.reg_state;
-    let Lower { ro_precheck, .. } = *lw;
+    let ro_precheck = lw.blocks.ro_precheck;
     let body_loop = lw.body_start();
     let RuntimeHelpers {
         suppress_admit_id, ..
@@ -139,7 +139,7 @@ pub(super) fn emit_readonly_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) 
     if !lw.ro_invariant.contains(&true) {
         lw.bcx
             .ins()
-            .jump(lw.step_precheck.unwrap_or(body_loop), &[]);
+            .jump(lw.blocks.step_precheck.unwrap_or(body_loop), &[]);
         return;
     }
     let entry_stored = entry_values(lw);
@@ -156,7 +156,7 @@ pub(super) fn emit_readonly_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) 
     }
     lw.bcx
         .ins()
-        .jump(lw.step_precheck.unwrap_or(body_loop), &[]);
+        .jump(lw.blocks.step_precheck.unwrap_or(body_loop), &[]);
     lw.bcx.switch_to_block(exit_blk);
     lw.bcx.seal_block(exit_blk);
     let tags_idx = lw

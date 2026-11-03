@@ -174,7 +174,7 @@ pub(super) fn emit_loop_copy<E: Emit>(
         lw.current_kinds[r] = back[r];
     }
     // sealed by the tail, which emitted every back edge
-    lw.bcx.switch_to_block(lw.body_loop);
+    lw.bcx.switch_to_block(lw.blocks.body_loop);
     commit_start(lw, pl);
     emit_ops(lw, pl, &mut cx, 0..p)?;
     let looped = Restart::take(lw);

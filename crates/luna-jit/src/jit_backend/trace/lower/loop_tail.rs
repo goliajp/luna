@@ -210,7 +210,7 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
 /// optimizing tier's loop, or leaves at its head for the dispatcher to move
 /// it there, once the count is reached (see `handoff`).
 pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, tail: &[RegKind]) {
-    let Lower { body_loop, .. } = *lw;
+    let body_loop = lw.blocks.body_loop;
     lw.back_edge_kinds = Some(tail.to_vec());
     commit_back_edge(lw);
     let Some(t) = &lw.tier_count else {
