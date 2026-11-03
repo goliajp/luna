@@ -258,6 +258,9 @@ impl TraceRecord {
     pub(crate) fn truncated(&self, n: usize) -> TraceRecord {
         let mut r = self.clone();
         r.closed_at_head &= n == r.ops.len();
+        if n < r.ops.len() {
+            r.link_pc = None;
+        }
         r.ops.truncate(n);
         r.result_tags.truncate(n);
         r.field_slots.truncate(n);

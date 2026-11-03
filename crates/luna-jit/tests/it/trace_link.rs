@@ -20,30 +20,26 @@ fn run(v: LuaVersion, src: &str, jit: bool) -> (Vec<Value>, u64, u64) {
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(jit);
     let r = vm.eval(src).unwrap();
-    let dropped = vm
-        .trace_close_cause_counts()
-        .get("reached-compiled-trace")
-        .copied()
-        .unwrap_or(0);
-    (r, dropped, vm.trace_closed_count())
+    (
+        r,
+        vm.trace_side_trace_started_count(),
+        vm.trace_side_trace_compiled_count(),
+    )
 }
 
-/// The results with the trace JIT on and off, compared, and the
-/// recordings dropped at a compiled trace's head with it on.
-fn check(src: &str) -> Vec<u64> {
-    DIALECTS
-        .iter()
-        .map(|&v| {
-            let (want, _, _) = run(v, src, false);
-            let (got, dropped, closed) = run(v, src, true);
-            assert_eq!(format!("{got:?}"), format!("{want:?}"), "{v:?}: {src}");
-            assert!(
-                closed >= 2,
-                "{v:?}: a root and a side trace close, got {closed}"
-            );
-            dropped
-        })
-        .collect()
+/// The results with the trace JIT on and off, compared, and every side
+/// recording started with it on closed and compiled: none was dropped at
+/// the compiled trace it reached. (A root recording of the outer loop,
+/// made before the side trace forms, still is: it would run the outer
+/// body only to hand over to the inner trace.)
+fn check(src: &str) {
+    for v in DIALECTS {
+        let (want, _, _) = run(v, src, false);
+        let (got, started, compiled) = run(v, src, true);
+        assert_eq!(format!("{got:?}"), format!("{want:?}"), "{v:?}: {src}");
+        assert!(started >= 1, "{v:?}: no side trace started");
+        assert_eq!(compiled, started, "{v:?}: side recordings dropped");
+    }
 }
 
 // the inner loop's trace leaves when its loop ends; the side trace from
@@ -58,7 +54,7 @@ fn an_outer_loop_edge_goes_on_and_leaves_when_the_loop_ends() {
             t = t + i * 2
         end
         return s, t";
-    assert_eq!(check(src), [0; 5]);
+    check(src);
 }
 
 // a short loop in the outer body ran out while it was recorded: the side
@@ -72,7 +68,7 @@ fn a_loop_recorded_ending_leaves_when_it_goes_on() {
             t = t + 1
         end
         return s, t";
-    assert_eq!(check(src), [0; 5]);
+    check(src);
 }
 
 // a float loop and a negative integer step take the same way
@@ -92,6 +88,6 @@ fn float_and_downward_loops_step_as_the_interpreter() {
          end
          return s, t",
     ] {
-        assert_eq!(check(src), [0; 5]);
+        check(src);
     }
 }
