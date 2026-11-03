@@ -2,6 +2,7 @@ use super::*;
 
 mod cmp_table_checks;
 mod frames;
+mod next_pc;
 mod op_checks;
 mod peel_point;
 mod scan;
@@ -10,6 +11,7 @@ mod validate;
 mod value_checks;
 use cmp_table_checks::*;
 use frames::*;
+use next_pc::*;
 use op_checks::*;
 use peel_point::*;
 use scan::*;
@@ -195,7 +197,10 @@ pub(super) fn plan_trace<'r>(
         && call_idx_opt.is_none()
         && return_idx_opt.is_none()
         && inline_abort_idx_opt.is_none()
-        && downrec_idx_opt.is_none();
+        && downrec_idx_opt.is_none()
+        // a side trace linked to another trace's head ends there, not
+        // back at its own start
+        && record.link_pc.is_none_or(|l| l == record.head_pc);
     // The head-frame registers the dispatcher checks on entry (see
     // `entry_live`); the others start held on the stack.
     let parent_exit_tags = side_parent_exit_tags(record);
