@@ -1,4 +1,4 @@
-//! Hot counting pauses after a collection exit, and each of the three ways
+//! Hot counting pauses after a collection exit, and each of the four ways
 //! out of the pause ends it.
 
 use crate::runtime::{LuaClosure, Value};
@@ -71,19 +71,35 @@ fn run(src: &str, head: impl Fn(crate::runtime::Gc<LuaClosure>) -> i64) -> (bool
 const LOOP: &str = "local s = 0 for i = 1, 100 do s = s + i end";
 const G: &str = "local function g() local s = 0 for i = 1, 100 do s = s + i end return s end";
 
-// the pause holds through the frame's own loop and the calls it makes, and
-// nothing counts
+// the pause holds through the calls the frame makes and the loops they
+// run, and nothing counts
 #[test]
 fn nothing_counts_after_a_collection_exit() {
-    let src = format!("{G} mark(-1) g() g() {LOOP} return quiet(), g");
+    let src = format!("{G} mark(-1) g() g() return quiet(), g");
     let (q, counts) = run(&src, |_| -1);
     assert!(q);
     assert_eq!(counts, [0, 0, 0]);
     // the same without the exit counts all of it
-    let src = format!("{G} g() g() {LOOP} return quiet(), g");
+    let src = format!("{G} g() g() return quiet(), g");
     let (q, counts) = run(&src, |_| -1);
     assert!(!q);
-    assert!(counts.iter().all(|&c| c > 0), "{counts:?}");
+    assert!(counts[1..].iter().all(|&c| c > 0), "{counts:?}");
+}
+
+// a back-edge of the frame the exit left that goes elsewhere than the
+// trace's head: the trace's loop is over, and that back-edge on counts as
+// it would have without the exit
+#[test]
+fn the_pause_ends_at_another_back_edge_of_the_frame() {
+    let (q, [main, _, _]) = run(&format!("{G} mark(-1) {LOOP} return quiet(), g"), |_| -1);
+    assert!(!q);
+    let (_, [unpaused, _, _]) = run(&format!("{G} {LOOP} return quiet(), g"), |_| -1);
+    assert_eq!(main, unpaused);
+    // nested in the frame's loop, the call's own back-edges leave it paused
+    let src = format!("{G} mark(-1) g() local p = quiet() {LOOP} return p, g");
+    let (q, [main, inner, _]) = run(&src, |_| -1);
+    assert!(q);
+    assert_eq!((main, inner), (unpaused, 0));
 }
 
 // the frame the exit left returns: the frame below counts again
@@ -125,7 +141,7 @@ fn the_pause_ends_when_a_trace_is_entered() {
 fn the_loop_counts_are_parked_during_a_pause() {
     let mut vm = vm();
     let f = vm
-        .load(format!("mark(-1) {LOOP} return quiet()").as_bytes(), b"=t")
+        .load(format!("{G} mark(-1) g() return quiet()").as_bytes(), b"=t")
         .unwrap();
     let r = vm.call_value(Value::Closure(f), &[]).unwrap();
     assert!(matches!(r[0], Value::Bool(true)));
