@@ -161,41 +161,55 @@ fn install(
     for c in &img.protos[1..] {
         protos.push(find_proto(req.roots, c)?);
     }
+    // a baseline trace that calls the optimizing tier's loop from its back
+    // edge keeps its own code as the entry, the loop beside it
+    let at_loop = img.sources.contains(&Source::TierLoop);
     let optimized = img.optimized.get().or(match &img.code {
         Some((Tier::Optimizing, c)) => Some(c),
         _ => None,
     });
     let mut ct = img
         .meta
-        .instantiate(optimized.is_some(), req.proto.call_hot_count());
+        .instantiate(optimized.is_some() && !at_loop, req.proto.call_hot_count());
     let relocs: Vec<(RelocKind, i64)> = img
         .sources
         .iter()
         .map(|s| Some((kind_of(s), value_of(s, &protos, req, &ct)?)))
         .collect::<Option<_>>()?;
-    let code: Option<&Code> = optimized.or(img.code.as_ref().map(|(_, c)| c));
+    let code: Option<&Code> = match at_loop {
+        true => img.code.as_ref().map(|(_, c)| c),
+        false => optimized.or(img.code.as_ref().map(|(_, c)| c)),
+    };
     if let Some(code) = code {
-        let n = code.bytes.len();
-        let entry = cs
-            .baseline_code
-            .place_with(n, |out| code.write_to(out, |k| relocs[k].1))
-            .ok()?;
-        super::code_dump::dump_len("image", ct.head_pc, entry, n);
+        let entry = place(cs, code, &relocs)?;
+        super::code_dump::dump_len("image", ct.head_pc, entry, code.bytes.len());
         // SAFETY: the code is a copy of a trace compiled for code of this
         // content, with the `TraceFn` ABI, and this Vm's addresses written
         // where it held the compiling Vm's; it stays mapped until this Vm
         // releases its code
         ct.entry = unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) };
         cs.images.insert(entry as usize, img.id);
-        if optimized.is_none()
-            && let (Some(t), Some(lir)) = (&mut ct.tier_up, &img.lir)
-        {
-            *t.source_mut() = Some(Box::new(TierSource {
-                lir: lir.clone(),
-                relocs,
-                image: Some(img.clone()),
-                record: None,
-            }));
+        let looped = match (at_loop, optimized) {
+            (true, Some(c)) => {
+                let p = place(cs, c, &relocs)?;
+                super::code_dump::dump_len("image-loop", ct.head_pc, p, c.bytes.len());
+                // SAFETY: as above, the optimizing tier's loop of this trace
+                Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(p) })
+            }
+            _ => None,
+        };
+        if let Some(t) = &mut ct.tier_up {
+            if at_loop {
+                luna_core::__private::set_tier_up_at_loop(t, looped);
+            }
+            if let (None, Some(lir)) = (optimized, &img.lir) {
+                *t.source_mut() = Some(Box::new(TierSource {
+                    lir: lir.clone(),
+                    relocs,
+                    image: Some(img.clone()),
+                    record: None,
+                }));
+            }
         }
     }
     Some(AdoptedTrace {
@@ -221,6 +235,7 @@ fn kind_of(s: &Source) -> RelocKind {
         Source::Proto(_) => RelocKind::Proto,
         Source::Chain(n) => RelocKind::Chain(*n),
         Source::TierCell => RelocKind::TierCell,
+        Source::TierLoop => RelocKind::TierLoop,
     }
 }
 
@@ -248,7 +263,18 @@ fn value_of(
             .tier_up
             .as_ref()
             .map_or(0, |t| t.count() as *const TCellU32 as i64),
+        Source::TierLoop => ct.tier_up.as_ref().map_or(0, |t| {
+            luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64
+        }),
     })
+}
+
+/// `code` copied into this Vm's code memory with the addresses `relocs`
+/// written in.
+fn place(cs: &mut CraneliftJitStorage, code: &Code, relocs: &[(RelocKind, i64)]) -> Option<*const u8> {
+    cs.baseline_code
+        .place_with(code.bytes.len(), |out| code.write_to(out, |k| relocs[k].1))
+        .ok()
 }
 
 /// A function of the chunks `roots` with content `c`.

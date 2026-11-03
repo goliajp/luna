@@ -177,6 +177,7 @@ mod trace_test_kind_fold;
 mod trace_testset_kind_fold;
 mod trace_tforcall_batched_helper;
 mod trace_tforloop_back_edge;
+mod trace_tier_loop;
 mod trace_tiers;
 mod trace_truthy_runtime_guard;
 mod trace_var_count_snapshot;

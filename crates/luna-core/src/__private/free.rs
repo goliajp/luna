@@ -139,3 +139,28 @@ pub unsafe fn put_tier_source(
         *t.source.borrow_mut() = Some(source);
     }
 }
+
+/// The cell holding the optimizing tier's loop of the trace `t` moves on
+/// (null until compiled), whose address the baseline code reads at its
+/// back edge.
+pub fn tier_up_loop_cell(t: &crate::jit::trace_types::tier_up::TierUp) -> &crate::jit::send_compat::TCellPtr {
+    &t.looped
+}
+
+/// Marks `t` as a trace whose code calls the optimizing tier's loop from
+/// its back edge (see [`tier_up_loop_cell`]): the code the backend's tier-up
+/// returns is that loop, entered with the loop head's registers, rather
+/// than an entry of the trace. `looped`: that loop, already compiled (the
+/// trace then moves no further). Only a trace not yet installed is marked;
+/// [`crate::jit::CompiledTrace::from_parts`] states what its code must be.
+pub fn set_tier_up_at_loop(
+    t: &mut crate::jit::trace_types::tier_up::TierUp,
+    looped: Option<crate::jit::trace::TraceFn>,
+) {
+    t.at_loop = true;
+    if let Some(f) = looped {
+        t.looped.set(f as *const () as *const u8);
+        t.count.set(t.at.saturating_sub(1));
+        t.tried.set(true);
+    }
+}

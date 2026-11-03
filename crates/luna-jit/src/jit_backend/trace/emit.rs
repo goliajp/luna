@@ -5,6 +5,7 @@
 //! records the same instructions for the baseline tier. Both use Cranelift's
 //! entity types (`Value`, `Block`, `Variable`, ...) as plain indices.
 
+use super::reloc::{RelocKind, reloc_symbol};
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::{Ieee64, Imm64, Offset32};
 use cranelift_codegen::ir::{
@@ -165,6 +166,13 @@ pub(crate) trait Emit: Ins {
     /// `at`, else to `cont`. Only the baseline tier counts: Cranelift IR
     /// just goes to `cont`.
     fn tier_count(&mut self, cell: i64, at: u32, hot: Block, cont: Block);
+    /// Block `at` starts the optimizing tier's loop, which reads the
+    /// registers (the variables `regs`, register `i` at `reg_state + 8 i`)
+    /// the loop reads before writing them (see `lower::handoff`). Only the
+    /// baseline tier's instructions keep it.
+    fn set_loop_entry(&mut self, at: Block, regs: &[Variable]) {
+        let _ = (at, regs);
+    }
     /// The address `live`, which means something only in the Vm the trace
     /// is compiled for. The code another Vm installs gets that Vm's address
     /// of the same `kind` written over it (see `super::image`).
@@ -188,24 +196,6 @@ pub(crate) fn len_state_flags_in(
             description: "table length state".into(),
         });
     cranelift_codegen::ir::MemFlagsData::trusted().with_alias_region(Some(region))
-}
-
-/// What a Vm-specific address in a trace's code stands for.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum RelocKind {
-    /// An interned string (a key or a constant of one of the trace's protos).
-    Str,
-    /// A function prototype an inlined call is checked against.
-    Proto,
-    /// The frame chain of inline side exit `n`.
-    Chain(u32),
-    /// The baseline tier's iteration count.
-    TierCell,
-}
-
-/// The name of the data symbol Cranelift code reads relocation `n` from.
-pub(crate) fn reloc_symbol(n: usize) -> String {
-    format!("__luna_reloc_{n}")
 }
 
 macro_rules! forward_ins {

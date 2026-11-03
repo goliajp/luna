@@ -25,6 +25,8 @@ pub(crate) enum Source {
     Chain(u32),
     /// The trace's iteration count for moving to the optimizing tier.
     TierCell,
+    /// The cell holding the trace's optimizing tier's loop.
+    TierLoop,
 }
 
 /// The settings a trace was recorded and compiled under: a trace is shared
@@ -120,6 +122,7 @@ pub(crate) fn build(
             }
             RelocKind::Chain(n) => Source::Chain(n),
             RelocKind::TierCell => Source::TierCell,
+            RelocKind::TierLoop => Source::TierLoop,
         });
     }
     let meta = Meta::of(ct);

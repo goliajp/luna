@@ -13,8 +13,11 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Linkage, Module};
 
 mod define;
+mod entry;
 mod ops;
 pub(crate) use define::define;
+#[cfg(feature = "llvm-jit")]
+pub(crate) use entry::live_in_vars;
 use ops::hoist;
 
 fn cty(t: Ty) -> Type {

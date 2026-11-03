@@ -15,6 +15,7 @@ mod fold_calls;
 mod fold_fmod;
 mod gc_due;
 mod gc_roots;
+mod handoff;
 mod helpers;
 mod loop_tail;
 mod ops;
@@ -41,6 +42,7 @@ use fold_calls::*;
 use fold_fmod::*;
 use gc_due::*;
 use gc_roots::*;
+use handoff::*;
 pub(in crate::jit_backend::trace) use helpers::Helpers;
 use helpers::*;
 use loop_tail::*;
@@ -181,7 +183,12 @@ fn emit_trace<E: Emit>(
     // the same `DataId` again, but `define_data` refuses a second definition
     let defined_aot_data: std::collections::HashSet<DataId> = std::collections::HashSet::new();
     let head = emit_entry(&mut bcx, pl);
-    let due_words = emit_due_words(&mut bcx, pl)?;
+    // a variable: `loop_entry` reads the address again (see `handoff`)
+    let due_words = emit_due_words(&mut bcx, pl)?.map(|w| {
+        let var = bcx.declare_var(types::I64);
+        bcx.def_var(var, w);
+        var
+    });
     let mut escape = escape;
     let sunk = alloc_sunk_sites(&mut bcx, pl, &mut escape);
     let flush_ctx = start_accum(&mut bcx, pl, h, &head.regs_full);
@@ -198,13 +205,19 @@ fn emit_trace<E: Emit>(
         blocks,
     );
     if count_at > 0 {
-        lower.tier_count = Some((Box::new(TCellU32::new(0)), count_at));
+        let calls_at = pl.record.head_proto.call_hot_count();
+        lower.tier_count = Some(Box::new(TierUp::new(
+            Box::new(TCellU32::new(0)),
+            count_at,
+            calls_at,
+        )));
     }
     lower.due_words = due_words;
     // only a body of pure ops gains: elsewhere every op that is not pure
     // commits everything anyway, and the exits store more
     lower.at_exits = at_exits && (0..pl.effective_end).all(|i| !syncs_before(pl.record, pl, i));
     let lw = &mut lower;
+    emit_loop_entry(lw, pl)?;
     emit_fold_precheck(lw, pl);
     emit_readonly_precheck(lw, pl);
     emit_step_precheck(lw, pl);
@@ -213,8 +226,6 @@ fn emit_trace<E: Emit>(
     if let Some(lc) = loop_copy {
         emit_loop_copy(lw, pl, lc)?;
     }
-    // every back edge is emitted: the loop head has all its predecessors
-    lw.bcx.seal_block(lw.body_loop);
     let Lower {
         entry,
         bcx,
@@ -227,9 +238,19 @@ fn emit_trace<E: Emit>(
         materialize_emit_count,
         closure_seen,
         escape,
-        tier_count,
+        mut tier_count,
+        loop_entry,
+        loops,
         ..
     } = lower;
+    let mut bcx = bcx;
+    match (&mut tier_count, loop_entry) {
+        (Some(t), Some(at)) if loops => {
+            luna_core::__private::set_tier_up_at_loop(t, None);
+            bcx.set_loop_entry(at, &entry.regs_full);
+        }
+        _ => {}
+    }
     Some((
         bcx,
         Emitted {

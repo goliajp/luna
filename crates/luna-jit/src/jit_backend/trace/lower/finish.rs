@@ -24,7 +24,7 @@ pub(super) struct Emitted {
     pub(super) global_side_trace_box: Box<TCellPtr>,
     pub(super) downrec_link_for_compiled: Option<(u32, u32)>,
     pub(super) downrec_multi_way_count_for_compiled: u8,
-    pub(super) tier_count: Option<(Box<TCellU32>, u32)>,
+    pub(super) tier_count: Option<Box<TierUp>>,
 }
 
 /// Builds the `CompiledTrace` from the emit pass's bookkeeping.
@@ -199,9 +199,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         // `1` for single-CMP-fallback DownRec; `>= 2` for the
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
-        tier_up: tier_count.map(|(count, at)| {
-            Box::new(TierUp::new(count, at, record.head_proto.call_hot_count()))
-        }),
+        tier_up: tier_count,
     }
 }
 

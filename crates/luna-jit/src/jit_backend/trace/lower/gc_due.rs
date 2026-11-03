@@ -52,6 +52,7 @@ pub(super) fn emit_due_words<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> Option<Opti
 /// is due before then, and none of the exit's bookkeeping is needed.
 fn reached<E: Emit>(lw: &mut Lower<E>) -> Value {
     let w = lw.due_words.expect("may_check covers every op that checks");
+    let w = lw.bcx.use_var(w);
     let bytes = lw.bcx.ins().load(types::I64, MemFlagsData::new(), w, 0);
     let limit = lw.bcx.ins().load(
         types::I64,

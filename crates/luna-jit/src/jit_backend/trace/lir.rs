@@ -5,6 +5,7 @@
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 
 mod alloc;
+mod blocks;
 mod build;
 mod cg;
 mod cg_ops;
@@ -17,6 +18,7 @@ mod llvm;
 mod masm;
 mod pmove;
 mod record;
+mod spare;
 
 #[cfg(all(target_arch = "aarch64", not(windows)))]
 mod a64;
@@ -235,6 +237,9 @@ pub(crate) struct Lir {
     /// The values a block entered before being sealed inherits if it is
     /// sealed before anything is emitted into it.
     pub(crate) pending_inherit: Option<(u32, (u32, u32))>,
+    /// The block the optimizing tier's loop starts at, and the variable of
+    /// each register it reads from `reg_state` (see `lower::handoff`).
+    pub(crate) loop_entry: Option<(u32, Vec<u32>)>,
     /// A primitive the backend does not implement was emitted.
     pub(crate) unsupported: Option<&'static str>,
     /// The helpers declared by the first trace this `Lir` recorded, and how
@@ -251,88 +256,5 @@ impl Lir {
 
     pub(crate) fn params(&self, c: &Callee) -> &[Ty] {
         &self.param_tys[c.params_at as usize..(c.params_at + c.n_params) as usize]
-    }
-}
-
-thread_local! {
-    static SPARE: std::cell::RefCell<Option<Lir>> = const { std::cell::RefCell::new(None) };
-}
-
-impl Lir {
-    /// A cleared `Lir`, reusing the buffers of the last one given back on
-    /// this thread.
-    pub(crate) fn take() -> Lir {
-        match SPARE.with(|s| s.borrow_mut().take()) {
-            Some(mut l) => {
-                l.insts.clear();
-                l.blocks.clear();
-                l.value_ty.clear();
-                l.konst.clear();
-                l.relocs.clear();
-                l.var_ty.clear();
-                l.args.clear();
-                l.slots.clear();
-                let (nf, np) = l.helpers.map_or((0, 0), |(_, f, p)| (f, p));
-                l.funcs.truncate(nf as usize);
-                l.sigs.clear();
-                l.param_tys.truncate(np as usize);
-                l.snaps.clear();
-                l.bparams.clear();
-                l.bparam_vals.clear();
-                l.var_cur.clear();
-                l.arg0 = NONE;
-                l.cur = NONE;
-                l.unsupported = None;
-                l.pending_inherit = None;
-                l
-            }
-            None => Lir::new(),
-        }
-    }
-
-    pub(crate) fn give(self) {
-        SPARE.with(|s| *s.borrow_mut() = Some(self));
-    }
-}
-
-impl Lir {
-    /// Bytes `self` takes, roughly.
-    pub(crate) fn size(&self) -> usize {
-        std::mem::size_of::<Lir>()
-            + self.insts.len() * std::mem::size_of::<Inst>()
-            + self.blocks.len() * std::mem::size_of::<BlockData>()
-            + self.value_ty.len()
-            + 4 * (self.args.len() + self.bparams.len())
-    }
-
-    /// The parts of `self` code generation reads, in buffers of their own
-    /// (kept for the optimizing tier).
-    pub(crate) fn detach(&self) -> Lir {
-        Lir {
-            insts: self.insts.clone(),
-            blocks: self
-                .blocks
-                .iter()
-                .map(|b| BlockData {
-                    first: b.first,
-                    last: b.last,
-                    len: b.len,
-                    params_at: b.params_at,
-                    n_params: b.n_params,
-                    ..BlockData::default()
-                })
-                .collect(),
-            value_ty: self.value_ty.clone(),
-            relocs: self.relocs.clone(),
-            var_ty: self.var_ty.clone(),
-            args: self.args.clone(),
-            slots: self.slots.clone(),
-            funcs: self.funcs.clone(),
-            sigs: self.sigs.clone(),
-            param_tys: self.param_tys.clone(),
-            bparams: self.bparams.clone(),
-            arg0: self.arg0,
-            ..Lir::new()
-        }
     }
 }
