@@ -6,8 +6,9 @@ use super::*;
 /// What the backend compiles a trace from at the optimizing tier.
 pub(crate) type Source = Box<dyn std::any::Any + Send + Sync>;
 
-/// A trace on its way to the optimizing tier. Its cells are written only
-/// by the dispatcher; the backend reads them and gives the source.
+/// A trace on its way to the optimizing tier. The dispatcher writes its
+/// count and entry; the backend reads them, gives the source, and writes
+/// the loop and `tried` through `__private::set_tier_up_loop`.
 pub struct TierUp {
     /// Loop iterations run in the trace's code plus entries: the code adds
     /// one per iteration through this cell (whose address it holds), the

@@ -18,8 +18,8 @@
 //! prototype or an installed trace holds, nor frees the storage that code
 //! lives in (a storage another replaces is kept until the Vm drops, and
 //! clearing a storage's cache leaves the code mapped); taking a trace's
-//! tier-up source only keeps the trace at its tier. The example compiles; each one after it fails to compile, for the
-//! reason its comment gives.
+//! tier-up source only keeps the trace at its tier. The example compiles;
+//! each one after it fails to compile, for the reason its comment gives.
 //!
 //! ```
 //! use luna_core::{jit::*, runtime::{Gc, LuaClosure, Proto, Value}, version::LuaVersion, vm::Vm};
