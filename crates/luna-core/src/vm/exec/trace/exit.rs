@@ -22,6 +22,10 @@ impl Vm {
         reg_state: Vec<i64>,
         entry_tags: Vec<u8>,
     ) {
+        let synced = std::mem::take(&mut self.jit.step.synced_exit);
+        if synced || self.jit.gc_exit.is_some() {
+            self.gc_quiet_from(pre_frames, ct.head_pc);
+        }
         self.trace_exit_regs(
             cl,
             base,
@@ -30,6 +34,7 @@ impl Vm {
             pre_frames,
             reg_state,
             entry_tags,
+            synced,
         );
         if let Some(op_pc) = self.jit.gc_exit.take()
             && let Err(e) = self.checkpoint_after_jit(op_pc)
@@ -49,12 +54,8 @@ impl Vm {
         pre_frames: usize,
         mut reg_state: Vec<i64>,
         entry_tags: Vec<u8>,
+        synced: bool,
     ) {
-        let synced = std::mem::take(&mut self.jit.step.synced_exit);
-        let head_pc_val = ct.head_pc;
-        if synced || self.jit.gc_exit.is_some() {
-            self.gc_quiet_from(pre_frames, head_pc_val);
-        }
         let per_exit_inline = &ct.per_exit_inline;
         let global_tag_res_kind = ct.global_tag_res_kind;
         let max_stack = cl.proto.max_stack as usize;
@@ -215,7 +216,7 @@ impl Vm {
         // `self.frames`: an exit inside an inlined function rebuilt
         // its frames), which need not run the parent's function.
         if side_trace_should_start {
-            self.trace_start_side(cl, base_us, cont_pc, head_pc_val, exit_hit_idx);
+            self.trace_start_side(cl, base_us, cont_pc, ct.head_pc, exit_hit_idx);
         }
         // Put the dispatch buffers back
         // before the `continue;` so the next
