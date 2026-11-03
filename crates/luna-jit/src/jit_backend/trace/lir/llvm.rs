@@ -20,6 +20,7 @@ use inkwell::values::{
 };
 
 mod body;
+mod mem;
 mod ops;
 mod preds;
 
