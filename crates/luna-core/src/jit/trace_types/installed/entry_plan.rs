@@ -16,30 +16,50 @@ pub(crate) struct EntrySlot {
 /// The head frame's registers a trace takes on entry, from its entry tags
 /// (`CompiledTrace::entry_tags`): the ones it checks, and the ones it takes
 /// unchecked (entry tag `ENTRY_TAG_ANY`), which only a side trace run from
-/// one of its exits reads from the buffers.
+/// one of its exits reads from the buffers. One array, sized once: the
+/// checked registers first, in slot order, then the unchecked ones.
 #[derive(Debug, Default)]
 pub(crate) struct EntryPlan {
-    pub(crate) checked: Box<[EntrySlot]>,
-    pub(crate) unchecked: Box<[u16]>,
-    /// The registers the entry tags cover; a frame's registers past them
-    /// are checked against their own tags.
-    pub(crate) len: usize,
+    slots: Box<[EntrySlot]>,
+    checked: usize,
 }
 
 impl EntryPlan {
     pub(crate) fn of(entry_tags: &[u8]) -> Self {
-        let slots = || (0u16..).zip(entry_tags.iter().copied());
-        EntryPlan {
-            checked: slots()
-                .filter(|&(_, tag)| tag != ENTRY_TAG_ANY)
-                .map(|(slot, tag)| EntrySlot { slot, tag })
-                .collect(),
-            unchecked: slots()
-                .filter(|&(_, tag)| tag == ENTRY_TAG_ANY)
-                .map(|(slot, _)| slot)
-                .collect(),
-            len: entry_tags.len(),
+        let mut slots = vec![EntrySlot { slot: 0, tag: 0 }; entry_tags.len()].into_boxed_slice();
+        let (mut front, mut back) = (0, slots.len());
+        for (slot, &tag) in (0u16..).zip(entry_tags) {
+            if tag == ENTRY_TAG_ANY {
+                back -= 1;
+                slots[back] = EntrySlot { slot, tag };
+            } else {
+                slots[front] = EntrySlot { slot, tag };
+                front += 1;
+            }
         }
+        EntryPlan {
+            slots,
+            checked: front,
+        }
+    }
+
+    /// The registers checked on entry, in slot order.
+    #[inline]
+    pub(crate) fn checked(&self) -> &[EntrySlot] {
+        &self.slots[..self.checked]
+    }
+
+    /// The registers taken unchecked.
+    #[inline]
+    pub(crate) fn unchecked(&self) -> &[EntrySlot] {
+        &self.slots[self.checked..]
+    }
+
+    /// The registers the entry tags cover; a frame's registers past them
+    /// are checked against their own tags.
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.slots.len()
     }
 }
 
@@ -51,10 +71,12 @@ mod tests {
     fn the_plan_splits_the_entry_tags_by_slot() {
         let p = EntryPlan::of(&[3, ENTRY_TAG_ANY, 5, ENTRY_TAG_ANY]);
         assert_eq!(
-            &*p.checked,
+            p.checked(),
             &[EntrySlot { slot: 0, tag: 3 }, EntrySlot { slot: 2, tag: 5 }]
         );
-        assert_eq!(&*p.unchecked, &[1, 3]);
-        assert_eq!(p.len, 4);
+        let mut un: Vec<u16> = p.unchecked().iter().map(|e| e.slot).collect();
+        un.sort();
+        assert_eq!(un, [1, 3]);
+        assert_eq!(p.len(), 4);
     }
 }

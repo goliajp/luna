@@ -50,10 +50,10 @@ impl PlannedExit {
 
 /// Per exit, numbered as its hit counts are (the inline side exits, the
 /// typed exits of the tag table, then the trace's global tags), its plan
-/// once the exit has been taken: an exit never taken costs one empty slot.
+/// once the exit has been taken: an exit never taken costs one empty word.
 #[derive(Debug, Default)]
 pub(crate) struct ExitPlan {
-    exits: Box<[Once<PlannedExit>]>,
+    exits: Box<[Once<Box<PlannedExit>>]>,
 }
 
 impl ExitPlan {
@@ -67,7 +67,11 @@ impl ExitPlan {
     /// Exit `i`'s plan, from `tags`, the exit's tags, the first time.
     #[inline]
     pub(crate) fn exit(&self, i: usize, tags: &[ExitTag]) -> Option<&PlannedExit> {
-        Some(self.exits.get(i)?.get_or_init(|| PlannedExit::of(tags)))
+        Some(
+            self.exits
+                .get(i)?
+                .get_or_init(|| Box::new(PlannedExit::of(tags))),
+        )
     }
 }
 
