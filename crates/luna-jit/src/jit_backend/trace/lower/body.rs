@@ -12,6 +12,14 @@ pub(super) struct BodyCx {
     rewritten: Vec<bool>,
 }
 
+impl BodyCx {
+    /// The commit before op `op` (see `commit_before`).
+    pub(super) fn commit_before<E: Emit>(&self, lw: &mut Lower<E>, pl: &Plan<'_>, op: usize) {
+        let n = lw.entry.regs_full.len();
+        commit_before(lw, pl, op, &self.rewritten[op * n..(op + 1) * n]);
+    }
+}
+
 /// The emit pass over the body: enters the loop head and lowers each
 /// recorded op up to `effective_end`; with temporaries, the first pass's
 /// copy of the first ops and the rest, leaving the loop head's copy for
