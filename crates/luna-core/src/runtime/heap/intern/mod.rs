@@ -161,7 +161,10 @@ impl Heap {
         }
         // 5.1 looks every string up by its bytes
         if self.rules.hash51() && n <= 512 {
-            return self.try_intern(joined(parts, &mut [0u8; 512]));
+            let mut buf = self.concat_buf.take().unwrap_or_else(|| Box::new([0; 512]));
+            let r = self.try_intern(joined(parts, &mut buf[..]));
+            self.concat_buf = Some(buf);
+            return r;
         }
         if self.rules.hash51() {
             return self.try_intern(&parts.concat());

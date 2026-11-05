@@ -184,6 +184,10 @@ pub struct Heap {
     /// Freed tables (at most 4096) that new tables reuse, listed outside
     /// the allocation context: a sweep allocates nothing, as PUC's.
     table_pool: Vec<std::ptr::NonNull<crate::runtime::table::Table>>,
+    /// The buffer 5.1 joins a concatenation of at most 512 bytes in to look
+    /// it up by its bytes, kept for the next instead of clearing one each
+    /// time
+    concat_buf: Option<Box<[u8; 512]>>,
     /// the blocks the fixed natives are made in
     slab: slab::NativeSlab,
     /// A userdata the VM refers to without keeping it alive; null once
