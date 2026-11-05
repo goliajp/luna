@@ -33,9 +33,9 @@ impl Vm {
             return false;
         }
         if ct.has_any_side_wired.get() {
-            for e in plan.unchecked() {
-                let s = e.slot as usize;
-                if s < l {
+            let want = &*ct.entry_tags;
+            for s in 0..want.len().min(l) {
+                if want[s] == ENTRY_TAG_ANY {
                     // not read before the trace writes it: any value
                     // enters, and an exit that has not written it leaves
                     // it as it is
