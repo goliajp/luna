@@ -15,7 +15,11 @@ impl Vm {
         let Some(rec) = self.jit.active_trace.as_mut() else {
             return;
         };
-        if rec.side_trace_parent.is_none() || !in_frame || !rec.head_proto.ptr_eq(proto) {
+        if rec.side_trace_parent.is_none()
+            || !in_frame
+            || !rec.head_proto.ptr_eq(proto)
+            || left_its_frame(&rec.ops)
+        {
             return;
         }
         // the op at `pc` was recorded as the interpreter was about to run
@@ -45,4 +49,19 @@ impl Vm {
             note_trace_compile_failure(&mut self.jit.counters, rec.head_proto, rec.head_pc);
         }
     }
+}
+
+/// Whether a recording returned from, or tail-called out of, the frame it
+/// began in. The frame on top may then be another call of the same
+/// function at the same depth (the host called it again), which is not the
+/// frame the recording's ops ran in.
+fn left_its_frame(ops: &[crate::jit::trace::RecordedOp]) -> bool {
+    use crate::vm::isa::Op;
+    ops.iter().any(|o| {
+        o.inline_depth == 0
+            && matches!(
+                o.inst.op(),
+                Op::Return | Op::Return0 | Op::Return1 | Op::TailCall
+            )
+    })
 }
