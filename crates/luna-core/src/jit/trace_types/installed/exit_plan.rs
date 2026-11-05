@@ -28,20 +28,19 @@ pub(crate) struct PlannedExit {
 
 impl PlannedExit {
     fn of(tags: &[ExitTag]) -> Self {
+        // counted first, so the list is allocated once at its size
+        let n = tags.iter().filter(|&&k| k != ExitTag::Untouched).count();
+        let mut written = Vec::with_capacity(n);
         let mut untouched_end = 0;
-        let written = (0u16..)
-            .zip(tags)
-            .filter_map(|(slot, &kind)| {
-                if kind == ExitTag::Untouched {
-                    untouched_end = usize::from(slot) + 1;
-                    None
-                } else {
-                    Some(ExitSlot { slot, kind })
-                }
-            })
-            .collect();
+        for (slot, &kind) in (0u16..).zip(tags) {
+            if kind == ExitTag::Untouched {
+                untouched_end = usize::from(slot) + 1;
+            } else {
+                written.push(ExitSlot { slot, kind });
+            }
+        }
         PlannedExit {
-            written,
+            written: written.into_boxed_slice(),
             untouched_end,
             len: tags.len(),
         }
