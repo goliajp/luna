@@ -109,7 +109,7 @@ pub(super) fn lower_and_encode_meta(
         }
 
         // Serialize the meta blob for this trace.
-        let entry_tags_vec: Vec<u8> = ct.entry_tags().iter().copied().collect();
+        let entry_tags_vec: Vec<u8> = ct.entry_tags().to_vec();
         let exit_tags_vec: Vec<u8> = ct.exit_tags().iter().copied().map(pack_exit_tag).collect();
         // v2 tail — per-cont_pc typed-register side-exit shapes.
         // Each entry's `tags_packed` mirrors the JIT-time

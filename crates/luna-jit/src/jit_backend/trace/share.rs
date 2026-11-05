@@ -108,7 +108,7 @@ pub(crate) fn adopt(
         let Some(img) = cache.by_head.get(&key).and_then(|list| {
             list.iter().find(|img| {
                 img.protos[0] == *head
-                    && entry_tags_admit(&img.meta.entry_tags, req.entry_tags)
+                    && entry_tags_admit(img.meta.plans.entry_tags(), req.entry_tags)
                     && img.side_parent.map(|(pc, exit, id)| (pc, exit, Some(id)))
                         == req.side_parent.map(|(_, pc, exit)| (pc, exit, parent_id))
             })

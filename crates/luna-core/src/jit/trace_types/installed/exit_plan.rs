@@ -3,9 +3,7 @@
 
 use super::super::ExitTag;
 
-#[cfg(not(feature = "send"))]
-type Once<T> = std::cell::OnceCell<T>;
-#[cfg(feature = "send")]
+// shared between the Vms that run one trace's code, on any thread
 type Once<T> = std::sync::OnceLock<T>;
 
 /// A register an exit wrote: its slot in the trace's window and its kind.
@@ -61,6 +59,16 @@ impl ExitPlan {
         ExitPlan {
             exits: (0..n).map(|_| Once::new()).collect(),
         }
+    }
+
+    /// The exits numbered.
+    pub(crate) fn len(&self) -> usize {
+        self.exits.len()
+    }
+
+    /// Bytes the per-exit cells take, without the plans worked out in them.
+    pub(crate) fn cells_size(&self) -> usize {
+        self.exits.len() * std::mem::size_of::<Once<Box<PlannedExit>>>()
     }
 
     /// Exit `i`'s plan, from `tags`, the exit's tags, the first time.

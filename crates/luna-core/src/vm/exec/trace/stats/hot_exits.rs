@@ -10,14 +10,14 @@ fn exit_at(ct: &CompiledTrace, idx: usize) -> (u32, TArc<[ExitTag]>) {
     if idx < inline_n {
         let ent = &ct.per_exit_inline[idx];
         (ent.cont_pc, ent.exit_tags.clone())
-    } else if idx < inline_n + ct.per_exit_tags.len() {
+    } else if idx < inline_n + ct.plans.per_exit_tags.len() {
         let i = idx - inline_n;
         (
-            ct.per_exit_tags.cont_pc(i),
-            TArc::from(ct.per_exit_tags.tags(i)),
+            ct.plans.per_exit_tags.cont_pc(i),
+            TArc::from(ct.plans.per_exit_tags.tags(i)),
         )
     } else {
-        (ct.head_pc, ct.exit_tags.clone())
+        (ct.head_pc, TArc::from(&ct.plans.exit_tags[..]))
     }
 }
 
@@ -36,7 +36,7 @@ impl Vm {
     /// - `[per_exit_inline.len()..inline.len() + per_exit_tags.len())`
     ///   → `per_exit_tags.tags(i)` (per-cont_pc caller-window tags).
     /// - Last slot → global clean-tail (cont_pc = `head_pc`,
-    ///   exit_tags = `ct.exit_tags`).
+    ///   exit_tags = `ct.plans.exit_tags`).
     pub fn hot_exit_iter(
         &self,
         cl: crate::runtime::heap::Gc<crate::runtime::function::LuaClosure>,
@@ -48,7 +48,7 @@ impl Vm {
         ) {
             for ct in proto.traces.borrow().iter() {
                 let inline_n = ct.per_exit_inline.len();
-                let tags_n = ct.per_exit_tags.len();
+                let tags_n = ct.plans.per_exit_tags.len();
                 debug_assert_eq!(
                     ct.exit_hit_counts.len(),
                     inline_n + tags_n + 1,

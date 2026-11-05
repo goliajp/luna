@@ -9,10 +9,9 @@ pub(crate) struct Meta {
     n_ops: u32,
     dispatchable: bool,
     window_size: u32,
-    exit_tags: Box<[ExitTag]>,
-    global_tag_res_kind: TagResKind,
-    pub(crate) entry_tags: Box<[u8]>,
-    per_exit_tags: ExitTagTable,
+    /// Shared with every trace made from the image: an exit's plan is
+    /// worked out once, by the first Vm to take the exit.
+    pub(crate) plans: TracePlans,
     per_exit_inline: Box<[(u32, u32, Box<[ExitTag]>, Box<[FrameMaterializeInfo]>)]>,
     is_inline_abort_close: bool,
     dispatch_off_reason: Option<&'static str>,
@@ -36,10 +35,7 @@ impl Meta {
             n_ops: ct.n_ops,
             dispatchable: ct.dispatchable,
             window_size: ct.window_size,
-            exit_tags: ct.exit_tags.iter().copied().collect(),
-            global_tag_res_kind: ct.global_tag_res_kind,
-            entry_tags: ct.entry_tags.iter().copied().collect(),
-            per_exit_tags: ct.per_exit_tags.clone(),
+            plans: ct.plans.clone(),
             per_exit_inline: ct
                 .per_exit_inline
                 .iter()
@@ -86,7 +82,7 @@ impl Meta {
                 chain: TArc::from(&chain[..]),
             })
             .collect();
-        let total = per_exit_inline.len() + self.per_exit_tags.len() + 1;
+        let total = self.plans.exit_count();
         let tier_up = self
             .tier_at
             .filter(|_| !tiered)
@@ -97,10 +93,7 @@ impl Meta {
             n_ops: self.n_ops,
             dispatchable: self.dispatchable,
             window_size: self.window_size,
-            exit_tags: arc(&self.exit_tags),
-            global_tag_res_kind: self.global_tag_res_kind,
-            entry_tags: TArc::from(&self.entry_tags[..]),
-            per_exit_tags: self.per_exit_tags.clone(),
+            plans: self.plans.clone(),
             per_exit_inline: per_exit_inline.into(),
             exit_hit_counts: (0..total)
                 .map(|_| TCellU32::new(0))
@@ -128,13 +121,7 @@ impl Meta {
 
     pub(super) fn size(&self) -> usize {
         std::mem::size_of::<Meta>()
-            + self.exit_tags.len()
-            + self.entry_tags.len()
-            + self
-                .per_exit_tags
-                .iter()
-                .map(|(_, t)| 8 + t.len())
-                .sum::<usize>()
+            + self.plans.byte_size()
             + self
                 .per_exit_inline
                 .iter()

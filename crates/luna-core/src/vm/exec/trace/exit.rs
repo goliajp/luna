@@ -75,7 +75,7 @@ impl Vm {
         synced: bool,
     ) {
         let per_exit_inline = &ct.per_exit_inline;
-        let global_tag_res_kind = ct.global_tag_res_kind;
+        let global_tag_res_kind = ct.plans.global_tag_res_kind;
         let max_stack = cl.proto.max_stack as usize;
         let base_us = base as usize;
         // the exit's shape (`decode_exit_shape`): the upper 32 bits are the
@@ -100,8 +100,8 @@ impl Vm {
         let decoded = crate::jit::trace::decode_exit_shape(
             decode_body,
             decode_inline,
-            &shapes.per_exit_tags,
-            &shapes.exit_tags,
+            &shapes.plans.per_exit_tags,
+            &shapes.plans.exit_tags,
         );
         let site_id = decoded.site_id;
         let cont_pc = decoded.cont_pc;
@@ -128,7 +128,7 @@ impl Vm {
         if !synced {
             let keep = keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0);
             let planned = (!child_ran && keep.is_empty())
-                .then(|| shapes.exit_plan.exit(exit_hit_idx, exit_tags_for_pc))
+                .then(|| shapes.plans.exit_plan.exit(exit_hit_idx, exit_tags_for_pc))
                 .flatten()
                 .filter(|e| e.untouched_end <= max_stack && base_us + e.len <= self.stack.len());
             if let Some(e) = planned {
@@ -147,7 +147,7 @@ impl Vm {
                 );
             }
             let tags = exit_tags_for_pc;
-            let table = &ct.per_exit_tags;
+            let table = &ct.plans.per_exit_tags;
             let window = ct.window_size as usize;
             self.trace_restore_back_edge_kinds(base_us, table, tags, keep, reg_state, window);
         }

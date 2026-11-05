@@ -26,14 +26,14 @@ impl Vm {
         let l = entry_tags.len();
         let frame = &self.stack[base_us..base_us + l];
         let (regs, tags) = (&mut reg_state[..l], &mut entry_tags[..l]);
-        let plan = &ct.entry_plan;
+        let plan = &ct.plans.entry_plan;
         if let Err(k) = checked_slots(plan.checked(), frame, regs, tags)
             && !odd_slots(&plan.checked()[k..], frame, regs, tags)
         {
             return false;
         }
         if ct.has_any_side_wired.get() {
-            let want = &*ct.entry_tags;
+            let want = &*ct.plans.entry_tags;
             for s in 0..want.len().min(l) {
                 if want[s] == ENTRY_TAG_ANY {
                     // not read before the trace writes it: any value

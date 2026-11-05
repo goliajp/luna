@@ -4,7 +4,8 @@
 
 use super::reloc::Code;
 use super::*;
-use luna_core::jit::trace_types::{ExitTag, TagResKind};
+use luna_core::__private::TracePlans;
+use luna_core::jit::trace_types::ExitTag;
 use luna_core::runtime::Value;
 
 pub(crate) use luna_core::__private::{ProtoContent as Content, hash64};

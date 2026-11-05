@@ -53,6 +53,8 @@ impl CompiledTrace {
         // `inline_n + tags_n + 1` (matches the dispatcher's
         // `hot_exit_iter` invariant).
         let inline_n = per_exit_inline.len();
+        // the plans work the kind out from the tags; the blob's is the same
+        debug_assert_eq!(global_tag_res_kind, classify_exit_tags(&exit_tags));
         let total_slots = inline_n + per_exit_tags.len() + 1;
         let exit_hit_counts: TArc<[TCellU32]> = {
             let v: Vec<TCellU32> = (0..total_slots).map(|_| TCellU32::new(0)).collect();
@@ -68,10 +70,7 @@ impl CompiledTrace {
             n_ops,
             dispatchable,
             window_size,
-            exit_tags,
-            global_tag_res_kind,
-            entry_tags,
-            per_exit_tags,
+            plans: TracePlans::new(&entry_tags, &exit_tags, per_exit_tags, inline_n),
             per_exit_inline: TArc::from(per_exit_inline),
             exit_hit_counts,
             exit_side_trace_ptrs,

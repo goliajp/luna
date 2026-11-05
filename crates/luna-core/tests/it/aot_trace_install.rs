@@ -4,12 +4,11 @@
 //! resolver that *calls* this API lives in `luna-runtime-helpers` and
 //! is exercised by `crates/luna-aot/tests/it/aot_trace_fires.rs`.
 
-use luna_core::__private::classify_exit_tags;
-use luna_core::__private::{CompiledTrace, CompiledTraceParts, ProtoTraceInternals};
+use luna_core::__private::{CompiledTrace, CompiledTraceParts, ProtoTraceInternals, TracePlans};
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
 use luna_core::jit::send_compat::{TArc, TCellPtr, TCellU32};
-use luna_core::jit::trace::{ExitTag, ExitTagTable, TagResKind};
+use luna_core::jit::trace::{ExitTag, ExitTagTable};
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
 
@@ -23,22 +22,19 @@ unsafe extern "C" fn dummy_entry(_reg_state: *mut i64) -> i64 {
 }
 
 fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
-    let exit_tags: TArc<[ExitTag]> = (0..max_stack)
-        .map(|_| ExitTag::Untouched)
-        .collect::<Vec<_>>()
-        .into();
-    let global_kind: TagResKind = classify_exit_tags(&exit_tags);
-    let entry_tags: TArc<[u8]> = vec![0u8; max_stack as usize].into();
-    let parts = CompiledTraceParts {
+    install(dummy_parts(head_pc, max_stack))
+}
+
+fn dummy_parts(head_pc: u32, max_stack: u32) -> CompiledTraceParts {
+    let exit_tags = vec![ExitTag::Untouched; max_stack as usize];
+    let entry_tags = vec![0u8; max_stack as usize];
+    CompiledTraceParts {
         head_pc,
         entry: dummy_entry,
         n_ops: 1,
         dispatchable: true,
         window_size: max_stack,
-        exit_tags,
-        global_tag_res_kind: global_kind,
-        entry_tags,
-        per_exit_tags: ExitTagTable::default(),
+        plans: TracePlans::new(&entry_tags, &exit_tags, ExitTagTable::default(), 0),
         per_exit_inline: TArc::from(Vec::new()),
         exit_hit_counts: TArc::from(vec![TCellU32::new(0u32)]),
         exit_side_trace_ptrs: TArc::from(vec![TCellPtr::null()]),
@@ -55,8 +51,14 @@ fn make_dummy_trace(head_pc: u32, max_stack: u32) -> CompiledTrace {
         downrec_link: None,
         downrec_multi_way_count: 0,
         tier_up: None,
-    };
-    // SAFETY: the entry has the `TraceFn` ABI; no test enters it
+    }
+}
+
+/// `parts` made into a trace; a debug build checks the plans are of them.
+fn install(parts: CompiledTraceParts) -> CompiledTrace {
+    // SAFETY: the entry has the `TraceFn` ABI and no test enters it; the one
+    // test passing plans of other code runs only where the debug check stops
+    // `from_parts` before a trace is made
     unsafe { CompiledTrace::from_parts(parts) }
 }
 
@@ -134,4 +136,17 @@ fn install_then_lookup_via_collect_hashes() {
         1,
         "trace must end up on the matched proto"
     );
+}
+
+/// Plans made for more exits than the parts have are not of this code:
+/// debug builds stop there.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "plans are not of its code")]
+fn plans_of_other_code_are_caught_in_debug_builds() {
+    let mut parts = dummy_parts(0, 2);
+    // two inline exits, which the parts do not have
+    let tags = vec![ExitTag::Untouched; 2];
+    parts.plans = TracePlans::new(&[0, 0], &tags, ExitTagTable::default(), 2);
+    let _ = install(parts);
 }

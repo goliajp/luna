@@ -26,10 +26,6 @@ readers! {
     n_ops: u32 = copy;
     dispatchable: bool = copy;
     window_size: u32 = copy;
-    exit_tags: &TArc<[ExitTag]> = borrow;
-    global_tag_res_kind: TagResKind = copy;
-    entry_tags: &TArc<[u8]> = borrow;
-    per_exit_tags: &ExitTagTable = borrow;
     per_exit_inline: &[InlineSideExit] = borrow;
     exit_hit_counts: &[TCellU32] = borrow;
     exit_side_trace_ptrs: &[TCellPtr] = borrow;
@@ -48,6 +44,32 @@ readers! {
 }
 
 impl CompiledTrace {
+    /// The entry tags of [`CompiledTraceParts::plans`]: per head-frame
+    /// register, the tag the code is specialised to, or `ENTRY_TAG_ANY`.
+    #[inline]
+    pub fn entry_tags(&self) -> &[u8] {
+        &self.plans.entry_tags
+    }
+
+    /// The clean tail's exit tags of [`CompiledTraceParts::plans`].
+    #[inline]
+    pub fn exit_tags(&self) -> &[ExitTag] {
+        &self.plans.exit_tags
+    }
+
+    /// How the clean tail's exit tags restore: all untouched, all
+    /// integers, or mixed.
+    #[inline]
+    pub fn global_tag_res_kind(&self) -> TagResKind {
+        self.plans.global_tag_res_kind
+    }
+
+    /// The typed side exits' tag table of [`CompiledTraceParts::plans`].
+    #[inline]
+    pub fn per_exit_tags(&self) -> &ExitTagTable {
+        &self.plans.per_exit_tags
+    }
+
     /// As [`CompiledTraceParts::tier_up`].
     #[inline]
     pub fn tier_up(&self) -> Option<&TierUp> {
