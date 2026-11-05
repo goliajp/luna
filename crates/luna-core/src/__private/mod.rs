@@ -9,6 +9,7 @@
 //! with their conditions under `# Safety`.
 
 mod capi;
+pub(crate) mod exit_code;
 mod fields;
 mod free;
 mod heap;
@@ -24,6 +25,10 @@ pub use capi::debug::VmCApiDebug;
 pub use capi::load::VmCApiLoad;
 pub use capi::state::VmCApiState;
 pub use capi::values::VmCApiValues;
+pub use exit_code::{
+    EXIT_KEEP_TFOR_VARS, EXIT_SITE_LIMIT, EXIT_TAGS_INDEX_BIT, SIDE_SENT_DOWNREC_CODE,
+    is_downrec_sentinel,
+};
 pub use fields::{
     CoroHostInternals, JIT_NEXT_NONE, JitProtoState, ProtoTraceInternals, TRACE_HEADS_NONE,
     VmJitState,

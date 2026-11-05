@@ -122,7 +122,9 @@ pub(super) fn emit_downrec_tail<E: Emit>(
     // stitch target.
     lw.bcx.switch_to_block(stitch_blk);
     lw.bcx.seal_block(stitch_blk);
-    let raw_ret = (1u64 << 63) | ((SIDE_SENT_DOWNREC_CODE as u64) << 56) | (record.head_pc as u64);
+    let raw_ret = (1u64 << 63)
+        | ((luna_core::__private::SIDE_SENT_DOWNREC_CODE as u64) << 56)
+        | (record.head_pc as u64);
     let stitch_ret = lw.bcx.ins().iconst(types::I64, raw_ret as i64);
     lw.bcx.ins().return_(&[stitch_ret]);
 

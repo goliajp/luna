@@ -115,7 +115,7 @@ pub(in crate::vm::exec) fn keep_tfor_vars(
     cont_pc: u32,
     off: usize,
 ) -> std::ops::Range<usize> {
-    if decode_body & crate::jit::trace_types::EXIT_KEEP_TFOR_VARS == 0 {
+    if decode_body & crate::__private::EXIT_KEEP_TFOR_VARS == 0 {
         return 0..0;
     }
     let call = proto.code[cont_pc as usize - 1];
