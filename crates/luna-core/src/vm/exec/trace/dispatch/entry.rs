@@ -27,14 +27,14 @@ impl Vm {
         let frame = &self.stack[base_us..base_us + l];
         let (regs, tags) = (&mut reg_state[..l], &mut entry_tags[..l]);
         let plan = &ct.entry_plan;
-        if let Err(k) = checked_slots(&plan.checked, frame, regs, tags)
-            && !odd_slots(&plan.checked[k..], frame, regs, tags)
+        if let Err(k) = checked_slots(plan.checked(), frame, regs, tags)
+            && !odd_slots(&plan.checked()[k..], frame, regs, tags)
         {
             return false;
         }
         if ct.has_any_side_wired.get() {
-            for &s in &plan.unchecked {
-                let s = s as usize;
+            for e in plan.unchecked() {
+                let s = e.slot as usize;
                 if s < l {
                     // not read before the trace writes it: any value
                     // enters, and an exit that has not written it leaves
@@ -44,11 +44,11 @@ impl Vm {
                 }
             }
         }
-        plan.len >= l
+        plan.len() >= l
             || past_slots(
-                &frame[plan.len..],
-                &mut regs[plan.len..],
-                &mut tags[plan.len..],
+                &frame[plan.len()..],
+                &mut regs[plan.len()..],
+                &mut tags[plan.len()..],
             )
     }
 }
