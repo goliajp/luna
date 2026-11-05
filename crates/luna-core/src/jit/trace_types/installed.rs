@@ -89,6 +89,9 @@ pub struct CompiledTrace {
     /// The tags and plans of [`CompiledTraceParts::plans`], read in place:
     /// a dispatch takes no count of it.
     pub(crate) plans: std::sync::Arc<plans::Plans>,
+    /// A copy of the plans' entry plan, read by every dispatch without
+    /// going through `plans`.
+    pub(crate) entry_plan: entry_plan::EntryPlan,
     pub(crate) per_exit_inline: TArc<[InlineSideExit]>,
     pub(crate) exit_hit_counts: TArc<[TCellU32]>,
     pub(crate) exit_side_trace_ptrs: TArc<[TCellPtr]>,
@@ -142,6 +145,7 @@ macro_rules! moved {
         let CompiledTraceParts { $($f,)* plans } = $parts;
         Self {
             call_count: false,
+            entry_plan: plans.0.entry_plan.clone(),
             plans: plans.0,
             $($f,)*
             side_children: TRefLock::new(std::collections::HashMap::new()),

@@ -26,7 +26,7 @@ impl Vm {
         let l = entry_tags.len();
         let frame = &self.stack[base_us..base_us + l];
         let (regs, tags) = (&mut reg_state[..l], &mut entry_tags[..l]);
-        let plan = &ct.plans.entry_plan;
+        let plan = &ct.entry_plan;
         if let Err(k) = checked_slots(plan.checked(), frame, regs, tags)
             && !odd_slots(&plan.checked()[k..], frame, regs, tags)
         {
