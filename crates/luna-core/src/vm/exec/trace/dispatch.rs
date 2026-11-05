@@ -4,6 +4,7 @@
 use super::*;
 use downrec::downrec_close_exit;
 
+mod entry;
 pub(in crate::vm::exec) mod words;
 
 impl Vm {
@@ -135,116 +136,4 @@ impl Vm {
         }
         ran
     }
-
-    /// Copy the frame's registers, `entry_tags.len()` of them from `base_us`,
-    /// into the trace's entry buffers `entry_tags` and `reg_state` (as
-    /// long). `false` when a register the trace checks has a tag other than
-    /// the one `ct` was compiled for, or one that cannot be passed as a raw
-    /// payload. A trace with no side trace wired copies only the registers
-    /// it checks. The others are held on the stack (see the lowering's
-    /// `StackHeld`), and only a side trace run from one of its exits reads
-    /// them, or their entry tags, from the buffers. Out of line, so that the
-    /// loop has the registers to itself.
-    #[inline(never)]
-    fn trace_marshal_in(
-        &self,
-        ct: &crate::jit::trace::CompiledTrace,
-        base_us: usize,
-        entry_tags: &mut [u8],
-        reg_state: &mut [i64],
-    ) -> bool {
-        let (max_stack, want) = (entry_tags.len(), &*ct.entry_tags);
-        // one loop per value of `checked_only`: tested once per slot, it
-        // cost two instructions on every register of every entry
-        if !ct.has_any_side_wired.get() {
-            self.marshal_in_slots::<true>(base_us, max_stack, want, entry_tags, reg_state)
-        } else {
-            self.marshal_in_slots::<false>(base_us, max_stack, want, entry_tags, reg_state)
-        }
-    }
-
-    #[inline(always)]
-    fn marshal_in_slots<const CHECKED_ONLY: bool>(
-        &self,
-        base_us: usize,
-        max_stack: usize,
-        compile_entry_tags: &[u8],
-        entry_tags: &mut [u8],
-        reg_state: &mut [i64],
-    ) -> bool {
-        use crate::jit::trace::{ENTRY_TAG_ANY, PLAIN_ENTRY_TAGS};
-        let frame = &self.stack[base_us..base_us + max_stack];
-        // the slots the trace was compiled with tags for, then the ones past
-        // them: zipped, so no slot pays for a bounds check
-        let n = compile_entry_tags.len().min(max_stack);
-        let (regs, regs_past) = reg_state[..max_stack].split_at_mut(n);
-        let (tags, tags_past) = entry_tags[..max_stack].split_at_mut(n);
-        let slots = frame[..n].iter().zip(&compile_entry_tags[..n]);
-        for ((v, &want), (r, t)) in slots.zip(regs.iter_mut().zip(tags.iter_mut())) {
-            if want == ENTRY_TAG_ANY {
-                // not read before the trace writes it: any value enters,
-                // and an exit that has not written it leaves it as it is
-                if !CHECKED_ONLY {
-                    *r = unpack_word(*v).1;
-                    *t = ENTRY_TAG_ANY;
-                }
-                continue;
-            }
-            let (tag, payload) = unpack_word(*v);
-            *r = payload;
-            // The trace's IR is specialised to the compile-time entry
-            // tags: on another, body ops would misread the raw bits (a Str
-            // pointer as an Int payload). The interpreter runs this entry;
-            // the trace stays for later ones. The payload of anything else
-            // cannot stand for the value. A boolean, the one entry type
-            // two tags enter, is left to the out-of-line test, so that the
-            // common case costs one comparison and one bit test
-            if tag != want || PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
-                match bool_entry(want, tag) {
-                    Some(p) => *r = p,
-                    None => return false,
-                }
-            }
-            *t = tag;
-        }
-        marshal_past(&frame[n..], regs_past, tags_past)
-    }
-}
-
-/// `v`'s tag and its payload word as a register holds it.
-#[inline(always)]
-fn unpack_word(v: Value) -> (u8, i64) {
-    let (tag, payload) = v.unpack();
-    // SAFETY: every field of `RawVal` is one plain 8-byte word, and
-    // `unpack` returns it fully initialised
-    (tag, unsafe { payload.zero as i64 })
-}
-
-/// The payload a register of tag `tag` enters a trace with whose entry tag
-/// for it is `want`, when `tag` is not the plain match of `want`: a trace
-/// compiled for a boolean takes either value, as payload 0 or 1. `None`:
-/// the register cannot enter.
-#[cold]
-#[inline(never)]
-fn bool_entry(want: u8, tag: u8) -> Option<i64> {
-    use crate::runtime::value::raw;
-    (want == raw::FALSE && (tag == raw::FALSE || tag == raw::TRUE)).then(|| i64::from(tag - want))
-}
-
-/// [`Vm::marshal_in_slots`] of the slots past the compile-time tags, each
-/// checked like one read.
-#[inline(always)]
-fn marshal_past(frame: &[Value], regs: &mut [i64], tags: &mut [u8]) -> bool {
-    for (v, (r, t)) in frame.iter().zip(regs.iter_mut().zip(tags.iter_mut())) {
-        let (tag, payload) = unpack_word(*v);
-        *r = payload;
-        if crate::jit::trace::PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
-            match bool_entry(tag, tag) {
-                Some(p) => *r = p,
-                None => return false,
-            }
-        }
-        *t = tag;
-    }
-    true
 }

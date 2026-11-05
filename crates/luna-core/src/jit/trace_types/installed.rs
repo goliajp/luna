@@ -3,6 +3,7 @@
 use super::tier_up::TierUp;
 use super::*;
 
+pub(crate) mod entry_plan;
 mod read;
 
 /// A trace compiled by a backend and ready to be dispatched into at its
@@ -131,6 +132,8 @@ pub struct CompiledTrace {
     /// `tier_up`'s cell: it has a `tier_up` and `per_exit_tags` gives
     /// back-edge kinds (see `__private::trace_count_slot`).
     pub(crate) call_count: bool,
+    /// What a dispatch checks and copies in, from `entry_tags`.
+    pub(crate) entry_plan: entry_plan::EntryPlan,
 }
 
 /// Moves each named field of a [`CompiledTraceParts`] into a
@@ -140,6 +143,7 @@ macro_rules! moved {
         let CompiledTraceParts { $($f),* } = $parts;
         Self {
             call_count: false,
+            entry_plan: entry_plan::EntryPlan::default(),
             $($f,)*
             side_children: TRefLock::new(std::collections::HashMap::new()),
             has_any_side_wired: TCellBool::new(false),
@@ -171,6 +175,7 @@ impl CompiledTrace {
     pub unsafe fn from_parts(parts: CompiledTraceParts) -> Self {
         let call_count =
             parts.tier_up.is_some() && !parts.per_exit_tags.back_edge_kinds().is_empty();
+        let entry_plan = entry_plan::EntryPlan::of(&parts.entry_tags);
         let ct = moved!(parts => head_pc, entry, n_ops, dispatchable, window_size, exit_tags,
             global_tag_res_kind, entry_tags, per_exit_tags, per_exit_inline, exit_hit_counts,
             exit_side_trace_ptrs,
@@ -178,7 +183,11 @@ impl CompiledTrace {
             accum_bufferable_seen, sunk_alloc_seen, materialize_emit_count, closure_seen,
             inline_kinds, inline_depth, body_writes, downrec_link, downrec_multi_way_count,
             tier_up);
-        Self { call_count, ..ct }
+        Self {
+            call_count,
+            entry_plan,
+            ..ct
+        }
     }
 
     /// The entry to call: the optimizing tier's once it exists.
