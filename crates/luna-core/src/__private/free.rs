@@ -158,9 +158,17 @@ pub fn tier_up_loop_cell(
 /// `looped` is the optimizing tier's loop compiled for this trace's
 /// `loop_entry` (the code `t` belongs to): against its tags and window,
 /// sharing its exits and the cells their addresses name (the frame chains
-/// of its inlined exits, the iteration count, this loop cell). Entered with
-/// `reg_state` holding the registers the loop head reads, as that code's
-/// back edge calls it, it returns as that code does.
+/// of its inlined exits, this loop cell). Entered with `reg_state` holding
+/// the registers the loop head reads, as that code's back edge calls it, it
+/// returns as that code does.
+///
+/// The one way into the loop is the back edge's hand-over that luna-jit's
+/// lowerer emits (`lower::handoff`), in the baseline tier's code and in the
+/// optimizing tier's first pass alike: it writes this call's count and its
+/// mark of a pass into the loop (`trace_count_slot`, `trace_passed_slot`)
+/// before the call, which is how an exit from the loop is known to be past
+/// the first back edge. Nothing else reads this cell from compiled code, and
+/// nothing calls the loop from Rust.
 pub unsafe fn set_tier_up_loop(
     t: &crate::jit::trace_types::tier_up::TierUp,
     looped: crate::jit::trace::TraceFn,

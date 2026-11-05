@@ -99,44 +99,20 @@ impl Vm {
         // the exit's hit count (the child's after a side trace), saturating;
         // the one that reaches `HOTEXIT_THRESHOLD` starts a side trace
         // once the stack and pc are restored
-        let mut side_trace_should_start = false;
         // an exit to check for a collection is no guard failing either: it
         // starts no side trace, which would run past the check
         let tier_exit =
             !child_ran && is_tier_exit(ct, cont_pc) || self.jit.gc_exit.is_some() || synced;
-        if let Some(c) = decode_hit_counts.get(exit_hit_idx).filter(|_| !tier_exit) {
-            let v = c.get();
-            if v < u32::MAX {
-                c.set(v + 1);
-            }
-            // After a side trace ran, `exit_hit_idx` is an
-            // exit of that child, but a side trace is
-            // recorded and wired as one of `head_pc_val`'s
-            // exits: it would replace the side trace on the
-            // parent's exit of that number, which resumes
-            // elsewhere.
-            // An exit that has a side trace already (one taken over from
-            // another Vm comes with its side traces wired, and counts
-            // from zero) starts none.
-            if v + 1 == crate::jit::trace::HOTEXIT_THRESHOLD
-                && !child_ran
-                && self.jit.active_trace.is_none()
-                && self.jit.trace_enabled
-                && ct
-                    .exit_side_trace_ptrs
-                    .get(exit_hit_idx)
-                    .is_none_or(|p| p.get().is_null())
-            {
-                side_trace_should_start = true;
-            }
-        }
+        let side_trace_should_start =
+            self.count_exit_hit(ct, decode_hit_counts, exit_hit_idx, tier_exit, child_ran);
         // after a step the trace made in place, the stack is the
         // interpreter's already: a finalizer may have changed it since
         if !synced {
+            let keep = keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0);
             self.trace_restore_slots(
                 base_us,
                 max_stack,
-                keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0),
+                keep.clone(),
                 using_global_exit_tags,
                 global_tag_res_kind,
                 exit_tags_for_pc,
@@ -144,6 +120,10 @@ impl Vm {
                 &entry_tags,
                 child_ran,
             );
+            let tags = exit_tags_for_pc;
+            let table = &ct.per_exit_tags;
+            let window = ct.window_size as usize;
+            self.trace_restore_back_edge_kinds(base_us, table, tags, keep, &reg_state, window);
         }
         // For non-inline exits the
         // helper was never called (no metas chain for
@@ -219,6 +199,42 @@ impl Vm {
         // dispatch picks up the same allocation.
         self.jit.reg_state_buf = reg_state;
         self.jit.entry_tags_buf = entry_tags;
+    }
+
+    /// Counts the hit of exit `exit_hit_idx` in `hit_counts` (none for a
+    /// `tier_exit`); whether it is the one that starts a side trace.
+    fn count_exit_hit(
+        &self,
+        ct: &CompiledTrace,
+        hit_counts: &[crate::jit::send_compat::TCellU32],
+        exit_hit_idx: usize,
+        tier_exit: bool,
+        child_ran: bool,
+    ) -> bool {
+        let Some(c) = hit_counts.get(exit_hit_idx).filter(|_| !tier_exit) else {
+            return false;
+        };
+        let v = c.get();
+        if v < u32::MAX {
+            c.set(v + 1);
+        }
+        // After a side trace ran, `exit_hit_idx` is an
+        // exit of that child, but a side trace is
+        // recorded and wired as one of `head_pc_val`'s
+        // exits: it would replace the side trace on the
+        // parent's exit of that number, which resumes
+        // elsewhere.
+        // An exit that has a side trace already (one taken over from
+        // another Vm comes with its side traces wired, and counts
+        // from zero) starts none.
+        v + 1 == crate::jit::trace::HOTEXIT_THRESHOLD
+            && !child_ran
+            && self.jit.active_trace.is_none()
+            && self.jit.trace_enabled
+            && ct
+                .exit_side_trace_ptrs
+                .get(exit_hit_idx)
+                .is_none_or(|p| p.get().is_null())
     }
 
     /// Start recording a side trace at `cont_pc`, the exit of the trace at

@@ -212,16 +212,37 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
 pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, tail: &[RegKind]) {
     let body_loop = lw.blocks.body_loop;
     lw.back_edge_kinds = Some(tail.to_vec());
+    note_write_only_kinds(lw, pl, tail);
     commit_back_edge(lw);
     let Some(t) = &lw.tier_count else {
         lw.bcx.ins().jump(body_loop, &[]);
         return;
     };
-    let (cell, at) = (t.count() as *const TCellU32 as i64, t.at());
+    let (count, at) = (super::handoff::count_at(lw, pl, t), t.at());
     lw.loops = true;
     let hot = lw.bcx.create_block();
-    lw.bcx.tier_count(cell, at, hot, body_loop);
+    lw.bcx.tier_count(count, at, hot, body_loop);
     lw.bcx.switch_to_block(hot);
     lw.bcx.seal_block(hot);
     emit_hot_back_edge(lw, pl);
+}
+
+/// Notes the kinds `tail` leaves the written-only registers in (see
+/// `Lower::write_only_kinds`).
+fn note_write_only_kinds<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, tail: &[RegKind]) {
+    let kinds: Option<Vec<(u16, ExitTag)>> = (pl.write_only.iter().enumerate())
+        .filter(|(_, w)| **w)
+        .map(|(r, _)| {
+            let k = crate::jit_backend::trace::kinds::exit_tag_of(&tail[r]);
+            let fits = matches!(
+                k,
+                ExitTag::Int | ExitTag::Float | ExitTag::Bool | ExitTag::Nil
+            );
+            fits.then_some((r as u16, k))
+        })
+        .collect();
+    lw.write_only_kinds = match (std::mem::replace(&mut lw.write_only_kinds, Err(())), kinds) {
+        (Ok(had), Some(k)) if had.is_empty() || had == k => Ok(k),
+        _ => Err(()),
+    };
 }

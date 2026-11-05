@@ -11,17 +11,19 @@ use super::*;
 /// fn(reg_state: *mut i64) -> i64
 /// ```
 ///
-/// - `reg_state` points to a caller-managed buffer of
-///   `head_proto.max_stack` `i64` slots. The trace reads its live
-///   inputs from this buffer at entry and writes back any modified
-///   regs before returning. Each slot holds the raw 8-byte payload
-///   of a Lua `Value`; the type tags live in [`CompiledTrace`]'s
-///   tag arrays.
+/// - `reg_state` points to a caller-managed buffer of the trace's
+///   `window_size` `i64` slots and three words after them (see
+///   `__private::trace_count_slot`: a down-recursion trace's saved
+///   pc, this call's tier-up count, its mark of a pass into the
+///   optimizing tier's loop). The trace reads its live inputs from
+///   this buffer at entry and writes back any modified regs before
+///   returning. Each slot holds the raw 8-byte payload of a Lua
+///   `Value`; the type tags live in [`CompiledTrace`]'s tag arrays.
 /// - Return value = continuation PC. A clean loop close (control
 ///   returns to the trace's `head_pc`) returns `head_pc as i64`;
 ///   side exits return the failing guard's PC (see
 ///   [`decode_exit_shape`] for the upper-bit encoding).
-// SAFETY: `TraceFn` is the ABI of native code emitted by the Cranelift lowerer (see `jit_backend::trace`); callers guarantee the `*mut i64` points to a reg_state buffer of size `window_size` and survive the trace call.
+// SAFETY: `TraceFn` is the ABI of native code emitted by the Cranelift lowerer (see `jit_backend::trace`); callers guarantee the `*mut i64` points to a reg_state buffer of `window_size + 3` words and survive the trace call.
 pub type TraceFn = unsafe extern "C" fn(*mut i64) -> i64;
 
 /// What a backend compiled for a trace: its code and what the dispatcher

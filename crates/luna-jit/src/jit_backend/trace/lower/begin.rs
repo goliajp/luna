@@ -14,10 +14,7 @@ pub(super) fn begin_body<E: Emit>(
 ) -> Lower<E> {
     let (virt_vars, virt_kinds, sunk_alloc_seen) = sunk;
     let current_kinds = entry_kinds(pl);
-    let ro_invariant = match blocks.ro_precheck {
-        Some(_) => readonly_invariants(pl, &current_kinds),
-        None => vec![false; pl.window_size_us],
-    };
+    let ro_invariant = ro_invariants(pl, &blocks, &current_kinds);
     Lower {
         bcx,
         h,
@@ -48,12 +45,21 @@ pub(super) fn begin_body<E: Emit>(
         virt_held: Vec::new(),
         alt_joins: std::collections::HashMap::new(),
         tier_count: None,
+        write_only_kinds: Ok(Vec::new()),
         loop_entry: None,
         loops: false,
         due_words: None,
         gc_quiet: false,
         ro_invariant,
         ro_checked: Vec::new(),
+    }
+}
+
+/// [`readonly_invariants`] when the trace tests tables before the loop head, else none.
+fn ro_invariants(pl: &Plan<'_>, blocks: &HeadBlocks, current_kinds: &[RegKind]) -> Vec<bool> {
+    match blocks.ro_precheck {
+        Some(_) => readonly_invariants(pl, current_kinds),
+        None => vec![false; pl.window_size_us],
     }
 }
 

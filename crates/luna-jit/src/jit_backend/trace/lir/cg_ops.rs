@@ -164,7 +164,7 @@ impl<M: Masm> Gen<'_, M> {
                 self.jump(i.a, args, next);
             }
             Op::Brif(n_then) => self.brif(&i, n_then, next),
-            Op::TierCount { n, at } => self.tier_count(n, at, i.b, i.c, next),
+            Op::TierCount { .. } => self.tier_count(&i, next),
             Op::Call | Op::CallIndirect => {
                 let lir = self.lir;
                 let (f, addr) = match i.op {

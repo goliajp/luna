@@ -18,6 +18,8 @@ pub(super) struct Emitted {
     pub(super) downrec_link_for_compiled: Option<(u32, u32)>,
     pub(super) downrec_multi_way_count_for_compiled: u8,
     pub(super) tier_count: Option<Box<TierUp>>,
+    /// See `Lower::write_only_kinds`.
+    pub(super) write_only_kinds: Result<Vec<(u16, ExitTag)>, ()>,
 }
 
 impl<E: Emit> Lower<E> {
@@ -38,6 +40,7 @@ impl<E: Emit> Lower<E> {
             escape,
             tier_count,
             loop_entry,
+            write_only_kinds,
             ..
         } = self;
         let mut bcx = bcx;
@@ -59,6 +62,7 @@ impl<E: Emit> Lower<E> {
                 downrec_link_for_compiled: downrec.0,
                 downrec_multi_way_count_for_compiled: downrec.1,
                 tier_count,
+                write_only_kinds,
             },
         )
     }
@@ -79,6 +83,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         downrec_link_for_compiled,
         downrec_multi_way_count_for_compiled,
         tier_count,
+        write_only_kinds,
     } = em;
     let (current_kinds, dispatchable, dispatch_off_reason) = apply_tail_kinds_and_gates(
         pl,
@@ -121,11 +126,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
     // `per_exit_tags` for the dispatcher. Each exit's tags keep the length its emit site pushed (caller window at
     // depth 0, the full window deeper): the dispatcher walks
     // `exit_tags_for_pc.len()` either way.
-    let tag_vecs: Vec<(u32, Vec<ExitTag>)> = per_exit_kinds
-        .iter()
-        .map(|(pc, kinds)| (pc, kinds_to_exit_tags(kinds)))
-        .collect();
-    let per_exit_tags = ExitTagTable::from_exits(tag_vecs.iter().map(|(pc, t)| (*pc, &t[..])));
+    let per_exit_tags = exit_tag_table(&per_exit_kinds, write_only_kinds.unwrap_or_default());
     let mut last = None;
     let inline_tags: Vec<TArc<[ExitTag]>> = per_exit_inline_vec
         .iter()
@@ -265,4 +266,15 @@ fn inline_kinds(pl: &Plan<'_>) -> u8 {
         }
     }
     k
+}
+
+/// The tags of each tagged exit, with the written-only registers' kinds
+/// past the first back edge (see `entry_live`).
+fn exit_tag_table(per_exit_kinds: &ExitKinds, write_only: Vec<(u16, ExitTag)>) -> ExitTagTable {
+    let tag_vecs: Vec<(u32, Vec<ExitTag>)> = per_exit_kinds
+        .iter()
+        .map(|(pc, kinds)| (pc, kinds_to_exit_tags(kinds)))
+        .collect();
+    ExitTagTable::from_exits(tag_vecs.iter().map(|(pc, t)| (*pc, &t[..])))
+        .with_back_edge_kinds(write_only)
 }

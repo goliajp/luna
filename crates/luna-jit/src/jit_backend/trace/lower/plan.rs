@@ -72,6 +72,8 @@ pub(super) struct Plan<'r> {
     pub(super) head_live: Vec<bool>,
     /// The temporaries of a looping body (see `entry_live`).
     pub(super) temps: Vec<bool>,
+    /// Per head register, whether it is written-only (see `entry_live`).
+    pub(super) write_only: Vec<bool>,
     /// The ops before this one are lowered for the first pass apart (see
     /// `peel`); 0 when the trace has no temporaries.
     pub(super) peel_end: usize,
@@ -97,6 +99,7 @@ pub(super) fn plan_trace<'r>(
     frame_w: usize,
     opts: CompileOptions,
     float_only: bool,
+    split: bool,
 ) -> Option<(Plan<'r>, EscapeAnalysis)> {
     let n = record.ops.len();
     set_last_op(usize::MAX, 255);
@@ -198,11 +201,7 @@ pub(super) fn plan_trace<'r>(
     let parent_exit_tags = side_parent_exit_tags(record);
     let alt_paths = alt_path::find_alt_paths(record, effective_end, head_proto);
     let alt_written = alt_path::alt_written(&alt_paths);
-    let HeadRegs {
-        live: head_live,
-        temps,
-        peel_end,
-    } = entry_live(
+    let regs = entry_live(
         record,
         &op_offsets,
         &inline_writes,
@@ -211,8 +210,9 @@ pub(super) fn plan_trace<'r>(
         do_internal_loop,
         parent_exit_tags.as_deref(),
         &alt_written,
+        split,
     );
-    let active_accum = buffered_accum(&escape, &head_live, &temps);
+    let active_accum = buffered_accum(&escape, &regs.live, &regs.temps);
     let (consumed_by_cmp, cmp_dirs) = validate_ops(
         record,
         &vconsts,
@@ -225,14 +225,14 @@ pub(super) fn plan_trace<'r>(
     let step_guard = plan_step_guard(
         record,
         &op_offsets,
-        &head_live,
+        &regs.live,
         &alt_paths,
         for_loop_idx_opt,
         opts.pre53 && !float_only,
     );
     let peel_end = peel_point(
         record,
-        peel_end,
+        regs.peel_end,
         effective_end,
         &math_folds,
         active_accum.as_ref(),
@@ -276,8 +276,9 @@ pub(super) fn plan_trace<'r>(
             self_link_idx_opt,
             downrec_idx_opt,
             do_internal_loop,
-            head_live,
-            temps,
+            head_live: regs.live,
+            temps: regs.temps,
+            write_only: regs.write_only,
             peel_end,
             active_accum,
             consumed_by_cmp,

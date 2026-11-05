@@ -24,7 +24,7 @@ pub unsafe extern "C" fn luna_jit_gc_due(op_pc: i64, exit_ret: i64, reg_state: *
     let n = vm.jit_step_window(exit_ret as u64);
     // SAFETY: a window is given only for the running trace's frame, whose
     // register buffer (# Safety) holds that frame's registers as `exit_ret`
-    // leaves them
+    // leaves them and the three words past its window
     unsafe {
         let regs = (n > 0).then(|| std::slice::from_raw_parts(reg_state, n));
         vm.jit_gc_step(op_pc as u32, exit_ret as u64, regs)

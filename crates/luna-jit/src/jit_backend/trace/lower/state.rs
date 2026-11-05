@@ -83,6 +83,10 @@ pub(super) struct Lower<E: Emit> {
     /// The trace's move to the optimizing tier, whose iteration count the
     /// back edge keeps and whose loop it calls (see `handoff`).
     pub(super) tier_count: Option<Box<TierUp>>,
+    /// The kinds the back edge leaves the written-only registers (see
+    /// `entry_live`); `Err` when one is not a kind the dispatcher may give
+    /// them past a back edge, or two back edges disagree.
+    pub(super) write_only_kinds: Result<Vec<(u16, ExitTag)>, ()>,
     /// The block the optimizing tier's loop starts at (see `handoff`).
     pub(super) loop_entry: Option<Block>,
     /// A back edge with an iteration count was emitted.

@@ -403,6 +403,12 @@ optimization.
   `SIDE_SENT_DOWNREC_CODE` and `is_downrec_sentinel` are gone from
   `luna_core::jit`. The layout is internal to luna's JIT; the inline site
   and exit index field is now bits 32–52.
+- A trace function's register buffer (`TraceFn`'s `reg_state`) holds three
+  words past the trace's window: the down-recursion saved pc, the call's
+  tier-up count and its mark of a pass into the optimizing tier's loop. A
+  trace whose exit table gives back-edge kinds counts in that word instead
+  of its tier-up count cell. A caller that runs a trace function itself
+  sizes the buffer `window_size + 3`.
 
 ### Changed
 
@@ -1367,6 +1373,14 @@ optimization.
 
 ### Added
 
+- `ExitTagTable::with_back_edge_kinds` and `ExitTagTable::back_edge_kind`:
+  the kinds a looping trace's written-only registers (assigned in the loop,
+  never read there) hold once a call of the trace has gone round its first
+  back edge. An exit that leaves such a register untouched restores it
+  with that kind past the first back edge and leaves it as it was before;
+  only kinds the collector does not trace (integer, float, boolean, nil)
+  are accepted. The baseline tier no longer lowers the loop's first pass
+  apart for these registers.
 - C API: `luna_newstate_seeded(version, seed)` and
   `luna_newstate_with_seeded(version, f, ud, seed)`, `luaL_newstate` and
   `lua_newstate` whose strings hash with the caller's seed, so that tables

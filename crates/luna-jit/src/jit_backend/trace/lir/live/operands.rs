@@ -8,12 +8,12 @@ use super::*;
 pub(crate) fn for_uses(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
     let nv = lir.value_ty.len() as u32;
     match i.op {
-        Op::Iconst(_)
-        | Op::Reloc(_)
-        | Op::Fconst(_)
-        | Op::StackAddr(..)
-        | Op::StackLoad(..)
-        | Op::TierCount { .. } => {}
+        Op::Iconst(_) | Op::Reloc(_) | Op::Fconst(_) | Op::StackAddr(..) | Op::StackLoad(..) => {}
+        Op::TierCount {
+            count: CountAt::Frame(_),
+            ..
+        } => f(i.a),
+        Op::TierCount { .. } => {}
         Op::Bin(_) | Op::Icmp(_) | Op::Fcmp(_) | Op::Store(_) => {
             f(i.a);
             f(i.b);
