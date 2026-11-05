@@ -17,15 +17,16 @@ pub(crate) type HotTable = Box<[u32; LOOP_HOT_SLOTS]>;
 
 /// The trace a collection exit left: the frame it ran in (its depth, base
 /// and function), its head, the last back-edge to that head (`None` when
-/// no back-edge of the function reaches it), and the back-edges the pause
-/// has held back so far.
+/// no back-edge of the function reaches it; found when first asked, as a
+/// collection exit is frequent and the question rare), and the back-edges
+/// the pause has held back so far.
 #[derive(Clone, Copy)]
 pub(crate) struct GcQuiet {
     depth: usize,
     base: u32,
     proto: Gc<Proto>,
     head_pc: u32,
-    loop_end: Option<u32>,
+    loop_end: Option<Option<u32>>,
     held: u32,
 }
 
@@ -64,7 +65,7 @@ impl Vm {
             base: f.base,
             proto: f.closure.proto,
             head_pc,
-            loop_end: loop_end(f.closure.proto, head_pc),
+            loop_end: None,
             held: 0,
         };
         let step = &mut self.jit.step;
@@ -146,13 +147,12 @@ impl Vm {
         let in_frame = same_frame && self.frames.len() == q.depth;
         let at_head = proto.ptr_eq(q.proto) && pc == q.head_pc;
         // a call the frame makes: its pc is already past the call
-        let called_after_loop = !back_edge
-            && same_frame
-            && self.frames.len() == q.depth + 1
+        let calls = !back_edge && same_frame && self.frames.len() == q.depth + 1;
+        let end = if calls { self.quiet_loop_end(q) } else { None };
+        let called_after_loop = calls
             && !self.frames[q.depth - 1].lua().is_some_and(|f| {
                 let call_pc = f.pc.wrapping_sub(1);
-                q.loop_end
-                    .is_some_and(|end| (q.head_pc..=end).contains(&call_pc))
+                end.is_some_and(|end| (q.head_pc..=end).contains(&call_pc))
             });
         if self.frames.len() < q.depth
             || !same_frame
@@ -164,6 +164,20 @@ impl Vm {
             return false;
         }
         true
+    }
+}
+
+impl Vm {
+    /// `q`'s last back-edge to its head, found once per pause.
+    fn quiet_loop_end(&mut self, q: GcQuiet) -> Option<u32> {
+        if let Some(end) = q.loop_end {
+            return end;
+        }
+        let end = loop_end(q.proto, q.head_pc);
+        if let Some(p) = self.jit.step.quiet.as_mut() {
+            p.loop_end = Some(end);
+        }
+        end
     }
 }
 
