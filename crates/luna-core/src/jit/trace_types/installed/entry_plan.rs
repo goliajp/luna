@@ -75,6 +75,14 @@ impl EntryPlan {
         }
     }
 
+    /// Bytes the plan takes beyond itself.
+    pub(crate) fn size(&self) -> usize {
+        match &self.checked {
+            Checked::Inline(..) => 0,
+            Checked::Heap(b) => 4 * b.len(),
+        }
+    }
+
     #[inline]
     pub(crate) fn len(&self) -> usize {
         self.len as usize

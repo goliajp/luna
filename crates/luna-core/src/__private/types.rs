@@ -10,6 +10,7 @@ pub use crate::jit::trace_types::adopt::{AdoptRequest, AdoptedTrace};
 pub use crate::jit::trace_types::compiled::CompiledTraceParts;
 pub use crate::jit::trace_types::content::{ProtoContent, hash64};
 pub use crate::jit::trace_types::installed::CompiledTrace;
+pub use crate::jit::trace_types::installed::plans::TracePlans;
 pub use crate::jit::trace_types::options::CompileOptions;
 pub use crate::jit::trace_types::record::{FieldIcSnapshot, RecordedOp, TraceRecord};
 pub use crate::jit::trace_types::self_link::{DownRecClose, RetfRecord};

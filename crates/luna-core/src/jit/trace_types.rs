@@ -30,6 +30,7 @@ pub use compiled::TraceFn;
 pub use exit::*;
 pub use exit_table::{ExitTagIter, ExitTagTable};
 pub(crate) use installed::CompiledTrace;
+pub(crate) use installed::plans::TracePlans;
 pub(crate) use options::CompileOptions;
 pub use outcome::{
     CompileOutcome, INLINE_CLOSURE, INLINE_MULTI_RESULTS, INLINE_VAR_ARGS, INLINE_VARARG_CALLEE,

@@ -59,15 +59,15 @@ impl Vm {
         let exit_tags = parent_ct.exit_tags_of(parent_exit_idx);
         // slots past the child's frame belong to frames that are gone when
         // it runs; it neither reads nor writes them
-        let end = (off + ct.entry_tags.len()).min(exit_tags.len());
+        let end = (off + ct.plans.entry_tags.len()).min(exit_tags.len());
         let shape_matches = exit_tags.len() >= off
             && crate::jit::trace::exit_tags_match_entry_tags(
-                &ct.entry_tags,
+                &ct.plans.entry_tags,
                 &exit_tags[off..end],
                 &stack_held_as_child(
-                    &parent_ct.entry_tags,
+                    &parent_ct.plans.entry_tags,
                     &parent_ct.body_writes,
-                    &ct.entry_tags,
+                    &ct.plans.entry_tags,
                     off,
                 ),
             );

@@ -52,8 +52,8 @@ impl Vm {
         let tentative = crate::jit::trace::decode_exit_shape(
             raw_ret,
             &ct.per_exit_inline,
-            &ct.per_exit_tags,
-            &ct.exit_tags,
+            &ct.plans.per_exit_tags,
+            &ct.plans.exit_tags,
         );
         let exit = tentative.exit_hit_idx;
         let Some(child) = ct.side_children.borrow().get(&(exit as u32)).cloned() else {
@@ -65,7 +65,7 @@ impl Vm {
         // from its own
         let off = ct.exit_frame_offset(exit);
         if child.head_pc != tentative.cont_pc
-            || !self.child_reads_stack_held_ok(base_us, off, entry_tags, &child.entry_tags)
+            || !self.child_reads_stack_held_ok(base_us, off, entry_tags, &child.plans.entry_tags)
         {
             return parent_only;
         }

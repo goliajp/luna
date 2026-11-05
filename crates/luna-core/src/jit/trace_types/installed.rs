@@ -5,6 +5,7 @@ use super::*;
 
 pub(crate) mod entry_plan;
 pub(crate) mod exit_plan;
+pub(crate) mod plans;
 mod read;
 
 /// A trace compiled by a backend and ready to be dispatched into at its
@@ -85,10 +86,9 @@ pub struct CompiledTrace {
     pub(crate) n_ops: u32,
     pub(crate) dispatchable: bool,
     pub(crate) window_size: u32,
-    pub(crate) exit_tags: TArc<[ExitTag]>,
-    pub(crate) global_tag_res_kind: TagResKind,
-    pub(crate) entry_tags: TArc<[u8]>,
-    pub(crate) per_exit_tags: ExitTagTable,
+    /// The tags and plans of [`CompiledTraceParts::plans`], read in place:
+    /// a dispatch takes no count of it.
+    pub(crate) plans: std::sync::Arc<plans::Plans>,
     pub(crate) per_exit_inline: TArc<[InlineSideExit]>,
     pub(crate) exit_hit_counts: TArc<[TCellU32]>,
     pub(crate) exit_side_trace_ptrs: TArc<[TCellPtr]>,
@@ -133,21 +133,16 @@ pub struct CompiledTrace {
     /// `tier_up`'s cell: it has a `tier_up` and `per_exit_tags` gives
     /// back-edge kinds (see `__private::trace_count_slot`).
     pub(crate) call_count: bool,
-    /// What a dispatch checks and copies in, from `entry_tags`.
-    pub(crate) entry_plan: entry_plan::EntryPlan,
-    /// What each exit writes back, from its exit tags.
-    pub(crate) exit_plan: exit_plan::ExitPlan,
 }
 
 /// Moves each named field of a [`CompiledTraceParts`] into a
 /// [`CompiledTrace`] with no side trace wired.
 macro_rules! moved {
     ($parts:ident => $($f:ident),* $(,)?) => {{
-        let CompiledTraceParts { $($f),* } = $parts;
+        let CompiledTraceParts { $($f,)* plans } = $parts;
         Self {
             call_count: false,
-            entry_plan: entry_plan::EntryPlan::default(),
-            exit_plan: exit_plan::ExitPlan::default(),
+            plans: plans.0,
             $($f,)*
             side_children: TRefLock::new(std::collections::HashMap::new()),
             has_any_side_wired: TCellBool::new(false),
@@ -164,6 +159,12 @@ impl CompiledTrace {
     ///   the entry and exit tags and the window size `parts` states (the
     ///   dispatcher moves registers in and out by them unchecked), that
     ///   lives as long as any Vm the trace is installed on.
+    /// - `parts.plans` is of that compile: made by [`plans::TracePlans::new`]
+    ///   from the tags the code was compiled against, with one inline exit
+    ///   per `per_exit_inline`, or [`Self::plans`] of a trace made from the
+    ///   same compile (whose `per_exit_inline` tags these are as well): an
+    ///   exit's plan, worked out once, serves every trace sharing them.
+    ///   Debug builds check the lengths and the number of exits.
     /// - Code whose back edge calls the loop its `tier_up`'s loop cell
     ///   (`__private::tier_up_loop_cell`) holds, when that is not null,
     ///   stores the registers the loop head reads first and returns what
@@ -171,30 +172,37 @@ impl CompiledTrace {
     /// - The cells whose addresses that code holds are the ones `parts`
     ///   owns: the `chain` of each of `per_exit_inline`, and the count and
     ///   the loop cell of `tier_up`; `exit_side_trace_ptrs` are null. Code
-    ///   whose `per_exit_tags` gives back-edge kinds counts in `reg_state`
+    ///   whose tag table gives back-edge kinds counts in `reg_state`
     ///   instead of `tier_up`'s count (`__private::trace_count_slot`).
     /// - The `tier_up` source, if any, was made for this trace by the
     ///   backend that compiled it, in the JIT storage of the Vm it is
     ///   installed on.
     pub unsafe fn from_parts(parts: CompiledTraceParts) -> Self {
-        let call_count =
-            parts.tier_up.is_some() && !parts.per_exit_tags.back_edge_kinds().is_empty();
-        let entry_plan = entry_plan::EntryPlan::of(&parts.entry_tags);
-        let n_exits = parts.per_exit_inline.len() + parts.per_exit_tags.len() + 1;
-        let exit_plan = exit_plan::ExitPlan::new(n_exits);
-        let ct = moved!(parts => head_pc, entry, n_ops, dispatchable, window_size, exit_tags,
-            global_tag_res_kind, entry_tags, per_exit_tags, per_exit_inline, exit_hit_counts,
-            exit_side_trace_ptrs,
+        let p = &parts.plans.0;
+        debug_assert!(
+            p.entry_tags.len() <= parts.window_size as usize
+                && p.exit_tags.len() <= parts.window_size as usize
+                && parts.plans.exit_count()
+                    == parts.per_exit_inline.len() + p.per_exit_tags.len() + 1,
+            "the trace's plans are not of its code: {:?}, window {}, {} inline exits",
+            parts.plans,
+            parts.window_size,
+            parts.per_exit_inline.len()
+        );
+        let call_count = parts.tier_up.is_some() && !p.per_exit_tags.back_edge_kinds().is_empty();
+        let ct = moved!(parts => head_pc, entry, n_ops, dispatchable, window_size,
+            per_exit_inline, exit_hit_counts, exit_side_trace_ptrs,
             is_inline_abort_close, dispatch_off_reason, sinkable_sites_seen,
             accum_bufferable_seen, sunk_alloc_seen, materialize_emit_count, closure_seen,
             inline_kinds, inline_depth, body_writes, downrec_link, downrec_multi_way_count,
             tier_up);
-        Self {
-            call_count,
-            entry_plan,
-            exit_plan,
-            ..ct
-        }
+        Self { call_count, ..ct }
+    }
+
+    /// The tags and plans this trace's code was compiled against, for a
+    /// Vm taking the code up to hand [`CompiledTraceParts::plans`].
+    pub fn plans(&self) -> plans::TracePlans {
+        plans::TracePlans(self.plans.clone())
     }
 
     /// The entry to call: the optimizing tier's once it exists.
@@ -217,7 +225,7 @@ impl std::fmt::Debug for CompiledTrace {
             .field("head_pc", &self.head_pc)
             .field("n_ops", &self.n_ops)
             .field("dispatchable", &self.dispatchable)
-            .field("exit_tags", &self.exit_tags)
+            .field("exit_tags", &self.plans.exit_tags)
             .field("entry", &"<fn>")
             .finish()
     }

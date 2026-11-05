@@ -1,5 +1,5 @@
 use super::*;
-use luna_core::__private::classify_exit_tags;
+use luna_core::__private::TracePlans;
 
 mod gates;
 use gates::apply_tail_kinds_and_gates;
@@ -121,8 +121,6 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
             }
         }
     }
-    let global_tag_res_kind = classify_exit_tags(&exit_tags_vec);
-    let exit_tags: TArc<[ExitTag]> = exit_tags_vec.into();
     // `per_exit_tags` for the dispatcher. Each exit's tags keep the length its emit site pushed (caller window at
     // depth 0, the full window deeper): the dispatcher walks
     // `exit_tags_for_pc.len()` either way.
@@ -148,6 +146,21 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
     checkpoint("post:emit-pass-done");
     // before the struct, while per_exit_tags's len can be read
     let exits = per_exit_inline.len() + per_exit_tags.len() + 1;
+    let entry_tags: Vec<u8> = record
+        .entry_tags
+        .iter()
+        .enumerate()
+        .map(|(i, &t)| match pl.head_live.get(i) {
+            Some(false) => ENTRY_TAG_ANY,
+            _ => luna_core::jit::trace::entry_tag_of(t),
+        })
+        .collect();
+    let plans = TracePlans::new(
+        &entry_tags,
+        &exit_tags_vec,
+        per_exit_tags,
+        per_exit_inline.len(),
+    );
     let exit_hit_counts: TArc<[TCellU32]> = (0..exits).map(|_| TCellU32::new(0)).collect();
     // per exit, the side trace's entry once one compiles (null before)
     let exit_side_trace_ptrs: TArc<[TCellPtr]> = (0..exits).map(|_| TCellPtr::null()).collect();
@@ -161,25 +174,13 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         // real window_size ≥ max_stack; the
         // dispatcher reads this to size its reg_state buffer.
         window_size,
-        exit_tags,
-        global_tag_res_kind,
+        plans,
         is_inline_abort_close: inline_abort_idx_opt.is_some(),
         dispatch_off_reason: if dispatchable {
             None
         } else {
             dispatch_off_reason
         },
-        entry_tags: record
-            .entry_tags
-            .iter()
-            .enumerate()
-            .map(|(i, &t)| match pl.head_live.get(i) {
-                Some(false) => ENTRY_TAG_ANY,
-                _ => luna_core::jit::trace::entry_tag_of(t),
-            })
-            .collect::<Vec<u8>>()
-            .into(),
-        per_exit_tags,
         // populated by the cmp@d>0 emit sites
         // above; the IR encodes `(site_idx + 1)` in the upper 32
         // bits of its return value so the dispatcher can pull the

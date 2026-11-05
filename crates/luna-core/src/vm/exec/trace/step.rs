@@ -143,8 +143,8 @@ impl Vm {
         let d = crate::jit::trace::decode_exit_shape(
             exit_ret,
             &ct.per_exit_inline,
-            &ct.per_exit_tags,
-            &ct.exit_tags,
+            &ct.plans.per_exit_tags,
+            &ct.plans.exit_tags,
         );
         let keep = keep_tfor_vars(proto, exit_ret, d.cont_pc, 0);
         self.trace_restore_slots(
@@ -152,7 +152,7 @@ impl Vm {
             proto.max_stack as usize,
             keep.clone(),
             d.using_global_exit_tags,
-            ct.global_tag_res_kind,
+            ct.plans.global_tag_res_kind,
             d.exit_tags_for_pc,
             regs,
             &[],
@@ -160,7 +160,7 @@ impl Vm {
         );
         // the call's count is read, not put back: the trace goes on counting
         let (tags, w) = (d.exit_tags_for_pc, ct.window_size as usize);
-        self.trace_restore_back_edge_kinds(base, &ct.per_exit_tags, tags, keep, regs, w);
+        self.trace_restore_back_edge_kinds(base, &ct.plans.per_exit_tags, tags, keep, regs, w);
         d.cont_pc
     }
 

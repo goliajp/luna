@@ -57,45 +57,14 @@ pub struct CompiledTraceParts {
     /// — depth>0 slots start initialized to zero, and the trace's
     /// own GetUpval / arith fills them as it runs.
     pub window_size: u32,
-    /// Per-register exit tag of length `window_size`. Indexed by
-    /// position within the trace's reg_state_buf. The dispatcher
-    /// consults this to pack `reg_state[i]` back into a `Value`
-    /// after the trace returns at the **clean tail** (head_pc or
-    /// call-truncation pc). See [`ExitTag`] for the semantics.
-    /// `Rc<[]>` so the dispatcher's per-dispatch lookup is a cheap
-    /// refcount bump, not a Vec heap clone (fib_28 dispatches 1M×
-    /// — clone cost dominates without this).
-    pub exit_tags: TArc<[ExitTag]>,
-    /// Classification of the global `exit_tags` for
-    /// the dispatcher's restore-loop fast path. The dispatcher
-    /// dispatches on this when `site_id == 0` AND
-    /// `per_exit_tags.find(cont_pc)` misses (the common
-    /// back-edge / clean-tail exit shape):
-    /// - `AllUntouched` → skip the restore loop entirely (trace
-    ///   touched no slots; vm.stack already holds the right
-    ///   values from entry, possibly modified by spill helpers)
-    /// - `AllInt`       → `vm.stack[base+i] = Value::Int(reg_state[i])`
-    ///   per slot, no per-iter match
-    /// - `Mixed`        → original match-arm loop
-    pub global_tag_res_kind: TagResKind,
-    /// Compile-time snapshot of `entry_tags` from the
-    /// `TraceRecord`. The trace's IR + `current_kinds` propagation
-    /// are specialised to these tags; if the runtime entry tags
-    /// differ, the dispatcher must skip dispatch (fall back to
-    /// interp) — otherwise the trace would treat e.g. a Str ptr
-    /// slot as Int and produce garbage. `Rc<[]>` to match the
-    /// other tag arrays' cheap-clone idiom.
-    pub entry_tags: TArc<[u8]>,
-    /// Per side-exit `exit_tags`. Each entry is
-    /// `(continuation_pc, exit_tags)`; when the trace returns the index
-    /// of an entry, the dispatcher uses its tags instead of
-    /// the clean-tail `exit_tags`. This makes side-exits that fire
-    /// **before** later writers (`GetUpval` is the today motivator)
-    /// restore the affected slot as `Untouched` (carry entry tag)
-    /// rather than pack with a tag the slot hasn't actually become.
-    /// Empty when no side-exit needs a different vector than the
-    /// clean tail (e.g. plain numeric loops with no GetUpval).
-    pub per_exit_tags: ExitTagTable,
+    /// The register tags the code was compiled against, and the plans
+    /// worked out from them: the entry tags (per head-frame register, the
+    /// tag the trace is specialised to, or `ENTRY_TAG_ANY`), the clean
+    /// tail's exit tags (see [`ExitTag`]) and the typed side exits' tag
+    /// table. Made by [`TracePlans::new`] for code just compiled; code
+    /// taken over from another Vm brings its compile's
+    /// ([`CompiledTrace::plans`]).
+    pub plans: TracePlans,
     /// Per inline side-exit metadata, indexed by
     /// `site_idx`. Each entry carries the side-exit's `cont_pc`,
     /// the per-slot `exit_tags` snapshot (sized to `window_size` so

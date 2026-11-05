@@ -156,13 +156,13 @@ impl CompiledTrace {
     /// leaves, over the whole window from the trace's head frame.
     pub(crate) fn exit_tags_of(&self, exit_idx: usize) -> &[ExitTag] {
         let inline_n = self.per_exit_inline.len();
-        let tags_n = self.per_exit_tags.len();
+        let tags_n = self.plans.per_exit_tags.len();
         if exit_idx < inline_n {
             &self.per_exit_inline[exit_idx].exit_tags
         } else if exit_idx < inline_n + tags_n {
-            self.per_exit_tags.tags(exit_idx - inline_n)
+            self.plans.per_exit_tags.tags(exit_idx - inline_n)
         } else {
-            &self.exit_tags
+            &self.plans.exit_tags
         }
     }
 

@@ -28,14 +28,14 @@ impl Vm {
         let parent = decode_exit_shape(
             raw_ret,
             &ct.per_exit_inline,
-            &ct.per_exit_tags,
-            &ct.exit_tags,
+            &ct.plans.per_exit_tags,
+            &ct.plans.exit_tags,
         );
         let own = decode_exit_shape(
             body,
             &child.per_exit_inline,
-            &child.per_exit_tags,
-            &child.exit_tags,
+            &child.plans.per_exit_tags,
+            &child.plans.exit_tags,
         );
         if let Some(c) = child.exit_hit_counts.get(own.exit_hit_idx) {
             c.set(c.get().saturating_add(1));
@@ -47,7 +47,7 @@ impl Vm {
             parent.exit_tags_for_pc,
             own.exit_tags_for_pc,
             off,
-            child.entry_tags.len(),
+            child.plans.entry_tags.len(),
         );
         let keep = match &self.frames[child_frame] {
             CallFrame::Lua(f) => keep_tfor_vars(&f.closure.proto, body, own.cont_pc, off),
@@ -64,7 +64,7 @@ impl Vm {
             entry_tags,
             false,
         );
-        let table = &ct.per_exit_tags;
+        let table = &ct.plans.per_exit_tags;
         self.trace_restore_back_edge_kinds(
             base_us,
             table,
