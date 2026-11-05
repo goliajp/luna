@@ -7,10 +7,14 @@ use crate::jit::trace::CompiledTrace;
 
 pub(in crate::vm::exec) mod decode;
 pub(in crate::vm::exec) mod inner;
+mod side;
 
 impl Vm {
-    /// The trace `ct` entered at `pc` returned `continuation_pc`; one that
-    /// left after an allocation with a step due checks for a collection.
+    /// The trace `ct` entered at `pc` returned `continuation_pc`, its
+    /// registers in the dispatcher's buffers `reg_state` and `entry_tags`.
+    /// One that left after an allocation with a step due checks for a
+    /// collection once the dispatcher has its buffers back
+    /// ([`Self::trace_gc_exit_check`]).
     #[allow(clippy::too_many_arguments)]
     pub(in crate::vm::exec) fn trace_exit_restore(
         &mut self,
@@ -19,12 +23,12 @@ impl Vm {
         ct: &CompiledTrace,
         continuation_pc: i64,
         pre_frames: usize,
-        reg_state: Vec<i64>,
-        entry_tags: Vec<u8>,
+        reg_state: &mut Vec<i64>,
+        entry_tags: &[u8],
     ) {
-        let synced = std::mem::take(&mut self.jit.step.synced_exit);
+        let synced = self.jit.step.synced_exit;
         if synced || self.jit.gc_exit.is_some() {
-            self.gc_quiet_from(pre_frames, ct.head_pc);
+            self.trace_gc_left(pre_frames, ct.head_pc);
         }
         self.trace_exit_regs(
             cl,
@@ -36,9 +40,23 @@ impl Vm {
             entry_tags,
             synced,
         );
-        if let Some(op_pc) = self.jit.gc_exit.take()
-            && let Err(e) = self.checkpoint_after_jit(op_pc)
-        {
+    }
+
+    /// The trace left for a collection, or after a step it made in place:
+    /// hot counting pauses.
+    #[cold]
+    #[inline(never)]
+    fn trace_gc_left(&mut self, pre_frames: usize, head_pc: u32) {
+        self.jit.step.synced_exit = false;
+        self.gc_quiet_from(pre_frames, head_pc);
+    }
+
+    /// A collection-check exit: the check the interpreter makes after the
+    /// op `op_pc`.
+    #[cold]
+    #[inline(never)]
+    pub(in crate::vm::exec) fn trace_gc_exit_check(&mut self, op_pc: u32) {
+        if let Err(e) = self.checkpoint_after_jit(op_pc) {
             // raised by the op the interpreter goes on from
             self.jit.pending_raise = Some(e);
         }
@@ -52,8 +70,8 @@ impl Vm {
         ct: &CompiledTrace,
         continuation_pc: i64,
         pre_frames: usize,
-        mut reg_state: Vec<i64>,
-        entry_tags: Vec<u8>,
+        reg_state: &mut Vec<i64>,
+        entry_tags: &[u8],
         synced: bool,
     ) {
         let per_exit_inline = &ct.per_exit_inline;
@@ -63,7 +81,7 @@ impl Vm {
         // the exit's shape (`decode_exit_shape`): the upper 32 bits are the
         // inline side exit's site + 1 (0 for any other exit)
         let raw_ret = continuation_pc as u64;
-        let src = self.trace_exit_source(cl, ct, raw_ret, &mut reg_state, base_us, &entry_tags);
+        let src = self.trace_exit_source(cl, ct, raw_ret, reg_state, base_us, entry_tags);
         if src.ran && src.off > 0 {
             self.trace_exit_restore_inner(
                 cl, base_us, ct, raw_ret, src, pre_frames, reg_state, entry_tags,
@@ -116,14 +134,14 @@ impl Vm {
                 using_global_exit_tags,
                 global_tag_res_kind,
                 exit_tags_for_pc,
-                &reg_state,
-                &entry_tags,
+                reg_state,
+                entry_tags,
                 child_ran,
             );
             let tags = exit_tags_for_pc;
             let table = &ct.per_exit_tags;
             let window = ct.window_size as usize;
-            self.trace_restore_back_edge_kinds(base_us, table, tags, keep, &reg_state, window);
+            self.trace_restore_back_edge_kinds(base_us, table, tags, keep, reg_state, window);
         }
         // For non-inline exits the
         // helper was never called (no metas chain for
@@ -194,93 +212,6 @@ impl Vm {
         if side_trace_should_start {
             self.trace_start_side(cl, base_us, cont_pc, ct.head_pc, exit_hit_idx);
         }
-        // Put the dispatch buffers back
-        // before the `continue;` so the next
-        // dispatch picks up the same allocation.
-        self.jit.reg_state_buf = reg_state;
-        self.jit.entry_tags_buf = entry_tags;
-    }
-
-    /// Counts the hit of exit `exit_hit_idx` in `hit_counts` (none for a
-    /// `tier_exit`); whether it is the one that starts a side trace.
-    fn count_exit_hit(
-        &self,
-        ct: &CompiledTrace,
-        hit_counts: &[crate::jit::send_compat::TCellU32],
-        exit_hit_idx: usize,
-        tier_exit: bool,
-        child_ran: bool,
-    ) -> bool {
-        let Some(c) = hit_counts.get(exit_hit_idx).filter(|_| !tier_exit) else {
-            return false;
-        };
-        let v = c.get();
-        if v < u32::MAX {
-            c.set(v + 1);
-        }
-        // After a side trace ran, `exit_hit_idx` is an
-        // exit of that child, but a side trace is
-        // recorded and wired as one of `head_pc_val`'s
-        // exits: it would replace the side trace on the
-        // parent's exit of that number, which resumes
-        // elsewhere.
-        // An exit that has a side trace already (one taken over from
-        // another Vm comes with its side traces wired, and counts
-        // from zero) starts none.
-        v + 1 == crate::jit::trace::HOTEXIT_THRESHOLD
-            && !child_ran
-            && self.jit.active_trace.is_none()
-            && self.jit.trace_enabled
-            && ct
-                .exit_side_trace_ptrs
-                .get(exit_hit_idx)
-                .is_none_or(|p| p.get().is_null())
-    }
-
-    /// Start recording a side trace at `cont_pc`, the exit of the trace at
-    /// `head_pc_val` that just became hot.
-    fn trace_start_side(
-        &mut self,
-        cl: Gc<LuaClosure>,
-        base_us: usize,
-        cont_pc: u32,
-        head_pc_val: u32,
-        exit_hit_idx: usize,
-    ) {
-        let (resume_base, resume_proto) = match self.frames.last() {
-            Some(CallFrame::Lua(f)) => (f.base as usize, f.closure.proto),
-            _ => (base_us, cl.proto),
-        };
-        let resume_max_stack = resume_proto.max_stack as usize;
-        let mut side_entry_tags: Vec<u8> = Vec::with_capacity(resume_max_stack);
-        // Extend stack if cont_pc's frame window
-        // overhangs the current stack len (rare,
-        // but inline-pushed frame stack writes
-        // only covered the trace's writeback).
-        // a stack that cannot grow just starts no side trace here
-        if !self.jit_ensure_stack(resume_base + resume_max_stack) {
-            return;
-        }
-        let parent = Some((cl.proto, head_pc_val, exit_hit_idx));
-        if self.trace_try_adopt(resume_proto, cont_pc, resume_base, parent, false) {
-            return;
-        }
-        for i in 0..resume_max_stack {
-            let (tag, _) = self.stack[resume_base + i].unpack();
-            side_entry_tags.push(tag);
-        }
-        let mut rec = crate::jit::trace::TraceRecord::start_side_trace(
-            resume_proto,
-            cont_pc,
-            side_entry_tags,
-            cl.proto,
-            head_pc_val,
-            exit_hit_idx,
-        );
-        rec.settings = self.jit.recording_settings();
-        self.jit.active_trace = Some(Box::new(rec));
-        self.jit.recording_frame_base = self.frames.len() - 1;
-        self.jit.counters.side_trace_started += 1;
     }
 }
 
