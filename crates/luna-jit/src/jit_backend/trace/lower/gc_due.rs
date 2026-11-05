@@ -140,9 +140,8 @@ fn step_in_place<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, next_pc: u32, check:
             );
         }
     }
-    let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
-        | (u64::from(tags) << 32)
-        | u64::from(next_pc);
+    let ret =
+        luna_core::__private::EXIT_TAGS_INDEX_BIT | (u64::from(tags) << 32) | u64::from(next_pc);
     let exit = lw.bcx.ins().iconst(types::I64, ret as i64);
     let r = call_gc_step(lw, check, exit);
     let (cont, leave) = (lw.bcx.create_block(), lw.bcx.create_block());

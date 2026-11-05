@@ -195,9 +195,8 @@ pub(super) fn emit_tagged_exit<E: Emit>(
         let r = bcx.import_func(suppress_admit_id);
         bcx.ins().call(r, &[]);
     }
-    let ret = luna_core::jit::trace_types::EXIT_TAGS_INDEX_BIT
-        | (u64::from(tags_idx) << 32)
-        | u64::from(pc);
+    let ret =
+        luna_core::__private::EXIT_TAGS_INDEX_BIT | (u64::from(tags_idx) << 32) | u64::from(pc);
     emit_store_back_and_return(bcx, regs, stored, reg_state, ret as i64, flush_ctx);
 }
 

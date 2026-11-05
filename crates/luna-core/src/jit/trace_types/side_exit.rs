@@ -38,15 +38,6 @@ pub struct InlineSideExit {
 /// short workloads a chance to wire side traces.
 pub const HOTEXIT_THRESHOLD: u32 = 2;
 
-/// The code a down-recursion trace's stitch return carries in bits 56..=62
-/// of its return value, with bit 63 set: the `TraceEnd::DownRec` close
-/// returns it when the caller-pc guard hits (saved `[base-8]` matches the
-/// recorded `target_proto`'s expected return PC), so the dispatcher walks
-/// the trace's RetfRecord chain to materialise the inlined frames and goes
-/// on in the stitched trace rather than in the interpreter at `head_pc`.
-/// No other return sets bit 63.
-pub const SIDE_SENT_DOWNREC_CODE: u32 = 0x10;
-
 /// Upper bound on the multi-way caller-pc guard
 /// chain emitted at the `TraceEnd::DownRec` close in the lowerer
 /// (`crates/luna-jit/src/jit_backend/trace.rs` `downrec_idx_opt` arm).
@@ -63,16 +54,6 @@ pub const SIDE_SENT_DOWNREC_CODE: u32 = 0x10;
 /// true` so the primary dispatcher arm hits the trace without going
 /// through the `downrec_link.is_some()` fallback admit clause.
 pub const DOWNREC_MULTI_WAY_GUARD_MAX: usize = 4;
-
-/// True iff the dispatcher's decoded
-/// `sentinel_code` (`(raw_ret >> 56) & 0x7F` at
-/// the dispatcher) marks a down-recursion stitch return. Shared so
-/// the lowerer, the dispatcher and any diagnostic probe use one
-/// definition.
-#[inline]
-pub fn is_downrec_sentinel(sentinel_code: u32) -> bool {
-    sentinel_code == SIDE_SENT_DOWNREC_CODE
-}
 
 /// Env-gated probe switch. `LUNA_V2C_PROBE=1` (any
 /// non-empty value) turns on the side-trace dispatch probes (IR

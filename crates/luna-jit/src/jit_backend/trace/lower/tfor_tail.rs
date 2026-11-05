@@ -115,7 +115,7 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
         caller_regs,
         &lw.stored,
         reg_state,
-        (luna_core::jit::trace_types::EXIT_KEEP_TFOR_VARS | u64::from(rop.pc)) as i64,
+        (luna_core::__private::EXIT_KEEP_TFOR_VARS | u64::from(rop.pc)) as i64,
         lw.flush_ctx.as_ref(),
     );
 

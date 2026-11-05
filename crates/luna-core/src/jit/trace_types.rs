@@ -40,10 +40,7 @@ pub use record::{
 pub(crate) use record::{FieldIcSnapshot, RecordedOp, TraceRecord};
 pub use self_link::SelfRecKind;
 pub(crate) use self_link::{DownRecClose, RetfRecord};
-pub use side_exit::{
-    DOWNREC_MULTI_WAY_GUARD_MAX, HOTEXIT_THRESHOLD, SIDE_SENT_DOWNREC_CODE, is_downrec_sentinel,
-    v2c_probe_enabled,
-};
+pub use side_exit::{DOWNREC_MULTI_WAY_GUARD_MAX, HOTEXIT_THRESHOLD, v2c_probe_enabled};
 pub(crate) use side_exit::{FrameMaterializeInfo, HotExitInfo, InlineSideExit};
 
 /// Back-edge visit count after which a PC is promoted to a trace

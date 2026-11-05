@@ -124,17 +124,7 @@ pub fn exit_tags_match_entry_tags(
     true
 }
 
-/// Set in a trace's return value when bits 32.. hold an index into
-/// `per_exit_tags` (see [`decode_exit_shape`]).
-pub const EXIT_TAGS_INDEX_BIT: u64 = 1 << 54;
-/// Set in a trace's return value to resume at a generic-for's TForLoop
-/// with its loop variables as they are on the stack: the TForCall
-/// helper wrote them there with their real tags, which need not be the
-/// ones the trace's registers were compiled for.
-pub const EXIT_KEEP_TFOR_VARS: u64 = 1 << 55;
-/// Bits 32..54 of a trace's return value: inline site id + 1, or a
-/// `per_exit_tags` index under [`EXIT_TAGS_INDEX_BIT`].
-const EXIT_SITE_MASK: u64 = (1 << 22) - 1;
+use crate::__private::exit_code::{EXIT_SITE_MASK, EXIT_TAGS_INDEX_BIT};
 
 /// Decoded exit shape. Returned by
 /// [`decode_exit_shape`]. Carries the per-exit metadata the

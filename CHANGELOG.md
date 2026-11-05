@@ -398,6 +398,11 @@ optimization.
   through a side trace, so the only return with bit 63 set is a
   down-recursion stitch, whose code is `SIDE_SENT_DOWNREC_CODE` (test it
   with `is_downrec_sentinel`).
+- The bits of a trace's return value are no longer public:
+  `jit::EXIT_TAGS_INDEX_BIT`, `EXIT_KEEP_TFOR_VARS`,
+  `SIDE_SENT_DOWNREC_CODE` and `is_downrec_sentinel` are gone from
+  `luna_core::jit`. The layout is internal to luna's JIT; the inline site
+  and exit index field is now bits 32–52.
 
 ### Changed
 

@@ -208,6 +208,11 @@ impl ExitKinds {
         &mut self.kinds[at as usize..(at + len) as usize]
     }
 
+    /// How many exits are recorded.
+    pub(super) fn len(&self) -> usize {
+        self.exits.len()
+    }
+
     /// Each exit's pc and kinds, in order.
     pub(super) fn iter(&self) -> impl Iterator<Item = (u32, &[RegKind])> {
         self.exits

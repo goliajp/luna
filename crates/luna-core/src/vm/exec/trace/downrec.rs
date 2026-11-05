@@ -61,5 +61,5 @@ impl Vm {
 pub(super) fn downrec_close_exit(continuation_pc: i64) -> bool {
     let raw_ret = continuation_pc as u64;
     (raw_ret >> 63) & 1 == 1
-        && crate::jit::trace_types::is_downrec_sentinel(((raw_ret >> 56) & 0x7F) as u32)
+        && crate::__private::is_downrec_sentinel(((raw_ret >> 56) & 0x7F) as u32)
 }

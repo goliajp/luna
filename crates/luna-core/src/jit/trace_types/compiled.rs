@@ -203,7 +203,7 @@ pub struct CompiledTraceParts {
     /// trace closes via `TraceEnd::DownRec`. Layout:
     /// `Some((trace_id_placeholder, target_head_pc))`. The lowerer
     /// emits a caller-pc guard at the close site that, on guard hit,
-    /// returns the [`SIDE_SENT_DOWNREC_CODE`] sentinel — and on guard
+    /// returns the [`crate::__private::SIDE_SENT_DOWNREC_CODE`] sentinel — and on guard
     /// miss, falls back to the safe deopt-tail (store back caller
     /// window + return `head_pc` as a plain exit).
     ///

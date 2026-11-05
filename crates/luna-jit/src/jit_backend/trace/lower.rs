@@ -214,5 +214,30 @@ fn emit_trace<E: Emit>(
     }
     // last, so that it takes nothing from the blocks lowered before it
     emit_loop_entry(lw)?;
+    if !exits_fit(lower.per_exit_inline_vec.len(), lower.per_exit_kinds.len()) {
+        checkpoint("exits:too-many");
+        return None;
+    }
     Some(lower.into_emitted(downrec))
+}
+
+/// Whether `inline` inline sites (returned as their number + 1) and
+/// `tagged` tagged exits fit the bits of a return value that number them.
+fn exits_fit(inline: usize, tagged: usize) -> bool {
+    let limit = luna_core::__private::EXIT_SITE_LIMIT as usize;
+    inline < limit && tagged <= limit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exits_fit;
+    use luna_core::__private::EXIT_SITE_LIMIT;
+
+    #[test]
+    fn exit_numbers_up_to_the_site_field_compile() {
+        let l = EXIT_SITE_LIMIT as usize;
+        assert!(exits_fit(l - 1, l));
+        assert!(!exits_fit(l, 0));
+        assert!(!exits_fit(0, l + 1));
+    }
 }
