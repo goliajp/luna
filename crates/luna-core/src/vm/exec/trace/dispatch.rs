@@ -8,6 +8,31 @@ mod entry;
 pub(in crate::vm::exec) mod words;
 
 impl Vm {
+    /// Whether a trace may start at `pc` of `proto`: `pc` is one of its
+    /// `trace_heads`, or they are too many to list. Elsewhere no trace
+    /// admits an entry ([`Self::trace_admits`] wants the trace's head, and
+    /// every trace it admits is listed there when cached), so
+    /// [`Self::trace_dispatch`] is not called there.
+    #[inline(always)]
+    pub(in crate::vm::exec) fn trace_head_at(
+        proto: &crate::runtime::Proto,
+        pc: u32,
+        blocked: bool,
+    ) -> bool {
+        use crate::runtime::function::TRACE_HEADS_MANY;
+        let heads = proto.trace_heads.get();
+        let at = heads[0] == TRACE_HEADS_MANY || heads.contains(&pc);
+        debug_assert!(
+            at || !proto
+                .traces
+                .borrow()
+                .iter()
+                .any(|t| Vm::trace_admits(t, pc, blocked)),
+            "a trace starts at pc {pc}, which is not among the trace heads"
+        );
+        at
+    }
+
     /// Run the trace cached for `pc` of `cl` (frame `base`), if one admits this
     /// entry. `true` when the trace ran and the frame's pc now points past it.
     #[inline(never)]

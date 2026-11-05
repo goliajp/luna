@@ -144,7 +144,10 @@ impl Vm {
             let admit = trace_on && cl.proto.has_dispatchable_trace.get() && !self.limited;
             let downrec_admit_blocked =
                 admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
-            if admit && self.trace_dispatch(cl, pc, base, downrec_admit_blocked) {
+            if admit
+                && Vm::trace_head_at(&cl.proto, pc, downrec_admit_blocked)
+                && self.trace_dispatch(cl, pc, base, downrec_admit_blocked)
+            {
                 // the check the trace's exit made raised
                 if let Some(e) = self.jit.pending_raise.take() {
                     return Err(e);
