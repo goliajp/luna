@@ -115,6 +115,30 @@ impl Vm {
 }
 
 impl Vm {
+    /// [`Self::trace_restore_slots`] by an exit's plan: the registers it
+    /// wrote, `written`, back to the frame at `base_us` with their kinds.
+    /// Only for an exit after which no side trace ran, with no generic
+    /// `for` variables to keep, whose untouched registers all lie in the
+    /// frame (the stack holds them as they entered) and whose window the
+    /// stack covers.
+    pub(in crate::vm::exec) fn trace_restore_planned(
+        &mut self,
+        base_us: usize,
+        written: &[crate::jit::trace_types::installed::exit_plan::ExitSlot],
+        reg_state: &[i64],
+    ) {
+        let frame = &mut self.stack[base_us..];
+        for e in written {
+            let s = e.slot as usize;
+            let r = reg_state[s];
+            let mut tag = RAW_OF[e.kind as usize];
+            if tag == BOOL {
+                tag = raw::FALSE + (r & 1) as u8;
+            }
+            put(&mut frame[s], tag, r);
+        }
+    }
+
     /// After a write-back through `tags`, the registers `table` gives a
     /// kind past the first back edge (see
     /// [`crate::jit::trace::ExitTagTable::with_back_edge_kinds`]) that the

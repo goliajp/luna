@@ -4,6 +4,7 @@ use super::tier_up::TierUp;
 use super::*;
 
 pub(crate) mod entry_plan;
+pub(crate) mod exit_plan;
 mod read;
 
 /// A trace compiled by a backend and ready to be dispatched into at its
@@ -134,6 +135,8 @@ pub struct CompiledTrace {
     pub(crate) call_count: bool,
     /// What a dispatch checks and copies in, from `entry_tags`.
     pub(crate) entry_plan: entry_plan::EntryPlan,
+    /// What each exit writes back, from its exit tags.
+    pub(crate) exit_plan: exit_plan::ExitPlan,
 }
 
 /// Moves each named field of a [`CompiledTraceParts`] into a
@@ -144,6 +147,7 @@ macro_rules! moved {
         Self {
             call_count: false,
             entry_plan: entry_plan::EntryPlan::default(),
+            exit_plan: exit_plan::ExitPlan::default(),
             $($f,)*
             side_children: TRefLock::new(std::collections::HashMap::new()),
             has_any_side_wired: TCellBool::new(false),
@@ -176,6 +180,11 @@ impl CompiledTrace {
         let call_count =
             parts.tier_up.is_some() && !parts.per_exit_tags.back_edge_kinds().is_empty();
         let entry_plan = entry_plan::EntryPlan::of(&parts.entry_tags);
+        let exit_plan = exit_plan::ExitPlan::of(
+            &parts.per_exit_inline,
+            &parts.per_exit_tags,
+            &parts.exit_tags,
+        );
         let ct = moved!(parts => head_pc, entry, n_ops, dispatchable, window_size, exit_tags,
             global_tag_res_kind, entry_tags, per_exit_tags, per_exit_inline, exit_hit_counts,
             exit_side_trace_ptrs,
@@ -186,6 +195,7 @@ impl CompiledTrace {
         Self {
             call_count,
             entry_plan,
+            exit_plan,
             ..ct
         }
     }
