@@ -65,26 +65,12 @@ impl Vm {
         }
     }
 
-    /// The words of the running trace's buffer a step in it reads (its
-    /// window and the words past it, see
-    /// `crate::__private::trace_count_slot`), or 0 when it cannot run in
-    /// place: no trace of this frame runs, or the trace left no exit for it
-    /// (`exit_ret` 0).
-    pub(crate) fn jit_step_window(&self, exit_ret: u64) -> usize {
-        match self.step_frame() {
-            Some((cl, _)) if exit_ret != 0 => self.stepping_trace(&cl.proto).map_or(0, |ct| {
-                ct.window_size as usize + crate::__private::TRACE_FRAME_TAIL
-            }),
-            _ => 0,
-        }
-    }
-
     /// Compiled code reached the point a step falls due at, after the op
-    /// whose check `op_pc` names. Without `regs` (see
-    /// [`Vm::jit_step_window`]): 1 when the step is due, the trace then
-    /// leaving through its exit for the interpreter to check
-    /// ([`Vm::jit_gc_due`]). With them, the registers of the trace's frame
-    /// as of its exit `exit_ret`: when due, the step runs here, with the
+    /// whose check `op_pc` names. With `exit_ret` 0, or outside the running
+    /// trace's frame: 1 when the step is due, the trace then leaving through
+    /// its exit for the interpreter to check ([`Vm::jit_gc_due`]). Otherwise
+    /// `reg_state` holds the registers of the trace's frame as of its exit
+    /// `exit_ret`: when due, the step runs here, with the
     /// stack and the frame's pc as that exit leaves them; 0 when the trace
     /// goes on, 2 when it leaves through that exit with the step made.
     ///
@@ -94,9 +80,9 @@ impl Vm {
         &mut self,
         op_pc: u32,
         exit_ret: u64,
-        regs: Option<&[i64]>,
+        reg_state: *const i64,
     ) -> i64 {
-        let (Some(regs), Some((cl, base))) = (regs, self.step_frame()) else {
+        let Some((cl, base)) = self.step_frame().filter(|_| exit_ret != 0) else {
             return i64::from(self.jit_gc_due(op_pc));
         };
         if !self.step_due() || self.jit.pending_err.is_some() {
@@ -105,6 +91,11 @@ impl Vm {
         let Some(ct) = self.stepping_trace(&cl.proto) else {
             return i64::from(self.jit_gc_due(op_pc));
         };
+        let n = ct.window_size as usize + crate::__private::TRACE_FRAME_TAIL;
+        // SAFETY: the call comes from `ct`, the trace running in the top
+        // frame (# Safety), whose register buffer `reg_state` covers its
+        // window and the words past it
+        let regs = unsafe { std::slice::from_raw_parts(reg_state, n) };
         let cont_pc = self.step_write_back(&cl.proto, base as usize, &ct, exit_ret, regs);
         let CallFrame::Lua(f) = self.top_frame_raw_mut() else {
             unreachable!("a trace runs in a Lua frame")
