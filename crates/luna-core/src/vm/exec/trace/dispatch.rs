@@ -30,7 +30,6 @@ impl Vm {
         let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
         let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
-        let compile_entry_tags = &ct.entry_tags;
         let max_stack = cl.proto.max_stack as usize;
         let window_size_us = window_size as usize;
         let base_us = base as usize;
@@ -46,15 +45,9 @@ impl Vm {
         let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
         words::frame_in(&mut reg_state, window_size_us, max_stack);
         let dispatch_ok = self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
-            && self.trace_marshal_in(
-                base_us,
-                max_stack,
-                compile_entry_tags,
-                &mut entry_tags,
-                &mut reg_state,
-                !ct.has_any_side_wired.get(),
-            );
+            && self.trace_marshal_in(&ct, base_us, &mut entry_tags, &mut reg_state[..max_stack]);
 
+        let mut ran = false;
         if dispatch_ok {
             debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
             // A recording in progress cannot see what the trace runs
@@ -119,9 +112,7 @@ impl Vm {
                 // a due step leaves through an exit, never the close
                 debug_assert!(self.jit.gc_exit.is_none());
                 self.trace_downrec_classify(pre_frames);
-                self.jit.reg_state_buf = reg_state;
-                self.jit.entry_tags_buf = entry_tags;
-                return true;
+                ran = true;
             } else {
                 self.trace_exit_restore(
                     cl,
@@ -129,51 +120,46 @@ impl Vm {
                     &ct,
                     continuation_pc,
                     pre_frames,
-                    reg_state,
-                    entry_tags,
+                    &mut reg_state,
+                    &entry_tags,
                 );
-                return true;
+                ran = true;
             }
         }
+        // the buffers back for the next dispatch, before a collection check
+        // runs code that may dispatch
         self.jit.reg_state_buf = reg_state;
         self.jit.entry_tags_buf = entry_tags;
-        false
+        if let Some(op_pc) = self.jit.gc_exit.take() {
+            self.trace_gc_exit_check(op_pc);
+        }
+        ran
     }
 
-    /// Copy the frame's registers into the trace's entry buffer. `false` when a
-    /// register the trace checks has a tag other than the one the trace was
-    /// compiled for, or one that cannot be passed as a raw payload.
-    /// `checked_only`: copy only the registers the trace checks. The others
-    /// are held on the stack (see the lowering's `StackHeld`), and only a
-    /// side trace run from one of its exits reads them, or their entry tags,
-    /// from the buffers.
+    /// Copy the frame's registers, `entry_tags.len()` of them from `base_us`,
+    /// into the trace's entry buffers `entry_tags` and `reg_state` (as
+    /// long). `false` when a register the trace checks has a tag other than
+    /// the one `ct` was compiled for, or one that cannot be passed as a raw
+    /// payload. A trace with no side trace wired copies only the registers
+    /// it checks. The others are held on the stack (see the lowering's
+    /// `StackHeld`), and only a side trace run from one of its exits reads
+    /// them, or their entry tags, from the buffers. Out of line, so that the
+    /// loop has the registers to itself.
+    #[inline(never)]
     fn trace_marshal_in(
         &self,
+        ct: &crate::jit::trace::CompiledTrace,
         base_us: usize,
-        max_stack: usize,
-        compile_entry_tags: &[u8],
         entry_tags: &mut [u8],
         reg_state: &mut [i64],
-        checked_only: bool,
     ) -> bool {
+        let (max_stack, want) = (entry_tags.len(), &*ct.entry_tags);
         // one loop per value of `checked_only`: tested once per slot, it
         // cost two instructions on every register of every entry
-        if checked_only {
-            self.marshal_in_slots::<true>(
-                base_us,
-                max_stack,
-                compile_entry_tags,
-                entry_tags,
-                reg_state,
-            )
+        if !ct.has_any_side_wired.get() {
+            self.marshal_in_slots::<true>(base_us, max_stack, want, entry_tags, reg_state)
         } else {
-            self.marshal_in_slots::<false>(
-                base_us,
-                max_stack,
-                compile_entry_tags,
-                entry_tags,
-                reg_state,
-            )
+            self.marshal_in_slots::<false>(base_us, max_stack, want, entry_tags, reg_state)
         }
     }
 

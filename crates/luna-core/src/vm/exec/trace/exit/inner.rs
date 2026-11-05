@@ -18,8 +18,8 @@ impl Vm {
         raw_ret: u64,
         src: ExitSource,
         pre_frames: usize,
-        reg_state: Vec<i64>,
-        entry_tags: Vec<u8>,
+        reg_state: &[i64],
+        entry_tags: &[u8],
     ) {
         let ExitSource {
             child, body, off, ..
@@ -60,8 +60,8 @@ impl Vm {
             false,
             crate::jit::trace::TagResKind::Mixed,
             &tags,
-            &reg_state,
-            &entry_tags,
+            reg_state,
+            entry_tags,
             false,
         );
         let table = &ct.per_exit_tags;
@@ -70,13 +70,11 @@ impl Vm {
             table,
             &tags,
             keep,
-            &reg_state,
+            reg_state,
             ct.window_size as usize,
         );
         let head_resume = site.head_resume_pc;
         self.resume_inner_frames(pre_frames, child_frame, head_resume, &child, &own);
-        self.jit.reg_state_buf = reg_state;
-        self.jit.entry_tags_buf = entry_tags;
     }
 }
 
