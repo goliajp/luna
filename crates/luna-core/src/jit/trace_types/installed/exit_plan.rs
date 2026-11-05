@@ -1,7 +1,12 @@
-//! What each exit of a trace writes back, worked out once from its exit
-//! tags: the registers it wrote, with their kinds.
+//! What each exit of a trace writes back, worked out from its exit tags the
+//! first time the exit is taken: the registers it wrote, with their kinds.
 
-use super::super::{ExitTag, ExitTagTable, InlineSideExit};
+use super::super::ExitTag;
+
+#[cfg(not(feature = "send"))]
+type Once<T> = std::cell::OnceCell<T>;
+#[cfg(feature = "send")]
+type Once<T> = std::sync::OnceLock<T>;
 
 /// A register an exit wrote: its slot in the trace's window and its kind.
 /// Laid out so that generated code can read the plan as well.
@@ -12,59 +17,57 @@ pub(crate) struct ExitSlot {
     pub(crate) kind: ExitTag,
 }
 
-/// Per exit, numbered as its hit counts are (the inline side exits, the
-/// typed exits of the tag table, then the trace's global tags): the
-/// registers it wrote, in slot order, and how far its tags reach.
-#[derive(Debug, Default)]
-pub(crate) struct ExitPlan {
-    /// `(start, end, untouched_end, len)`: `slots[start..end]` were
-    /// written; every register the exit left untouched lies below
-    /// `untouched_end`; its tags cover `len` registers.
-    exits: Box<[(u32, u32, u32, u32)]>,
-    slots: Box<[ExitSlot]>,
-}
-
-/// One exit of an [`ExitPlan`].
-pub(crate) struct PlannedExit<'a> {
-    pub(crate) written: &'a [ExitSlot],
+/// One exit's plan: the registers it wrote, in slot order; every register
+/// it left untouched lies below `untouched_end`; its tags cover `len`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PlannedExit {
+    pub(crate) written: Box<[ExitSlot]>,
     pub(crate) untouched_end: usize,
     pub(crate) len: usize,
 }
 
-impl ExitPlan {
-    pub(crate) fn of(inline: &[InlineSideExit], table: &ExitTagTable, global: &[ExitTag]) -> Self {
-        let mut exits = Vec::new();
-        let mut slots = Vec::new();
-        let all = (inline.iter().map(|e| &*e.exit_tags))
-            .chain((0..table.len()).map(|i| table.tags(i)))
-            .chain(std::iter::once(global));
-        for tags in all {
-            let start = slots.len() as u32;
-            let mut untouched_end = 0;
-            for (slot, &kind) in (0u16..).zip(tags) {
+impl PlannedExit {
+    fn of(tags: &[ExitTag]) -> Self {
+        let mut untouched_end = 0;
+        let written = (0u16..)
+            .zip(tags)
+            .filter_map(|(slot, &kind)| {
                 if kind == ExitTag::Untouched {
-                    untouched_end = u32::from(slot) + 1;
+                    untouched_end = usize::from(slot) + 1;
+                    None
                 } else {
-                    slots.push(ExitSlot { slot, kind });
+                    Some(ExitSlot { slot, kind })
                 }
-            }
-            exits.push((start, slots.len() as u32, untouched_end, tags.len() as u32));
+            })
+            .collect();
+        PlannedExit {
+            written,
+            untouched_end,
+            len: tags.len(),
         }
+    }
+}
+
+/// Per exit, numbered as its hit counts are (the inline side exits, the
+/// typed exits of the tag table, then the trace's global tags), its plan
+/// once the exit has been taken: an exit never taken costs one empty slot.
+#[derive(Debug, Default)]
+pub(crate) struct ExitPlan {
+    exits: Box<[Once<PlannedExit>]>,
+}
+
+impl ExitPlan {
+    /// A plan for `n` exits, none worked out yet.
+    pub(crate) fn new(n: usize) -> Self {
         ExitPlan {
-            exits: exits.into(),
-            slots: slots.into(),
+            exits: (0..n).map(|_| Once::new()).collect(),
         }
     }
 
-    /// Exit `i` (its hit-count index).
+    /// Exit `i`'s plan, from `tags`, the exit's tags, the first time.
     #[inline]
-    pub(crate) fn exit(&self, i: usize) -> Option<PlannedExit<'_>> {
-        let &(start, end, untouched_end, len) = self.exits.get(i)?;
-        Some(PlannedExit {
-            written: self.slots.get(start as usize..end as usize)?,
-            untouched_end: untouched_end as usize,
-            len: len as usize,
-        })
+    pub(crate) fn exit(&self, i: usize, tags: &[ExitTag]) -> Option<&PlannedExit> {
+        Some(self.exits.get(i)?.get_or_init(|| PlannedExit::of(tags)))
     }
 }
 
@@ -73,13 +76,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn each_exit_lists_the_registers_it_wrote() {
+    fn an_exit_lists_the_registers_it_wrote_once_taken() {
         use ExitTag::*;
-        let table = ExitTagTable::from_exits([(7, &[Int, Untouched, Float][..])]);
-        let p = ExitPlan::of(&[], &table, &[Untouched, Nil]);
-        let e = p.exit(0).expect("typed exit");
+        let p = ExitPlan::new(2);
+        let e = p.exit(0, &[Int, Untouched, Float]).expect("exit 0");
         assert_eq!(
-            e.written,
+            &*e.written,
             &[
                 ExitSlot { slot: 0, kind: Int },
                 ExitSlot {
@@ -89,9 +91,13 @@ mod tests {
             ]
         );
         assert_eq!((e.untouched_end, e.len), (2, 3));
-        let g = p.exit(1).expect("global exit");
-        assert_eq!(g.written, &[ExitSlot { slot: 1, kind: Nil }]);
-        assert_eq!((g.untouched_end, g.len), (1, 2));
-        assert!(p.exit(2).is_none());
+        // worked out once: later tags are not read again
+        assert_eq!(p.exit(0, &[]).expect("exit 0").len, 3);
+        let g = p.exit(1, &[Untouched, Nil]).expect("exit 1");
+        assert_eq!(
+            (&*g.written, g.untouched_end),
+            (&[ExitSlot { slot: 1, kind: Nil }][..], 1)
+        );
+        assert!(p.exit(2, &[Int]).is_none());
     }
 }

@@ -180,11 +180,8 @@ impl CompiledTrace {
         let call_count =
             parts.tier_up.is_some() && !parts.per_exit_tags.back_edge_kinds().is_empty();
         let entry_plan = entry_plan::EntryPlan::of(&parts.entry_tags);
-        let exit_plan = exit_plan::ExitPlan::of(
-            &parts.per_exit_inline,
-            &parts.per_exit_tags,
-            &parts.exit_tags,
-        );
+        let n_exits = parts.per_exit_inline.len() + parts.per_exit_tags.len() + 1;
+        let exit_plan = exit_plan::ExitPlan::new(n_exits);
         let ct = moved!(parts => head_pc, entry, n_ops, dispatchable, window_size, exit_tags,
             global_tag_res_kind, entry_tags, per_exit_tags, per_exit_inline, exit_hit_counts,
             exit_side_trace_ptrs,

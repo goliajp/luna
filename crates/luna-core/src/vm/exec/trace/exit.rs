@@ -128,11 +128,11 @@ impl Vm {
         if !synced {
             let keep = keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0);
             let planned = (!child_ran && keep.is_empty())
-                .then(|| shapes.exit_plan.exit(exit_hit_idx))
+                .then(|| shapes.exit_plan.exit(exit_hit_idx, exit_tags_for_pc))
                 .flatten()
                 .filter(|e| e.untouched_end <= max_stack && base_us + e.len <= self.stack.len());
             if let Some(e) = planned {
-                self.trace_restore_planned(base_us, e.written, reg_state);
+                self.trace_restore_planned(base_us, &e.written, reg_state);
             } else {
                 self.trace_restore_slots(
                     base_us,
