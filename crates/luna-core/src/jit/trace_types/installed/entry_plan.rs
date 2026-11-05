@@ -19,7 +19,7 @@ pub(crate) struct EntrySlot {
 /// in the trace itself; more than [`ENTRY_PLAN_INLINE`] take an
 /// allocation. The unchecked registers, which only a side trace run from
 /// one of its exits reads from the buffers, are read off the entry tags.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct EntryPlan {
     checked: Checked,
     /// The registers the entry tags cover; a frame's registers past them
@@ -30,10 +30,11 @@ pub(crate) struct EntryPlan {
 /// Checked registers an [`EntryPlan`] holds without an allocation.
 pub(crate) const ENTRY_PLAN_INLINE: usize = 12;
 
-#[derive(Debug)]
+// a trace copies its plan in when installed: the rare long one is shared
+#[derive(Clone, Debug)]
 enum Checked {
     Inline(u8, [EntrySlot; ENTRY_PLAN_INLINE]),
-    Heap(Box<[EntrySlot]>),
+    Heap(std::sync::Arc<[EntrySlot]>),
 }
 
 impl Default for EntryPlan {
