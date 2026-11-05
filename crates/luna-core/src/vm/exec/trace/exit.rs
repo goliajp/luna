@@ -127,17 +127,25 @@ impl Vm {
         // interpreter's already: a finalizer may have changed it since
         if !synced {
             let keep = keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0);
-            self.trace_restore_slots(
-                base_us,
-                max_stack,
-                keep.clone(),
-                using_global_exit_tags,
-                global_tag_res_kind,
-                exit_tags_for_pc,
-                reg_state,
-                entry_tags,
-                child_ran,
-            );
+            let planned = (!child_ran && keep.is_empty())
+                .then(|| shapes.exit_plan.exit(exit_hit_idx))
+                .flatten()
+                .filter(|e| e.untouched_end <= max_stack && base_us + e.len <= self.stack.len());
+            if let Some(e) = planned {
+                self.trace_restore_planned(base_us, e.written, reg_state);
+            } else {
+                self.trace_restore_slots(
+                    base_us,
+                    max_stack,
+                    keep.clone(),
+                    using_global_exit_tags,
+                    global_tag_res_kind,
+                    exit_tags_for_pc,
+                    reg_state,
+                    entry_tags,
+                    child_ran,
+                );
+            }
             let tags = exit_tags_for_pc;
             let table = &ct.per_exit_tags;
             let window = ct.window_size as usize;
