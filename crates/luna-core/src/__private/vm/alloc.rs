@@ -18,15 +18,14 @@ pub const JIT_GC_LIMIT_OFFSET: i32 = crate::runtime::puc::api::GC_LIMIT_OFFSET a
 /// ```
 /// use luna_core::{__private::VmJitAlloc, version::LuaVersion, vm::Vm};
 /// let mut vm = Vm::new(LuaVersion::Lua54);
-/// let _ = vm.jit_step_window(1);
-/// // SAFETY: no registers
-/// let _ = unsafe { vm.jit_gc_step(0, 0, None) };
+/// // SAFETY: no exit, so no registers are read
+/// let _ = unsafe { vm.jit_gc_step(0, 0, std::ptr::null()) };
 /// ```
 ///
 /// ```compile_fail,E0133
 /// use luna_core::{__private::VmJitAlloc, version::LuaVersion, vm::Vm};
 /// let mut vm = Vm::new(LuaVersion::Lua54);
-/// vm.jit_gc_step(0, 1, Some(&[0; 4])); // error[E0133]: `jit_gc_step` is unsafe
+/// vm.jit_gc_step(0, 1, std::ptr::null()); // error[E0133]: `jit_gc_step` is unsafe
 /// ```
 pub trait VmJitAlloc {
     /// Compiled code just allocated (or 5.2 entered a call): whether a
@@ -34,19 +33,18 @@ pub trait VmJitAlloc {
     /// (`op_pc`, as `Vm::checkpoint_after_jit` takes it) for the exit it
     /// then takes to have the interpreter check.
     fn jit_gc_due(&mut self, op_pc: u32) -> bool;
-    /// The registers a step run in place in the running trace writes back
-    /// at its exit `exit_ret` (0: the step cannot run there).
-    fn jit_step_window(&self, exit_ret: u64) -> usize;
     /// Compiled code reached the due point after the op whose check
-    /// `op_pc` names; `regs` the trace frame's registers as of its exit
-    /// `exit_ret` when [`VmJitAlloc::jit_step_window`] allowed them: 0 to
-    /// go on, otherwise leave through that exit.
+    /// `op_pc` names, leaving through its exit `exit_ret` if the step
+    /// cannot run in place (0: no exit to run it at): 0 to go on, otherwise
+    /// leave through that exit.
     ///
     /// # Safety
-    /// With `regs`, the call comes from the running trace, and `regs` holds
-    /// the tag-typed payloads of its frame's registers as its exit
-    /// `exit_ret` leaves them.
-    unsafe fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64;
+    /// With `exit_ret` not 0, the call comes from the running trace, and
+    /// `reg_state` is its register buffer: its window and the words past it
+    /// (`trace_count_slot`), holding the tag-typed payloads of its frame's
+    /// registers as its exit `exit_ret` leaves them. With `exit_ret` 0,
+    /// `reg_state` is not read and may be null.
+    unsafe fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, reg_state: *const i64) -> i64;
     /// The count and, [`JIT_GC_LIMIT_OFFSET`] bytes after it,
     /// the point a collection step falls due at: compiled code calls
     /// [`VmJitAlloc::jit_gc_due`] only once the count has reached it.
@@ -139,13 +137,9 @@ impl VmJitAlloc for crate::vm::Vm {
         crate::vm::Vm::jit_gc_due(self, op_pc)
     }
     #[inline]
-    fn jit_step_window(&self, exit_ret: u64) -> usize {
-        crate::vm::Vm::jit_step_window(self, exit_ret)
-    }
-    #[inline]
-    unsafe fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, regs: Option<&[i64]>) -> i64 {
+    unsafe fn jit_gc_step(&mut self, op_pc: u32, exit_ret: u64, reg_state: *const i64) -> i64 {
         // SAFETY: as this function's (# Safety)
-        unsafe { crate::vm::Vm::jit_gc_step(self, op_pc, exit_ret, regs) }
+        unsafe { crate::vm::Vm::jit_gc_step(self, op_pc, exit_ret, reg_state) }
     }
     #[inline]
     fn jit_due_words(&self) -> *const usize {
