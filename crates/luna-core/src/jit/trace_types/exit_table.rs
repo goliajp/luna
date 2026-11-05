@@ -11,6 +11,8 @@ pub struct ExitTagTable {
     /// (both bounds kept, so the dispatcher reads them in one go).
     index: Box<[(u32, u32, u32)]>,
     tags: Box<[ExitTag]>,
+    /// `(register, kind)`, by register: see [`Self::with_back_edge_kinds`].
+    back_edge: Box<[(u16, ExitTag)]>,
 }
 
 impl ExitTagTable {
@@ -30,7 +32,55 @@ impl ExitTagTable {
         ExitTagTable {
             index: index.into(),
             tags: tags.into(),
+            back_edge: Box::default(),
         }
+    }
+
+    /// The table with the kinds `kinds` gives, as `(register, kind)`, for
+    /// registers a looping trace writes in its loop without reading them:
+    /// until a call of the trace goes round its back edge for the first
+    /// time such a register holds what it held on entry, after that a
+    /// value of the given kind. An exit whose tag for the register is
+    /// [`ExitTag::Untouched`] restores it with that kind when the exit is
+    /// past the call's first back edge (the dispatcher tells by the
+    /// exit's return value and the trace's tier-up count), and leaves it
+    /// untouched otherwise. Replaces any kinds the table had.
+    ///
+    /// # Panics
+    /// If a kind is not [`ExitTag::Int`], [`ExitTag::Float`],
+    /// [`ExitTag::Bool`] or [`ExitTag::Nil`] (a value the collector does
+    /// not trace), or a register appears twice.
+    pub fn with_back_edge_kinds(mut self, kinds: impl IntoIterator<Item = (u16, ExitTag)>) -> Self {
+        let mut v: Vec<(u16, ExitTag)> = kinds.into_iter().collect();
+        for &(r, k) in &v {
+            assert!(
+                matches!(
+                    k,
+                    ExitTag::Int | ExitTag::Float | ExitTag::Bool | ExitTag::Nil
+                ),
+                "register {r}: back edge kind {k:?} is not a kind the collector skips"
+            );
+        }
+        v.sort_unstable_by_key(|e| e.0);
+        assert!(
+            v.windows(2).all(|w| w[0].0 != w[1].0),
+            "a register given two back edge kinds"
+        );
+        self.back_edge = v.into();
+        self
+    }
+
+    /// The kind register `reg` holds past the first back edge, when the
+    /// table has one for it (see [`Self::with_back_edge_kinds`]).
+    #[inline]
+    pub fn back_edge_kind(&self, reg: u16) -> Option<ExitTag> {
+        let i = self.back_edge.binary_search_by_key(&reg, |e| e.0).ok()?;
+        Some(self.back_edge[i].1)
+    }
+
+    /// The registers [`Self::back_edge_kind`] gives a kind for, with it.
+    pub(crate) fn back_edge_kinds(&self) -> &[(u16, ExitTag)] {
+        &self.back_edge
     }
 
     /// How many exits the table holds.
@@ -131,5 +181,34 @@ mod tests {
         assert_eq!(all, t.iter().collect::<Vec<_>>());
         assert_eq!(all.len(), 3);
         assert!(ExitTagTable::default().is_empty());
+    }
+
+    #[test]
+    fn back_edge_kinds_by_register() {
+        let t = ExitTagTable::default().with_back_edge_kinds([
+            (9, ExitTag::Float),
+            (2, ExitTag::Int),
+            (4, ExitTag::Nil),
+        ]);
+        assert_eq!(t.back_edge_kind(2), Some(ExitTag::Int));
+        assert_eq!(t.back_edge_kind(4), Some(ExitTag::Nil));
+        assert_eq!(t.back_edge_kind(9), Some(ExitTag::Float));
+        assert_eq!(t.back_edge_kind(3), None);
+        let t = t.with_back_edge_kinds([(1, ExitTag::Bool)]);
+        assert_eq!(t.back_edge_kind(2), None);
+        assert_eq!(t.back_edge_kind(1), Some(ExitTag::Bool));
+    }
+
+    #[test]
+    #[should_panic(expected = "not a kind the collector skips")]
+    fn a_collectable_back_edge_kind_is_refused() {
+        let _ = ExitTagTable::default().with_back_edge_kinds([(0, ExitTag::Table)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "two back edge kinds")]
+    fn a_register_given_twice_is_refused() {
+        let _ =
+            ExitTagTable::default().with_back_edge_kinds([(5, ExitTag::Int), (5, ExitTag::Float)]);
     }
 }

@@ -19,7 +19,11 @@
 //! register a looping body writes only on some ways (a `TestSet`, the loop
 //! registers, an inlined call's results) is checked on entry instead, and
 //! keeps the kind it has on every pass. So is every register a side trace
-//! writes.
+//! writes. With `split`, a register the body writes on every path and never
+//! reads is no temporary but written-only: not lowered twice, held on the
+//! stack on entry, it leaves each exit before its write untouched, and the
+//! dispatcher gives it the kind the back edge leaves it once the call has
+//! gone round a back edge (`ExitTagTable::with_back_edge_kinds`).
 
 use super::slots::rw_ranges;
 use super::*;
@@ -36,6 +40,8 @@ pub(super) struct HeadRegs {
     /// The ops before this one are lowered for the first pass apart: the
     /// op after the last temporary's first write; 0 without temporaries.
     pub(super) peel_end: usize,
+    /// Per register, whether it is written-only (see the module doc).
+    pub(super) write_only: Vec<bool>,
 }
 
 /// For each of the head frame's `max_stack` registers, whether the trace
@@ -44,7 +50,9 @@ pub(super) struct HeadRegs {
 /// `end` and the terminator at `end`. `parent_exit` is the exit a side
 /// trace starts from: the side trace can only leave a register to the stack
 /// where that exit did. `also_live`: registers checked on entry whatever
-/// the ops do.
+/// the ops do. `split`: set written-only registers apart from the
+/// temporaries.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn entry_live(
     record: &TraceRecord,
     op_offsets: &[u32],
@@ -54,22 +62,14 @@ pub(super) fn entry_live(
     may_loop: bool,
     parent_exit: Option<&[ExitTag]>,
     also_live: &[u32],
+    split: bool,
 ) -> HeadRegs {
-    let mut regs = HeadRegs {
-        live: vec![true; max_stack],
-        temps: vec![false; max_stack],
-        peel_end: 0,
-    };
+    let mut regs = HeadRegs::new(max_stack);
     if record.side_trace_parent.is_some() && parent_exit.is_none() {
         return regs;
     }
     let ops = &record.ops[..(end + 1).min(record.ops.len())];
-    let mut scan = Scan {
-        live: vec![false; max_stack],
-        defined: vec![false; max_stack],
-        written: vec![false; max_stack],
-        first_def: vec![usize::MAX; max_stack],
-    };
+    let mut scan = Scan::new(max_stack);
     for i in 0..ops.len() {
         let off = op_offsets.get(i).copied().unwrap_or(0) as usize;
         scan.op(ops, i, off, inline_writes.get(i).copied());
@@ -87,7 +87,12 @@ pub(super) fn entry_live(
         }
     }
     if may_loop {
-        classify_written(&mut scan, &mut regs, record.side_trace_parent.is_none());
+        classify_written(
+            &mut scan,
+            &mut regs,
+            record.side_trace_parent.is_none(),
+            split,
+        );
     }
     regs.peel_end = regs.peel_end.min(end);
     regs.live = scan.live;
@@ -105,9 +110,33 @@ struct Scan {
     written: Vec<bool>,
     /// The op that first writes a register on every path.
     first_def: Vec<usize>,
+    /// Read by some op.
+    read: Vec<bool>,
+}
+
+impl HeadRegs {
+    /// Every register taken from the entry, none apart.
+    fn new(max_stack: usize) -> HeadRegs {
+        HeadRegs {
+            live: vec![true; max_stack],
+            temps: vec![false; max_stack],
+            peel_end: 0,
+            write_only: vec![false; max_stack],
+        }
+    }
 }
 
 impl Scan {
+    fn new(max_stack: usize) -> Scan {
+        Scan {
+            live: vec![false; max_stack],
+            defined: vec![false; max_stack],
+            written: vec![false; max_stack],
+            first_def: vec![usize::MAX; max_stack],
+            read: vec![false; max_stack],
+        }
+    }
+
     /// Notes what `ops[i]`, whose frame starts at register `off`, reads and
     /// writes; `inline_write`: the registers it writes as an inlined call's
     /// return or a vararg expansion.
@@ -152,6 +181,9 @@ impl Scan {
         let frame = rop.proto.max_stack as u32;
         let mut read = |r: u32| {
             let s = off + r as usize;
+            if r < frame && s < self.read.len() {
+                self.read[s] = true;
+            }
             if r < frame && s < self.live.len() && !self.defined[s] {
                 self.live[s] = true;
             }
@@ -189,15 +221,18 @@ impl Scan {
 
 /// Sorts the registers a looping body writes without reading them first:
 /// in a root trace, those it writes on every path are temporaries, lowered
-/// for the first pass apart up to the op after their first write; the
-/// others (and every one a side trace writes) leave the body's own value
-/// behind and are checked on entry.
-fn classify_written(scan: &mut Scan, regs: &mut HeadRegs, root: bool) {
+/// for the first pass apart up to the op after their first write, or with
+/// `split` written-only when nothing reads them; the others (and every one
+/// a side trace writes) leave the body's own value behind and are checked
+/// on entry.
+fn classify_written(scan: &mut Scan, regs: &mut HeadRegs, root: bool, split: bool) {
     for s in 0..scan.live.len() {
         if !scan.written[s] || scan.live[s] {
             continue;
         }
-        if root && scan.defined[s] {
+        if root && scan.defined[s] && split && !scan.read[s] {
+            regs.write_only[s] = true;
+        } else if root && scan.defined[s] {
             regs.temps[s] = true;
             regs.peel_end = regs.peel_end.max(scan.first_def[s] + 1);
         } else {

@@ -56,7 +56,7 @@ impl Vm {
         self.trace_restore_slots(
             base_us,
             cl.proto.max_stack as usize,
-            keep,
+            keep.clone(),
             false,
             crate::jit::trace::TagResKind::Mixed,
             &tags,
@@ -64,10 +64,37 @@ impl Vm {
             &entry_tags,
             false,
         );
-        // each frame resumes after the call that entered the next one; the
-        // innermost at the side trace's exit
+        let table = &ct.per_exit_tags;
+        self.trace_restore_back_edge_kinds(
+            base_us,
+            table,
+            &tags,
+            keep,
+            &reg_state,
+            ct.window_size as usize,
+        );
+        let head_resume = site.head_resume_pc;
+        self.resume_inner_frames(pre_frames, child_frame, head_resume, &child, &own);
+        self.jit.reg_state_buf = reg_state;
+        self.jit.entry_tags_buf = entry_tags;
+    }
+}
+
+impl Vm {
+    /// Each frame resumes after the call that entered the next one: the
+    /// trace's (`pre_frames - 1`) at `head_resume`, the side trace's
+    /// (`child_frame`) after its own inlined exit if `own` is one, the
+    /// innermost at the side trace's exit.
+    fn resume_inner_frames(
+        &mut self,
+        pre_frames: usize,
+        child_frame: usize,
+        head_resume: u32,
+        child: &CompiledTrace,
+        own: &crate::jit::trace::DecodedExit<'_>,
+    ) {
         if let CallFrame::Lua(f) = &mut self.frames[pre_frames - 1] {
-            f.pc = site.head_resume_pc;
+            f.pc = head_resume;
         }
         if own.site_id > 0
             && let CallFrame::Lua(f) = &mut self.frames[child_frame]
@@ -77,8 +104,6 @@ impl Vm {
         if let Some(CallFrame::Lua(f)) = self.frames.last_mut() {
             f.pc = own.cont_pc;
         }
-        self.jit.reg_state_buf = reg_state;
-        self.jit.entry_tags_buf = entry_tags;
     }
 }
 

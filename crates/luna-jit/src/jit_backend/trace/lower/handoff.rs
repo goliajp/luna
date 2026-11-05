@@ -14,6 +14,7 @@
 //! added inside either loop.
 
 use super::*;
+use crate::jit_backend::trace::lir::Count;
 
 /// Creates `loop_entry` for a trace whose back edge moves on to the
 /// optimizing tier, once everything else is lowered: emitted before, its
@@ -58,8 +59,7 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let (reg_state, sig) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     if let Some(t) = &lw.tier_count {
         let cell_addr = luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64;
-        let count_addr = t.count() as *const TCellU32 as i64;
-        let at = t.at();
+        let (count, at) = (count_at(lw, pl, t), t.at());
         let cell = lw.bcx.reloc(RelocKind::TierLoop, cell_addr);
         let f = lw
             .bcx
@@ -69,12 +69,7 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         lw.bcx.ins().brif(f, go, &[], out, &[]);
         lw.bcx.switch_to_block(go);
         lw.bcx.seal_block(go);
-        let count = lw.bcx.reloc(RelocKind::TierCell, count_addr);
-        let back = lw
-            .bcx
-            .ins()
-            .iconst(types::I32, i64::from(at.saturating_sub(1)));
-        lw.bcx.ins().store(MemFlagsData::trusted(), back, count, 0);
+        mark_pass_into_loop(lw, pl, count, at);
         if let Some(ctx) = &lw.flush_ctx {
             emit_flush_buf(&mut lw.bcx, ctx, &lw.entry.regs_full);
         }
@@ -100,4 +95,44 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         record.head_pc,
         lw.flush_ctx.as_ref(),
     );
+}
+
+/// Where the back edge counts: in this call's word of the register buffer
+/// when the trace has written-only registers, whose exits tell a call
+/// before its first back edge from one past it (see
+/// `luna_core::__private::trace_count_slot`), else in the count cell the
+/// trace's calls share.
+pub(super) fn count_at<E: Emit>(lw: &Lower<E>, pl: &Plan<'_>, t: &TierUp) -> Count {
+    if pl.write_only.iter().any(|w| *w) {
+        let off = 8 * luna_core::__private::trace_count_slot(pl.window_size_us) as i32;
+        Count::Frame(lw.entry.reg_state, off)
+    } else {
+        Count::Cell(t.count() as *const TCellU32 as i64)
+    }
+}
+
+/// Before the hand-over to the optimizing tier's loop: the count set back
+/// to `at - 1`, and for a count in this call's word its mark of a pass into
+/// the loop set.
+fn mark_pass_into_loop<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, count: Count, at: u32) {
+    let back = lw
+        .bcx
+        .ins()
+        .iconst(types::I32, i64::from(at.saturating_sub(1)));
+    let flags = MemFlagsData::trusted();
+    let (reg_state, off) = match count {
+        Count::Cell(cell) => {
+            let count = lw.bcx.reloc(RelocKind::TierCell, cell);
+            lw.bcx.ins().store(flags, back, count, 0);
+            return;
+        }
+        Count::Frame(reg_state, off) => (reg_state, off),
+    };
+    lw.bcx.ins().store(flags, back, reg_state, off);
+    let window = pl.window_size_us;
+    let one = lw.bcx.ins().iconst(types::I64, 1);
+    let passed_off = 8 * luna_core::__private::trace_passed_slot(window) as i32;
+    lw.bcx
+        .ins()
+        .store(MemFlagsData::trusted(), one, reg_state, passed_off);
 }

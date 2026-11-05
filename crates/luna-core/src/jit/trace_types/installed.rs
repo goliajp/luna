@@ -127,6 +127,10 @@ pub struct CompiledTrace {
     pub(crate) downrec_link: Option<(u32, u32)>,
     pub(crate) downrec_multi_way_count: u8,
     pub(crate) tier_up: Option<Box<TierUp>>,
+    /// The code counts in this call's word of `reg_state`, not in
+    /// `tier_up`'s cell: it has a `tier_up` and `per_exit_tags` gives
+    /// back-edge kinds (see `__private::trace_count_slot`).
+    pub(crate) call_count: bool,
 }
 
 /// Moves each named field of a [`CompiledTraceParts`] into a
@@ -135,6 +139,7 @@ macro_rules! moved {
     ($parts:ident => $($f:ident),* $(,)?) => {{
         let CompiledTraceParts { $($f),* } = $parts;
         Self {
+            call_count: false,
             $($f,)*
             side_children: TRefLock::new(std::collections::HashMap::new()),
             has_any_side_wired: TCellBool::new(false),
@@ -157,18 +162,23 @@ impl CompiledTrace {
     ///   the loop returns.
     /// - The cells whose addresses that code holds are the ones `parts`
     ///   owns: the `chain` of each of `per_exit_inline`, and the count and
-    ///   the loop cell of `tier_up`; `exit_side_trace_ptrs` are null.
+    ///   the loop cell of `tier_up`; `exit_side_trace_ptrs` are null. Code
+    ///   whose `per_exit_tags` gives back-edge kinds counts in `reg_state`
+    ///   instead of `tier_up`'s count (`__private::trace_count_slot`).
     /// - The `tier_up` source, if any, was made for this trace by the
     ///   backend that compiled it, in the JIT storage of the Vm it is
     ///   installed on.
     pub unsafe fn from_parts(parts: CompiledTraceParts) -> Self {
-        moved!(parts => head_pc, entry, n_ops, dispatchable, window_size, exit_tags,
+        let call_count =
+            parts.tier_up.is_some() && !parts.per_exit_tags.back_edge_kinds().is_empty();
+        let ct = moved!(parts => head_pc, entry, n_ops, dispatchable, window_size, exit_tags,
             global_tag_res_kind, entry_tags, per_exit_tags, per_exit_inline, exit_hit_counts,
             exit_side_trace_ptrs,
             is_inline_abort_close, dispatch_off_reason, sinkable_sites_seen,
             accum_bufferable_seen, sunk_alloc_seen, materialize_emit_count, closure_seen,
             inline_kinds, inline_depth, body_writes, downrec_link, downrec_multi_way_count,
-            tier_up)
+            tier_up);
+        Self { call_count, ..ct }
     }
 
     /// The entry to call: the optimizing tier's once it exists.

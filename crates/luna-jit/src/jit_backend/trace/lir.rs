@@ -110,6 +110,25 @@ pub(crate) enum UnOp {
     FcvtToSintSat,
 }
 
+/// Where a back edge counts (see `Emit::tier_count`): the trace's count
+/// cell at this address, or this call's count word at `base + off`.
+#[derive(Clone, Copy)]
+pub(crate) enum Count {
+    Cell(i64),
+    Frame(cranelift_codegen::ir::Value, i32),
+}
+
+/// Where a `TierCount` keeps its count.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CountAt {
+    /// The `u32` cell relocation `n` holds the address of: the count the
+    /// trace's calls share.
+    Cell(u32),
+    /// The `u32` at `a + off`, `a` the trace's register buffer: this call's
+    /// count (see `luna_core::__private::trace_count_slot`).
+    Frame(i32),
+}
+
 /// One recorded instruction. Operands are value numbers; `ty` is the
 /// result type, or the operand type for comparisons and stores.
 #[derive(Clone, Copy, Debug)]
@@ -152,10 +171,10 @@ pub(crate) enum Op {
     CallIndirect,
     /// Returns value `a`.
     Return,
-    /// `*(u32 *)cell += 1`, then to block `b` when it equals `at`, else
-    /// to block `c`; `cell` is relocation `n`.
+    /// The count at `count` `+= 1`, then to block `b` when it equals `at`,
+    /// else to block `c`.
     TierCount {
-        n: u32,
+        count: CountAt,
         at: u32,
     },
     /// The value of variable `a`.

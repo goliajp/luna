@@ -4,6 +4,8 @@
 use super::*;
 use downrec::downrec_close_exit;
 
+pub(in crate::vm::exec) mod words;
+
 impl Vm {
     /// Run the trace cached for `pc` of `cl` (frame `base`), if one admits this
     /// entry. `true` when the trace ran and the frame's pc now points past it.
@@ -38,18 +40,11 @@ impl Vm {
         let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
         entry_tags.resize(max_stack, 0);
         // a trace that closes by down-recursion (whether or not it is also
-        // dispatchable) guards on the caller's saved pc, in a slot just past
-        // the window
+        // dispatchable) guards on the caller's saved pc, in the word just
+        // past the window
         let is_downrec_entry = ct.downrec_link.is_some();
         let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
-        let reg_state_len = if is_downrec_entry {
-            window_size_us + 1
-        } else {
-            window_size_us
-        };
-        // marshal-in fills the frame's registers; the rest start at zero
-        reg_state.resize(reg_state_len, 0i64);
-        reg_state[max_stack.min(reg_state_len)..].fill(0);
+        words::frame_in(&mut reg_state, window_size_us, max_stack);
         let dispatch_ok = self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
             && self.trace_marshal_in(
                 base_us,
@@ -88,14 +83,16 @@ impl Vm {
                 eprintln!("luna-runtime-helpers: aot_trace_fired pc={head_pc_val}");
             }
             self.jit_ghosts_enter();
+            words::count_in(&ct, &mut reg_state, window_size_us);
             let running = self.trace_step_enter(&*ct);
             let continuation_pc = {
                 let vm_ptr: *mut Vm = self;
                 let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                // SAFETY: `entry_fn` is the entry of `ct`, a compiled trace `cl.proto.traces` keeps alive; `reg_state` was sized above to the trace's window (plus the saved-pc slot for a down-recursion entry) and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
+                // SAFETY: `entry_fn` is the entry of `ct`, a compiled trace `cl.proto.traces` keeps alive; `reg_state` was sized above to at least the trace's window and the three words past it and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
                 unsafe { entry_fn(reg_state.as_mut_ptr()) }
             };
             self.trace_step_leave(running);
+            words::count_out(&ct, &reg_state, window_size_us);
             self.jit.ghost_depth -= 1;
             self.jit.counters.dispatched += 1;
             if ct.inline_kinds != 0 {

@@ -265,12 +265,24 @@ impl Emit for Lir {
             inherit,
         });
     }
-    fn tier_count(&mut self, cell: i64, at: u32, hot: Block, cont: Block) {
+    fn tier_count(&mut self, count: super::Count, at: u32, hot: Block, cont: Block) {
         self.edge(hot);
         self.edge(cont);
-        let n = self.reloc_index(super::super::RelocKind::TierCell, cell);
-        let op = Op::TierCount { n, at };
-        self.push(op, Ty::I64, NONE, NONE, hot.as_u32(), cont.as_u32());
+        let (count, a) = match count {
+            super::Count::Cell(cell) => {
+                let n = self.reloc_index(super::super::RelocKind::TierCell, cell);
+                (super::CountAt::Cell(n), NONE)
+            }
+            super::Count::Frame(base, off) => (super::CountAt::Frame(off), v(base)),
+        };
+        self.push(
+            Op::TierCount { count, at },
+            Ty::I64,
+            NONE,
+            a,
+            hot.as_u32(),
+            cont.as_u32(),
+        );
     }
     fn reloc(&mut self, kind: super::super::RelocKind, live: i64) -> Value {
         let n = self.reloc_index(kind, live);

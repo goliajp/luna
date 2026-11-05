@@ -65,12 +65,16 @@ impl Vm {
         }
     }
 
-    /// The number of registers a step in the running trace writes back
-    /// (its frame's), or 0 when it cannot run in place: no trace of this
-    /// frame runs, or the trace left no exit for it (`exit_ret` 0).
+    /// The words of the running trace's buffer a step in it reads (its
+    /// window and the words past it, see
+    /// `crate::__private::trace_count_slot`), or 0 when it cannot run in
+    /// place: no trace of this frame runs, or the trace left no exit for it
+    /// (`exit_ret` 0).
     pub(crate) fn jit_step_window(&self, exit_ret: u64) -> usize {
         match self.step_frame() {
-            Some((cl, _)) if exit_ret != 0 => cl.proto.max_stack as usize,
+            Some((cl, _)) if exit_ret != 0 => self.stepping_trace(&cl.proto).map_or(0, |ct| {
+                ct.window_size as usize + crate::__private::TRACE_FRAME_TAIL
+            }),
             _ => 0,
         }
     }
@@ -101,28 +105,11 @@ impl Vm {
         let Some(ct) = self.stepping_trace(&cl.proto) else {
             return i64::from(self.jit_gc_due(op_pc));
         };
-        let d = crate::jit::trace::decode_exit_shape(
-            exit_ret,
-            &ct.per_exit_inline,
-            &ct.per_exit_tags,
-            &ct.exit_tags,
-        );
-        let proto = &cl.proto;
-        self.trace_restore_slots(
-            base as usize,
-            proto.max_stack as usize,
-            keep_tfor_vars(proto, exit_ret, d.cont_pc, 0),
-            d.using_global_exit_tags,
-            ct.global_tag_res_kind,
-            d.exit_tags_for_pc,
-            regs,
-            &[],
-            false,
-        );
+        let cont_pc = self.step_write_back(&cl.proto, base as usize, &ct, exit_ret, regs);
         let CallFrame::Lua(f) = self.top_frame_raw_mut() else {
             unreachable!("a trace runs in a Lua frame")
         };
-        let pc = std::mem::replace(&mut f.pc, d.cont_pc);
+        let pc = std::mem::replace(&mut f.pc, cont_pc);
         let stack = (self.stack.as_ptr() as usize, self.stack.len());
         self.jit.step.disturbed = false;
         let r = self.checkpoint_after_jit(op_pc);
@@ -141,6 +128,40 @@ impl Vm {
         }
         self.jit.step.synced_exit = true;
         2
+    }
+
+    /// Writes the running trace's registers `regs` back to the frame at
+    /// `base` as its exit `exit_ret` leaves them; that exit's pc.
+    fn step_write_back(
+        &mut self,
+        proto: &crate::runtime::function::Proto,
+        base: usize,
+        ct: &crate::jit::trace::CompiledTrace,
+        exit_ret: u64,
+        regs: &[i64],
+    ) -> u32 {
+        let d = crate::jit::trace::decode_exit_shape(
+            exit_ret,
+            &ct.per_exit_inline,
+            &ct.per_exit_tags,
+            &ct.exit_tags,
+        );
+        let keep = keep_tfor_vars(proto, exit_ret, d.cont_pc, 0);
+        self.trace_restore_slots(
+            base,
+            proto.max_stack as usize,
+            keep.clone(),
+            d.using_global_exit_tags,
+            ct.global_tag_res_kind,
+            d.exit_tags_for_pc,
+            regs,
+            &[],
+            false,
+        );
+        // the call's count is read, not put back: the trace goes on counting
+        let (tags, w) = (d.exit_tags_for_pc, ct.window_size as usize);
+        self.trace_restore_back_edge_kinds(base, &ct.per_exit_tags, tags, keep, regs, w);
+        d.cont_pc
     }
 
     /// The trace of `proto` the step window was opened for.

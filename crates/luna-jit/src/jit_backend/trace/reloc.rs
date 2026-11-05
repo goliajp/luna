@@ -226,7 +226,7 @@ pub(crate) enum RelocKind {
     Proto,
     /// The frame chain of inline side exit `n`.
     Chain(u32),
-    /// The baseline tier's iteration count.
+    /// The baseline tier's iteration count, when the trace's calls share it.
     TierCell,
     /// The cell holding the optimizing tier's loop (see `lower::handoff`).
     TierLoop,

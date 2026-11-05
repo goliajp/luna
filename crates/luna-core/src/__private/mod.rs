@@ -17,6 +17,7 @@ mod layout;
 mod mem;
 mod panic_watch;
 mod runtime;
+mod trace_frame;
 mod types;
 mod vm;
 
@@ -39,6 +40,7 @@ pub use layout::{STR_LEN_OFFSET, TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK};
 pub use mem::{lany_new, lbox_new, lvec_new, lvec_with_capacity};
 pub use panic_watch::{panic_free, panics_in};
 pub use runtime::*;
+pub use trace_frame::{TRACE_FRAME_TAIL, trace_count_slot, trace_passed_slot};
 pub use types::*;
 pub use vm::alloc::{JIT_GC_CALL, JIT_GC_LIMIT_OFFSET, JIT_GC_PREV, VmJitAlloc};
 pub use vm::host::{VmHeap, VmHostInternals};

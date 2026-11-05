@@ -5,6 +5,7 @@
 //! records the same instructions for the baseline tier. Both use Cranelift's
 //! entity types (`Value`, `Block`, `Variable`, ...) as plain indices.
 
+use super::lir::Count;
 use super::reloc::{RelocKind, reloc_symbol};
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::{Ieee64, Imm64, Offset32};
@@ -162,10 +163,9 @@ pub(crate) trait Emit: Ins {
     ) -> cranelift_codegen::ir::GlobalValue;
     fn symbol_value(&mut self, ty: Type, gv: GlobalValue) -> Value;
     fn declare_data_in_func(&mut self, data: DataId) -> GlobalValue;
-    /// Adds one to the `u32` at `cell` and goes to `hot` when it reaches
-    /// `at`, else to `cont`. Only the baseline tier counts: Cranelift IR
-    /// just goes to `cont`.
-    fn tier_count(&mut self, cell: i64, at: u32, hot: Block, cont: Block);
+    /// Adds one to the `u32` at `count`, then to `hot` once it is `at`, else
+    /// to `cont`. Only the baseline tier counts: Cranelift IR goes to `cont`.
+    fn tier_count(&mut self, count: Count, at: u32, hot: Block, cont: Block);
     /// Block `at` starts the optimizing tier's loop, which reads the
     /// registers (the variables `regs`, register `i` at `reg_state + 8 i`)
     /// the loop reads before writing them (see `lower::handoff`). Only the
@@ -332,7 +332,7 @@ impl<M: Module> Emit for ClifEmit<'_, '_, M> {
     fn declare_data_in_func(&mut self, data: DataId) -> GlobalValue {
         self.m.declare_data_in_func(data, self.b.func)
     }
-    fn tier_count(&mut self, _cell: i64, _at: u32, _hot: Block, cont: Block) {
+    fn tier_count(&mut self, _count: Count, _at: u32, _hot: Block, cont: Block) {
         self.b.ins().jump(cont, &[]);
     }
     fn reloc(&mut self, kind: RelocKind, live: i64) -> Value {

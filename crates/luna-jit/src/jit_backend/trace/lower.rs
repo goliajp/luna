@@ -69,17 +69,18 @@ pub(super) fn lower_trace_into_inner<M: Module>(
     float_only: bool,
     at_exits: bool,
 ) -> Option<(FuncId, CompiledTraceParts)> {
-    with_plan(record, opts, float_only, |pl, escape| {
+    with_plan(record, opts, float_only, false, |pl, escape| {
         lower_clif(module, pl, escape, aot_fn_name, always_codegen, at_exits)
     })?
 }
 
 /// Plans `record` and hands the plan to `f`; `None` when the record
-/// cannot be lowered.
+/// cannot be lowered. `split`: see `entry_live`.
 fn with_plan<R>(
     record: &TraceRecord,
     opts: CompileOptions,
     float_only: bool,
+    split: bool,
     f: impl FnOnce(&Plan<'_>, EscapeAnalysis) -> R,
 ) -> Option<R> {
     checkpoint("enter");
@@ -114,20 +115,11 @@ fn with_plan<R>(
     };
     let out = 'planned: {
         let Some((plan, escape)) = plan_trace(
-            record, vconsts, head_proto, max_stack, frame_w, opts, float_only,
+            record, vconsts, head_proto, max_stack, frame_w, opts, float_only, split,
         ) else {
             break 'planned None;
         };
-        // a root trace reading a register on entry that holds a value no
-        // trace is entered with (a boolean, a coroutine) could never run: it
-        // is not compiled, and leaves its head free for a later recording
-        let never_entered = record.side_trace_parent.is_none()
-            && record
-                .entry_tags
-                .iter()
-                .zip(&plan.head_live)
-                .any(|(&t, &live)| live && !luna_core::jit::trace::entry_tag_enterable(t));
-        if never_entered {
+        if never_entered(record, &plan) {
             checkpoint("bail:entry-tag-never-entered");
             break 'planned None;
         }
@@ -139,6 +131,18 @@ fn with_plan<R>(
     out
 }
 
+/// A root trace reading a register on entry that holds a value no trace is
+/// entered with (a boolean, a coroutine) could never run: it is not
+/// compiled, and leaves its head free for a later recording.
+fn never_entered(record: &TraceRecord, plan: &Plan<'_>) -> bool {
+    record.side_trace_parent.is_none()
+        && record
+            .entry_tags
+            .iter()
+            .zip(&plan.head_live)
+            .any(|(&t, &live)| live && !luna_core::jit::trace::entry_tag_enterable(t))
+}
+
 /// The trace recorded for the baseline code generator, with what the
 /// emit pass decided; `None` when it cannot be lowered. `at_exits`: see
 /// `Lower::at_exits`.
@@ -148,7 +152,25 @@ pub(super) fn lower_trace_lir(
     float_only: bool,
     at_exits: bool,
 ) -> Option<(super::lir::Lir, CompiledTraceParts)> {
-    with_plan(record, opts, float_only, |pl, escape| {
+    // only a trace that counts its passes tells its exits before the first
+    // back edge from the later ones (see `entry_live`); when a written-only
+    // register's kind at the back edge cannot be given past it, the record
+    // is lowered again with it a temporary
+    let counts = matches!(opts.tier, TraceTier::Auto) && opts.tier_up_at > 0;
+    match lower_trace_lir_split(record, opts, float_only, at_exits, counts)? {
+        Ok(l) => Some(l),
+        Err(()) => lower_trace_lir_split(record, opts, float_only, at_exits, false)?.ok(),
+    }
+}
+
+fn lower_trace_lir_split(
+    record: &TraceRecord,
+    opts: CompileOptions,
+    float_only: bool,
+    at_exits: bool,
+    split: bool,
+) -> Option<Result<(super::lir::Lir, CompiledTraceParts), ()>> {
+    with_plan(record, opts, float_only, split, |pl, escape| {
         let mut e = super::lir::Lir::take();
         let h = match e.helpers {
             Some((h, _, _)) => h,
@@ -163,7 +185,11 @@ pub(super) fn lower_trace_lir(
             _ => 0,
         };
         let (e, emitted) = emit_trace(e, pl, h, escape, count_at, at_exits)?;
-        Some((e, build_compiled(pl, emitted)))
+        if emitted.write_only_kinds.is_err() {
+            e.give();
+            return Some(Err(()));
+        }
+        Some(Ok((e, build_compiled(pl, emitted))))
     })?
 }
 

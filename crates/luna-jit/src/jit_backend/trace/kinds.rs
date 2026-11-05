@@ -90,7 +90,7 @@ pub(super) fn shared_exit_tags<'k>(
     tags
 }
 
-fn exit_tag_of(k: &RegKind) -> ExitTag {
+pub(super) fn exit_tag_of(k: &RegKind) -> ExitTag {
     match k {
         RegKind::Unset | RegKind::Unknown | RegKind::StackHeld => ExitTag::Untouched,
         RegKind::Int => ExitTag::Int,
