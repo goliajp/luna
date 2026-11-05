@@ -38,7 +38,7 @@ impl Vm {
         // way out; `reg_state` covers the trace's window, which may exceed
         // the frame
         let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
-        entry_tags.resize(max_stack, 0);
+        words::tags_in(&mut entry_tags, max_stack);
         // a trace that closes by down-recursion (whether or not it is also
         // dispatchable) guards on the caller's saved pc, in the word just
         // past the window
@@ -46,7 +46,12 @@ impl Vm {
         let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
         words::frame_in(&mut reg_state, window_size_us, max_stack);
         let dispatch_ok = self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
-            && self.trace_marshal_in(&ct, base_us, &mut entry_tags, &mut reg_state[..max_stack]);
+            && self.trace_marshal_in(
+                &ct,
+                base_us,
+                &mut entry_tags[..max_stack],
+                &mut reg_state[..max_stack],
+            );
 
         let mut ran = false;
         if dispatch_ok {
@@ -122,7 +127,7 @@ impl Vm {
                     continuation_pc,
                     pre_frames,
                     &mut reg_state,
-                    &entry_tags,
+                    &entry_tags[..max_stack],
                 );
                 ran = true;
             }

@@ -15,13 +15,26 @@ pub(super) fn frame_in(reg_state: &mut Vec<i64>, window: usize, max_stack: usize
     if reg_state.len() < window + TRACE_FRAME_TAIL {
         grow(reg_state, window + TRACE_FRAME_TAIL);
     }
-    reg_state[max_stack.min(window)..window].fill(0);
+    // registers past the frame are an inlined function's
+    if window > max_stack {
+        reg_state[max_stack..window].fill(0);
+    }
+}
+
+/// Readies the Vm's buffer `entry_tags` to hold the tags of a frame of
+/// `max_stack` registers: grown only when a frame larger than any before
+/// enters, never cut, so the dispatch passes on its first `max_stack`.
+#[inline(always)]
+pub(super) fn tags_in(entry_tags: &mut Vec<u8>, max_stack: usize) {
+    if entry_tags.len() < max_stack {
+        grow(entry_tags, max_stack);
+    }
 }
 
 #[cold]
 #[inline(never)]
-fn grow(reg_state: &mut Vec<i64>, len: usize) {
-    reg_state.resize(len, 0);
+fn grow<T: Copy + Default>(buf: &mut Vec<T>, len: usize) {
+    buf.resize(len, T::default());
 }
 
 /// A trace that counts in this call's word (`CompiledTrace::call_count`)
