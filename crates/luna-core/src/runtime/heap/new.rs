@@ -104,6 +104,7 @@ impl Heap {
             track_chunk_roots: false,
             mem_cap: None,
             table_pool: Vec::new(),
+            concat_buf: None,
             slab: Default::default(),
             weak_userdata: ptr::null_mut(),
             next_id: 0,
