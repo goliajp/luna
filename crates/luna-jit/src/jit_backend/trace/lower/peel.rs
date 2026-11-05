@@ -116,6 +116,7 @@ pub(super) fn emit_first_pass<E: Emit>(
     lw.bcx.seal_block(peel);
     commit_start(lw, pl);
     emit_ops(lw, pl, &mut cx, 0..p)?;
+    commit_at_join(lw, pl, &cx, p);
     // what reg_state holds of the registers at `P`
     let stored: Vec<bool> = (0..lw.stored.len())
         .map(|r| {
@@ -177,6 +178,7 @@ pub(super) fn emit_loop_copy<E: Emit>(
     lw.bcx.switch_to_block(lw.blocks.body_loop);
     commit_start(lw, pl);
     emit_ops(lw, pl, &mut cx, 0..p)?;
+    commit_at_join(lw, pl, &cx, p);
     let looped = Restart::take(lw);
     if looped.holds(&at) && lw.alt_joins.is_empty() && lw.call_chain.is_empty() {
         alias_upvals(lw, &at.upvals, &looped.upvals);
@@ -201,6 +203,18 @@ pub(super) fn emit_loop_copy<E: Emit>(
     lw.stored = tail_stored;
     lw.head_stored = tail_head_stored;
     Some(())
+}
+
+/// The commit of op `P` (or the one before the tail, when the copy is the
+/// whole body), emitted before the join in both copies where the values are
+/// still at hand: after the join they would be read back from the
+/// variables' homes on every pass.
+fn commit_at_join<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, cx: &BodyCx, p: usize) {
+    if p < pl.effective_end {
+        cx.commit_before(lw, pl, p);
+    } else {
+        commit_end(lw, pl, p);
+    }
 }
 
 /// Gives the variables the ops after `P` read the upvalues through (`at`)
