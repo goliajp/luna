@@ -4,7 +4,9 @@
 //! resolver that *calls* this API lives in `luna-runtime-helpers` and
 //! is exercised by `crates/luna-aot/tests/it/aot_trace_fires.rs`.
 
-use luna_core::__private::{CompiledTrace, CompiledTraceParts, ProtoTraceInternals, TracePlans};
+use luna_core::__private::{
+    CompiledTrace, CompiledTraceParts, PassCount, ProtoTraceInternals, TracePlans,
+};
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
 use luna_core::jit::send_compat::{TArc, TCellU32};
@@ -34,7 +36,13 @@ fn dummy_parts(head_pc: u32, max_stack: u32) -> CompiledTraceParts {
         n_ops: 1,
         dispatchable: true,
         window_size: max_stack,
-        plans: TracePlans::new(&entry_tags, &exit_tags, ExitTagTable::default(), 0),
+        plans: TracePlans::new(
+            &entry_tags,
+            &exit_tags,
+            ExitTagTable::default(),
+            ExitTagTable::default(),
+            PassCount::Shared,
+        ),
         per_exit_inline: TArc::from(Vec::new()),
         exit_hit_counts: TArc::from(vec![TCellU32::new(0u32)]),
         is_inline_abort_close: false,
@@ -137,8 +145,8 @@ fn install_then_lookup_via_collect_hashes() {
     );
 }
 
-/// Plans made for more exits than the parts have are not of this code:
-/// debug builds stop there.
+/// Plans made for more inline exits than the parts have are not of this
+/// code: debug builds stop there.
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "plans are not of its code")]
@@ -146,6 +154,14 @@ fn plans_of_other_code_are_caught_in_debug_builds() {
     let mut parts = dummy_parts(0, 2);
     // two inline exits, which the parts do not have
     let tags = vec![ExitTag::Untouched; 2];
-    parts.plans = TracePlans::new(&[0, 0], &tags, ExitTagTable::default(), 2);
+    let inline = ExitTagTable::from_exits([(0, &tags[..]), (1, &tags[..])]);
+    let plans = TracePlans::new(
+        &[0, 0],
+        &tags,
+        ExitTagTable::default(),
+        inline,
+        PassCount::Shared,
+    );
+    parts.plans = plans;
     let _ = install(parts);
 }

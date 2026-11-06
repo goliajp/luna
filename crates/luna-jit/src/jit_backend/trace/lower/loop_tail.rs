@@ -219,6 +219,7 @@ pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, tail: &[
         return;
     };
     let (count, at) = (super::handoff::count_at(lw, pl, t), t.at());
+    lw.counts_per_call |= matches!(count, crate::jit_backend::trace::lir::Count::Frame(..));
     lw.loops = true;
     let hot = lw.bcx.create_block();
     lw.bcx.tier_count(count, at, hot, body_loop);
@@ -234,11 +235,7 @@ fn note_write_only_kinds<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, tail: &[RegK
         .filter(|(_, w)| **w)
         .map(|(r, _)| {
             let k = crate::jit_backend::trace::kinds::exit_tag_of(&tail[r]);
-            let fits = matches!(
-                k,
-                ExitTag::Int | ExitTag::Float | ExitTag::Bool | ExitTag::Nil
-            );
-            fits.then_some((r as u16, k))
+            luna_core::__private::kept_past_back_edge(k).then_some((r as u16, k))
         })
         .collect();
     lw.write_only_kinds = match (std::mem::replace(&mut lw.write_only_kinds, Err(())), kinds) {

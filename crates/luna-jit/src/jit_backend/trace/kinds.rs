@@ -74,22 +74,6 @@ pub(super) fn kinds_to_exit_tags(kinds: &[RegKind]) -> Vec<ExitTag> {
     kinds.iter().map(exit_tag_of).collect()
 }
 
-/// The exit tags of `kinds`, sharing the slice of the exit before when
-/// that exit left with the same kinds (`last`: its kinds and tags).
-pub(super) fn shared_exit_tags<'k>(
-    kinds: &'k [RegKind],
-    last: &mut Option<(&'k [RegKind], TArc<[ExitTag]>)>,
-) -> TArc<[ExitTag]> {
-    if let Some((k, t)) = last
-        && *k == kinds
-    {
-        return t.clone();
-    }
-    let tags: TArc<[ExitTag]> = kinds.iter().map(exit_tag_of).collect();
-    *last = Some((kinds, tags.clone()));
-    tags
-}
-
 pub(super) fn exit_tag_of(k: &RegKind) -> ExitTag {
     match k {
         RegKind::Unset | RegKind::Unknown | RegKind::StackHeld => ExitTag::Untouched,

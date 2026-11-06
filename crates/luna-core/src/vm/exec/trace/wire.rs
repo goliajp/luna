@@ -43,7 +43,10 @@ impl Vm {
         // a trace the lowerer would not dispatch (an untyped table read, an
         // inline abort) is no safer from the parent's exit, unless only the
         // length gate (overhead, not soundness; recorded last) refused it
-        let runnable = ct.dispatchable || ct.dispatch_off_reason == Some("length-gate");
+        // nor is one counting in its call's words, which nothing sets up for
+        // a side trace
+        let runnable =
+            (ct.dispatchable || ct.dispatch_off_reason == Some("length-gate")) && !ct.call_count;
         ct.dispatchable = false;
         ct.dispatch_off_reason = Some(SIDE_TRACE);
         let parent_traces = parent_proto.traces.borrow();

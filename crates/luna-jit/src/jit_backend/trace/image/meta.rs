@@ -12,7 +12,7 @@ pub(crate) struct Meta {
     /// Shared with every trace made from the image: an exit's plan is
     /// worked out once, by the first Vm to take the exit.
     pub(crate) plans: TracePlans,
-    per_exit_inline: Box<[(u32, u32, Box<[ExitTag]>, Box<[FrameMaterializeInfo]>)]>,
+    per_exit_inline: Box<[(u32, u32, Box<[FrameMaterializeInfo]>)]>,
     is_inline_abort_close: bool,
     dispatch_off_reason: Option<&'static str>,
     sinkable_sites_seen: u32,
@@ -43,7 +43,6 @@ impl Meta {
                     (
                         e.cont_pc,
                         e.head_resume_pc,
-                        e.exit_tags.iter().copied().collect(),
                         e.chain.iter().copied().collect(),
                     )
                 })
@@ -71,14 +70,12 @@ impl Meta {
     // not, which costs every adopted trace more than the call
     #[inline(never)]
     pub(crate) fn instantiate(&self, tiered: bool, calls_at: u32) -> CompiledTraceParts {
-        let arc = |t: &[ExitTag]| -> TArc<[ExitTag]> { TArc::from(t) };
         let per_exit_inline: Vec<InlineSideExit> = self
             .per_exit_inline
             .iter()
-            .map(|(cont_pc, head_resume_pc, tags, chain)| InlineSideExit {
+            .map(|(cont_pc, head_resume_pc, chain)| InlineSideExit {
                 cont_pc: *cont_pc,
                 head_resume_pc: *head_resume_pc,
-                exit_tags: arc(tags),
                 chain: TArc::from(&chain[..]),
             })
             .collect();
@@ -121,7 +118,7 @@ impl Meta {
             + self
                 .per_exit_inline
                 .iter()
-                .map(|(_, _, t, c)| 16 + t.len() + 12 * c.len())
+                .map(|(_, _, c)| 16 + 12 * c.len())
                 .sum::<usize>()
             + 4 * self.body_writes.len()
     }

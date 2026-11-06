@@ -6,19 +6,8 @@ use crate::jit::trace::{CompiledTrace, ExitTag};
 /// The resume pc and register tags of exit `idx` of `ct`, in the layout of
 /// `exit_hit_counts`.
 fn exit_at(ct: &CompiledTrace, idx: usize) -> (u32, TArc<[ExitTag]>) {
-    let inline_n = ct.per_exit_inline.len();
-    if idx < inline_n {
-        let ent = &ct.per_exit_inline[idx];
-        (ent.cont_pc, ent.exit_tags.clone())
-    } else if idx < inline_n + ct.plans.per_exit_tags.len() {
-        let i = idx - inline_n;
-        (
-            ct.plans.per_exit_tags.cont_pc(i),
-            TArc::from(ct.plans.per_exit_tags.tags(i)),
-        )
-    } else {
-        (ct.head_pc, TArc::from(&ct.plans.exit_tags[..]))
-    }
+    let cont_pc = ct.plans.exit_cont_pc(idx).unwrap_or(ct.head_pc);
+    (cont_pc, TArc::from(ct.plans.exit_tags(idx)))
 }
 
 impl Vm {
@@ -47,11 +36,9 @@ impl Vm {
             out: &mut Vec<HotExitInfo>,
         ) {
             for ct in proto.traces.borrow().iter() {
-                let inline_n = ct.per_exit_inline.len();
-                let tags_n = ct.plans.per_exit_tags.len();
                 debug_assert_eq!(
                     ct.exit_hit_counts.len(),
-                    inline_n + tags_n + 1,
+                    ct.plans.exit_count(),
                     "exit_hit_counts layout invariant violated"
                 );
                 for (idx, cell) in ct.exit_hit_counts.iter().enumerate() {

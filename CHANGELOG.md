@@ -388,6 +388,17 @@ optimization.
   item is `(u32, &[ExitTag])`), index with `table.cont_pc(i)` and
   `table.tags(i)` (or `table.get(i)`), and build one with
   `ExitTagTable::from_exits(exits.iter().map(|(pc, t)| (*pc, &t[..])))`.
+- `jit::decode_exit_shape` and `jit::DecodedExit` are no longer public:
+  the dispatcher decodes a trace's return through the trace's plans, which
+  hold every exit's tags, and nothing outside luna-core called them.
+- An inline side exit's tags are held by the trace's plans, not by the exit:
+  `InlineSideExit::exit_tags` is gone, `CompiledTrace::inline_exit_tags`
+  gives them in the order of `per_exit_inline` (an `ExitTagTable` of each
+  exit's resume pc and tags), and
+  `jit::aot_meta::PerExitInlineEntry::from_inline_side_exit` takes the
+  exit's tags beside it.
+  Migration: build the inline exits without `exit_tags` and pass their
+  `(cont_pc, tags)` to `TracePlans::new` as an `ExitTagTable`.
 - The side-trace cells no compiled code read are gone:
   `CompiledTraceParts::tags_side_trace_ptrs` and `global_side_trace_ptr`
   (with their `CompiledTrace` readers), `CompiledTraceParts::exit_side_trace_ptrs`
@@ -409,7 +420,7 @@ optimization.
 - A trace function's register buffer (`TraceFn`'s `reg_state`) holds three
   words past the trace's window: the down-recursion saved pc, the call's
   tier-up count and its mark of a pass into the optimizing tier's loop. A
-  trace whose exit table gives back-edge kinds counts in that word instead
+  trace whose plans count `PassCount::PerCall` counts in that word instead
   of its tier-up count cell. A caller that runs a trace function itself
   sizes the buffer `window_size + 3`.
 
@@ -1376,14 +1387,14 @@ optimization.
 
 ### Added
 
-- `ExitTagTable::with_back_edge_kinds` and `ExitTagTable::back_edge_kind`:
-  the kinds a looping trace's written-only registers (assigned in the loop,
-  never read there) hold once a call of the trace has gone round its first
-  back edge. An exit that leaves such a register untouched restores it
-  with that kind past the first back edge and leaves it as it was before;
-  only kinds the collector does not trace (integer, float, boolean, nil)
-  are accepted. The baseline tier no longer lowers the loop's first pass
-  apart for these registers.
+- A looping trace's written-only registers (assigned in the loop, never
+  read there) are no longer lowered apart for the loop's first pass: an
+  exit that leaves such a register untouched restores it with the kind the
+  back edge leaves it in once the call has gone round its first back edge,
+  and leaves it as it was before. Only kinds the collector does not trace
+  (integer, float, boolean, nil) are given so. Such a trace counts its
+  passes in its call's words; `__private::PassCount::PerCall` carries the
+  kinds, and `__private::kept_past_back_edge` says which kinds qualify.
 - C API: `luna_newstate_seeded(version, seed)` and
   `luna_newstate_with_seeded(version, f, ud, seed)`, `luaL_newstate` and
   `lua_newstate` whose strings hash with the caller's seed, so that tables

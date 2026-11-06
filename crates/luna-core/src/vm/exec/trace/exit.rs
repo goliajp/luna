@@ -98,12 +98,7 @@ impl Vm {
         let decode_inline = &shapes.per_exit_inline;
         let decode_hit_counts = &shapes.exit_hit_counts;
         let shape_plans = child.as_deref().map_or(plans, |c| &*c.plans);
-        let decoded = crate::jit::trace::decode_exit_shape(
-            decode_body,
-            decode_inline,
-            &shape_plans.per_exit_tags,
-            &shape_plans.exit_tags,
-        );
+        let decoded = shape_plans.decode(decode_body);
         let site_id = decoded.site_id;
         let cont_pc = decoded.cont_pc;
         let exit_hit_idx = decoded.exit_hit_idx;
@@ -129,7 +124,7 @@ impl Vm {
         if !synced {
             let keep = keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0);
             let planned = (!child_ran && keep.is_empty())
-                .then(|| shape_plans.exit_plan.exit(exit_hit_idx, exit_tags_for_pc))
+                .then(|| shape_plans.exit(exit_hit_idx))
                 .flatten()
                 .filter(|e| e.untouched_end <= max_stack && base_us + e.len <= self.stack.len());
             if let Some(e) = planned {
@@ -147,10 +142,7 @@ impl Vm {
                     child_ran,
                 );
             }
-            let tags = exit_tags_for_pc;
-            let table = &plans.per_exit_tags;
-            let window = ct.window_size as usize;
-            self.trace_restore_back_edge_kinds(base_us, table, tags, keep, reg_state, window);
+            self.trace_restore_back_edge_kinds(base_us, ct, exit_tags_for_pc, keep, reg_state);
         }
         // For non-inline exits the
         // helper was never called (no metas chain for

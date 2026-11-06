@@ -10,8 +10,8 @@
 //!
 //! A call has passed its first back edge when word `window + 2` is set or
 //! the two halves of word `window + 1` differ. Only a trace whose exits
-//! tell a call before its first back edge from one past it (its exit table
-//! gives back-edge kinds) counts in these two words; any other counts in
+//! tell a call before its first back edge from one past it (its plans count
+//! `PassCount::PerCall`) counts in these two words; any other counts in
 //! its tier-up count cell, and the dispatcher leaves the words alone. Each call has its words: a
 //! trace entered again from inside itself (a metamethod running the same
 //! loop) counts in its own buffer.

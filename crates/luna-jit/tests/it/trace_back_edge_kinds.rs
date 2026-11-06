@@ -6,7 +6,7 @@
 //! first back edge, in both tiers, from a call nested inside another of the
 //! same trace, and around collections, against the interpreter.
 
-use luna_core::__private::ProtoTraceInternals;
+use luna_core::__private::{PassCount, ProtoTraceInternals};
 use luna_jit::jit::trace::{ExitTag, TraceTier};
 use luna_jit::runtime::Value;
 use luna_jit::version::LuaVersion;
@@ -78,11 +78,12 @@ fn exits_before_a_written_only_register_is_written_restore_what_it_holds() {
         let Value::Closure(c) = f else {
             unreachable!("the chunk returns a function")
         };
-        let kinds: Vec<Option<ExitTag>> = (c.proto.traces().iter())
-            .map(|t| t.per_exit_tags().back_edge_kind(2))
+        let kinds: Vec<PassCount> = (c.proto.traces().iter())
+            .map(|t| t.pass_count().clone())
             .collect();
         assert!(
-            kinds.contains(&Some(ExitTag::Int)),
+            (kinds.iter())
+                .any(|k| matches!(k, PassCount::PerCall(r) if r.contains(&(2, ExitTag::Int)))),
             "at {at}: x has no kind past the back edge: {kinds:?}"
         );
     }

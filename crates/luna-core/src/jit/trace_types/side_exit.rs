@@ -18,10 +18,6 @@ pub struct InlineSideExit {
     /// loop. Captured at emit time as the outermost `Op::Call`'s
     /// `pc + 1` from the live `call_chain`.
     pub head_resume_pc: u32,
-    /// Slot-by-slot `ExitTag` snapshot at the side-exit moment.
-    /// Length = `window_size` — covers caller + every inlined
-    /// frame's register window.
-    pub exit_tags: TArc<[ExitTag]>,
     /// Frames to push onto `vm.frames` (outermost = depth 1 first,
     /// innermost = depth `len()` last). The innermost frame's `pc`
     /// is overwritten to the side-exit PC at compile time so the
@@ -155,15 +151,7 @@ impl CompiledTrace {
     /// The register tags exit `exit_idx` (laid out as `exit_hit_counts`)
     /// leaves, over the whole window from the trace's head frame.
     pub(crate) fn exit_tags_of(&self, exit_idx: usize) -> &[ExitTag] {
-        let inline_n = self.per_exit_inline.len();
-        let tags_n = self.plans.per_exit_tags.len();
-        if exit_idx < inline_n {
-            &self.per_exit_inline[exit_idx].exit_tags
-        } else if exit_idx < inline_n + tags_n {
-            self.plans.per_exit_tags.tags(exit_idx - inline_n)
-        } else {
-            &self.plans.exit_tags
-        }
+        self.plans.exit_tags(exit_idx)
     }
 
     /// Where the frame exit `exit_idx` resumes in starts, in registers from

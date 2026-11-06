@@ -225,12 +225,10 @@ fn v3_per_exit_inline_round_trip_from_live() {
     let live = InlineSideExit {
         cont_pc: 42,
         head_resume_pc: 50,
-        exit_tags: crate::jit::send_compat::TArc::from(
-            vec![ExitTag::Int, ExitTag::Float, ExitTag::Untouched].into_boxed_slice(),
-        ),
         chain: crate::jit::send_compat::TArc::from(chain.into_boxed_slice()),
     };
-    let entry = PerExitInlineEntry::from_inline_side_exit(&live);
+    let tags = [ExitTag::Int, ExitTag::Float, ExitTag::Untouched];
+    let entry = PerExitInlineEntry::from_inline_side_exit(&live, &tags);
     assert_eq!(entry.cont_pc, 42);
     assert_eq!(entry.head_resume_pc, 50);
     assert_eq!(entry.tags_packed.len(), 3);

@@ -95,7 +95,7 @@
 //!
 //! `body_writes`, side-trace ptrs etc. default to empty / null.
 
-use crate::jit::trace_types::{ExitTag, FrameMaterializeInfo, TagResKind};
+use crate::jit::trace_types::{ExitTag, FrameMaterializeInfo, InlineSideExit, TagResKind};
 
 mod blob;
 pub use blob::*;
@@ -272,19 +272,11 @@ impl PerExitInlineEntry {
     /// against the live struct so layout drift fails the build.
     pub const FRAME_MATERIALIZE_INFO_SIZE: usize = 16;
 
-    /// Construct a `PerExitInlineEntry` from a live
-    /// [`crate::jit::trace_types::InlineSideExit`]. The chain is
-    /// serialized via a raw-byte copy — `FrameMaterializeInfo` is
-    /// `repr(C)` + all-`Copy` fields with no padding, so the byte
-    /// pattern matches the on-disk wire layout verbatim.
-    ///
-    /// # Safety
-    ///
-    /// `FrameMaterializeInfo` is `#[repr(C)]` with four 32-bit
-    /// fields and no padding; the byte-level transmute below is
-    /// sound per the wire-size assertion at module top.
-    pub fn from_inline_side_exit(src: &crate::jit::trace_types::InlineSideExit) -> Self {
-        let tags_packed: Vec<u8> = src.exit_tags.iter().copied().map(pack_exit_tag).collect();
+    /// The entry of the live inline exit `src`, whose tags are `tags` (the
+    /// trace's `inline_exit_tags` of the same index): the tags packed, the
+    /// chain's records written field by field, little-endian.
+    pub fn from_inline_side_exit(src: &InlineSideExit, tags: &[ExitTag]) -> Self {
+        let tags_packed: Vec<u8> = tags.iter().copied().map(pack_exit_tag).collect();
         let n = src.chain.len();
         let mut chain_bytes = Vec::with_capacity(n * Self::FRAME_MATERIALIZE_INFO_SIZE);
         for fm in src.chain.iter() {

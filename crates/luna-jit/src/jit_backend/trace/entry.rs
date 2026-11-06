@@ -23,7 +23,7 @@
 //! reads is no temporary but written-only: not lowered twice, held on the
 //! stack on entry, it leaves each exit before its write untouched, and the
 //! dispatcher gives it the kind the back edge leaves it once the call has
-//! gone round a back edge (`ExitTagTable::with_back_edge_kinds`).
+//! gone round a back edge (`PassCount::PerCall`).
 
 use super::slots::rw_ranges;
 use super::*;
