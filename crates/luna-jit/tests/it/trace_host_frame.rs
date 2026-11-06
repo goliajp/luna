@@ -2,7 +2,9 @@
 //! to another coroutine, stops there: the next op the interpreter runs
 //! belongs to another call (the host calling the function again, or a
 //! library function calling back into Lua) or another thread, and
-//! recording it would put two executions' ops in one trace.
+//! recording it would put two executions' ops in one trace. A call trace
+//! of a function the host calls again and again is the exception: the next
+//! call starts at the trace's head, where the recording closes.
 
 use luna_core::__private::VmJitState;
 use luna_jit::runtime::Value;
@@ -117,5 +119,63 @@ fn a_recording_stops_when_its_thread_switches_to_a_coroutine() {
             left += n;
         }
         assert!(left > 0, "{v:?}: no recording left its thread");
+    }
+}
+
+// a function with no loop, called by the host in a loop: its call trace
+// closes at its head when the host calls it again, and its body is long
+// enough for the trace to be dispatched
+const CALLED: &str = r#"
+return function(a, b)
+    local s = a * 3 + b
+    s = s % 1009 + a  s = s * 5 - b  s = s % 1013 + a  s = s * 7 - b
+    s = s % 1019 + a  s = s * 3 - b  s = s % 1021 + a  s = s * 5 - b
+    s = s % 1031 + a  s = s * 7 - b  s = s % 1033 + a  s = s * 3 - b
+    s = s % 1039 + a  s = s * 5 - b  s = s % 1049 + a  s = s * 7 - b
+    s = s % 1051 + a  s = s * 3 - b  s = s % 1061 + a  s = s * 5 - b
+    s = s % 1063 + a  s = s * 7 - b  s = s % 1069 + a  s = s * 3 - b
+    s = s % 1087 + a  s = s * 5 - b  s = s % 1091 + a  s = s * 7 - b
+    s = s % 1093 + a  s = s * 3 - b  s = s % 1097 + a  s = s * 5 - b
+    return s
+end
+"#;
+
+/// The results of 40 host calls of [`CALLED`], the traces compiled and
+/// dispatched, and the recordings stopped for leaving their frame (a side
+/// trace's, which begins at an exit, still is).
+fn host_loop(v: LuaVersion, jit: bool) -> (Vec<String>, u64, u64, u64) {
+    let mut vm = luna_jit::new_with_jit(v);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(jit);
+    vm.set_call_hot_threshold(2);
+    vm.set_trace_hot_threshold(2);
+    let f = vm.eval(CALLED).unwrap().remove(0);
+    let out = (0..40)
+        .map(|k| {
+            format!(
+                "{:?}",
+                vm.call_value(f, &[Value::Int(k), Value::Int(k % 7)])
+                    .unwrap()
+            )
+        })
+        .collect();
+    let left = vm
+        .trace_close_cause_counts()
+        .get("left-start-frame")
+        .copied()
+        .unwrap_or(0);
+    let (compiled, dispatched) = (vm.trace_compiled_count(), vm.trace_dispatched_count());
+    (out, compiled, dispatched, left)
+}
+
+#[test]
+fn a_function_the_host_calls_in_a_loop_gets_a_call_trace() {
+    for v in DIALECTS {
+        let (want, ..) = host_loop(v, false);
+        let (got, compiled, dispatched, left) = host_loop(v, true);
+        assert_eq!(got, want, "{v:?}");
+        let counts = format!("{compiled} compiled, {dispatched} dispatched, {left} left");
+        assert!(compiled > 0, "{v:?}: no trace compiled ({counts})");
+        assert!(dispatched > 0, "{v:?}: the trace never ran ({counts})");
     }
 }
