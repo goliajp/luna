@@ -74,14 +74,7 @@ impl Vm {
             t.tried.set(false);
         }
         let Some(entry) = entry else { return };
-        let p = entry as *const () as *const u8;
-        t.optimized.set(p);
-        let c = t.parent_cell.get() as *const crate::jit::send_compat::TCellPtr;
-        if !c.is_null() {
-            // SAFETY: the cell belongs to the parent trace, which stays in
-            // its proto's `traces` as long as this child can run
-            unsafe { (*c).set(p) };
-        }
+        t.optimized.set(entry as *const () as *const u8);
         self.jit.counters.tiered_up += 1;
     }
 }

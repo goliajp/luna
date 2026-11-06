@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1907** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1906** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 261 | files under a `tests/`, `benches/` or `examples/` directory, or whose name contains `tests` |
 | **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; thirty-four more in `luna_core::__private`, which is not public API, see §5 |
 | **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
@@ -32,7 +32,7 @@ the pattern CI counts (§4). Several `unsafe` blocks on one line count
 once; a block spread over several lines counts once; a comment that
 quotes the pattern counts too.
 
-Changes since the 1801 snapshot (net 106 more):
+Changes since the 1801 snapshot (net 105 more):
 
 - the stores into a table go through the table's handle (`Gc<Table>::set`,
   `set_int`, `try_set_existing`, `set_metatable`), which borrows the table
@@ -114,6 +114,9 @@ Changes since the 1801 snapshot (net 106 more):
   reads is made where the step runs (`jit_gc_step`, `vm/exec`) instead of
   in the helper that calls it (`luna-jit-helpers`): one block moved (no
   change in total)
+- a side trace's entry is no longer written into a cell of its parent's
+  exit, which no code read: the block in `counting.rs` that rewrote that
+  cell when the side trace moved to the optimizing tier is gone (1 fewer)
 
 ## 2. Distribution by crate and module
 
@@ -121,7 +124,7 @@ Changes since the 1801 snapshot (net 106 more):
 |---|---|---:|---|
 | `luna-core` | `vm/exec` fast loop (`fast.rs`, `fast/*`, `num.rs`, `num/words.rs`) | 85 | reading and writing registers and constants in place through the frame's register window; the running frame pointer; instruction fetch; a numeric `for`'s control values read a word pair at a time (aarch64) |
 | | `vm/exec/index*` | 41 | table reads and writes the loop finishes itself with the operands read in place; the `__index` / `__newindex` miss paths entered with raw operand pointers |
-| | `vm/exec` (other) | 97 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
+| | `vm/exec` (other) | 96 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `runtime/gc_hooks` | 176 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation (the lists of objects with finalizers and of those due), the `Gc<T>` handle, the debug check of the slow-store bit; the collector checks of the test-only builds (`gc-verify`: the freed-address probes, the tricolour and string-count checks) |
 | | `runtime/puc` | 138 | the model of PUC's allocations: the records it keeps over raw object headers (the parser's tables and frames a collection step marks, 5.1's environment records, the objects PUC makes and luna does not yet, the strings a load sets aside), its marking and sweeping of them, the 5.5 sizer |
 | | `__private` (`luna_core::__private`) | 66 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, the two table stores that leave the read-only test and the write barrier to the JIT's helpers, the table stores and write barriers that must be given the object's own heap, the VM's heap and the JIT state borrowed mutably, the tier-up source put back on a trace, the optimizing tier's loop function written into a trace's loop cell, the method entry a background compile hands over, the containers made on a context, the JIT entries that take register words (`jit_concat_regs`, `jit_gc_step`) or a string buffer (`jit_str_buf_acquire`), and the JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
@@ -147,7 +150,7 @@ Changes since the 1801 snapshot (net 106 more):
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-fuzz` | | 1 | the heap the dump reader's target loads into |
 | `luna-jit-derive`, `luna-tools` | | 0 | |
-| **Total** | | **1907** | |
+| **Total** | | **1906** | |
 
 ## 3. Pattern catalog
 
@@ -305,7 +308,7 @@ Three CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **1907**, with no headroom;
+  The ceiling is the exact count, **1906**, with no headroom;
 - the same job runs `scripts/unsafe-accounting.py`, which puts every file
   in one row of the table in §2 and fails when a row, the table's total,
   the snapshot in §1 or the ceiling differs from the count in the tree,
@@ -780,7 +783,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 1907, the ceiling in ci.yml's unsafe-drift job
+# 1906, the ceiling in ci.yml's unsafe-drift job
 python3 scripts/unsafe-accounting.py
 # every row of §2, the totals and the ceiling against the tree
 cargo clippy --workspace --all-targets \

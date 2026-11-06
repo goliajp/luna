@@ -162,8 +162,6 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         per_exit_inline.len(),
     );
     let exit_hit_counts: TArc<[TCellU32]> = (0..exits).map(|_| TCellU32::new(0)).collect();
-    // per exit, the side trace's entry once one compiles (null before)
-    let exit_side_trace_ptrs: TArc<[TCellPtr]> = (0..exits).map(|_| TCellPtr::null()).collect();
     CompiledTraceParts {
         head_pc: record.head_pc,
         // caller (JIT wrapper or AOT pipeline)
@@ -188,9 +186,6 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         // alive keeps each chain's address stable across dispatches
         // (cranelift IR has the raw pointer baked in via iconst).
         exit_hit_counts,
-        exit_side_trace_ptrs,
-        // per-TAG-entry side-trace cells (parallel
-        // to per_exit_tags) + the GLOBAL singleton cell
         per_exit_inline,
         // diagnostic only; counts Sinkable sites from the
         // pre-emit sweep. Vm sums these into

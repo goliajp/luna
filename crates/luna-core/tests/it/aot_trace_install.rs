@@ -7,7 +7,7 @@
 use luna_core::__private::{CompiledTrace, CompiledTraceParts, ProtoTraceInternals, TracePlans};
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
-use luna_core::jit::send_compat::{TArc, TCellPtr, TCellU32};
+use luna_core::jit::send_compat::{TArc, TCellU32};
 use luna_core::jit::trace::{ExitTag, ExitTagTable};
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -37,7 +37,6 @@ fn dummy_parts(head_pc: u32, max_stack: u32) -> CompiledTraceParts {
         plans: TracePlans::new(&entry_tags, &exit_tags, ExitTagTable::default(), 0),
         per_exit_inline: TArc::from(Vec::new()),
         exit_hit_counts: TArc::from(vec![TCellU32::new(0u32)]),
-        exit_side_trace_ptrs: TArc::from(vec![TCellPtr::null()]),
         is_inline_abort_close: false,
         dispatch_off_reason: None,
         sinkable_sites_seen: 0,

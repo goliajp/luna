@@ -390,8 +390,11 @@ optimization.
   `ExitTagTable::from_exits(exits.iter().map(|(pc, t)| (*pc, &t[..])))`.
 - The side-trace cells no compiled code read are gone:
   `CompiledTraceParts::tags_side_trace_ptrs` and `global_side_trace_ptr`
-  (with their `CompiledTrace` readers) and `InlineSideExit::side_trace_ptr`.
-  A side trace wired to an exit is found through `exit_side_trace_ptrs`.
+  (with their `CompiledTrace` readers), `CompiledTraceParts::exit_side_trace_ptrs`
+  (with `CompiledTrace::exit_side_trace_ptrs`) and
+  `InlineSideExit::side_trace_ptr`. A side trace wired to an exit is held
+  by the parent trace; `__private::CompiledTraceInternals::has_side_trace`
+  tells whether an exit has one.
   Migration: drop those fields where the parts are built.
 - `jit::encode_side_sentinel` and `SIDE_SENT_KIND_INLINE`, `_TAG`,
   `_GLOBAL` and `_DOWNREC` are gone: compiled code no longer returns

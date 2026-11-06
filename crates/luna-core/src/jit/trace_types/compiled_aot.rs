@@ -10,7 +10,7 @@ impl CompiledTrace {
     /// Builds a [`CompiledTrace`] from the fields the AOT meta blob
     /// carries plus a deploy-resolved trace fn pointer.
     /// `per_exit_inline`, `body_writes` default to empty / null;
-    /// `exit_hit_counts` / `exit_side_trace_ptrs` are sized to
+    /// `exit_hit_counts` is sized to
     /// `per_exit_tags.len() + 1` (each typed-exit slot + the global
     /// clean-tail). The deploy `Vm` never records side traces against
     /// an AOT-installed parent (the recorder is invoked from the
@@ -49,19 +49,14 @@ impl CompiledTrace {
         // from the wire format's `chain_bytes` (for shape decode and side
         // trace routing); no side compares the other's pointers
         //
-        // `exit_hit_counts` / `exit_side_trace_ptrs` sized to
-        // `inline_n + tags_n + 1` (matches the dispatcher's
-        // `hot_exit_iter` invariant).
+        // `exit_hit_counts` sized to `inline_n + tags_n + 1` (matches the
+        // dispatcher's `hot_exit_iter` invariant).
         let inline_n = per_exit_inline.len();
         // the plans work the kind out from the tags; the blob's is the same
         debug_assert_eq!(global_tag_res_kind, classify_exit_tags(&exit_tags));
         let total_slots = inline_n + per_exit_tags.len() + 1;
         let exit_hit_counts: TArc<[TCellU32]> = {
             let v: Vec<TCellU32> = (0..total_slots).map(|_| TCellU32::new(0)).collect();
-            v.into()
-        };
-        let exit_side_trace_ptrs: TArc<[TCellPtr]> = {
-            let v: Vec<TCellPtr> = (0..total_slots).map(|_| TCellPtr::null()).collect();
             v.into()
         };
         let parts = CompiledTraceParts {
@@ -73,7 +68,6 @@ impl CompiledTrace {
             plans: TracePlans::new(&entry_tags, &exit_tags, per_exit_tags, inline_n),
             per_exit_inline: TArc::from(per_exit_inline),
             exit_hit_counts,
-            exit_side_trace_ptrs,
             is_inline_abort_close: false,
             dispatch_off_reason: None,
             sinkable_sites_seen: 0,
@@ -95,7 +89,7 @@ impl CompiledTrace {
             tier_up: None,
         };
         // SAFETY: `entry` is as the parts state and holds no address of
-        // the cells made above (# Safety); every side-trace cell is null
+        // the cells made above (# Safety)
         unsafe { CompiledTrace::from_parts(parts) }
     }
 }
