@@ -545,3 +545,5 @@ jobs:
             echo "Either justify the new unsafe (and bump the ceiling in ci.yml) or refactor."
             exit 1
           fi
+      - name: check the per-module counts in docs/unsafe-accounting.md
+        run: python3 scripts/unsafe-accounting.py
