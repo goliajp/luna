@@ -38,9 +38,8 @@ impl CompiledTrace {
         n_ops: u32,
         dispatchable: bool,
         window_size: u32,
-        entry_tags: TArc<[u8]>,
-        exit_tags: TArc<[ExitTag]>,
-        global_tag_res_kind: TagResKind,
+        entry_tags: &[u8],
+        exit_tags: &[ExitTag],
         per_exit_tags: ExitTagTable,
         per_exit_inline: Vec<crate::jit::trace_types::InlineSideExit>,
     ) -> Self {
@@ -48,12 +47,7 @@ impl CompiledTrace {
         // code holds come from `aot_inline_chain_resolver`, the copies here
         // from the wire format's `chain_bytes` (for shape decode and side
         // trace routing); no side compares the other's pointers
-        //
-        // `exit_hit_counts` sized to `inline_n + tags_n + 1` (matches the
-        // dispatcher's `hot_exit_iter` invariant).
         let inline_n = per_exit_inline.len();
-        // the plans work the kind out from the tags; the blob's is the same
-        debug_assert_eq!(global_tag_res_kind, classify_exit_tags(&exit_tags));
         let total_slots = inline_n + per_exit_tags.len() + 1;
         let exit_hit_counts: TArc<[TCellU32]> = {
             let v: Vec<TCellU32> = (0..total_slots).map(|_| TCellU32::new(0)).collect();
@@ -65,7 +59,7 @@ impl CompiledTrace {
             n_ops,
             dispatchable,
             window_size,
-            plans: TracePlans::new(&entry_tags, &exit_tags, per_exit_tags, inline_n),
+            plans: TracePlans::new(entry_tags, exit_tags, per_exit_tags, inline_n),
             per_exit_inline: TArc::from(per_exit_inline),
             exit_hit_counts,
             is_inline_abort_close: false,

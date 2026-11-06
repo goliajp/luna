@@ -62,8 +62,7 @@ pub struct CompiledTraceParts {
     /// tag the trace is specialised to, or `ENTRY_TAG_ANY`), the clean
     /// tail's exit tags (see [`ExitTag`]) and the typed side exits' tag
     /// table. Made by [`TracePlans::new`] for code just compiled; code
-    /// taken over from another Vm brings its compile's
-    /// ([`CompiledTrace::plans`]).
+    /// taken over from another Vm brings a clone of its compile's.
     pub plans: TracePlans,
     /// Per inline side-exit metadata, indexed by
     /// `site_idx`. Each entry carries the side-exit's `cont_pc`,
