@@ -91,7 +91,7 @@ impl Vm {
         let Some(ct) = self.stepping_trace(&cl.proto) else {
             return i64::from(self.jit_gc_due(op_pc));
         };
-        let n = ct.window_size as usize + crate::__private::TRACE_FRAME_TAIL;
+        let n = ct.window_size as usize + crate::jit::trace_types::frame::TRACE_FRAME_TAIL;
         // SAFETY: the call comes from `ct`, the trace running in the top
         // frame (# Safety), whose register buffer `reg_state` covers its
         // window and the words past it

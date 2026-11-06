@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::jit::trace::CompiledTrace;
+use crate::jit::trace_types::frame::TRACE_FRAME_TAIL;
 
 impl Vm {
     /// Which trace's exit shapes decode `raw_ret`: a side trace's when one
@@ -145,12 +146,12 @@ impl Vm {
 }
 
 /// The words a side trace that counts in its call's word keeps past its window in
-/// the parent's buffer (see `crate::__private::trace_count_slot`): they
+/// the parent's buffer (see `crate::jit::trace_types::frame`): they
 /// may lie on registers of the parent's window past the child's, which the
 /// write-back after it reads, so those are put back after the child ran. A
 /// side trace that does not count reads none of them.
 struct ChildWords {
-    saved: [i64; crate::__private::TRACE_FRAME_TAIL],
+    saved: [i64; TRACE_FRAME_TAIL],
 }
 
 impl ChildWords {
@@ -159,14 +160,14 @@ impl ChildWords {
     /// it counts.
     fn put(reg_state: &mut Vec<i64>, off: usize, child: &CompiledTrace) -> Option<ChildWords> {
         let end = off + child.window_size as usize;
-        let tail = end + crate::__private::TRACE_FRAME_TAIL;
+        let tail = end + TRACE_FRAME_TAIL;
         if reg_state.len() < tail {
             reg_state.resize(tail, 0);
         }
         if !child.call_count {
             return None;
         }
-        let mut saved = [0i64; crate::__private::TRACE_FRAME_TAIL];
+        let mut saved = [0i64; TRACE_FRAME_TAIL];
         saved.copy_from_slice(&reg_state[end..tail]);
         super::dispatch::words::count_in(child, &mut reg_state[off..], end - off);
         Some(ChildWords { saved })
@@ -177,7 +178,7 @@ impl ChildWords {
     fn take(self, reg_state: &mut [i64], off: usize, child: &CompiledTrace) {
         let w = child.window_size as usize;
         super::dispatch::words::count_out(child, &reg_state[off..], w);
-        reg_state[off + w..off + w + crate::__private::TRACE_FRAME_TAIL]
+        reg_state[off + w..off + w + TRACE_FRAME_TAIL]
             .copy_from_slice(&self.saved);
     }
 }

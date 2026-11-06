@@ -9,7 +9,6 @@
 //! with their conditions under `# Safety`.
 
 mod capi;
-pub(crate) mod exit_code;
 mod fields;
 mod free;
 mod heap;
@@ -17,19 +16,18 @@ mod layout;
 mod mem;
 mod panic_watch;
 mod runtime;
-mod trace_frame;
 mod types;
 mod vm;
 
+pub use crate::jit::trace_types::exit_code::{
+    EXIT_KEEP_TFOR_VARS, EXIT_SITE_LIMIT, EXIT_TAGS_INDEX_BIT, SIDE_SENT_DOWNREC_CODE,
+};
+pub use crate::jit::trace_types::frame::{trace_count_slot, trace_passed_slot};
 pub use crate::runtime::dialect::Rules;
 pub use capi::debug::VmCApiDebug;
 pub use capi::load::VmCApiLoad;
 pub use capi::state::VmCApiState;
 pub use capi::values::VmCApiValues;
-pub use exit_code::{
-    EXIT_KEEP_TFOR_VARS, EXIT_SITE_LIMIT, EXIT_TAGS_INDEX_BIT, SIDE_SENT_DOWNREC_CODE,
-    is_downrec_sentinel,
-};
 pub use fields::{
     CoroHostInternals, JIT_NEXT_NONE, JitProtoState, ProtoTraceInternals, TRACE_HEADS_NONE,
     VmJitState,
@@ -40,7 +38,6 @@ pub use layout::{STR_LEN_OFFSET, TABLE_FLAGS_OFFSET, TABLE_SLOW_MASK};
 pub use mem::{lany_new, lbox_new, lvec_new, lvec_with_capacity};
 pub use panic_watch::{panic_free, panics_in};
 pub use runtime::*;
-pub use trace_frame::{TRACE_FRAME_TAIL, trace_count_slot, trace_passed_slot};
 pub use types::*;
 pub use vm::alloc::{JIT_GC_CALL, JIT_GC_LIMIT_OFFSET, JIT_GC_PREV, VmJitAlloc};
 pub use vm::host::{VmHeap, VmHostInternals};

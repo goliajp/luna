@@ -42,7 +42,7 @@ pub const SIDE_SENT_DOWNREC_CODE: u32 = 0x10;
 /// Whether `sentinel_code`, bits 56–62 of a return value with bit 63 set,
 /// marks a down-recursion stitch return.
 #[inline]
-pub fn is_downrec_sentinel(sentinel_code: u32) -> bool {
+pub(crate) fn is_downrec_sentinel(sentinel_code: u32) -> bool {
     sentinel_code == SIDE_SENT_DOWNREC_CODE
 }
 
