@@ -17,7 +17,7 @@ impl Gen<'_, '_> {
         self.ind += 1;
         // tables in locals: a trace reading them through upvalues is not
         // dispatched
-        self.line("local t, arr, c, seq, M, M2, P, objs = t, arr, c, seq, M, M2, P, objs");
+        self.line("local t, arr, c, seq, M, M2, P, objs, BT, BK = t, arr, c, seq, M, M2, P, objs, BT, BK");
         let kernel_hot = self.pick(4) != 0;
         let hot = std::mem::replace(&mut self.hot, kernel_hot);
         if kernel_hot {

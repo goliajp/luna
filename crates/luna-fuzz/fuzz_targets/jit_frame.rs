@@ -37,6 +37,7 @@ local P = setmetatable({}, {__index = t, __newindex = t})
 local TMT = {__index = function(_, k) hits = hits + 1 return 5 end}
 local TMT2 = {__index = Mstore, __newindex = Mstore}
 local objs = {t, M, P}
+local BT, BK = {a = false, b = true, c = false}, {"a", "b", "c"}
 local o = t
 local obj = {v = 0}
 local function va(...)
