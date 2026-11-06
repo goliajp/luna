@@ -100,3 +100,36 @@ fn getfield_returns_correct_value() {
         r[0]
     );
 }
+
+/// `t[k]` with `k` a string in a register and a boolean under it: the
+/// read goes through the checked helper (either boolean), in every
+/// dialect, and the trace runs.
+#[test]
+fn a_boolean_read_by_a_string_key_in_a_register_compiles() {
+    let src = "local t = { a = false, b = true, c = false }
+               local keys = { 'a', 'b', 'c' }
+               local n = 0
+               for i = 1, 300 do
+                   local k = keys[i % 3 + 1]
+                   if t[k] then n = n + 1 end
+               end
+               return n == 100";
+    for v in [
+        LuaVersion::Lua51,
+        LuaVersion::Lua52,
+        LuaVersion::Lua53,
+        LuaVersion::Lua54,
+        LuaVersion::Lua55,
+    ] {
+        let mut vm = luna_jit::new_with_jit(v);
+        vm.set_jit_enabled(false);
+        vm.set_trace_jit_enabled(true);
+        let r = vm.eval(src).unwrap();
+        assert!(
+            matches!(r[0], luna_jit::runtime::Value::Bool(true)),
+            "{v:?}: {:?}",
+            r[0]
+        );
+        assert!(vm.trace_dispatched_count() > 0, "{v:?}: no trace ran");
+    }
+}

@@ -11,7 +11,11 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
         effective_end,
         ..
     } = *pl;
-    let OpHelpers { new_table_id, .. } = lw.h.op;
+    let OpHelpers {
+        new_table_id,
+        get_field_checked_id,
+        ..
+    } = lw.h.op;
     let RuntimeHelpers { get_int_id, .. } = lw.h.rt;
     let OpCx { i, off, ins, .. } = *oc;
     let regs: &[Variable] = oc.regs;
@@ -138,6 +142,11 @@ pub(super) fn emit_table_new_get_op<E: Emit>(
                     let slotted = constant && kind != RegKind::Bool;
                     let v = match record.field_slot(i).filter(|_| slotted) {
                         Some(slot) => emit_field_slot_read(lw, pl, oc, t, key, slot, want),
+                        // the inline chain walk compares one value tag, and a
+                        // boolean has two
+                        None if kind == RegKind::Bool => {
+                            checked_read!(lw, pl, get_field_checked_id, t, key, want, oc.rop.pc, i)
+                        }
                         None => super::field::emit_str_key_read(lw, pl, oc, t, key, want),
                     };
                     lw.bcx.def_var(regs[ins.a() as usize], v);
