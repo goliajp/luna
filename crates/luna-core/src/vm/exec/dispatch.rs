@@ -106,7 +106,7 @@ impl Vm {
     /// The trace JIT's part of the instruction `inst` at `pc` of `cl` (frame
     /// `base`): a recording takes it, and a trace cached for `pc` runs.
     /// `Ok(true)` when a trace ran and the loop goes on where it left.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn trace_at(
         &mut self,
         cl: Gc<LuaClosure>,
