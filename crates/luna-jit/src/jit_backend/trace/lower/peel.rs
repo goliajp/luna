@@ -114,9 +114,7 @@ pub(super) fn emit_first_pass<E: Emit>(
     let restart = Restart::take(lw);
     lw.bcx.switch_to_block(peel);
     lw.bcx.seal_block(peel);
-    commit_start(lw, pl);
-    emit_ops(lw, pl, &mut cx, 0..p)?;
-    commit_at_join(lw, pl, &cx, p);
+    emit_copy(lw, pl, &mut cx, p)?;
     // what reg_state holds of the registers at `P`
     let stored: Vec<bool> = (0..lw.stored.len())
         .map(|r| {
@@ -176,11 +174,36 @@ pub(super) fn emit_loop_copy<E: Emit>(
     }
     // sealed by the tail, which emitted every back edge
     lw.bcx.switch_to_block(lw.blocks.body_loop);
+    emit_copy(lw, pl, &mut cx, p)?;
+    join_loop_copy(lw, pl, &at, &stored, join);
+    lw.bcx.seal_block(join);
+    tail.put(lw);
+    lw.stored = tail_stored;
+    lw.head_stored = tail_head_stored;
+    Some(())
+}
+
+/// The ops before `p`, as each copy lowers them: from the commit at the
+/// start to the commit before the join.
+fn emit_copy<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, cx: &mut BodyCx, p: usize) -> Option<()> {
     commit_start(lw, pl);
-    emit_ops(lw, pl, &mut cx, 0..p)?;
-    commit_at_join(lw, pl, &cx, p);
+    emit_ops(lw, pl, cx, 0..p)?;
+    commit_at_join(lw, pl, cx, p);
+    Some(())
+}
+
+/// The end of the loop's copy: the join, when it reached `P` in the state
+/// the first pass did (`at`; `stored`, what reg_state held there), the
+/// registers stored where the first pass left them; an exit otherwise.
+fn join_loop_copy<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    at: &Restart,
+    stored: &[bool],
+    join: Block,
+) {
     let looped = Restart::take(lw);
-    if looped.holds(&at) && lw.alt_joins.is_empty() && lw.call_chain.is_empty() {
+    if looped.holds(at) && lw.alt_joins.is_empty() && lw.call_chain.is_empty() {
         alias_upvals(lw, &at.upvals, &looped.upvals);
         for (r, _) in stored.iter().enumerate().filter(|(_, s)| **s) {
             let v = use_var_resolved(&mut lw.bcx, lw.entry.regs_full[r]);
@@ -195,14 +218,10 @@ pub(super) fn emit_loop_copy<E: Emit>(
     } else {
         // the loop leaves where its copy would not go on as the first did
         checkpoint("peel:loop-copy-differs");
+        let p = pl.peel_end;
         let pc = pl.record.ops.get(p).map_or(pl.record.head_pc, |o| o.pc);
         guard_exit(lw, pl, pc, p);
     }
-    lw.bcx.seal_block(join);
-    tail.put(lw);
-    lw.stored = tail_stored;
-    lw.head_stored = tail_head_stored;
-    Some(())
 }
 
 /// The commit of op `P` (or the one before the tail, when the copy is the
