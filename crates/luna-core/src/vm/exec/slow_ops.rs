@@ -36,10 +36,12 @@ impl Vm {
             Op::JmpClose | Op::JmpCloseBack => {
                 self.close_from(base + inst.a() - 1);
                 let off = inst.jump_offset();
+                // the pc after the jump's own
+                let pc = self.pc_of_top() - 1;
                 self.add_pc(off);
                 // a loop's back-edge counts toward recording it, as a `Jmp`'s
                 if off < 0 && self.jit.trace_enabled {
-                    let target = self.pc_of_top();
+                    let target = crate::vm::isa::Inst::branch_target(pc, off);
                     if self.back_edge_hot(cl.proto, target) {
                         self.trace_start_at_back_edge(cl, base, target, None);
                     }

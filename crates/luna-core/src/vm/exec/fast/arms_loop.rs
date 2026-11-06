@@ -235,7 +235,7 @@ macro_rules! fast_loop_arms {
                 // threshold.
                 if $trace_on && $npc != $pc + 1 {
                     // the back-edge target is the body's first op
-                    let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
+                    let target = crate::vm::isa::Inst::branch_target($pc, $inst.loop_back_offset());
                     if $vm.back_edge_hot(cl!().proto, target) {
                         save!();
                         slow |= $vm.trace_start_at_back_edge(cl!(), base!(), target, None);
@@ -319,7 +319,7 @@ macro_rules! fast_loop_arms {
                     // takes no back-edge
                     if $trace_on {
                         // the body's first op, right after TForPrep
-                        let target = ($pc as i32 + 1 - $inst.bx() as i32).max(0) as u32;
+                        let target = crate::vm::isa::Inst::branch_target($pc, $inst.loop_back_offset());
                         if $vm.back_edge_hot(cl!().proto, target) {
                             save!();
                             $vm.trace_start_at_back_edge(cl!(), base!(), target, Some((a, $d var as u32)));

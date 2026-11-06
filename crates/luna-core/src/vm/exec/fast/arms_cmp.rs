@@ -18,7 +18,7 @@ macro_rules! fast_cmp_arms {
                 // counts them, and from the threshold on looks whether
                 // to record from the target
                 if $trace_on && off < 0 {
-                    let target = ($pc as i32 + 1 + off).max(0) as u32;
+                    let target = crate::vm::isa::Inst::branch_target($pc, off);
                     if $vm.back_edge_hot(cl!().proto, target) && {
                         save!();
                         $vm.trace_start_at_back_edge(cl!(), base!(), target, None)

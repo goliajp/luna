@@ -30,26 +30,13 @@ pub(crate) struct GcQuiet {
     held: u32,
 }
 
-/// Where the back-edge `inst` at `pc` goes, if it is one.
-fn back_edge_target(inst: crate::vm::isa::Inst, pc: u32) -> Option<u32> {
-    let op = inst.op();
-    let off = if op.is_for_loop() || op.is_tfor_loop() {
-        -(inst.bx() as i64)
-    } else if matches!(op, Op::Jmp | Op::JmpClose | Op::JmpCloseBack) {
-        i64::from(inst.jump_offset())
-    } else {
-        return None;
-    };
-    (off < 0).then(|| (i64::from(pc) + 1 + off).max(0) as u32)
-}
-
 /// The pc of the last back-edge of `proto` that goes to `head`: the trace's
 /// loop runs from `head` to there.
 fn loop_end(proto: Gc<Proto>, head: u32) -> Option<u32> {
     let code = &proto.code;
     (0..code.len() as u32)
         .rev()
-        .find(|&pc| back_edge_target(code[pc as usize], pc) == Some(head))
+        .find(|&pc| code[pc as usize].back_edge_target(pc) == Some(head))
 }
 
 impl Vm {
