@@ -108,6 +108,8 @@ fn run(backend: Backend, tier: TraceTier, tier_up_at: Option<u32>, src: &str) ->
     run_in(LuaVersion::Lua54, backend, tier, tier_up_at, src)
 }
 
+const HASH_SEED: u32 = 1;
+
 fn run_in(
     v: LuaVersion,
     backend: Backend,
@@ -116,7 +118,12 @@ fn run_in(
     src: &str,
 ) -> Run {
     let src = &repeated(src);
-    let mut vm = luna_jit::new_with_jit(v);
+    // one hash seed for every backend: where a table's string keys sit
+    // follows the seed, and with it which exits of a trace that reads them
+    // start side traces
+    let mut vm = luna_jit::vm::Vm::new_minimal_with_hash_seed(v, HASH_SEED);
+    luna_jit::install_default_jit(&mut vm);
+    vm.open_all_libs().expect("the libraries open");
     match backend {
         Backend::Interpreter => vm.install_null_jit(),
         Backend::Cranelift => vm.install_default_jit(),
