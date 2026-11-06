@@ -28,7 +28,7 @@ impl Vm {
     /// A checkpoint: gc-trace writes it, gc-verify checks the live top
     /// cuts into no running Lua frame, gc-stress collects (true: the
     /// checkpoint is done).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     #[track_caller]
     pub(in super::super) fn hook_checkpoint(&mut self, live_top: u32) -> bool {
         #[cfg(feature = "gc-trace")]

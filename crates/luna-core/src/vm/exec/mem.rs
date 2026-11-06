@@ -108,7 +108,7 @@ impl Vm {
     /// Enter native `act` on the running-natives chain, collecting in an
     /// emergency when the chain cannot grow. Its closure and arguments are
     /// on the stack, so the collection keeps them.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn push_native(
         &mut self,
         act: crate::runtime::function::NativeAct,

@@ -29,7 +29,7 @@ impl Vm {
 
     /// The end of a native's run: an error pops it and notes it as the
     /// error's raiser.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn native_returned(&mut self, result: Result<u32, LuaError>) -> Result<u32, LuaError> {
         match result {
             Ok(n) => {
