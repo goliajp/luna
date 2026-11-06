@@ -168,6 +168,9 @@ impl CompiledTrace {
     /// Whether a side trace is wired to exit `exit_idx` (laid out as
     /// `exit_hit_counts`).
     pub(crate) fn has_side_trace(&self, exit_idx: usize) -> bool {
-        u32::try_from(exit_idx).is_ok_and(|i| self.side_children.borrow().contains_key(&i))
+        self.side_children
+            .borrow()
+            .get(exit_idx)
+            .is_some_and(Option::is_some)
     }
 }
