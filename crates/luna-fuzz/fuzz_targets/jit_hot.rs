@@ -83,7 +83,7 @@ impl Gen<'_, '_> {
                 _ => format!("(not ({l} {op} {r}))"),
             };
         }
-        match self.pick(if d >= MAX_DEPTH { 2 } else { 5 }) {
+        match self.pick(if d >= MAX_DEPTH { 2 } else { 6 }) {
             0 => {
                 let op = self.one(&["<", "<=", ">", ">=", "==", "~="]);
                 format!("({} {op} {})", self.num_var(), self.hnum(MAX_DEPTH))
@@ -97,6 +97,14 @@ impl Gen<'_, '_> {
                 let e = self.hnum(d + 1);
                 format!("({e} ~= {e})")
             }
+            // a boolean read by a string key held in a register
+            4 => match self.loop_var() {
+                Some(v) => {
+                    let i = format!("math.floor({v}) % 3 + 1");
+                    format!("({{a = false, b = true, c = false}})[(\"abc\"):sub({i}, {i})]")
+                }
+                None => "({a = false})[s .. \"\"]".to_string(),
+            },
             _ => {
                 let op = self.one(&["and", "or"]);
                 format!("({} {op} {})", self.hcond(d + 1), self.hcond(d + 1))
