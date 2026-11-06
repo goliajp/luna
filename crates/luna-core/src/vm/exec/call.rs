@@ -121,10 +121,26 @@ macro_rules! lua_call {
 }
 
 /// `begin_call` of the native `nc`, the counts as in [`lua_call`].
-/// Returns from the function it is in.
+/// Returns from the function it is in: `in_place`, its `begin_call`
+/// result; `apart`, only what comes before the native runs, `Ok(Some(_))`
+/// when that finished the call and `Ok(None)` when the native is to run.
 macro_rules! native_call {
+    (@done in_place, $r:ident) => {
+        return $r
+    };
+    (@done apart, $r:ident) => {
+        return $r.map(Some)
+    };
+    (@run in_place, $vm:ident, $nc:ident, $func_slot:ident, $nargs:ident, $nresults:ident) => {
+        let nret = $vm.invoke_native($nc, $func_slot, $nargs)?;
+        $vm.finish_native_call($func_slot, $nargs, nret, $nresults)?;
+        return Ok(false);
+    };
+    (@run apart, $vm:ident, $nc:ident, $func_slot:ident, $nargs:ident, $nresults:ident) => {
+        return Ok(None);
+    };
     (
-        $vm:ident, $nc:ident, $func_slot:ident, $nargs:ident, $nresults:ident,
+        $how:ident, $vm:ident, $nc:ident, $func_slot:ident, $nargs:ident, $nresults:ident,
         $tail_ccmt:ident, $chain:ident
     ) => {{
         let (nc, func_slot, nargs, nresults) = ($nc, $func_slot, $nargs, $nresults);
@@ -147,7 +163,7 @@ macro_rules! native_call {
             && let Some(r) =
                 $vm.begin_special_native(nc, func_slot, nargs, nresults, tail_ccmt + chain as u8)
         {
-            return r;
+            native_call!(@done $how, r);
         }
         // a native that collects (e.g. `collectgarbage`) roots up to
         // its own arguments — the caller's live registers all sit
@@ -192,9 +208,7 @@ macro_rules! native_call {
             $vm.running_natives.pop();
             return Err(e);
         }
-        let nret = $vm.invoke_native(nc, func_slot, nargs)?;
-        $vm.finish_native_call(func_slot, nargs, nret, nresults)?;
-        return Ok(false);
+        native_call!(@run $how, $vm, nc, func_slot, nargs, nresults);
     }};
 }
 
@@ -243,7 +257,9 @@ impl Vm {
                 }
                 Value::Native(nc) => {
                     #[cfg(luna_hot)]
-                    native_call!(self, nc, func_slot, nargs, nresults, tail_ccmt, chain);
+                    native_call!(
+                        in_place, self, nc, func_slot, nargs, nresults, tail_ccmt, chain
+                    );
                     #[cfg(not(luna_hot))]
                     return self
                         .begin_native_call(nc, func_slot, nargs, nresults, tail_ccmt, chain);
@@ -256,40 +272,9 @@ impl Vm {
             }
         }
     }
-
-    /// [`lua_call`] as a function of its own (an unoptimised build).
-    #[cfg(not(luna_hot))]
-    #[allow(clippy::too_many_arguments)]
-    fn begin_lua_call(
-        &mut self,
-        cl: Gc<crate::runtime::LuaClosure>,
-        func_slot: u32,
-        nargs: u32,
-        nresults: i32,
-        from_c: bool,
-        tailcalls: u32,
-        tail_ccmt: u8,
-        chain: u32,
-    ) -> Result<bool, LuaError> {
-        lua_call!(
-            self, cl, func_slot, nargs, nresults, from_c, tailcalls, tail_ccmt, chain
-        )
-    }
-
-    /// [`native_call`] as a function of its own (an unoptimised build).
-    #[cfg(not(luna_hot))]
-    fn begin_native_call(
-        &mut self,
-        nc: Gc<crate::runtime::NativeClosure>,
-        func_slot: u32,
-        nargs: u32,
-        nresults: i32,
-        tail_ccmt: u8,
-        chain: u32,
-    ) -> Result<bool, LuaError> {
-        native_call!(self, nc, func_slot, nargs, nresults, tail_ccmt, chain)
-    }
 }
+#[cfg(not(luna_hot))]
+mod apart;
 pub(in crate::vm::exec) mod fast;
 pub(in crate::vm::exec) mod info;
 pub(in crate::vm::exec) mod limits;
