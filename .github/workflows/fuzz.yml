@@ -47,18 +47,29 @@ jobs:
           components: rust-src
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz
+      - name: restore the PUC 5.5.1 source tarball
+        # the tarball changes only with the pinned version, so a hit needs
+        # no lua.org at all; bump the key together with the sum below
+        if: matrix.target == 'fuzz_diff_puc' || matrix.target == 'fuzz_dump_puc'
+        uses: actions/cache@v6
+        with:
+          path: /tmp/puc-src
+          key: puc-src-5.5.1-v1
       - name: install PUC lua 5.5.1 (PUC differential targets)
         if: matrix.target == 'fuzz_diff_puc' || matrix.target == 'fuzz_dump_puc'
         # always the source release: apt's lua5.5 is 5.5.0 on ubuntu 26.04,
-        # which would silently replace the differential reference
+        # which would silently replace the differential reference. The
+        # tarball is downloaded only when the cache did not hold it, and
+        # checked against the sum lua.org publishes either way
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential libreadline-dev curl
-          mkdir -p /tmp/puc-build && cd /tmp/puc-build
-          curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
-          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  lua.tar.gz" | sha256sum -c -
-          tar -xzf lua.tar.gz && cd lua-5.5.1
+          mkdir -p /tmp/puc-src /tmp/puc-build
+          t=/tmp/puc-src/lua-5.5.1.tar.gz
+          [ -f "$t" ] || curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o "$t"
+          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  $t" | sha256sum -c -
+          cd /tmp/puc-build && tar -xzf "$t" && cd lua-5.5.1
           make linux-readline
           sudo make install INSTALL_TOP=/usr/local
           GOT=$(/usr/local/bin/lua -v 2>&1)
@@ -123,18 +134,29 @@ jobs:
           components: rust-src
       - name: install cargo-fuzz
         run: cargo install cargo-fuzz
+      - name: restore the PUC 5.5.1 source tarball
+        # the tarball changes only with the pinned version, so a hit needs
+        # no lua.org at all; bump the key together with the sum below
+        if: matrix.target == 'fuzz_diff_puc' || matrix.target == 'fuzz_dump_puc'
+        uses: actions/cache@v6
+        with:
+          path: /tmp/puc-src
+          key: puc-src-5.5.1-v1
       - name: install PUC lua 5.5.1 (PUC differential targets)
         if: matrix.target == 'fuzz_diff_puc' || matrix.target == 'fuzz_dump_puc'
         # always the source release: apt's lua5.5 is 5.5.0 on ubuntu 26.04,
-        # which would silently replace the differential reference
+        # which would silently replace the differential reference. The
+        # tarball is downloaded only when the cache did not hold it, and
+        # checked against the sum lua.org publishes either way
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential libreadline-dev curl
-          mkdir -p /tmp/puc-build && cd /tmp/puc-build
-          curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua.tar.gz
-          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  lua.tar.gz" | sha256sum -c -
-          tar -xzf lua.tar.gz && cd lua-5.5.1
+          mkdir -p /tmp/puc-src /tmp/puc-build
+          t=/tmp/puc-src/lua-5.5.1.tar.gz
+          [ -f "$t" ] || curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o "$t"
+          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  $t" | sha256sum -c -
+          cd /tmp/puc-build && tar -xzf "$t" && cd lua-5.5.1
           make linux-readline
           sudo make install INSTALL_TOP=/usr/local
           GOT=$(/usr/local/bin/lua -v 2>&1)

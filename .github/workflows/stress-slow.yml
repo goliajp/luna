@@ -87,6 +87,35 @@ jobs:
           path: /tmp/puc-multi
           key: puc-${{ runner.os }}-${{ runner.arch }}-5.1.5-5.2.4-5.3.6-5.4.9-5.5.1-v1
 
+      - name: Restore PUC source tarballs
+        # Only when the builds have to be made again. The tarballs change
+        # only with a pinned version, so a hit needs no lua.org at all;
+        # bump the key's versions together with the sums below.
+        if: steps.puc-cache.outputs.cache-hit != 'true'
+        id: puc-src
+        uses: actions/cache@v6
+        with:
+          path: /tmp/puc-src
+          key: puc-src-5.1.5-5.2.4-5.3.6-5.4.9-5.5.1-v1
+
+      - name: Fetch and check PUC source tarballs
+        # Downloads only what the cache did not hold, and checks every
+        # tarball, cached or not, against the sum lua.org publishes.
+        if: steps.puc-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/puc-src && cd /tmp/puc-src
+          while read -r sum v; do
+            [ -f "lua-$v.tar.gz" ] || curl -fsSL "https://www.lua.org/ftp/lua-$v.tar.gz" -o "lua-$v.tar.gz"
+            echo "$sum  lua-$v.tar.gz" | sha256sum -c -
+          done <<'EOF'
+          2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333 5.1.5
+          b9e2e4aad6789b3b63a056d442f7b39f0ecfca3ae0f1fc0ae4e9614401b69f4b 5.2.4
+          fc5fd69bb8736323f026672b1b7235da613d7177e72558893a0bdcd320466d60 5.3.6
+          2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6 5.4.9
+          1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce 5.5.1
+          EOF
+
       - name: Build PUC 5.1.5 / 5.2.4 / 5.3.6 / 5.4.9 / 5.5.1
         # Always from the lua.org source releases: an apt package would
         # make the differential basis depend on whatever the runner image
@@ -99,12 +128,10 @@ jobs:
           sudo apt-get install -y -qq build-essential
           mkdir -p /tmp/puc-multi && cd /tmp/puc-multi
           for v in 5.1.5 5.2.4 5.3.6 5.4.9; do
-            curl -fsSL "https://www.lua.org/ftp/lua-$v.tar.gz" | tar -xz
+            tar -xzf "/tmp/puc-src/lua-$v.tar.gz"
             ( cd "lua-$v" && make posix > /dev/null )
           done
-          curl -fsSL https://www.lua.org/ftp/lua-5.5.1.tar.gz -o lua-5.5.1.tar.gz
-          echo "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce  lua-5.5.1.tar.gz" | sha256sum -c -
-          tar -xzf lua-5.5.1.tar.gz && rm lua-5.5.1.tar.gz
+          tar -xzf /tmp/puc-src/lua-5.5.1.tar.gz
           ( cd lua-5.5.1 && make linux > /dev/null )
 
       - name: Point the harness at the PUC builds
