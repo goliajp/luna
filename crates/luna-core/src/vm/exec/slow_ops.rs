@@ -4,6 +4,58 @@ use super::*;
 
 mod tail_call;
 
+/// The ops below run in place in [`Vm::run_slow`] when optimised, and each
+/// in a function of its own otherwise: the frame under a call one of them
+/// makes then holds none of the other ops' locals.
+macro_rules! jmp_close_op {
+    ($vm:ident, $inst:ident, $cl:ident, $base:ident) => {{
+        $vm.close_from($base + $inst.a() - 1);
+        let off = $inst.jump_offset();
+        // the pc after the jump's own
+        let pc = $vm.pc_of_top() - 1;
+        $vm.add_pc(off);
+        // a loop's back-edge counts toward recording it, as a `Jmp`'s
+        if off < 0 && $vm.jit.trace_enabled {
+            let target = crate::vm::isa::Inst::branch_target(pc, off);
+            if $vm.back_edge_hot($cl.proto, target) {
+                $vm.trace_start_at_back_edge($cl, $base, target, None);
+            }
+        }
+    }};
+}
+
+macro_rules! close_op {
+    ($vm:ident, $inst:ident, $cl:ident, $base:ident, $entry_depth:ident) => {{
+        // the handlers run through the interpreter loop, so one
+        // can yield, above the whole register window: a goto out
+        // of a nested loop leaves the top at the inner body's,
+        // below a variable still to close (locals.lua:1219)
+        $vm.top = $vm.top.max($base + $cl.proto.max_stack as u32);
+        let _ = $vm.begin_close($base + $inst.a(), None, AfterClose::Block, $entry_depth)?;
+    }};
+}
+
+macro_rules! tfor_call_op {
+    ($vm:ident, $inst:ident, $base:ident) => {{
+        let lay = $inst.op().for_layout().expect("a loop op");
+        let abs = $base + $inst.a();
+        let need = (abs + lay.call_end()) as usize;
+        $vm.grow_stack(need)?;
+        // the iterator, the state and the control, copied to where
+        // the call runs (the control first: in 5.5 it is there)
+        let call = (abs + lay.var()) as usize;
+        $vm.stack[call + 2] = $vm.stack[(abs + lay.control()) as usize];
+        $vm.stack[call + 1] = $vm.stack[(abs + 1) as usize];
+        $vm.stack[call] = $vm.stack[abs as usize];
+        let nvars = $inst.c() as i32;
+        if !$vm.begin_call(call as u32, Some(2), nvars, false)? {
+            // 5.1's `luaD_call` of a C iterator checks for a
+            // collection when it returns
+            $vm.call_return_checkpoint(call as u32 + nvars as u32)?;
+        }
+    }};
+}
+
 impl Vm {
     /// Run an opcode the fast loop handed back. `Some` carries the results
     /// once the call that `entry_depth` started has returned. A function
@@ -33,28 +85,14 @@ impl Vm {
             | Op::Vararg
             | Op::GetVarg => self.run_frame_op(inst)?,
             // 5.2 / 5.3 jumps that close: rare enough to leave the fast loop
-            Op::JmpClose | Op::JmpCloseBack => {
-                self.close_from(base + inst.a() - 1);
-                let off = inst.jump_offset();
-                // the pc after the jump's own
-                let pc = self.pc_of_top() - 1;
-                self.add_pc(off);
-                // a loop's back-edge counts toward recording it, as a `Jmp`'s
-                if off < 0 && self.jit.trace_enabled {
-                    let target = crate::vm::isa::Inst::branch_target(pc, off);
-                    if self.back_edge_hot(cl.proto, target) {
-                        self.trace_start_at_back_edge(cl, base, target, None);
-                    }
-                }
-            }
-            Op::Close => {
-                // the handlers run through the interpreter loop, so one
-                // can yield, above the whole register window: a goto out
-                // of a nested loop leaves the top at the inner body's,
-                // below a variable still to close (locals.lua:1219)
-                self.top = self.top.max(base + cl.proto.max_stack as u32);
-                let _ = self.begin_close(base + inst.a(), None, AfterClose::Block, entry_depth)?;
-            }
+            #[cfg(luna_hot)]
+            Op::JmpClose | Op::JmpCloseBack => jmp_close_op!(self, inst, cl, base),
+            #[cfg(not(luna_hot))]
+            Op::JmpClose | Op::JmpCloseBack => self.op_jmp_close(inst, cl, base),
+            #[cfg(luna_hot)]
+            Op::Close => close_op!(self, inst, cl, base, entry_depth),
+            #[cfg(not(luna_hot))]
+            Op::Close => self.op_close(inst, cl, base, entry_depth)?,
             Op::Tbc => {
                 self.register_tbc(base + inst.a())?;
             }
@@ -62,28 +100,37 @@ impl Vm {
             Op::Return | Op::Return0 | Op::Return1 => {
                 return self.op_return(inst, base, entry_depth);
             }
-            Op::TForCall | Op::TForCall53 | Op::TForCall55 => {
-                let lay = inst.op().for_layout().expect("a loop op");
-                let abs = base + inst.a();
-                let need = (abs + lay.call_end()) as usize;
-                self.grow_stack(need)?;
-                // the iterator, the state and the control, copied to where
-                // the call runs (the control first: in 5.5 it is there)
-                let call = (abs + lay.var()) as usize;
-                self.stack[call + 2] = self.stack[(abs + lay.control()) as usize];
-                self.stack[call + 1] = self.stack[(abs + 1) as usize];
-                self.stack[call] = self.stack[abs as usize];
-                let nvars = inst.c() as i32;
-                if !self.begin_call(call as u32, Some(2), nvars, false)? {
-                    // 5.1's `luaD_call` of a C iterator checks for a
-                    // collection when it returns
-                    self.call_return_checkpoint(call as u32 + nvars as u32)?;
-                }
-            }
+            #[cfg(luna_hot)]
+            Op::TForCall | Op::TForCall53 | Op::TForCall55 => tfor_call_op!(self, inst, base),
+            #[cfg(not(luna_hot))]
+            Op::TForCall | Op::TForCall53 | Op::TForCall55 => self.op_tfor_call(inst, base)?,
             Op::ExtraArg => unreachable!("EXTRAARG executed directly"),
             op => unreachable!("{op:?} is run by the fast loop"),
         }
         Ok(None)
+    }
+
+    #[cfg(not(luna_hot))]
+    fn op_jmp_close(&mut self, inst: Inst, cl: Gc<LuaClosure>, base: u32) {
+        jmp_close_op!(self, inst, cl, base)
+    }
+
+    #[cfg(not(luna_hot))]
+    fn op_close(
+        &mut self,
+        inst: Inst,
+        cl: Gc<LuaClosure>,
+        base: u32,
+        entry_depth: usize,
+    ) -> Result<(), LuaError> {
+        close_op!(self, inst, cl, base, entry_depth);
+        Ok(())
+    }
+
+    #[cfg(not(luna_hot))]
+    fn op_tfor_call(&mut self, inst: Inst, base: u32) -> Result<(), LuaError> {
+        tfor_call_op!(self, inst, base);
+        Ok(())
     }
 
     #[cfg_attr(luna_hot, inline(always))]
