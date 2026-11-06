@@ -154,4 +154,4 @@ mod bounds;
 use bounds::os;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

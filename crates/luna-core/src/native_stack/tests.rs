@@ -15,6 +15,16 @@ thread_local! {
     static DEEPEST_CHECK: Cell<usize> = const { Cell::new(usize::MAX) };
 }
 
+/// Forget the checks this thread made so far.
+pub(crate) fn reset_deepest_check() {
+    DEEPEST_CHECK.with(|c| c.set(usize::MAX));
+}
+
+/// The stack pointer of the deepest check this thread made.
+pub(crate) fn deepest_check() -> usize {
+    DEEPEST_CHECK.with(Cell::get)
+}
+
 /// A check of the stack left, at `sp`.
 pub(super) fn checked_at(sp: usize) {
     DEEPEST_CHECK.with(|c| c.set(c.get().min(sp)));
