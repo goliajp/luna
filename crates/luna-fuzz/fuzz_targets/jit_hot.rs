@@ -99,11 +99,8 @@ impl Gen<'_, '_> {
             }
             // a boolean read by a string key held in a register
             4 => match self.loop_var() {
-                Some(v) => {
-                    let i = format!("math.floor({v}) % 3 + 1");
-                    format!("({{a = false, b = true, c = false}})[(\"abc\"):sub({i}, {i})]")
-                }
-                None => "({a = false})[s .. \"\"]".to_string(),
+                Some(v) => format!("BT[BK[{v} % 3 + 1]]"),
+                None => "BT[BK[2]]".to_string(),
             },
             _ => {
                 let op = self.one(&["and", "or"]);

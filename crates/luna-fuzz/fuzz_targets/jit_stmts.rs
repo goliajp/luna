@@ -92,7 +92,7 @@ impl Gen<'_, '_> {
         self.nums.clear();
         self.anys.clear();
         self.line("local function hk(a, b)");
-        self.line("  local t, arr, c, seq, M, M2, P, objs = t, arr, c, seq, M, M2, P, objs");
+        self.line("  local t, arr, c, seq, M, M2, P, objs, BT, BK = t, arr, c, seq, M, M2, P, objs, BT, BK");
         self.line("  local n1, n2, n3, f1, f2 = a, b, 0, b, b * 2");
         self.ind += 1;
         let (hot, floats) = (self.hot, self.floats);
