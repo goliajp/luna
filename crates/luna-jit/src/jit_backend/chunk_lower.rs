@@ -33,6 +33,12 @@ use helpers::*;
 use kinds::KindSweep;
 use scan::ChunkScan;
 
+/// The ops compiled code takes in their open form (`B == 0`, the operands
+/// up to the stack top): `SETLIST` right after an open self call. A level
+/// handed over at one goes on with the top the interpreter reads there,
+/// which the hand-over sets for luna-core's `OPEN_AFTER_CALL` ops only.
+const OPEN_OPS: &[Op] = &[Op::SetList];
+
 /// The chunk being lowered, as every pass reads it.
 #[derive(Clone, Copy)]
 struct ChunkIn<'a> {

@@ -306,7 +306,7 @@ impl<'ctx, 'a> ComputeEmitter<'ctx, 'a> {
         if value_read {
             // ValueRead — the chunk computes with integers only,
             // so a non-integer upvalue returns at once with a
-            // deopt parked (the interpreter re-runs the call);
+            // deopt parked (the level is handed over at the op);
             // otherwise luna_jit_upval_get(b) into regs[A].
             let idx_arg = i64_type.const_int(ins.b() as u64, false);
             let check = self.helpers.get("luna_jit_upval_is_int").copied()?;

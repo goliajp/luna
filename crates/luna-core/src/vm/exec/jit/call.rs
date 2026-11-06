@@ -167,11 +167,13 @@ impl Vm {
         if self.jit.pending_raise.is_some() {
             return JitRun::Done;
         }
-        // a helper met a metatable: the interpreter runs the call afresh
-        if self.jit.pending_err.take().is_some() {
-            self.jit.handoff.clear();
-            return JitRun::NotRun;
-        }
+        // every helper that parks a deopt is followed by a hand-over at its
+        // op, which clears it: running the call afresh would do its writes
+        // twice
+        debug_assert!(
+            self.jit.pending_err.is_none(),
+            "compiled code returned with a deopt parked and no hand-over"
+        );
         if !self.jit.handoff.is_empty() {
             return JitRun::Handed;
         }

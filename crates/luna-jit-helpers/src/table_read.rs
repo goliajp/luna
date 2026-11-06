@@ -98,8 +98,8 @@ pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
     let g = unsafe { table_arg(t) };
     // Metatable on the source table means PUC would route
     // a missing entry through __index; the helper bypasses that. Park a
-    // deopt request and bail; the dispatcher re-runs the call through
-    // the interpreter, which walks __index correctly (including the
+    // deopt request and bail; compiled code leaves at the op and the
+    // interpreter runs it, walking __index correctly (including the
     // infinite-loop error events.lua relies on).
     if g.metatable().is_some() {
         vm.park_jit_error("JIT deopt: table has metatable");
