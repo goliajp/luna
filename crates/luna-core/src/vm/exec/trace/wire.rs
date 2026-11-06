@@ -90,7 +90,7 @@ impl Vm {
 /// Hands the cached side trace `child` to the parent `wired` names.
 pub(in crate::vm::exec) fn hold_side_trace(wired: Option<Wired>, child: TArc<CompiledTrace>) {
     if let Some((parent, exit)) = wired {
-        parent.side_children.borrow_mut().insert(exit, child);
+        parent.side_children.borrow_mut()[exit as usize] = Some(child);
     }
 }
 

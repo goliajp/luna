@@ -37,7 +37,7 @@ mod read;
 ///
 /// ```compile_fail,E0616
 /// fn wire(ct: &luna_core::__private::CompiledTrace) {
-///     ct.side_children.borrow_mut().clear(); // error[E0616]: field `side_children` is private
+///     ct.side_children.borrow_mut().fill(None); // error[E0616]: field `side_children` is private
 /// }
 /// ```
 ///
@@ -84,11 +84,12 @@ pub struct CompiledTrace {
     pub(crate) entry_plan: entry_plan::EntryPlan,
     pub(crate) per_exit_inline: TArc<[InlineSideExit]>,
     pub(crate) exit_hit_counts: TArc<[TCellU32]>,
-    /// The side traces wired to this trace's exits, by exit index. Held
-    /// here rather than looked up on a proto: a side trace started at an
-    /// exit inside a function the trace inlined is cached on that
+    /// The side trace wired to each of this trace's exits, indexed as
+    /// `exit_hit_counts`: an exit that runs one finds it without hashing.
+    /// Held here rather than looked up on a proto: a side trace started at
+    /// an exit inside a function the trace inlined is cached on that
     /// function's proto.
-    pub(crate) side_children: TRefLock<std::collections::HashMap<u32, TArc<CompiledTrace>>>,
+    pub(crate) side_children: TRefLock<Box<[Option<TArc<CompiledTrace>>]>>,
     /// Fast-path short-circuit hint for the
     /// dispatcher's tentative-decode + cell-load + check path. Set
     /// to `true` by the close handler when a side trace is first wired
@@ -127,16 +128,16 @@ pub struct CompiledTrace {
 }
 
 /// Moves each named field of a [`CompiledTraceParts`] into a
-/// [`CompiledTrace`] with no side trace wired.
+/// [`CompiledTrace`], with no room for side traces yet.
 macro_rules! moved {
     ($parts:ident => $($f:ident),* $(,)?) => {{
         let CompiledTraceParts { $($f,)* plans } = $parts;
         Self {
             call_count: false,
+            side_children: TRefLock::new(Box::default()),
             entry_plan: plans.0.entry_plan.clone(),
             plans: plans.0,
             $($f,)*
-            side_children: TRefLock::new(std::collections::HashMap::new()),
             has_any_side_wired: TCellBool::new(false),
         }
     }};
@@ -197,7 +198,12 @@ impl CompiledTrace {
             accum_bufferable_seen, sunk_alloc_seen, materialize_emit_count, closure_seen,
             inline_kinds, inline_depth, body_writes, downrec_link, downrec_multi_way_count,
             tier_up);
-        Self { call_count, ..ct }
+        let side_children = TRefLock::new(vec![None; ct.exit_hit_counts.len()].into_boxed_slice());
+        Self {
+            call_count,
+            side_children,
+            ..ct
+        }
     }
 
     /// The entry to call: the optimizing tier's once it exists.

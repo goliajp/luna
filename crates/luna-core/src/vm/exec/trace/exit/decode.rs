@@ -52,7 +52,7 @@ impl Vm {
         // parent's code (a test at every exit cost more than it saved)
         let tentative = ct.plans.decode(raw_ret);
         let exit = tentative.exit_hit_idx;
-        let Some(child) = ct.side_children.borrow().get(&(exit as u32)).cloned() else {
+        let Some(child) = ct.side_children.borrow().get(exit).cloned().flatten() else {
             return parent_only;
         };
         // a side trace was recorded from the pc its exit resumed at; a
