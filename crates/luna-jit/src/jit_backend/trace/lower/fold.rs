@@ -4,21 +4,8 @@ use super::*;
 /// still the library function (only when nothing in the trace can
 /// reassign it).
 pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
-    let Plan {
-        record,
-        head_proto,
-        max_stack,
-        opts,
-        ..
-    } = *pl;
-    let reg_state = lw.entry.reg_state;
     let precheck = lw.blocks.precheck;
     let body_loop = lw.body_start();
-    let RuntimeHelpers {
-        suppress_admit_id,
-        math_fn_check_id,
-        ..
-    } = lw.h.rt;
     if let Some(precheck) = precheck {
         // Nothing has run yet: a failed check leaves at the head with the
         // entry kinds, and the interpreter makes the calls.
@@ -29,52 +16,10 @@ pub(super) fn emit_fold_precheck<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         // interned, so one pointer per name
         let mut checked: Vec<*const u8> = Vec::new();
         for fold in &pl.math_folds {
-            let math_key = head_proto.consts[record.ops[fold.start_idx].inst.c() as usize];
-            let name_key = head_proto.consts[record.ops[fold.start_idx + 1].inst.c() as usize];
-            let (
-                luna_core::runtime::Value::Str(math_key),
-                luna_core::runtime::Value::Str(name_key),
-            ) = (math_key, name_key)
-            else {
-                unreachable!("the fold matcher took both keys as strings");
-            };
-            let name_ptr = name_key.as_ptr() as *const u8;
-            if checked.contains(&name_ptr) {
-                continue;
-            }
-            checked.push(name_ptr);
-            let m = emit_str_key_arg(&mut lw.bcx, math_key, opts.aot, &mut lw.defined_aot_data);
-            let k = emit_str_key_arg(&mut lw.bcx, name_key, opts.aot, &mut lw.defined_aot_data);
-            let check_ref = lw.bcx.import_func(math_fn_check_id);
-            let call = lw.bcx.ins().call(check_ref, &[m, k]);
-            let is_library = lw.bcx.inst_results(call)[0];
-            let ok_blk = lw.bcx.create_block();
-            let exit_blk = lw.bcx.create_block();
-            lw.bcx.ins().brif(is_library, ok_blk, &[], exit_blk, &[]);
-            lw.bcx.switch_to_block(exit_blk);
-            lw.bcx.seal_block(exit_blk);
-            let tags_idx = lw
-                .per_exit_kinds
-                .push(record.head_pc, &lw.current_kinds[..max_stack]);
-            emit_tagged_exit(
-                &mut lw.bcx,
-                suppress_admit_id,
-                &lw.entry.regs_full[..max_stack],
-                &entry_stored,
-                reg_state,
-                record.head_pc,
-                record.head_pc,
-                tags_idx,
-                lw.flush_ctx.as_ref(),
-            );
-            lw.bcx.switch_to_block(ok_blk);
-            lw.bcx.seal_block(ok_blk);
+            emit_math_fn_check(lw, pl, fold.start_idx, &mut checked, &entry_stored);
         }
-        let next = lw
-            .blocks
-            .ro_precheck
-            .or(lw.blocks.step_precheck)
-            .unwrap_or(body_loop);
+        let b = &lw.blocks;
+        let next = b.ro_precheck.or(b.step_precheck).unwrap_or(body_loop);
         lw.bcx.ins().jump(next, &[]);
     }
 }
@@ -235,4 +180,66 @@ pub(super) fn emit_fold<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, oc: &OpCx<'_>
         }
     }
     Some(())
+}
+
+/// Checks that the `math.<fn>` the fold at op `start` reads is still the
+/// library function, once per name (`checked`); a failed check leaves at the
+/// head with the entry kinds (`entry_stored`).
+fn emit_math_fn_check<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    start: usize,
+    checked: &mut Vec<*const u8>,
+    entry_stored: &[Option<Value>],
+) {
+    let Plan {
+        record,
+        head_proto,
+        max_stack,
+        opts,
+        ..
+    } = *pl;
+    let RuntimeHelpers {
+        suppress_admit_id,
+        math_fn_check_id,
+        ..
+    } = lw.h.rt;
+    let math_key = head_proto.consts[record.ops[start].inst.c() as usize];
+    let name_key = head_proto.consts[record.ops[start + 1].inst.c() as usize];
+    let (luna_core::runtime::Value::Str(math_key), luna_core::runtime::Value::Str(name_key)) =
+        (math_key, name_key)
+    else {
+        unreachable!("the fold matcher took both keys as strings");
+    };
+    let name_ptr = name_key.as_ptr() as *const u8;
+    if checked.contains(&name_ptr) {
+        return;
+    }
+    checked.push(name_ptr);
+    let m = emit_str_key_arg(&mut lw.bcx, math_key, opts.aot, &mut lw.defined_aot_data);
+    let k = emit_str_key_arg(&mut lw.bcx, name_key, opts.aot, &mut lw.defined_aot_data);
+    let check_ref = lw.bcx.import_func(math_fn_check_id);
+    let call = lw.bcx.ins().call(check_ref, &[m, k]);
+    let is_library = lw.bcx.inst_results(call)[0];
+    let ok_blk = lw.bcx.create_block();
+    let exit_blk = lw.bcx.create_block();
+    lw.bcx.ins().brif(is_library, ok_blk, &[], exit_blk, &[]);
+    lw.bcx.switch_to_block(exit_blk);
+    lw.bcx.seal_block(exit_blk);
+    let tags_idx = lw
+        .per_exit_kinds
+        .push(record.head_pc, &lw.current_kinds[..max_stack]);
+    emit_tagged_exit(
+        &mut lw.bcx,
+        suppress_admit_id,
+        &lw.entry.regs_full[..max_stack],
+        entry_stored,
+        lw.entry.reg_state,
+        record.head_pc,
+        record.head_pc,
+        tags_idx,
+        lw.flush_ctx.as_ref(),
+    );
+    lw.bcx.switch_to_block(ok_blk);
+    lw.bcx.seal_block(ok_blk);
 }

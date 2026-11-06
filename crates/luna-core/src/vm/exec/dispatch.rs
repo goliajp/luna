@@ -54,158 +54,15 @@ impl Vm {
                 matches!(self.frames.last(), Some(CallFrame::Lua(_))),
                 "a continuation frame on top with `trap` clear"
             );
-            // GC runs only at the allocation safe points below (PUC's
-            // `luaC_checkGC` sites), each with a precise `gc_top`; the loop head
-            // no longer collects, so a stale full-window `gc_top` cannot leak in.
-            //
-            // Hot-path frame fetch: the Cont arm above continues the loop,
-            // so reaching here means `frame_peek` is the Lua frame. Reuse it
-            // rather than re-fetching `self.frames.last()`.
-            // SAFETY: the running thread always has a frame here, and it is a
-            // Lua frame: a continuation on top was consumed above
-            let f = match unsafe { self.frames.last().unwrap_unchecked() } {
-                CallFrame::Lua(f) => f,
-                // SAFETY: see above
-                CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
-            };
-            let cl = f.closure;
-            let base = f.base;
-            let pc = f.pc;
-            let oldpc = f.hook_oldpc;
-
-            // SAFETY: `pc` is bounded by the compiler against `proto.code.len()`
-            // — every branch / call op only sets `pc` to a valid index, and
-            // function entry initialises pc=0 with a non-empty body. PUC's
-            // `vmfetch` uses the equivalent unchecked load.
-            let inst = unsafe { *cl.proto.code.get_unchecked(pc as usize) };
-
-            // Trace recording append + close detection.
-            // Gated on `trace_jit_enabled` + `active_trace.is_some()`
-            // so default dispatch keeps a single not-taken branch.
-            //
-            // - At the head PC with a non-empty record, the trace has
-            //   looped back to its start: mark `closed = true` and
-            //   take the record for compile + cache.
-            // - Otherwise, capture the op. If the record overflows
-            //   MAX_TRACE_LEN, abort by dropping it.
+            let (cl, base, pc, oldpc, inst) = self.running_inst();
             // read once: with the trace JIT off this is the only JIT test an
             // instruction makes
             let trace_on = self.jit.trace_enabled;
-            if trace_on && self.jit.active_trace.is_some() {
-                self.trace_record_step(cl, pc, inst, base);
-            }
-
-            // Trace JIT dispatcher.
-            //
-            // When the dispatch loop is about to execute the op at
-            // `pc` and there's a `numeric_only` CompiledTrace cached
-            // for that `head_pc`, marshal the live regs into an
-            // i64 buffer, jump into the trace, and resume the
-            // interpreter at the returned continuation PC.
-            //
-            // Skipped when `trace_jit_enabled` is false or the Proto
-            // holds no trace the lookup could admit
-            // (`has_dispatchable_trace`); otherwise the lookup is a
-            // borrow + scan over `cl.proto.traces`.
-            //
-            // Marshalling contract — only Int slots survive the
-            // round-trip cleanly (the reg_state ABI is `*mut i64`
-            // with no tag info). Any non-Int slot in the affected
-            // window forces a skip; interp takes over for one op
-            // and the back-edge brings us back to try again next
-            // pass (slots that were Nil/Float at one moment can
-            // settle to Int by the time the next back-edge fires).
-            //
-            // A trace that comes back with `vm.jit.pending_err`
-            // parked is treated as a deopt: clear the err, leave
-            // the stack as the trace wrote it, and let the
-            // interpreter run from the same `pc`. The trace itself
-            // is left cached — a future entry might find no
-            // metatable in the way and succeed.
-            // Single Rc<CompiledTrace> clone instead of per-field Rc
-            // clones: proto.traces is Vec<Rc<CompiledTrace>>; the
-            // dispatcher clones ONE Rc and reads fields via auto-deref.
-            // One-shot consume of the
-            // `suppress_downrec_admit_once` flag. Set by the
-            // downrec post-invoke arm below when it force-deopts the
-            // trace (caller-pc guard miss OR cycle-budget exhausted)
-            // so the NEXT interpreter loop iteration skips the
-            // downrec admit, lets interp run the op at `head_pc`,
-            // advances `pc` past `head_pc`, and breaks the otherwise-
-            // infinite admit loop. Reading + clearing here means a
-            // single dispatch tick consumes the suppression — the
-            // following tick re-admits naturally (with the budget
-            // also reset by the deopt site).
-            // The one-shot suppression only matters where a downrec trace
-            // could be admitted, which needs the proto's flag.
-            // Compiled code ticks no instruction budget and checks no
-            // memory cap: while one is armed, every loop stays in the
-            // interpreter.
-            let admit = trace_on && cl.proto.has_dispatchable_trace.get() && !self.limited;
-            let downrec_admit_blocked =
-                admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
-            if admit
-                && Vm::trace_head_at(&cl.proto, pc, downrec_admit_blocked)
-                && self.trace_dispatch(cl, pc, base, downrec_admit_blocked)
-            {
-                // the check the trace's exit made raised
-                if let Some(e) = self.jit.pending_raise.take() {
-                    return Err(e);
-                }
+            if self.trace_at(cl, pc, inst, base, trace_on)? {
                 continue;
             }
-
-            // PUC `vmfetch` increments savedpc BEFORE firing traceexec, so
-            // hook code that consults `currentpc = savedpc - 1` lands on the
-            // instruction now executing. luna mirrors that by advancing
-            // `f.pc` to `pc + 1` before the hook block — local_at /
-            // getinfo / line attribution all read f.pc, and the existing
-            // `pc - 1` convention in those helpers then yields the current
-            // instruction's pc (db.lua :696: local `A` visible at the
-            // chunk's return line once OP_CLOSURE has advanced pc).
-            //
-            // Inline `top_frame_mut` for the hot path: top is guaranteed Lua
-            // (cont frames drained above) so the and_then/Option layers are
-            // dead weight.
-            // SAFETY: the running thread has a frame while it executes
-            // instructions
-            let mut fr: *mut Frame = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
-                CallFrame::Lua(fmut) => {
-                    fmut.pc = pc + 1;
-                    fmut
-                }
-                _ => unreachable!("Cont frame at pc bump"),
-            };
-
-            // count + line hooks (PUC traceexec): before executing the
-            // instruction. Skipped while the hook itself runs. `trap` is set
-            // whenever a hook is armed, so the common case tests one byte.
-            if self.trap && self.hook_armed() {
-                self.exec_hooks(cl, pc, oldpc)?;
-                // a hook runs Lua code, which can move `self.frames`
-                // SAFETY: as above
-                fr = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
-                    CallFrame::Lua(fmut) => fmut,
-                    _ => unreachable!("Cont frame after a hook"),
-                };
-            }
-
-            let mut heads = [crate::runtime::function::TRACE_HEADS_NONE;
-                crate::runtime::function::TRACE_HEADS_CAP];
-            let stay = !self.trap
-                && (!trace_on
-                    || self.jit.active_trace.is_none() && {
-                        heads = cl.proto.trace_heads.get();
-                        heads[0] != crate::runtime::function::TRACE_HEADS_MANY
-                    });
-            let fx = fast::Fast {
-                fr,
-                trace_on,
-                entry_depth,
-                stay,
-                heads,
-            };
-            let watch = !stay || heads[0] != crate::runtime::function::TRACE_HEADS_NONE;
+            let fr = self.enter_inst(cl, pc, oldpc)?;
+            let (fx, watch) = self.fast_entry(cl, fr, trace_on, entry_depth);
             let out = self.run_fast_for(fx, inst, pc + 1, (watch, trace_on, dbl, pre53))?;
             let inst = match out {
                 fast::FastExit::Reload => continue,
@@ -216,6 +73,151 @@ impl Vm {
             }
             // the loop head reloads everything from the frame
         }
+    }
+
+    /// The running Lua frame's closure, base, pc and hook pc, and the
+    /// instruction at its pc. A continuation frame on top was consumed.
+    #[inline(always)]
+    fn running_inst(&self) -> (Gc<LuaClosure>, u32, u32, u32, Inst) {
+        // GC runs only at the allocation safe points below (PUC's
+        // `luaC_checkGC` sites), each with a precise `gc_top`; the loop head
+        // no longer collects, so a stale full-window `gc_top` cannot leak in.
+        //
+        // SAFETY: the running thread always has a frame here, and it is a
+        // Lua frame: the loop head consumed a continuation on top
+        let f = match unsafe { self.frames.last().unwrap_unchecked() } {
+            CallFrame::Lua(f) => f,
+            // SAFETY: see above
+            CallFrame::Cont(_) => unsafe { std::hint::unreachable_unchecked() },
+        };
+        let cl = f.closure;
+        let base = f.base;
+        let pc = f.pc;
+        let oldpc = f.hook_oldpc;
+
+        // SAFETY: `pc` is bounded by the compiler against `proto.code.len()`
+        // — every branch / call op only sets `pc` to a valid index, and
+        // function entry initialises pc=0 with a non-empty body. PUC's
+        // `vmfetch` uses the equivalent unchecked load.
+        let inst = unsafe { *cl.proto.code.get_unchecked(pc as usize) };
+        (cl, base, pc, oldpc, inst)
+    }
+
+    /// The trace JIT's part of the instruction `inst` at `pc` of `cl` (frame
+    /// `base`): a recording takes it, and a trace cached for `pc` runs.
+    /// `Ok(true)` when a trace ran and the loop goes on where it left.
+    #[inline(always)]
+    fn trace_at(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        pc: u32,
+        inst: Inst,
+        base: u32,
+        trace_on: bool,
+    ) -> Result<bool, LuaError> {
+        // a recording takes the op (closing at its head, or dropped past its
+        // length limit)
+        if trace_on && self.jit.active_trace.is_some() {
+            self.trace_record_step(cl, pc, inst, base);
+        }
+        // A trace cached for `pc` runs on the frame's registers, and the
+        // interpreter goes on at its exit; one that comes back with
+        // `pending_err` parked is a deopt, and the interpreter runs from `pc`
+        // (the trace stays cached). Compiled code ticks no instruction budget
+        // and checks no memory cap: while one is armed, every loop stays in the
+        // interpreter. After a down-recursion trace's deopt the interpreter runs
+        // its head op once (`suppress_downrec_admit_once`, read and cleared
+        // here), or the trace would be admitted again forever.
+        let admit = trace_on && cl.proto.has_dispatchable_trace.get() && !self.limited;
+        let downrec_admit_blocked =
+            admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);
+        if admit
+            && Vm::trace_head_at(&cl.proto, pc, downrec_admit_blocked)
+            && self.trace_dispatch(cl, pc, base, downrec_admit_blocked)
+        {
+            // the check the trace's exit made raised
+            if let Some(e) = self.jit.pending_raise.take() {
+                return Err(e);
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Moves the running frame past the instruction at `pc` of `cl` and
+    /// runs the count and line hooks for it: the frame, which a hook may
+    /// have moved.
+    #[inline(always)]
+    fn enter_inst(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        pc: u32,
+        oldpc: u32,
+    ) -> Result<*mut Frame, LuaError> {
+        // PUC `vmfetch` increments savedpc BEFORE firing traceexec, so
+        // hook code that consults `currentpc = savedpc - 1` lands on the
+        // instruction now executing. luna mirrors that by advancing
+        // `f.pc` to `pc + 1` before the hook block — local_at /
+        // getinfo / line attribution all read f.pc, and the existing
+        // `pc - 1` convention in those helpers then yields the current
+        // instruction's pc (db.lua :696: local `A` visible at the
+        // chunk's return line once OP_CLOSURE has advanced pc).
+        //
+        // Inline `top_frame_mut` for the hot path: top is guaranteed Lua
+        // (cont frames drained above) so the and_then/Option layers are
+        // dead weight.
+        // SAFETY: the running thread has a frame while it executes
+        // instructions
+        let mut fr: *mut Frame = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+            CallFrame::Lua(fmut) => {
+                fmut.pc = pc + 1;
+                fmut
+            }
+            _ => unreachable!("Cont frame at pc bump"),
+        };
+
+        // count + line hooks (PUC traceexec): before executing the
+        // instruction. Skipped while the hook itself runs. `trap` is set
+        // whenever a hook is armed, so the common case tests one byte.
+        if self.trap && self.hook_armed() {
+            self.exec_hooks(cl, pc, oldpc)?;
+            // a hook runs Lua code, which can move `self.frames`
+            // SAFETY: as above
+            fr = match unsafe { self.frames.last_mut().unwrap_unchecked() } {
+                CallFrame::Lua(fmut) => fmut,
+                _ => unreachable!("Cont frame after a hook"),
+            };
+        }
+        Ok(fr)
+    }
+
+    /// The fast loop's state for frame `fr` of `cl`, and whether it stops at
+    /// trace heads.
+    #[inline(always)]
+    fn fast_entry(
+        &self,
+        cl: Gc<LuaClosure>,
+        fr: *mut Frame,
+        trace_on: bool,
+        entry_depth: usize,
+    ) -> (fast::Fast, bool) {
+        let mut heads =
+            [crate::runtime::function::TRACE_HEADS_NONE; crate::runtime::function::TRACE_HEADS_CAP];
+        let stay = !self.trap
+            && (!trace_on
+                || self.jit.active_trace.is_none() && {
+                    heads = cl.proto.trace_heads.get();
+                    heads[0] != crate::runtime::function::TRACE_HEADS_MANY
+                });
+        let fx = fast::Fast {
+            fr,
+            trace_on,
+            entry_depth,
+            stay,
+            heads,
+        };
+        let watch = !stay || heads[0] != crate::runtime::function::TRACE_HEADS_NONE;
+        (fx, watch)
     }
 
     /// The fast loop instantiated for the loop's `(watch, trace_on, dbl,
