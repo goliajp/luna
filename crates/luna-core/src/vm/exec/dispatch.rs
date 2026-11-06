@@ -77,7 +77,7 @@ impl Vm {
 
     /// The running Lua frame's closure, base, pc and hook pc, and the
     /// instruction at its pc. A continuation frame on top was consumed.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn running_inst(&self) -> (Gc<LuaClosure>, u32, u32, u32, Inst) {
         // GC runs only at the allocation safe points below (PUC's
         // `luaC_checkGC` sites), each with a precise `gc_top`; the loop head
@@ -147,7 +147,7 @@ impl Vm {
     /// Moves the running frame past the instruction at `pc` of `cl` and
     /// runs the count and line hooks for it: the frame, which a hook may
     /// have moved.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn enter_inst(
         &mut self,
         cl: Gc<LuaClosure>,
@@ -193,7 +193,7 @@ impl Vm {
 
     /// The fast loop's state for frame `fr` of `cl`, and whether it stops at
     /// trace heads.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn fast_entry(
         &self,
         cl: Gc<LuaClosure>,
@@ -225,7 +225,7 @@ impl Vm {
     /// instance when optimised; one call through a pointer otherwise, which
     /// keeps the loop head's frame (on every level of a Lua call made from
     /// a native) from holding the arguments of eight calls.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     fn run_fast_for(
         &mut self,
         fx: fast::Fast,

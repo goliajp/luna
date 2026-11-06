@@ -8,7 +8,7 @@ impl Vm {
     /// `luaD_checkstack` at a call, `top` being `L->top` there), the stack
     /// grown as PUC grows it, else the error PUC raises. `gc`: 5.3 and 5.4
     /// check for a collection before they grow it (`checkstackGCp`).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     pub(crate) fn check_lua_stack(
         &mut self,
         top: u32,

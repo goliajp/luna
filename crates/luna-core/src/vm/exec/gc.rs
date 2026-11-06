@@ -51,7 +51,7 @@ impl Vm {
     /// A point where PUC checks whether a step is due (`luaC_checkGC`), its
     /// stack top there: the slots from `live_top` up are dead to it. An
     /// object made while marking survives if the atomic step reaches it.
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     #[track_caller]
     pub(crate) fn checkpoint(&mut self, live_top: u32) -> Result<(), LuaError> {
         self.refused_growth()?;
@@ -146,7 +146,7 @@ impl Vm {
 
     /// 5.2's `luaD_precall` checks for a collection on every call, the
     /// `CallInfo` made, `L->top` at `top` (a Lua function's whole frame).
-    #[inline(always)]
+    #[cfg_attr(luna_hot, inline(always))]
     #[track_caller]
     pub(crate) fn precall_checkpoint(&mut self, top: u32) -> Result<(), LuaError> {
         if self.heap.rules().check_on_call() {
