@@ -96,3 +96,63 @@ fn a_chain_of_wrapped_calls_stops_at_the_c_level_limit() {
         assert_eq!(depth, want, "{v:?}");
     }
 }
+
+/// `n` levels of `RESUMES` or `WRAPS`, without reaching a limit.
+fn chain(wrapped: bool, n: u32) -> String {
+    let step = if wrapped {
+        "return coroutine.wrap(w)()"
+    } else {
+        "coroutine.resume(coroutine.create(w))"
+    };
+    format!("local d = 0 local function w() d = d + 1 if d < {n} then {step} end end w() return d")
+}
+
+/// Bytes of native stack a chain of `n` levels takes below the thread's
+/// start, run on a thread of its own, and the size of that thread's stack.
+fn chain_bytes(wrapped: bool, n: u32) -> (usize, usize) {
+    std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(move || {
+            let start = crate::native_stack::sp();
+            let size = start - crate::native_stack::low();
+            let mut vm = Vm::new(LuaVersion::Lua51);
+            crate::native_stack::tests::reset_deepest_check();
+            vm.eval(&chain(wrapped, n)).expect("the chain runs");
+            (start - crate::native_stack::tests::deepest_check(), size)
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// Room a [`STACK`] must keep past the deepest level the C-level limit
+/// allows, on top of the reserve: what frames on other targets and
+/// compilers may add.
+const MARGIN: usize = 256 << 10;
+
+/// A level of either chain takes few enough bytes for [`STACK`] to hold
+/// every level up to the C-level limit, the reserve and [`MARGIN`]. Each
+/// measurement runs on a new thread; its stack, which the C library may
+/// give from an earlier thread's, is reported with the numbers.
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "reads the real native stack, which Miri does not model"
+)]
+fn a_level_of_either_chain_leaves_the_c_level_limit_room() {
+    let budget =
+        (STACK - crate::native_stack::RESERVE - MARGIN) / crate::vm::exec::MAX_C_DEPTH as usize;
+    for wrapped in [false, true] {
+        let (short, s1) = chain_bytes(wrapped, 40);
+        let (long, s2) = chain_bytes(wrapped, 80);
+        let per = (long - short) / 40;
+        assert!(
+            per <= budget,
+            "{} chain: {per} bytes a level (40 levels {short}, 80 levels {long}, on stacks of {s1} and \
+             {s2}); a level may take {budget} for {STACK} to hold {} levels, {} of reserve and {MARGIN}",
+            if wrapped { "wrapped" } else { "resume" },
+            crate::vm::exec::MAX_C_DEPTH,
+            crate::native_stack::RESERVE,
+        );
+    }
+}
