@@ -48,7 +48,8 @@ impl Vm {
     }
 
     /// Park a deopt for an allocation compiled code could not make: a
-    /// trace leaves at the op, which the interpreter runs, allocating
+    /// trace leaves at the op, a function compiled whole hands its levels
+    /// over there, and the interpreter runs the op, allocating
     /// through its own path (which may collect in an emergency, as compiled
     /// code may not: it can hold new objects only in machine registers).
     /// The parked value is never raised, so it allocates nothing.

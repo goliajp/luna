@@ -260,7 +260,7 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(
     let k = luna_core::runtime::Value::Float(f64::from_bits(key_bits as u64));
     let v = luna_core::runtime::Value::Float(f64::from_bits(val_bits as u64));
     // a NaN key raises, a read-only table refuses, and a table that cannot
-    // grow grows there: the interpreter re-runs the call
+    // grow grows there: compiled code leaves at the op for the interpreter
     // SAFETY: `g` is a live table of the Vm lent to this call (# Safety) and the key and value are
     // numbers; no reference to the table is held across the store, and the heap stays in place
     match unsafe { g.store(vm.heap_mut(), k, v) } {

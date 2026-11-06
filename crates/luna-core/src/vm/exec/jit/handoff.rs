@@ -7,6 +7,11 @@
 
 use super::*;
 
+pub(crate) mod top;
+
+#[cfg(test)]
+mod tests;
+
 /// What became of a call [`Vm::try_jit_call_op`] was asked to run.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::vm::exec) enum JitRun {
@@ -74,7 +79,10 @@ impl Vm {
     ) -> Result<(), LuaError> {
         let levels = std::mem::take(&mut self.jit.handoff);
         let max = u32::from(cl.proto.max_stack);
-        let top = levels.first().map_or(func_slot + 1 + max, |f| f.base + max);
+        // the deepest level's op runs first, with the top it reads
+        let top = levels.first().map_or(func_slot + 1 + max, |f| {
+            f.base + top::handoff_top(&cl.proto.code, f.pc, max)
+        });
         let end = levels
             .iter()
             .map(|f| f.base + f.vals.len() as u32)

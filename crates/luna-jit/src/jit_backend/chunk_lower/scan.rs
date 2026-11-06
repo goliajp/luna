@@ -1,5 +1,6 @@
 use super::scan_data::scan_data;
 use super::*;
+use luna_core::__private::takes_top;
 
 /// What the whitelist scan learns about a chunk.
 pub(super) struct ChunkScan {
@@ -163,6 +164,9 @@ pub(super) fn scan_chunk(c: ChunkIn<'_>) -> Option<ChunkScan> {
     let mut pc = 0;
     while pc < n {
         let ins = code[pc];
+        if ins.b() == 0 && takes_top(ins.op()) && !OPEN_OPS.contains(&ins.op()) {
+            return None;
+        }
         match ins.op() {
             Op::LoadI
             | Op::LoadF
@@ -196,4 +200,25 @@ pub(super) fn scan_chunk(c: ChunkIn<'_>) -> Option<ChunkScan> {
         pc += 1;
     }
     Some(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OPEN_OPS;
+    use luna_core::__private::{OPEN_AFTER_CALL, takes_top};
+
+    /// The scan admits an op in its open form only if the hand-over sets
+    /// the top the interpreter reads there: admitting another fails here
+    /// until luna-core sets its top too.
+    #[test]
+    fn every_open_op_compiled_has_its_top_set_at_a_hand_over() {
+        assert!(!OPEN_OPS.is_empty());
+        for op in OPEN_OPS {
+            assert!(takes_top(*op), "{op:?} reads no top");
+            assert!(
+                OPEN_AFTER_CALL.contains(op),
+                "a level handed over at an open {op:?} goes on with the frame's top"
+            );
+        }
+    }
 }
