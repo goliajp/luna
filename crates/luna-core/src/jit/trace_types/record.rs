@@ -123,6 +123,10 @@ pub struct TraceRecord {
     /// `head_pc` in the head frame: the op that would follow the last
     /// recorded one is the head.
     pub closed_at_head: bool,
+    /// The recording ran a `Return` out of the frame it began in: an op
+    /// recorded after that, short of returning past the head, is another
+    /// call's (the host called in again).
+    pub returned_from_head: bool,
 }
 
 /// [`TraceRecord::index_slots`] for an op with none.
@@ -194,6 +198,7 @@ impl TraceRecord {
             index_key: None,
             for_step_up: None,
             closed_at_head: false,
+            returned_from_head: false,
         }
     }
 
@@ -237,6 +242,7 @@ impl TraceRecord {
             index_key: None,
             for_step_up: None,
             closed_at_head: false,
+            returned_from_head: false,
         }
     }
 

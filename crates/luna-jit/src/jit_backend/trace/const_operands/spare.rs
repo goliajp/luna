@@ -37,6 +37,7 @@ pub(super) fn copy_record(src: &TraceRecord) -> TraceRecord {
         index_key,
         for_step_up,
         closed_at_head,
+        returned_from_head,
     } = src;
     out.head_proto = *head_proto;
     out.settings = *settings;
@@ -57,6 +58,7 @@ pub(super) fn copy_record(src: &TraceRecord) -> TraceRecord {
     out.index_slots.clone_from(index_slots);
     out.index_key = *index_key;
     out.for_step_up = *for_step_up;
+    out.returned_from_head = *returned_from_head;
     out.closed_at_head = *closed_at_head;
     out
 }
