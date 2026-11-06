@@ -49,24 +49,22 @@ impl Vm {
             self.frames.len() - 1 - self.jit.recording_frame_base
         };
         let depth_cap_hit = cur_depth > crate::jit::trace::MAX_INLINE_DEPTH as usize;
-        if !returned_past_head {
-            if self
-                .jit
-                .active_trace
-                .as_ref()
-                .is_some_and(|r| r.returned_from_head)
-            {
-                self.abort_recording("left-start-frame");
-                return;
-            }
-            self.note_result_tag(cl, base, cur_depth);
-        }
-        let rec = self.jit.active_trace.as_mut().expect("just checked Some");
+        let rec = self.jit.active_trace.as_ref().expect("recording");
         let at_head_loop = cur_depth == 0
             && !rec.ops.is_empty()
             && !returned_past_head
             && std::ptr::eq(cl.proto.as_ptr(), rec.head_proto.as_ptr())
             && pc == rec.head_pc;
+        if !returned_past_head {
+            // past a return out of the head frame, the host calling the
+            // function again at the head closes the recording there; any
+            // other op is another call's
+            if rec.returned_from_head && !at_head_loop {
+                self.abort_recording("left-start-frame");
+                return;
+            }
+            self.note_result_tag(cl, base, cur_depth);
+        }
         let self_link_trip = self.self_link_trip(cl, pc, cur_depth, returned_past_head);
         if let Some(kind) = self_link_trip {
             self.relax_self_link(kind, cur_depth);
