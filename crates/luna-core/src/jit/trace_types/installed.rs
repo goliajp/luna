@@ -25,10 +25,6 @@ mod read;
 /// fn head(ct: &CompiledTrace) -> u32 { ct.head_pc() + ct.tier_up().is_some() as u32 }
 /// fn traces(p: &luna_core::runtime::Proto) -> usize { p.traces().len() }
 /// fn keep(ct: &CompiledTrace) -> bool { take_tier_source(ct).is_some() }
-/// // the side-trace cells are read, not rewired
-/// fn cells(ct: &CompiledTrace) -> bool {
-///     ct.exit_side_trace_ptrs().iter().all(|c| c.get().is_null())
-/// }
 /// // SAFETY: the caller vouches for the source
 /// unsafe fn back(ct: &CompiledTrace) {
 ///     if let Some(s) = take_tier_source(ct) { unsafe { put_tier_source(ct, s) } }
@@ -49,12 +45,6 @@ mod read;
 /// fn swap(a: &luna_core::__private::CompiledTrace, b: &luna_core::__private::CompiledTrace) {
 ///     let s = b.tier_up().unwrap().source.borrow_mut().take(); // error[E0616]: field `source` is private
 ///     *a.tier_up().unwrap().source.borrow_mut() = s;
-/// }
-/// ```
-///
-/// ```compile_fail,E0616
-/// fn cell(ct: &luna_core::__private::CompiledTrace) {
-///     let _ = &ct.exit_side_trace_ptrs; // error[E0616]: field `exit_side_trace_ptrs` is private
 /// }
 /// ```
 ///
@@ -94,7 +84,6 @@ pub struct CompiledTrace {
     pub(crate) entry_plan: entry_plan::EntryPlan,
     pub(crate) per_exit_inline: TArc<[InlineSideExit]>,
     pub(crate) exit_hit_counts: TArc<[TCellU32]>,
-    pub(crate) exit_side_trace_ptrs: TArc<[TCellPtr]>,
     /// The side traces wired to this trace's exits, by exit index. Held
     /// here rather than looked up on a proto: a side trace started at an
     /// exit inside a function the trace inlined is cached on that
@@ -102,10 +91,9 @@ pub struct CompiledTrace {
     pub(crate) side_children: TRefLock<std::collections::HashMap<u32, TArc<CompiledTrace>>>,
     /// Fast-path short-circuit hint for the
     /// dispatcher's tentative-decode + cell-load + check path. Set
-    /// to `true` by the close handler when ANY of this trace's
-    /// `exit_side_trace_ptrs` cells gets wired (i.e., the first
-    /// time a child side trace compiles + the shape gate
-    /// passes). Stays `true` for the trace's lifetime — once any
+    /// to `true` by the close handler when a side trace is first wired
+    /// to any of this trace's exits (it compiled and the shape gate
+    /// passed). Stays `true` for the trace's lifetime — once any
     /// side trace exists, the dispatcher must perform the per-
     /// exit check on every dispatch.
     ///
@@ -175,7 +163,7 @@ impl CompiledTrace {
     ///   the loop returns.
     /// - The cells whose addresses that code holds are the ones `parts`
     ///   owns: the `chain` of each of `per_exit_inline`, and the count and
-    ///   the loop cell of `tier_up`; `exit_side_trace_ptrs` are null. Code
+    ///   the loop cell of `tier_up`. Code
     ///   whose tag table gives back-edge kinds counts in `reg_state`
     ///   instead of `tier_up`'s count (`__private::trace_count_slot`).
     /// - The `tier_up` source, if any, was made for this trace by the
@@ -195,7 +183,7 @@ impl CompiledTrace {
         );
         let call_count = parts.tier_up.is_some() && !p.per_exit_tags.back_edge_kinds().is_empty();
         let ct = moved!(parts => head_pc, entry, n_ops, dispatchable, window_size,
-            per_exit_inline, exit_hit_counts, exit_side_trace_ptrs,
+            per_exit_inline, exit_hit_counts,
             is_inline_abort_close, dispatch_off_reason, sinkable_sites_seen,
             accum_bufferable_seen, sunk_alloc_seen, materialize_emit_count, closure_seen,
             inline_kinds, inline_depth, body_writes, downrec_link, downrec_multi_way_count,

@@ -99,10 +99,6 @@ impl Meta {
                 .map(|_| TCellU32::new(0))
                 .collect::<Vec<_>>()
                 .into(),
-            exit_side_trace_ptrs: (0..total)
-                .map(|_| TCellPtr::null())
-                .collect::<Vec<_>>()
-                .into(),
             is_inline_abort_close: self.is_inline_abort_close,
             dispatch_off_reason: self.dispatch_off_reason,
             sinkable_sites_seen: self.sinkable_sites_seen,

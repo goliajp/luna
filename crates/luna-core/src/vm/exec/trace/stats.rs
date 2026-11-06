@@ -149,8 +149,7 @@ impl Vm {
     }
 
     /// Number of side-trace recordings that closed,
-    /// compiled successfully, AND patched their parent's
-    /// `exit_side_trace_ptrs[exit_idx]`.
+    /// compiled successfully, AND were wired to their parent's exit.
     pub fn trace_side_trace_compiled_count(&self) -> u64 {
         self.jit.counters.side_trace_compiled
     }

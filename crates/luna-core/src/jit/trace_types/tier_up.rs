@@ -29,9 +29,6 @@ pub struct TierUp {
     pub(crate) looped: TCellPtr,
     /// Set once the optimizing tier was asked, whatever it answered.
     pub(crate) tried: TCellBool,
-    /// For a side trace: the parent's exit cell holding this trace's entry
-    /// (the address of a [`TCellPtr`]; null when not wired).
-    pub(crate) parent_cell: TCellPtr,
     /// What the backend compiles the trace from; taken when it does.
     pub(crate) source: TRefLock<Option<Source>>,
 }
@@ -48,7 +45,6 @@ impl TierUp {
             optimized: TCellPtr::null(),
             looped: TCellPtr::null(),
             tried: TCellBool::new(false),
-            parent_cell: TCellPtr::null(),
             source: TRefLock::new(None),
         }
     }

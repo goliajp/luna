@@ -34,10 +34,7 @@ impl Vm {
             && !child_ran
             && self.jit.active_trace.is_none()
             && self.jit.trace_enabled
-            && ct
-                .exit_side_trace_ptrs
-                .get(exit_hit_idx)
-                .is_none_or(|p| p.get().is_null())
+            && !ct.has_side_trace(exit_hit_idx)
     }
 
     /// Start recording a side trace at `cont_pc`, the exit of the trace at

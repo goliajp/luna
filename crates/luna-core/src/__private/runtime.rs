@@ -35,6 +35,8 @@ pub trait CompiledTraceInternals {
     /// inside an inlined function rebuilds, 0 for an exit in the head frame.
     /// A side trace started at that exit runs on the registers from there.
     fn exit_frame_offset(&self, exit_idx: usize) -> usize;
+    /// Whether a side trace is wired to exit `exit_idx`.
+    fn has_side_trace(&self, exit_idx: usize) -> bool;
 }
 
 impl CompiledTraceInternals for crate::jit::CompiledTrace {
@@ -45,6 +47,10 @@ impl CompiledTraceInternals for crate::jit::CompiledTrace {
     #[inline]
     fn exit_frame_offset(&self, exit_idx: usize) -> usize {
         crate::jit::CompiledTrace::exit_frame_offset(self, exit_idx)
+    }
+    #[inline]
+    fn has_side_trace(&self, exit_idx: usize) -> bool {
+        crate::jit::CompiledTrace::has_side_trace(self, exit_idx)
     }
 }
 

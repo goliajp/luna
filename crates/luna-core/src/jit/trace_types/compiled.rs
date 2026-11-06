@@ -96,21 +96,6 @@ pub struct CompiledTraceParts {
     /// mutable borrow on the CompiledTrace. Vm's
     /// `trace_exit_hit_distribution()` aggregates this for probe use.
     pub exit_hit_counts: TArc<[TCellU32]>,
-    /// Per-exit raw side-trace function pointer. Same
-    /// length / layout as [`Self::exit_hit_counts`]. `null` means
-    /// "no side trace compiled for this exit yet"; non-null means a
-    /// child side trace's entry fn lives at this pointer.
-    ///
-    /// `Cell<*const u8>` (not Atomic) since the Vm is single-
-    /// threaded. The pointer's stability is owned by
-    /// the child side trace's `TraceHandle` in `TRACE_JIT_HANDLES`
-    /// (thread-local Vec), which persists for the thread lifetime.
-    ///
-    /// **Send/Sync invariant**: `Cell<*const u8>` is not Sync, but
-    /// `CompiledTrace` was never required to be Sync (it lives in
-    /// `Proto.traces: RefCell<Vec<CompiledTrace>>` on the runtime
-    /// path). Adding this field doesn't tighten that.
-    pub exit_side_trace_ptrs: TArc<[TCellPtr]>,
     /// `true` iff this trace closes at a
     /// `TraceEnd::InlineAbort` (depth>0 op the lowerer can't
     /// continue past: depth past `MAX_INLINE_DEPTH`, non-self

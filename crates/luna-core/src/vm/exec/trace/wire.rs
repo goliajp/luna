@@ -46,7 +46,6 @@ impl Vm {
         let runnable = ct.dispatchable || ct.dispatch_off_reason == Some("length-gate");
         ct.dispatchable = false;
         ct.dispatch_off_reason = Some(SIDE_TRACE);
-        let entry_ptr = ct.entry as *const () as *const u8;
         let parent_traces = parent_proto.traces.borrow();
         let parent_ct = parent_traces.iter().find(|t| t.head_pc == parent_head_pc)?;
         // The child's registers are the parent's from the frame the exit
@@ -76,14 +75,6 @@ impl Vm {
         }
         if !(runnable && shape_matches) {
             return None;
-        }
-        if let Some(cell) = parent_ct.exit_side_trace_ptrs.get(parent_exit_idx) {
-            cell.set(entry_ptr);
-            // a child that may move to the optimizing tier updates the cell
-            // then
-            if let Some(t) = &ct.tier_up {
-                t.parent_cell.set(cell as *const _ as *const u8);
-            }
         }
         self.jit.counters.side_trace_compiled += 1;
         // the dispatcher decodes the parent's exits for a side trace to run

@@ -1,17 +1,15 @@
 //! Side-trace COMPILE + parent ptr LINK. Side traces compile
 //! through the normal lowerer path. The compiled side trace is
 //! pinned `dispatchable=false` (entered only via the parent's exit
-//! ptr, not via the back-edge / call-trigger lookup), and its
-//! entry fn ptr is written into the parent's
-//! `exit_side_trace_ptrs[parent_exit_idx]` Cell.
+//! exit, not via the back-edge / call-trigger lookup), and it is
+//! wired to the parent's exit it started from.
 
 use luna_core::__private::VmHostInternals;
-use luna_jit::__private::ProtoTraceInternals;
+use luna_jit::__private::{CompiledTraceInternals, ProtoTraceInternals};
 use luna_jit::version::LuaVersion;
 
 /// fib(28) — at least one side trace must compile (counter ≥ 1)
-/// AND at least one parent exit_side_trace_ptrs cell must be
-/// written (non-null after compile).
+/// AND at least one parent exit must have it wired.
 #[test]
 fn fib_28_compiles_side_trace() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
@@ -55,15 +53,12 @@ fn fib_28_compiles_side_trace() {
         started
     );
 
-    // Parent's exit_side_trace_ptrs[idx] should be non-null for at
-    // least one slot. Walk every trace on the fib proto chain via
-    // hot_exit_iter — each `head_proto` carries a `CompiledTrace`
-    // whose ptrs we can inspect.
-    let any_non_null = walk_any_side_ptr_non_null(cl);
+    // at least one exit of a trace on the fib proto chain has a side
+    // trace wired
     assert!(
-        any_non_null,
-        "fib_28 must have written at least one parent's \
-         exit_side_trace_ptrs cell to non-null; compiled={}",
+        walk_any_side_wired(cl),
+        "fib_28 must have wired a side trace to at least one parent's \
+         exit; compiled={}",
         compiled
     );
 }
@@ -98,8 +93,8 @@ fn binary_trees_d4_compiles_side_trace() {
         vm.trace_side_trace_compiled_count()
     );
     assert!(
-        walk_any_side_ptr_non_null(cl),
-        "binary_trees_d4 must write at least one parent exit ptr"
+        walk_any_side_wired(cl),
+        "binary_trees_d4 must wire a side trace to at least one parent exit"
     );
 }
 
@@ -184,17 +179,15 @@ fn side_trace_pinned_non_dispatchable() {
     );
 }
 
-/// Walk `cl.proto` recursively, return `true` if any
-/// `CompiledTrace.exit_side_trace_ptrs` cell is non-null.
-fn walk_any_side_ptr_non_null(
+/// Walk `cl.proto` recursively, return `true` if any exit of a trace
+/// has a side trace wired.
+fn walk_any_side_wired(
     cl: luna_jit::runtime::heap::Gc<luna_jit::runtime::function::LuaClosure>,
 ) -> bool {
     fn walk(proto: luna_jit::runtime::heap::Gc<luna_jit::runtime::function::Proto>) -> bool {
         for ct in proto.traces().iter() {
-            for cell in ct.exit_side_trace_ptrs().iter() {
-                if !cell.get().is_null() {
-                    return true;
-                }
+            if (0..ct.exit_hit_counts().len()).any(|i| ct.has_side_trace(i)) {
+                return true;
             }
         }
         for inner in proto.protos.iter() {
