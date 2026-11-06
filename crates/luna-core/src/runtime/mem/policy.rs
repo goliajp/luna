@@ -10,6 +10,24 @@ macro_rules! policy {
         /// memory itself still comes from the system allocator. With the
         /// `send` feature a policy is `Send`: a Vm sent to another thread
         /// takes it along, and Vms sharing it may run on several.
+        ///
+        /// What the policy sees is what the Vm allocates to run Lua: values,
+        /// stacks, frames and the buffers compiled code runs with. The JIT
+        /// compilers' own memory is not: the data a trace or function is
+        /// compiled through (freed once it is compiled) and the machine
+        /// code made from it come from the system allocator and the
+        /// operating system's pages, and do not grow with what the Lua
+        /// program allocates. They grow with the code that gets hot: a
+        /// trace records at most
+        /// [`MAX_TRACE_LEN`](crate::jit::trace::MAX_TRACE_LEN)
+        /// instructions, calls inlined at most
+        /// [`MAX_INLINE_DEPTH`](crate::jit::trace::MAX_INLINE_DEPTH) deep;
+        /// a loop head or function entry gets one trace (after at most a
+        /// few failed attempts), compiled again once for the optimizing
+        /// tier; each exit of a
+        /// trace gets at most one side trace, itself a trace; a function is
+        /// compiled whole once. A host that must bound every byte the Vm
+        /// takes turns the JIT off.
         pub trait MemoryPolicy $($bound)* {
             /// A block is about to grow from `old` bytes to `new` (`old` is
             /// 0 for a new block); `in_use` is what the Vm has allocated so
