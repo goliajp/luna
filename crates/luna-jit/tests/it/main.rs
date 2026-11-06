@@ -127,6 +127,7 @@ mod trace_getupval_whitelist;
 mod trace_hash_slot_materialize;
 mod trace_hash_sunk_emit;
 mod trace_head_exit_readmit;
+mod trace_host_frame;
 mod trace_hot_exit_detection;
 mod trace_inline_callee_identity;
 mod trace_inline_calls;

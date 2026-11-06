@@ -60,6 +60,11 @@ impl Vm {
     }
 
     pub(in crate::vm::exec) fn take_ctx(&mut self) -> SavedCtx {
+        // a recording runs in these frames: what runs next is another
+        // thread's, and recording it would join two threads' ops
+        if self.jit.active_trace.is_some() {
+            self.abort_recording("left-start-thread");
+        }
         // read before the frames it looks at are taken
         let gc_top = self.native_top().unwrap_or(u32::MAX);
         let saved = SavedCtx {

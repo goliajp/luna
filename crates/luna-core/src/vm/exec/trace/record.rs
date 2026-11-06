@@ -50,6 +50,15 @@ impl Vm {
         };
         let depth_cap_hit = cur_depth > crate::jit::trace::MAX_INLINE_DEPTH as usize;
         if !returned_past_head {
+            if self
+                .jit
+                .active_trace
+                .as_ref()
+                .is_some_and(|r| r.returned_from_head)
+            {
+                self.abort_recording("left-start-frame");
+                return;
+            }
             self.note_result_tag(cl, base, cur_depth);
         }
         let rec = self.jit.active_trace.as_mut().expect("just checked Some");
@@ -111,6 +120,13 @@ impl Vm {
         // means `cur_depth <= MAX_INLINE_DEPTH` and the
         // trace head's frame is still live.
         let depth_u8 = cur_depth as u8;
+        rec.returned_from_head |= depth_u8 == 0
+            && matches!(
+                inst.op(),
+                crate::vm::isa::Op::Return
+                    | crate::vm::isa::Op::Return0
+                    | crate::vm::isa::Op::Return1
+            );
         if depth_u8 > self.jit.max_depth_seen {
             self.jit.max_depth_seen = depth_u8;
         }
@@ -246,7 +262,7 @@ impl Vm {
     /// Drop the recording, tallied under `cause`. Counted like a failed
     /// compile: a head whose recordings keep aborting is given up instead
     /// of being recorded again on every hot crossing.
-    fn abort_recording(&mut self, cause: &'static str) {
+    pub(in crate::vm::exec) fn abort_recording(&mut self, cause: &'static str) {
         let rec = self.jit.active_trace.take().expect("recording");
         self.jit.counters.aborted += 1;
         self.jit.counters.bump_close_cause(cause);
