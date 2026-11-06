@@ -1,8 +1,8 @@
 //! The words past a trace's window a dispatch shares with the code (see
-//! `crate::__private::trace_count_slot`).
+//! `crate::jit::trace_types::frame`).
 
-use crate::__private::{TRACE_FRAME_TAIL, trace_count_slot, trace_passed_slot};
 use crate::jit::trace::CompiledTrace;
+use crate::jit::trace_types::frame::{TRACE_FRAME_TAIL, trace_count_slot, trace_passed_slot};
 
 /// Readies the Vm's buffer `reg_state` for a call of a trace whose window is
 /// `window` registers wide: at least the window and the words past it,

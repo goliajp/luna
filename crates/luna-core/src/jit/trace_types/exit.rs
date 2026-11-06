@@ -124,7 +124,7 @@ pub fn exit_tags_match_entry_tags(
     true
 }
 
-use crate::__private::exit_code::{EXIT_SITE_MASK, EXIT_TAGS_INDEX_BIT};
+use super::exit_code::{EXIT_SITE_MASK, EXIT_TAGS_INDEX_BIT};
 
 /// Decoded exit shape. Returned by
 /// [`decode_exit_shape`]. Carries the per-exit metadata the

@@ -122,7 +122,7 @@ pub struct CompiledTrace {
     pub(crate) tier_up: Option<Box<TierUp>>,
     /// The code counts in this call's word of `reg_state`, not in
     /// `tier_up`'s cell: it has a `tier_up` and `per_exit_tags` gives
-    /// back-edge kinds (see `__private::trace_count_slot`).
+    /// back-edge kinds (see `frame::trace_count_slot`).
     pub(crate) call_count: bool,
 }
 
@@ -166,7 +166,7 @@ impl CompiledTrace {
     ///   owns: the `chain` of each of `per_exit_inline`, and the count and
     ///   the loop cell of `tier_up`. Code
     ///   whose tag table gives back-edge kinds counts in `reg_state`
-    ///   instead of `tier_up`'s count (`__private::trace_count_slot`).
+    ///   instead of `tier_up`'s count (`frame::trace_count_slot`).
     /// - The `tier_up` source, if any, was made for this trace by the
     ///   backend that compiled it, in the JIT storage of the Vm it is
     ///   installed on.

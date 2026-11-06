@@ -17,7 +17,7 @@
 //! loop) counts in its own buffer.
 
 /// The words past the window a trace's buffer holds.
-pub const TRACE_FRAME_TAIL: usize = 3;
+pub(crate) const TRACE_FRAME_TAIL: usize = 3;
 
 /// The word of a buffer whose window is `window` registers wide that holds
 /// this call's tier-up count.
