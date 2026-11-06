@@ -60,11 +60,9 @@ impl Restart {
     /// took as known (they take no table as tested: see `emit_first_pass`).
     fn holds(&self, at: &Restart) -> bool {
         let keys = |u: &UpvalReads| {
-            let mut c: Vec<u32> = u.cache.keys().copied().collect();
-            let mut k: Vec<u32> = u.checked.keys().copied().collect();
+            let c: Vec<u32> = u.cache.keys().copied().collect();
+            let k: Vec<u32> = u.checked.keys().copied().collect();
             let mut d = u.check_done.clone();
-            c.sort_unstable();
-            k.sort_unstable();
             d.sort_unstable();
             (c, k, d, u.head_closure.is_some())
         };

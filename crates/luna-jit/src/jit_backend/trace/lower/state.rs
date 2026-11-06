@@ -126,12 +126,13 @@ pub(super) fn entry_values<E: Emit>(lw: &mut Lower<E>) -> Vec<Option<Value>> {
 #[derive(Default, Clone)]
 pub(super) struct UpvalReads {
     /// Per upvalue index, the variable holding its value once read: the
-    /// running closure stays the same through a dispatch.
-    pub(super) cache: std::collections::HashMap<u32, Variable>,
+    /// running closure stays the same through a dispatch. Ordered maps, so
+    /// whatever walks them emits in the same order in every process.
+    pub(super) cache: std::collections::BTreeMap<u32, Variable>,
     /// Per upvalue index, the checked typed read: its variable, out slot,
     /// check result and type.
     pub(super) checked:
-        std::collections::HashMap<u32, (Variable, cranelift_codegen::ir::StackSlot, Value, u8)>,
+        std::collections::BTreeMap<u32, (Variable, cranelift_codegen::ir::StackSlot, Value, u8)>,
     /// The upvalues whose checked read has been guarded.
     pub(super) check_done: Vec<u32>,
     /// The entry closure, fetched at the first inlined call, which
