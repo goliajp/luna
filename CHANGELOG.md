@@ -379,11 +379,10 @@ optimization.
   block, `ExitTagTable` (in `luna_core::jit::trace_types`), instead of one
   shared slice per exit, so a Vm taking up a trace another Vm compiled
   allocates them once, not once per exit.
-  `CompiledTraceParts::per_exit_tags` is an `ExitTagTable` (it was
-  `TArc<[(u32, TArc<[ExitTag]>)]>`) and `CompiledTrace::per_exit_tags`
-  returns `&ExitTagTable`; `decode_exit_shape` and
-  `CompiledTrace::from_aot_meta` take it the same way. Its iterator is
-  `ExitTagIter`, exported beside it.
+  `CompiledTrace::per_exit_tags` returns `&ExitTagTable` (the table was
+  `TArc<[(u32, TArc<[ExitTag]>)]>`), held in the trace's plans (see the
+  `luna_core::__private` entry below). Its iterator is `ExitTagIter`,
+  exported beside it.
   Migration: iterate with `for (pc, tags) in ct.per_exit_tags()` (each
   item is `(u32, &[ExitTag])`), index with `table.cont_pc(i)` and
   `table.tags(i)` (or `table.get(i)`), and build one with
@@ -410,19 +409,37 @@ optimization.
 - `jit::encode_side_sentinel` and `SIDE_SENT_KIND_INLINE`, `_TAG`,
   `_GLOBAL` and `_DOWNREC` are gone: compiled code no longer returns
   through a side trace, so the only return with bit 63 set is a
-  down-recursion stitch, whose code is `SIDE_SENT_DOWNREC_CODE` (test it
-  with `is_downrec_sentinel`).
+  down-recursion stitch, whose code is `SIDE_SENT_DOWNREC_CODE`.
 - The bits of a trace's return value are no longer public:
   `jit::EXIT_TAGS_INDEX_BIT`, `EXIT_KEEP_TFOR_VARS`,
   `SIDE_SENT_DOWNREC_CODE` and `is_downrec_sentinel` are gone from
   `luna_core::jit`. The layout is internal to luna's JIT; the inline site
-  and exit index field is now bits 32–52.
+  and exit index field is now bits 32–52. luna's own crates take
+  `EXIT_TAGS_INDEX_BIT`, `EXIT_KEEP_TFOR_VARS`, `SIDE_SENT_DOWNREC_CODE`
+  and the new `EXIT_SITE_LIMIT` (the values bits 32–52 hold) from
+  `luna_core::__private`, with `trace_count_slot` and `trace_passed_slot`,
+  the words of the register buffer below.
 - A trace function's register buffer (`TraceFn`'s `reg_state`) holds three
   words past the trace's window: the down-recursion saved pc, the call's
   tier-up count and its mark of a pass into the optimizing tier's loop. A
   trace whose plans count `PassCount::PerCall` counts in that word instead
   of its tier-up count cell. A caller that runs a trace function itself
   sizes the buffer `window_size + 3`.
+- In `luna_core::__private` (not covered by semantic versioning), for
+  luna's own crates: a compiled trace's tags and the plans worked out from
+  them are one `TracePlans` value, shared by every Vm running the same
+  code. `CompiledTraceParts` has a `plans` field in place of `exit_tags`,
+  `global_tag_res_kind`, `entry_tags` and `per_exit_tags`; `TracePlans`
+  has `new(entry_tags, exit_tags, per_exit_tags, inline_tags, pass_count)`,
+  `entry_tags`, `exit_count` and `byte_size`, and `PassCount` and
+  `kept_past_back_edge` go with it. `CompiledTrace::exit_tags` returns
+  `&[ExitTag]` (it returned `&TArc<[ExitTag]>`) and `entry_tags` `&[u8]`
+  (it returned `&TArc<[u8]>`); `CompiledTrace::inline_exit_tags` and
+  `pass_count` are new. `CompiledTrace::from_aot_meta` takes the trace's
+  `TracePlans` in place of its entry tags, exit tags, tag kind and typed
+  exits. `VmJitAlloc::jit_step_window` is gone, and `VmJitAlloc::jit_gc_step`
+  takes the running trace's register buffer as `*const i64` (it took
+  `Option<&[i64]>`).
 
 ### Changed
 
