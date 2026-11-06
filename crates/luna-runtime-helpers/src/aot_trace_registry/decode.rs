@@ -21,15 +21,16 @@ pub(super) fn per_exit_tags(entries: &[PerExitTagsEntry]) -> Option<ExitTagTable
     ))
 }
 
-/// Rebuild the v3 `per_exit_inline` side exits of one trace. `None`
-/// (after printing the probe line) when a chain or a packed tag is
-/// corrupt, in which case the whole trace skips install.
+/// Rebuild the v3 `per_exit_inline` side exits of one trace, with their
+/// resume pcs and tags. `None` (after printing the probe line) when a chain
+/// or a packed tag is corrupt, in which case the whole trace skips install.
 pub(super) fn per_exit_inline(
     entries: &[luna_core::jit::aot_meta::PerExitInlineEntry],
     head_pc: u32,
     probe_on: bool,
-) -> Option<Vec<InlineSideExit>> {
+) -> Option<(Vec<InlineSideExit>, ExitTagTable)> {
     let mut per_exit_inline_decoded: Vec<InlineSideExit> = Vec::with_capacity(entries.len());
+    let mut inline_tags: Vec<(u32, Vec<ExitTag>)> = Vec::with_capacity(entries.len());
     let mut inline_ok = true;
     for ent in entries {
         let Some(chain_vec) = ent.rebuild_chain() else {
@@ -63,12 +64,13 @@ pub(super) fn per_exit_inline(
         per_exit_inline_decoded.push(InlineSideExit {
             cont_pc: ent.cont_pc,
             head_resume_pc: ent.head_resume_pc,
-            exit_tags: tags.into(),
             chain: chain_vec.into(),
         });
+        inline_tags.push((ent.cont_pc, tags));
     }
     if !inline_ok {
         return None;
     }
-    Some(per_exit_inline_decoded)
+    let table = ExitTagTable::from_exits(inline_tags.iter().map(|(pc, t)| (*pc, &t[..])));
+    Some((per_exit_inline_decoded, table))
 }

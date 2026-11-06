@@ -134,33 +134,29 @@ use super::exit_code::{EXIT_SITE_MASK, EXIT_TAGS_INDEX_BIT};
 /// through, and a flag for the global classified-restore fast
 /// path.
 ///
-/// The lifetime ties `exit_tags_for_pc` to whichever input slice
-/// the decode picked from (one of the `CompiledTrace` fields).
-/// The dispatcher's per_exit_inline / per_exit_tags / exit_tags
-/// Rc clones from the per-dispatch lookup keep them alive for
-/// the dispatch.
-pub struct DecodedExit<'a> {
+/// The lifetime ties `exit_tags_for_pc` to the trace's plans the decode
+/// read it from.
+pub(crate) struct DecodedExit<'a> {
     /// Pc the interpreter should resume at after the trace exit.
-    pub cont_pc: u32,
+    pub(crate) cont_pc: u32,
     /// Stable id of the exit site (used to key per-site counters / caches).
-    pub site_id: u32,
+    pub(crate) site_id: u32,
     /// Index into `exit_hit_counts` for the side-trace trigger counter.
-    pub exit_hit_idx: usize,
+    pub(crate) exit_hit_idx: usize,
     /// Per-slot exit-tag array describing how to interpret saved register
     /// state for this exit.
-    pub exit_tags_for_pc: &'a [ExitTag],
+    pub(crate) exit_tags_for_pc: &'a [ExitTag],
     /// True when the global classified-restore fast path applies.
-    pub using_global_exit_tags: bool,
+    pub(crate) using_global_exit_tags: bool,
 }
 
 /// Decode a trace's i64 return value into the
 /// per-exit shape the dispatcher needs to restore vm.stack +
 /// bump the hit counter.
 ///
-/// Pure function over the input slices — the dispatcher passes
-/// the parent's `per_exit_inline` / `per_exit_tags` / `exit_tags`,
-/// or the side trace's same fields when a side trace wired to the exit
-/// ran.
+/// Pure function over a trace's tags (see `Plans::decode`): its inline
+/// exits', its typed exits' and its clean tail's, the parent's or, when a
+/// side trace wired to the exit ran, the side trace's.
 ///
 /// A depth-0 side exit returns `EXIT_TAGS_INDEX_BIT | (i << 32) | cont_pc`
 /// and restores through `per_exit_tags[i]`: several exits can resume at
@@ -170,24 +166,19 @@ pub struct DecodedExit<'a> {
 /// restores through the global tags, even when an exit resumes at that pc
 /// as well.
 ///
-/// Layout reminder (from `CompiledTraceParts::exit_hit_counts`):
-/// - `[0..inline.len())` — inline cmp@d>0 sites, indexed by
-///   `site_id - 1` (1-based encoding lets `site_id == 0` mean
-///   "non-inline").
-/// - `[inline.len()..inline.len() + tags.len())` — per_exit_tags,
-///   by the index the exit returns.
-/// - Last slot — global / clean-tail fallback.
+/// An inline exit's site is 1-based, so that 0 means none; `exit_hit_idx`
+/// numbers the exits as `TracePlans` does.
 // every exit decodes through it: out of line it costs a call per exit
 #[inline(always)]
-pub fn decode_exit_shape<'a>(
+pub(crate) fn decode_exit_shape<'a>(
     raw_ret: u64,
-    per_exit_inline: &'a [InlineSideExit],
+    inline_tags: &'a ExitTagTable,
     per_exit_tags: &'a ExitTagTable,
     exit_tags: &'a [ExitTag],
 ) -> DecodedExit<'a> {
     let site_field = ((raw_ret >> 32) & EXIT_SITE_MASK) as u32;
     let cont_pc = (raw_ret & 0xFFFF_FFFF) as u32;
-    let inline_n = per_exit_inline.len();
+    let inline_n = inline_tags.len();
     if raw_ret & EXIT_TAGS_INDEX_BIT != 0 {
         let i = site_field as usize;
         debug_assert_eq!(
@@ -208,14 +199,15 @@ pub fn decode_exit_shape<'a>(
         let idx = (site_id - 1) as usize;
         debug_assert!(idx < inline_n, "site {idx} of {inline_n}");
         debug_assert_eq!(
-            per_exit_inline[idx].cont_pc, cont_pc,
-            "per_exit_inline entry's cont_pc mismatch with IR"
+            inline_tags.cont_pc(idx),
+            cont_pc,
+            "inline exit's cont_pc mismatch with IR"
         );
         DecodedExit {
             cont_pc,
             site_id,
             exit_hit_idx: idx,
-            exit_tags_for_pc: &per_exit_inline[idx].exit_tags,
+            exit_tags_for_pc: inline_tags.tags(idx),
             using_global_exit_tags: false,
         }
     } else {

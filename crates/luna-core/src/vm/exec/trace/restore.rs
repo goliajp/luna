@@ -139,26 +139,25 @@ impl Vm {
         }
     }
 
-    /// After a write-back through `tags`, the registers `table` gives a
-    /// kind past the first back edge (see
-    /// [`crate::jit::trace::ExitTagTable::with_back_edge_kinds`]) that the
-    /// exit leaves untouched hold the value the pass before wrote, of that
-    /// kind, when the call that ran on `reg_state` (window `window`) passed
-    /// a back edge (see `dispatch::words::call_passed`), which is read only
-    /// for a table that has such registers. Those kinds are never
-    /// collectable.
+    /// After a write-back of `ct`'s exit through `tags`, the registers its
+    /// plans give a kind past the first back edge
+    /// ([`crate::jit::trace_types::installed::plans::PassCount::PerCall`])
+    /// that the exit leaves untouched hold the value the pass before wrote,
+    /// of that kind, when the call that ran on `reg_state` passed a back
+    /// edge (see `dispatch::words::call_passed`). The call's words are read
+    /// only for a trace that counts in them (`CompiledTrace::call_count`),
+    /// whose call set them. Those kinds are never collectable.
     #[inline(always)]
     pub(in crate::vm::exec) fn trace_restore_back_edge_kinds(
         &mut self,
         base_us: usize,
-        table: &crate::jit::trace::ExitTagTable,
+        ct: &crate::jit::trace::CompiledTrace,
         tags: &[ExitTag],
         keep: std::ops::Range<usize>,
         reg_state: &[i64],
-        window: usize,
     ) {
-        if !table.back_edge_kinds().is_empty() {
-            self.put_back_edge_kinds(base_us, table, tags, keep, reg_state, window);
+        if ct.call_count {
+            self.put_back_edge_kinds(base_us, ct, tags, keep, reg_state);
         }
     }
 
@@ -166,16 +165,16 @@ impl Vm {
     fn put_back_edge_kinds(
         &mut self,
         base_us: usize,
-        table: &crate::jit::trace::ExitTagTable,
+        ct: &crate::jit::trace::CompiledTrace,
         tags: &[ExitTag],
         keep: std::ops::Range<usize>,
         reg_state: &[i64],
-        window: usize,
     ) {
+        let window = ct.window_size as usize;
         if !super::dispatch::words::call_passed(reg_state, window) {
             return;
         }
-        for &(r, k) in table.back_edge_kinds() {
+        for &(r, k) in ct.plans.back_edge_kinds() {
             let r = r as usize;
             if r >= window || keep.contains(&r) {
                 continue;
@@ -189,8 +188,8 @@ impl Vm {
     }
 }
 
-/// The raw tag a value of a kind [`crate::jit::trace::ExitTagTable`] gives
-/// past the first back edge has.
+/// The raw tag a value of a kind a trace's plans give past the first back
+/// edge has.
 pub(in crate::vm::exec) fn back_edge_raw_tag(k: ExitTag, payload: i64) -> u8 {
     match RAW_OF[k as usize] {
         BOOL => raw::FALSE + (payload & 1) as u8,
@@ -232,3 +231,6 @@ fn put(dst: &mut Value, tag: u8, r: i64) {
     // registers)
     unsafe { Value::pack_into(dst, tag, crate::runtime::value::RawVal { zero: r as u64 }) };
 }
+
+#[cfg(test)]
+mod tests;

@@ -25,7 +25,7 @@ pub(crate) struct PlannedExit {
 }
 
 impl PlannedExit {
-    fn of(tags: &[ExitTag]) -> Self {
+    pub(crate) fn of(tags: &[ExitTag]) -> Self {
         // counted first, so the list is allocated once at its size
         let n = tags.iter().filter(|&&k| k != ExitTag::Untouched).count();
         let mut written = Vec::with_capacity(n);
@@ -45,9 +45,10 @@ impl PlannedExit {
     }
 }
 
-/// Per exit, numbered as its hit counts are (the inline side exits, the
-/// typed exits of the tag table, then the trace's global tags), its plan
-/// once the exit has been taken: an exit never taken costs one empty word.
+/// Per exit, numbered as its hit counts are (see
+/// [`TracePlans`](super::plans::TracePlans)), the cell its plan is worked
+/// out into the first time the exit is taken: an exit never taken costs
+/// one empty word.
 #[derive(Debug, Default)]
 pub(crate) struct ExitPlan {
     exits: Box<[Once<Box<PlannedExit>>]>,
@@ -71,14 +72,10 @@ impl ExitPlan {
         self.exits.len() * std::mem::size_of::<Once<Box<PlannedExit>>>()
     }
 
-    /// Exit `i`'s plan, from `tags`, the exit's tags, the first time.
+    /// Exit `i`'s cell.
     #[inline]
-    pub(crate) fn exit(&self, i: usize, tags: &[ExitTag]) -> Option<&PlannedExit> {
-        Some(
-            self.exits
-                .get(i)?
-                .get_or_init(|| Box::new(PlannedExit::of(tags))),
-        )
+    pub(crate) fn cell(&self, i: usize) -> Option<&Once<Box<PlannedExit>>> {
+        self.exits.get(i)
     }
 }
 
@@ -87,10 +84,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_exit_lists_the_registers_it_wrote_once_taken() {
+    fn an_exit_lists_the_registers_it_wrote() {
         use ExitTag::*;
-        let p = ExitPlan::new(2);
-        let e = p.exit(0, &[Int, Untouched, Float]).expect("exit 0");
+        let e = PlannedExit::of(&[Int, Untouched, Float]);
         assert_eq!(
             &*e.written,
             &[
@@ -102,13 +98,12 @@ mod tests {
             ]
         );
         assert_eq!((e.untouched_end, e.len), (2, 3));
-        // worked out once: later tags are not read again
-        assert_eq!(p.exit(0, &[]).expect("exit 0").len, 3);
-        let g = p.exit(1, &[Untouched, Nil]).expect("exit 1");
+        let g = PlannedExit::of(&[Untouched, Nil]);
         assert_eq!(
             (&*g.written, g.untouched_end),
             (&[ExitSlot { slot: 1, kind: Nil }][..], 1)
         );
-        assert!(p.exit(2, &[Int]).is_none());
+        let p = ExitPlan::new(2);
+        assert!(p.cell(1).is_some() && p.cell(2).is_none());
     }
 }

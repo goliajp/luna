@@ -1,5 +1,5 @@
 use super::*;
-use luna_core::__private::TracePlans;
+use luna_core::__private::{PassCount, TracePlans};
 
 mod gates;
 use gates::apply_tail_kinds_and_gates;
@@ -20,6 +20,8 @@ pub(super) struct Emitted {
     pub(super) tier_count: Option<Box<TierUp>>,
     /// See `Lower::write_only_kinds`.
     pub(super) write_only_kinds: Result<Vec<(u16, ExitTag)>, ()>,
+    /// See `Lower::counts_per_call`.
+    pub(super) counts_per_call: bool,
 }
 
 impl<E: Emit> Lower<E> {
@@ -41,6 +43,7 @@ impl<E: Emit> Lower<E> {
             tier_count,
             loop_entry,
             write_only_kinds,
+            counts_per_call,
             ..
         } = self;
         let mut bcx = bcx;
@@ -63,6 +66,7 @@ impl<E: Emit> Lower<E> {
                 downrec_multi_way_count_for_compiled: downrec.1,
                 tier_count,
                 write_only_kinds,
+                counts_per_call,
             },
         )
     }
@@ -84,6 +88,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         downrec_multi_way_count_for_compiled,
         tier_count,
         write_only_kinds,
+        counts_per_call,
     } = em;
     let (current_kinds, dispatchable, dispatch_off_reason) = apply_tail_kinds_and_gates(
         pl,
@@ -124,28 +129,20 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
     // `per_exit_tags` for the dispatcher. Each exit's tags keep the length its emit site pushed (caller window at
     // depth 0, the full window deeper): the dispatcher walks
     // `exit_tags_for_pc.len()` either way.
-    let per_exit_tags = exit_tag_table(&per_exit_kinds, write_only_kinds.unwrap_or_default());
-    let mut last = None;
-    let inline_tags: Vec<TArc<[ExitTag]>> = per_exit_inline_vec
-        .iter()
-        .map(|(_, _, kinds, _)| shared_exit_tags(kinds, &mut last))
-        .collect();
+    let per_exit_tags = exit_tag_table(per_exit_kinds.iter());
+    let inline_tags =
+        exit_tag_table((per_exit_inline_vec.iter()).map(|(pc, _, kinds, _)| (*pc, &kinds[..])));
     let per_exit_inline: TArc<[InlineSideExit]> = per_exit_inline_vec
         .into_iter()
-        .zip(inline_tags)
-        .map(
-            |((cont_pc, head_resume_pc, _, chain), exit_tags)| InlineSideExit {
-                cont_pc,
-                head_resume_pc,
-                exit_tags,
-                chain,
-            },
-        )
+        .map(|(cont_pc, head_resume_pc, _, chain)| InlineSideExit {
+            cont_pc,
+            head_resume_pc,
+            chain,
+        })
         .collect();
+    let pass_count = pass_count(counts_per_call, write_only_kinds.unwrap_or_default());
 
     checkpoint("post:emit-pass-done");
-    // before the struct, while per_exit_tags's len can be read
-    let exits = per_exit_inline.len() + per_exit_tags.len() + 1;
     let entry_tags: Vec<u8> = record
         .entry_tags
         .iter()
@@ -159,9 +156,11 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         &entry_tags,
         &exit_tags_vec,
         per_exit_tags,
-        per_exit_inline.len(),
+        inline_tags,
+        pass_count,
     );
-    let exit_hit_counts: TArc<[TCellU32]> = (0..exits).map(|_| TCellU32::new(0)).collect();
+    let exit_hit_counts: TArc<[TCellU32]> =
+        (0..plans.exit_count()).map(|_| TCellU32::new(0)).collect();
     CompiledTraceParts {
         head_pc: record.head_pc,
         // caller (JIT wrapper or AOT pipeline)
@@ -264,13 +263,25 @@ fn inline_kinds(pl: &Plan<'_>) -> u8 {
     k
 }
 
-/// The tags of each tagged exit, with the written-only registers' kinds
-/// past the first back edge (see `entry_live`).
-fn exit_tag_table(per_exit_kinds: &ExitKinds, write_only: Vec<(u16, ExitTag)>) -> ExitTagTable {
-    let tag_vecs: Vec<(u32, Vec<ExitTag>)> = per_exit_kinds
-        .iter()
+/// The table of the exits `exits`, each its resume pc and kinds.
+fn exit_tag_table<'k>(exits: impl Iterator<Item = (u32, &'k [RegKind])>) -> ExitTagTable {
+    let tag_vecs: Vec<(u32, Vec<ExitTag>)> = exits
         .map(|(pc, kinds)| (pc, kinds_to_exit_tags(kinds)))
         .collect();
     ExitTagTable::from_exits(tag_vecs.iter().map(|(pc, t)| (*pc, &t[..])))
-        .with_back_edge_kinds(write_only)
+}
+
+/// Where the code counts its passes: in this call's words when a back edge
+/// counts there, which is how a trace with written-only registers counts
+/// (see `handoff::count_at`), with their kinds past the back edge.
+fn pass_count(per_call: bool, write_only: Vec<(u16, ExitTag)>) -> PassCount {
+    if per_call {
+        PassCount::PerCall(write_only.into())
+    } else {
+        debug_assert!(
+            write_only.is_empty(),
+            "written-only registers, not counted per call"
+        );
+        PassCount::Shared
+    }
 }

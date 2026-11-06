@@ -2,6 +2,7 @@
 
 use super::super::tier_up::TierUp;
 use super::super::*;
+use super::plans::PassCount;
 
 /// One method per field, returning it by value or by reference.
 macro_rules! readers {
@@ -67,6 +68,20 @@ impl CompiledTrace {
     #[inline]
     pub fn per_exit_tags(&self) -> &ExitTagTable {
         &self.plans.per_exit_tags
+    }
+
+    /// The inline side exits' resume pcs and tags of
+    /// [`CompiledTraceParts::plans`], in the order of `per_exit_inline`.
+    #[inline]
+    pub fn inline_exit_tags(&self) -> &ExitTagTable {
+        &self.plans.inline_tags
+    }
+
+    /// Where the code counts its passes, as [`CompiledTraceParts::plans`]
+    /// gives it.
+    #[inline]
+    pub fn pass_count(&self) -> &PassCount {
+        &self.plans.pass_count
     }
 
     /// As [`CompiledTraceParts::tier_up`].

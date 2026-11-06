@@ -146,10 +146,9 @@ pub(super) fn lower_and_encode_meta(
         // from a separate `aot_inline_chain_resolver`-populated
         // slot (no shared ownership with the dispatcher field —
         // neither side compares pointers).
-        let per_exit_inline_entries: Vec<PerExitInlineEntry> = ct
-            .per_exit_inline()
-            .iter()
-            .map(PerExitInlineEntry::from_inline_side_exit)
+        let per_exit_inline_entries: Vec<PerExitInlineEntry> = (ct.per_exit_inline().iter())
+            .zip(ct.inline_exit_tags())
+            .map(|(e, (_, tags))| PerExitInlineEntry::from_inline_side_exit(e, tags))
             .collect();
         let blob = encode_meta_blob(
             &header,

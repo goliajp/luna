@@ -50,12 +50,7 @@ impl Vm {
         }
         // the side trace wired to the exit taken runs here, not from the
         // parent's code (a test at every exit cost more than it saved)
-        let tentative = crate::jit::trace::decode_exit_shape(
-            raw_ret,
-            &ct.per_exit_inline,
-            &ct.plans.per_exit_tags,
-            &ct.plans.exit_tags,
-        );
+        let tentative = ct.plans.decode(raw_ret);
         let exit = tentative.exit_hit_idx;
         let Some(child) = ct.side_children.borrow().get(&(exit as u32)).cloned() else {
             return parent_only;
@@ -94,7 +89,7 @@ impl Vm {
                 _ => return parent_only,
             }
         };
-        let words = ChildWords::put(reg_state, off, &child);
+        child_frame_in(reg_state, off, &child);
         let cent = child.current_entry();
         self.count_side_trace_run(off);
         let child_raw_ret = {
@@ -103,9 +98,6 @@ impl Vm {
             // SAFETY: `cent` is the entry of a side trace compiled for this exit and held by `ct`, whose code lives as long as this Vm; from register `off` on, `reg_state` holds at least the child's window and the three words past it, and the registers the child reads carry the tags it was compiled for (checked when it was wired, and the stack-held ones just above); `child_cl` runs the frame the child starts in, and the guard pins it and this Vm for the helpers the trace calls
             unsafe { cent(reg_state.as_mut_ptr().add(off)) }
         };
-        if let Some(words) = words {
-            words.take(reg_state, off, &child);
-        }
         ExitSource {
             child: Some(child),
             body: child_raw_ret as u64,
@@ -145,41 +137,15 @@ impl Vm {
     }
 }
 
-/// The words a side trace that counts in its call's word keeps past its window in
-/// the parent's buffer (see `crate::jit::trace_types::frame`): they
-/// may lie on registers of the parent's window past the child's, which the
-/// write-back after it reads, so those are put back after the child ran. A
-/// side trace that does not count reads none of them.
-struct ChildWords {
-    saved: [i64; TRACE_FRAME_TAIL],
-}
-
-impl ChildWords {
-    /// Sizes `reg_state` to hold `child`'s window and the words past it
-    /// from `reg_state[off]`, its register 0, and sets up those words when
-    /// it counts.
-    fn put(reg_state: &mut Vec<i64>, off: usize, child: &CompiledTrace) -> Option<ChildWords> {
-        let end = off + child.window_size as usize;
-        let tail = end + TRACE_FRAME_TAIL;
-        if reg_state.len() < tail {
-            reg_state.resize(tail, 0);
-        }
-        if !child.call_count {
-            return None;
-        }
-        let mut saved = [0i64; TRACE_FRAME_TAIL];
-        saved.copy_from_slice(&reg_state[end..tail]);
-        super::dispatch::words::count_in(child, &mut reg_state[off..], end - off);
-        Some(ChildWords { saved })
-    }
-
-    /// After `child` ran: its count back into it, the parent's registers
-    /// back in place.
-    fn take(self, reg_state: &mut [i64], off: usize, child: &CompiledTrace) {
-        let w = child.window_size as usize;
-        super::dispatch::words::count_out(child, &reg_state[off..], w);
-        reg_state[off + w..off + w + TRACE_FRAME_TAIL]
-            .copy_from_slice(&self.saved);
+/// Sizes `reg_state` to hold `child`'s window and the words past it from
+/// `reg_state[off]`, its register 0. A side trace never counts in its
+/// call's words (`wire_side_trace` refuses one that does), so it reads none
+/// of them, and the parent's registers they may lie on stay as they are.
+fn child_frame_in(reg_state: &mut Vec<i64>, off: usize, child: &CompiledTrace) {
+    debug_assert!(!child.call_count, "a side trace counting per call");
+    let tail = off + child.window_size as usize + TRACE_FRAME_TAIL;
+    if reg_state.len() < tail {
+        reg_state.resize(tail, 0);
     }
 }
 

@@ -87,6 +87,9 @@ pub(super) struct Lower<E: Emit> {
     /// `entry_live`); `Err` when one is not a kind the dispatcher may give
     /// them past a back edge, or two back edges disagree.
     pub(super) write_only_kinds: Result<Vec<(u16, ExitTag)>, ()>,
+    /// A back edge counts in this call's words past the window
+    /// (`handoff::count_at` gave `Count::Frame`).
+    pub(super) counts_per_call: bool,
     /// The block the optimizing tier's loop starts at (see `handoff`).
     pub(super) loop_entry: Option<Block>,
     /// A back edge with an iteration count was emitted.

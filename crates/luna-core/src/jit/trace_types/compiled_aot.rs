@@ -3,16 +3,14 @@
 use super::*;
 
 impl CompiledTrace {
-    /// AOT install constructor. Accepts `per_exit_tags`
-    /// (typed-register side-exits) so GetUpval-heavy traces install
-    /// correctly.
+    /// AOT install constructor: `plans` holds the tags the meta blob
+    /// carries (typed-register side exits included, so GetUpval-heavy
+    /// traces install correctly).
     ///
     /// Builds a [`CompiledTrace`] from the fields the AOT meta blob
     /// carries plus a deploy-resolved trace fn pointer.
-    /// `per_exit_inline`, `body_writes` default to empty / null;
-    /// `exit_hit_counts` is sized to
-    /// `per_exit_tags.len() + 1` (each typed-exit slot + the global
-    /// clean-tail). The deploy `Vm` never records side traces against
+    /// `body_writes` defaults to empty; `exit_hit_counts` has one count
+    /// per exit of `plans`. The deploy `Vm` never records side traces against
     /// an AOT-installed parent (the recorder is invoked from the
     /// dispatch path; AOT traces install before any record can fire),
     /// so the side-trace bookkeeping defaults are sound.
@@ -29,8 +27,9 @@ impl CompiledTrace {
     ///
     /// As [`CompiledTrace::from_parts`]: `entry` is code with the
     /// [`TraceFn`] ABI that lives as long as the program (an AOT trace
-    /// linked into the binary's text segment), compiled against the tags
-    /// and window size given, and holding the address of none of the
+    /// linked into the binary's text segment), compiled against `plans`
+    /// and the window size given (with `per_exit_inline` the inline exits
+    /// of `plans`, in order), and holding the address of none of the
     /// trace's cells (they are made here).
     pub unsafe fn from_aot_meta(
         entry: TraceFn,
@@ -38,28 +37,22 @@ impl CompiledTrace {
         n_ops: u32,
         dispatchable: bool,
         window_size: u32,
-        entry_tags: &[u8],
-        exit_tags: &[ExitTag],
-        per_exit_tags: ExitTagTable,
+        plans: TracePlans,
         per_exit_inline: Vec<crate::jit::trace_types::InlineSideExit>,
     ) -> Self {
-        // `inline_n` > 0 for inlined side exits at depth > 0: the chains the
+        // inline exits are those at depth > 0: the chains the
         // code holds come from `aot_inline_chain_resolver`, the copies here
         // from the wire format's `chain_bytes` (for shape decode and side
         // trace routing); no side compares the other's pointers
-        let inline_n = per_exit_inline.len();
-        let total_slots = inline_n + per_exit_tags.len() + 1;
-        let exit_hit_counts: TArc<[TCellU32]> = {
-            let v: Vec<TCellU32> = (0..total_slots).map(|_| TCellU32::new(0)).collect();
-            v.into()
-        };
+        let exit_hit_counts: TArc<[TCellU32]> =
+            (0..plans.exit_count()).map(|_| TCellU32::new(0)).collect();
         let parts = CompiledTraceParts {
             head_pc,
             entry,
             n_ops,
             dispatchable,
             window_size,
-            plans: TracePlans::new(entry_tags, exit_tags, per_exit_tags, inline_n),
+            plans,
             per_exit_inline: TArc::from(per_exit_inline),
             exit_hit_counts,
             is_inline_abort_close: false,

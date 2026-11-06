@@ -156,18 +156,25 @@ pub(super) fn lower_trace_lir(
     // back edge from the later ones (see `entry_live`); when a written-only
     // register's kind at the back edge cannot be given past it, the record
     // is lowered again with it a temporary
-    let counts = matches!(opts.tier, TraceTier::Auto) && opts.tier_up_at > 0;
-    match lower_trace_lir_split(record, opts, float_only, at_exits, counts)? {
+    let count_at = match opts.tier {
+        TraceTier::Auto => opts.tier_up_at,
+        _ => 0,
+    };
+    let lower = |split| lower_trace_lir_split(record, opts, float_only, at_exits, count_at, split);
+    match lower(count_at > 0)? {
         Ok(l) => Some(l),
-        Err(()) => lower_trace_lir_split(record, opts, float_only, at_exits, false)?.ok(),
+        Err(()) => lower(false)?.ok(),
     }
 }
 
+/// [`lower_trace_lir`] with the iteration count kept at `count_at` (none at
+/// 0) and, with `split`, written-only registers set apart.
 fn lower_trace_lir_split(
     record: &TraceRecord,
     opts: CompileOptions,
     float_only: bool,
     at_exits: bool,
+    count_at: u32,
     split: bool,
 ) -> Option<Result<(super::lir::Lir, CompiledTraceParts), ()>> {
     with_plan(record, opts, float_only, split, |pl, escape| {
@@ -179,10 +186,6 @@ fn lower_trace_lir_split(
                 e.helpers = Some((h, e.funcs.len() as u32, e.param_tys.len() as u32));
                 h
             }
-        };
-        let count_at = match opts.tier {
-            TraceTier::Auto => opts.tier_up_at,
-            _ => 0,
         };
         let (e, emitted) = emit_trace(e, pl, h, escape, count_at, at_exits)?;
         if emitted.write_only_kinds.is_err() {

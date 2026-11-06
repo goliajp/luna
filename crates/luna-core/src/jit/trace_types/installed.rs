@@ -121,8 +121,8 @@ pub struct CompiledTrace {
     pub(crate) downrec_multi_way_count: u8,
     pub(crate) tier_up: Option<Box<TierUp>>,
     /// The code counts in this call's word of `reg_state`, not in
-    /// `tier_up`'s cell: it has a `tier_up` and `per_exit_tags` gives
-    /// back-edge kinds (see `frame::trace_count_slot`).
+    /// `tier_up`'s cell: it has a `tier_up` and its plans count
+    /// [`plans::PassCount::PerCall`] (see `frame::trace_count_slot`).
     pub(crate) call_count: bool,
 }
 
@@ -152,21 +152,23 @@ impl CompiledTrace {
     ///   dispatcher moves registers in and out by them unchecked), that
     ///   lives as long as any Vm the trace is installed on.
     /// - `parts.plans` is of that compile: made by [`plans::TracePlans::new`]
-    ///   from the tags the code was compiled against, with one inline exit
-    ///   per `per_exit_inline`, or a clone of the plans another trace was
-    ///   made from by the same compile (whose `per_exit_inline` tags these
-    ///   are as well): an exit's plan, worked out once, serves every trace
-    ///   sharing them.
-    ///   Debug builds check the lengths and the number of exits.
+    ///   from the tags the code was compiled against, its inline exits in
+    ///   the order of `per_exit_inline`, or a clone of the plans another
+    ///   trace was made from by the same compile: an exit's plan, worked out
+    ///   once, serves every trace sharing them. Debug builds check the
+    ///   lengths, the number of inline exits and their resume pcs.
+    /// - Code that counts its passes in this call's words past the window
+    ///   (`frame::trace_count_slot`) has plans made with
+    ///   [`plans::PassCount::PerCall`], and a `tier_up`; code with plans
+    ///   made with [`plans::PassCount::Shared`] counts in `tier_up`'s count
+    ///   cell, if anywhere. Debug builds check the `tier_up`.
     /// - Code whose back edge calls the loop its `tier_up`'s loop cell
     ///   (`__private::tier_up_loop_cell`) holds, when that is not null,
     ///   stores the registers the loop head reads first and returns what
     ///   the loop returns.
     /// - The cells whose addresses that code holds are the ones `parts`
     ///   owns: the `chain` of each of `per_exit_inline`, and the count and
-    ///   the loop cell of `tier_up`. Code
-    ///   whose tag table gives back-edge kinds counts in `reg_state`
-    ///   instead of `tier_up`'s count (`frame::trace_count_slot`).
+    ///   the loop cell of `tier_up`.
     /// - The `tier_up` source, if any, was made for this trace by the
     ///   backend that compiled it, in the JIT storage of the Vm it is
     ///   installed on.
@@ -175,14 +177,20 @@ impl CompiledTrace {
         debug_assert!(
             p.entry_tags.len() <= parts.window_size as usize
                 && p.exit_tags.len() <= parts.window_size as usize
-                && parts.plans.exit_count()
-                    == parts.per_exit_inline.len() + p.per_exit_tags.len() + 1,
+                && p.inline_tags.len() == parts.per_exit_inline.len()
+                && (parts.per_exit_inline.iter().enumerate())
+                    .all(|(i, e)| p.inline_tags.cont_pc(i) == e.cont_pc),
             "the trace's plans are not of its code: {:?}, window {}, {} inline exits",
             parts.plans,
             parts.window_size,
             parts.per_exit_inline.len()
         );
-        let call_count = parts.tier_up.is_some() && !p.per_exit_tags.back_edge_kinds().is_empty();
+        let per_call = matches!(p.pass_count, plans::PassCount::PerCall(_));
+        debug_assert!(
+            !per_call || parts.tier_up.is_some(),
+            "code counting per call has no tier-up count"
+        );
+        let call_count = per_call && parts.tier_up.is_some();
         let ct = moved!(parts => head_pc, entry, n_ops, dispatchable, window_size,
             per_exit_inline, exit_hit_counts,
             is_inline_abort_close, dispatch_off_reason, sinkable_sites_seen,

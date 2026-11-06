@@ -16,7 +16,7 @@
 //! has both bracket symbols collapse to the same address; the walk
 //! short-circuits with `Ok(0)`.
 
-use luna_core::__private::CompiledTrace;
+use luna_core::__private::{CompiledTrace, PassCount, TracePlans};
 use luna_core::jit::aot_meta::{AotTraceIndexEntry, decode_meta_blob, unpack_tag_res_kind};
 use luna_core::jit::trace_types::TraceFn;
 use luna_core::vm::Vm;
@@ -218,8 +218,8 @@ unsafe fn walk_meta_section(
             tag_res_kind,
             luna_core::__private::classify_exit_tags(&exit_tags_vec)
         );
-        // v2 per_exit_tags: `(cont_pc, exit tags)` as the dispatcher's
-        // `decode_exit_shape` looks them up; an invalid byte skips the
+        // v2 per_exit_tags: `(cont_pc, exit tags)` as the dispatcher looks
+        // them up; an invalid byte skips the
         // whole trace, as for the exit tags
         let Some(per_exit_tags_decoded) = decode::per_exit_tags(&decoded.per_exit_tags) else {
             if probe_on {
@@ -248,11 +248,19 @@ unsafe fn walk_meta_section(
         // The two chain owners (this Rc and the leaked Rc
         // behind the slot) are independent allocations of the
         // same byte content — neither side compares pointers.
-        let Some(per_exit_inline_decoded) =
+        let Some((per_exit_inline_decoded, inline_tags)) =
             decode::per_exit_inline(&decoded.per_exit_inline, entry.head_pc, probe_on)
         else {
             continue;
         };
+        // AOT code counts its passes nowhere: it keeps no tier-up count
+        let plans = TracePlans::new(
+            &decoded.entry_tags,
+            &exit_tags_vec,
+            per_exit_tags_decoded,
+            inline_tags,
+            PassCount::Shared,
+        );
         // The C-ABI fn ptr travels as a u64 (wire-width-stable); the
         // AOT binary is always 64-bit, so it narrows to the pointer.
         let fn_ptr_raw = entry.fn_ptr as *const u8;
@@ -273,9 +281,7 @@ unsafe fn walk_meta_section(
                 decoded.header.n_ops,
                 decoded.header.dispatchable != 0,
                 decoded.header.window_size,
-                &decoded.entry_tags,
-                &exit_tags_vec,
-                per_exit_tags_decoded,
+                plans,
                 per_exit_inline_decoded,
             );
             luna_core::__private::install_aot_trace(vm, proto, ct);

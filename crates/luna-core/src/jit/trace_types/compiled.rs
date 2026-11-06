@@ -22,7 +22,8 @@ use super::*;
 /// - Return value = continuation PC. A clean loop close (control
 ///   returns to the trace's `head_pc`) returns `head_pc as i64`;
 ///   side exits return the failing guard's PC (see
-///   [`decode_exit_shape`] for the upper-bit encoding).
+///   `__private::EXIT_TAGS_INDEX_BIT` and the bits beside it for the
+///   upper-bit encoding).
 // SAFETY: `TraceFn` is the ABI of native code emitted by the Cranelift lowerer (see `jit_backend::trace`); callers guarantee the `*mut i64` points to a reg_state buffer of `window_size + 3` words and survive the trace call.
 pub type TraceFn = unsafe extern "C" fn(*mut i64) -> i64;
 

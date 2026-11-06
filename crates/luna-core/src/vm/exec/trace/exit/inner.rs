@@ -3,7 +3,7 @@
 //! frame that exit rebuilt.
 
 use super::*;
-use crate::jit::trace::{CompiledTrace, ExitTag, decode_exit_shape};
+use crate::jit::trace::{CompiledTrace, ExitTag};
 
 impl Vm {
     /// The trace `ct` (head frame at `base_us`, `pre_frames` frames before
@@ -25,18 +25,8 @@ impl Vm {
             child, body, off, ..
         } = src;
         let child = child.expect("a side trace ran");
-        let parent = decode_exit_shape(
-            raw_ret,
-            &ct.per_exit_inline,
-            &ct.plans.per_exit_tags,
-            &ct.plans.exit_tags,
-        );
-        let own = decode_exit_shape(
-            body,
-            &child.per_exit_inline,
-            &child.plans.per_exit_tags,
-            &child.plans.exit_tags,
-        );
+        let parent = ct.plans.decode(raw_ret);
+        let own = child.plans.decode(body);
         if let Some(c) = child.exit_hit_counts.get(own.exit_hit_idx) {
             c.set(c.get().saturating_add(1));
         }
@@ -64,15 +54,7 @@ impl Vm {
             entry_tags,
             false,
         );
-        let table = &ct.plans.per_exit_tags;
-        self.trace_restore_back_edge_kinds(
-            base_us,
-            table,
-            &tags,
-            keep,
-            reg_state,
-            ct.window_size as usize,
-        );
+        self.trace_restore_back_edge_kinds(base_us, ct, &tags, keep, reg_state);
         let head_resume = site.head_resume_pc;
         self.resume_inner_frames(pre_frames, child_frame, head_resume, &child, &own);
     }
