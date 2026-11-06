@@ -18,7 +18,7 @@
 
 use luna_core::__private::CompiledTrace;
 use luna_core::jit::aot_meta::{AotTraceIndexEntry, decode_meta_blob, unpack_tag_res_kind};
-use luna_core::jit::trace_types::{ExitTag, TraceFn};
+use luna_core::jit::trace_types::TraceFn;
 use luna_core::vm::Vm;
 
 mod decode;
@@ -213,8 +213,11 @@ unsafe fn walk_meta_section(
             }
             continue;
         };
-        let entry_tags_rc: luna_core::jit::send_compat::TArc<[u8]> = decoded.entry_tags.into();
-        let exit_tags_rc: luna_core::jit::send_compat::TArc<[ExitTag]> = exit_tags_vec.into();
+        // the trace's plans work the kind out from the tags again
+        debug_assert_eq!(
+            tag_res_kind,
+            luna_core::__private::classify_exit_tags(&exit_tags_vec)
+        );
         // v2 per_exit_tags: `(cont_pc, exit tags)` as the dispatcher's
         // `decode_exit_shape` looks them up; an invalid byte skips the
         // whole trace, as for the exit tags
@@ -270,9 +273,8 @@ unsafe fn walk_meta_section(
                 decoded.header.n_ops,
                 decoded.header.dispatchable != 0,
                 decoded.header.window_size,
-                entry_tags_rc,
-                exit_tags_rc,
-                tag_res_kind,
+                &decoded.entry_tags,
+                &exit_tags_vec,
                 per_exit_tags_decoded,
                 per_exit_inline_decoded,
             );

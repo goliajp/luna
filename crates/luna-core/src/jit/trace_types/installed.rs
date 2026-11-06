@@ -153,9 +153,10 @@ impl CompiledTrace {
     ///   lives as long as any Vm the trace is installed on.
     /// - `parts.plans` is of that compile: made by [`plans::TracePlans::new`]
     ///   from the tags the code was compiled against, with one inline exit
-    ///   per `per_exit_inline`, or [`Self::plans`] of a trace made from the
-    ///   same compile (whose `per_exit_inline` tags these are as well): an
-    ///   exit's plan, worked out once, serves every trace sharing them.
+    ///   per `per_exit_inline`, or a clone of the plans another trace was
+    ///   made from by the same compile (whose `per_exit_inline` tags these
+    ///   are as well): an exit's plan, worked out once, serves every trace
+    ///   sharing them.
     ///   Debug builds check the lengths and the number of exits.
     /// - Code whose back edge calls the loop its `tier_up`'s loop cell
     ///   (`__private::tier_up_loop_cell`) holds, when that is not null,
@@ -189,12 +190,6 @@ impl CompiledTrace {
             inline_kinds, inline_depth, body_writes, downrec_link, downrec_multi_way_count,
             tier_up);
         Self { call_count, ..ct }
-    }
-
-    /// The tags and plans this trace's code was compiled against, for a
-    /// Vm taking the code up to hand [`CompiledTraceParts::plans`].
-    pub fn plans(&self) -> plans::TracePlans {
-        plans::TracePlans(self.plans.clone())
     }
 
     /// The entry to call: the optimizing tier's once it exists.

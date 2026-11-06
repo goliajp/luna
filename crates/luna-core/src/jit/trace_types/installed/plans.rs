@@ -10,8 +10,8 @@ use std::sync::Arc;
 /// dispatcher copies in on entry and writes back on each exit by them.
 /// One trace's code shares one: a Vm that takes up a trace another Vm
 /// compiled hands [`CompiledTraceParts`](super::super::CompiledTraceParts)
-/// the plans of that compile ([`CompiledTrace::plans`](super::CompiledTrace::plans)),
-/// so an exit's plan is worked out once, by the first Vm to take it.
+/// a clone of the plans of that compile, so an exit's plan is worked out
+/// once, by the first Vm to take it.
 #[derive(Clone)]
 pub struct TracePlans(pub(crate) Arc<Plans>);
 
