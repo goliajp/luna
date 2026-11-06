@@ -1,72 +1,11 @@
-//! Statements, loops and the fixed program frame of `fuzz_jit_diff`.
+//! Statements and functions of `fuzz_jit_diff`; the loops are in
+//! `jit_loops`, the fixed frame in `jit_frame`.
 
+use super::jit_frame::{DUMP, FRAME};
 use super::jit_program::Gen;
 
 /// Upper bound on the product of nested trip counts.
-const MAX_ITERS: u32 = 3000;
-
-const FRAME: &str = r#"__out = {}
-print = function(...)
-  local p = {}
-  for i = 1, select('#', ...) do p[i] = tostring((select(i, ...))) end
-  __out[#__out + 1] = table.concat(p, "\t")
-end
-local n1, n2, n3 = NUM1, NUM2, NUM3
-local x, s = nil, "s"
-local cnt, psum, hits, nhits = 0, 0, 0, 0
-local c = {0, 0, n = 0}
-local t = {1, 2, 3, x = 1, y = "y"}
-local arr = {1, 2.5, "3", 4, 5, 6, 7, 8}
-local seq = {}
-local Mstore = {}
-local MT = {}
-MT.__index = function(_, k)
-  hits = hits + 1
-  local v = Mstore[k]
-  if v == nil then return type(k) == "number" and k * 2 or 1 end
-  return v
-end
-MT.__newindex = function(_, k, v) nhits = nhits + 1 Mstore[k] = v end
-MT.__len = function() hits = hits + 1 return 7 end
-MT.__concat = function(p, q) hits = hits + 1 return type(p) .. type(q) end
-MT.__eq = function() hits = hits + 1 return hits % 2 == 0 end
-MT.__lt = function() hits = hits + 1 return hits % 3 == 0 end
-MT.__le = function() hits = hits + 1 return hits % 3 ~= 0 end
-MT.__call = function(_, y) hits = hits + 1 return (tonumber(y) or 0) + 1 end
-MT.__add = function() hits = hits + 1 return 3 end
-MT.__unm = function() hits = hits + 1 return -1 end
-local MTidx = MT.__index
-local M, M2 = setmetatable({}, MT), setmetatable({}, MT)
-local P = setmetatable({}, {__index = t, __newindex = t})
-local TMT = {__index = function(_, k) hits = hits + 1 return 5 end}
-local TMT2 = {__index = Mstore, __newindex = Mstore}
-local objs = {t, M, P}
-local o = t
-local obj = {v = 0}
-local function va(...)
-  local acc = select('#', ...)
-  for q = 1, acc do
-    local v = select(q, ...)
-    if type(v) == "number" then acc = acc + v end
-  end
-  return acc, ...
-end
-"#;
-
-// addresses are masked before the sort: with a function or table key the
-// order would otherwise follow allocation addresses, which differ between
-// the jit and interpreter runs
-const DUMP: &str = r#"local function dump(tb)
-  local ks = {}
-  for k, v in pairs(tb) do
-    ks[#ks + 1] = (string.gsub(type(k):sub(1, 1) .. tostring(k) .. "=" .. tostring(v), "0[xX]%x+", "ADDR"):gsub("%x%x+[xX]0", "ADDR"))
-  end
-  table.sort(ks)
-  return table.concat(ks, " ")
-end
-print("end", n1, n2, n3, x, s, cnt, psum, hits, nhits, #seq, obj.v)
-print(dump(t)) print(dump(Mstore)) print(dump(arr)) print(dump(c))
-"#;
+pub(crate) const MAX_ITERS: u32 = 3000;
 
 impl Gen<'_, '_> {
     /// A whole program.
@@ -170,7 +109,7 @@ impl Gen<'_, '_> {
     }
 
     /// Up to `max` statements, one indent level deeper.
-    fn body(&mut self, max: u32) {
+    pub(crate) fn body(&mut self, max: u32) {
         self.ind += 1;
         let n = self.pick(max) + 1;
         for _ in 0..n {
@@ -297,129 +236,5 @@ impl Gen<'_, '_> {
             _ => format!("x = select(2, va({}, {}))", self.any(1), self.any(1)),
         };
         self.line(&s);
-    }
-
-    /// The trace JIT records one loop per function (the first whose
-    /// back edge gets hot), so each loop of the main chunk runs in a
-    /// function of its own, the locals it assigns passed in and back out.
-    fn loop_stmt(&mut self) {
-        if self.iters > 1 || !self.user_calls {
-            return self.loop_inner();
-        }
-        const LOCALS: &str = "n1, n2, n3, x, s, o, cnt, psum";
-        self.line(&format!("{LOCALS} = (function({LOCALS})"));
-        self.ind += 1;
-        // tables in locals: a trace reading them through upvalues is not
-        // dispatched
-        self.line("local t, arr, c, seq, M, M2, P, objs = t, arr, c, seq, M, M2, P, objs");
-        let kernel_hot = self.pick(4) != 0;
-        let hot = std::mem::replace(&mut self.hot, kernel_hot);
-        if kernel_hot {
-            // floats that stay floats, so a trace compiles float compares
-            let (a, b) = (self.pick(8), self.pick(8));
-            self.line(&format!("local f1, f2 = {a}.5, -{b}.25"));
-            self.floats = true;
-        }
-        self.loop_inner();
-        self.floats = false;
-        self.hot = hot;
-        self.line(&format!("return {LOCALS}"));
-        self.ind -= 1;
-        self.line(&format!("end)({LOCALS})"));
-    }
-
-    fn loop_inner(&mut self) {
-        if self.iters >= MAX_ITERS || self.fuel < 2 {
-            return self.line("cnt = cnt + 1");
-        }
-        const TRIPS: [u32; 9] = [1, 2, 3, 5, 9, 17, 40, 100, 300];
-        // a kernel's own loop runs long enough to get hot
-        let first = if self.iters == 1 && self.user_calls {
-            5
-        } else {
-            0
-        };
-        let trips = TRIPS[(first + self.pick(9 - first)) as usize]
-            .min(self.max_trips)
-            .min(MAX_ITERS / self.iters)
-            .max(1);
-        let id = self.id();
-        let (nums, anys) = (self.nums.len(), self.anys.len());
-        let saved = (self.in_loop, self.iters);
-        self.in_loop = true;
-        self.iters *= trips;
-        let kind = if self.hot && self.pick(2) == 0 {
-            0
-        } else {
-            self.pick(6)
-        };
-        match kind {
-            0 | 1 => self.numeric_for(id, trips),
-            2 => {
-                let w = format!("w{id}");
-                self.line(&format!(
-                    "do local {w} = 0 while {w} < {trips} do {w} = {w} + 1"
-                ));
-                self.nums.push(w);
-                self.body(5);
-                self.line("end end");
-            }
-            3 => {
-                let w = format!("w{id}");
-                self.line(&format!("do local {w} = 0 repeat {w} = {w} + 1"));
-                self.nums.push(w.clone());
-                self.body(5);
-                self.line(&format!("until {w} >= {trips} end"));
-            }
-            4 if saved.1 * 8 <= MAX_ITERS => {
-                self.iters = saved.1 * 8;
-                // the body can store past the end of `arr` (a computed
-                // key, or `arr` reached through `o` / `objs`), which
-                // would keep `ipairs` going for ever: stop at its
-                // initial length
-                self.line(&format!(
-                    "for k{id}, v{id} in ipairs(arr) do if k{id} > 8 then break end"
-                ));
-                self.nums.push(format!("k{id}"));
-                self.anys.push(format!("v{id}"));
-                self.body(5);
-                self.line("end");
-            }
-            // `t` and `Mstore` can hold thousands of keys by now
-            _ if saved.1 > 20 => self.numeric_for(id, trips),
-            _ => {
-                let tb = self.one(&["t", "Mstore", "arr", "c"]);
-                self.line(&format!(
-                    "for k{id}, v{id} in pairs({tb}) do cnt = cnt + 1 \
-                     if type(v{id}) == \"number\" then psum = psum + 1 end end"
-                ));
-            }
-        }
-        self.nums.truncate(nums);
-        self.anys.truncate(anys);
-        (self.in_loop, self.iters) = saved;
-    }
-
-    fn numeric_for(&mut self, id: u32, trips: u32) {
-        let i = format!("i{id}");
-        let last = trips - 1;
-        let head = match self.pick(6) {
-            0 => format!("for {i} = 1, {trips} do"),
-            1 => format!("for {i} = {trips}, 1, -1 do"),
-            2 => format!("for {i} = 0, {}, 2 do", last * 2),
-            3 => format!("for {i} = 0.5, {}, 0.5 do", trips as f64 * 0.5),
-            4 if self.wide_for => format!("for {i} = math.maxinteger - {last}, math.maxinteger do"),
-            // 5.3 wraps past `math.maxinteger` and never ends by itself
-            4 if self.ints => format!(
-                "for {i} = math.maxinteger - {last}, math.maxinteger do if {i} < 0 then break end"
-            ),
-            // a float limit, which 5.3 floors for an integer loop
-            4 => format!("for {i} = 1, {trips}.75 do"),
-            _ => format!("for {i} = 1, math.min({trips}, math.floor(tonumber(n1) or 0)) do"),
-        };
-        self.line(&head);
-        self.nums.push(i);
-        self.body(5);
-        self.line("end");
     }
 }

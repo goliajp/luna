@@ -40,6 +40,12 @@ mod jit_program;
 #[path = "jit_stmts.rs"]
 mod jit_stmts;
 
+#[path = "jit_frame.rs"]
+mod jit_frame;
+
+#[path = "jit_loops.rs"]
+mod jit_loops;
+
 #[path = "jit_hot.rs"]
 mod jit_hot;
 
