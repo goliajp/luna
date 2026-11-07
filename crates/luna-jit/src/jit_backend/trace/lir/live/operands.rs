@@ -13,7 +13,7 @@ pub(crate) fn for_uses(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
             count: CountAt::Frame(_),
             ..
         } => f(i.a),
-        Op::TierCount { .. } => {}
+        Op::TierCount { .. } | Op::Pick => {}
         Op::Bin(_) | Op::Icmp(_) | Op::Fcmp(_) | Op::Store(_) => {
             f(i.a);
             f(i.b);
@@ -69,6 +69,7 @@ pub(crate) fn succs(lir: &Lir, b: u32) -> [u32; 2] {
     let i = &lir.insts[last as usize];
     match i.op {
         Op::Jump => [i.a, NONE],
+        Op::Pick => [i.b, NONE],
         // the guarded path is visited last, so it is laid out first
         Op::Brif(_) => [i.c, i.b],
         Op::TierCount { .. } => [i.b, i.c],
@@ -79,8 +80,9 @@ pub(crate) fn succs(lir: &Lir, b: u32) -> [u32; 2] {
 /// Which function of a trace's instructions is compiled: the trace, or one
 /// of the two the optimizing tier makes of a looping one (see
 /// `lower::handoff`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum Start {
+    #[default]
     Whole,
     /// From `loop_entry`, each `TierCount` going on to its continuation.
     Loop,
@@ -89,16 +91,30 @@ pub(crate) enum Start {
     FirstPass,
 }
 
-/// The blocks `b` goes on to, a `TierCount` to its hot block only with
-/// `hot_only`.
-pub(super) fn succs_of(lir: &Lir, b: u32, hot_only: bool) -> [u32; 2] {
-    let s = succs(lir, b);
+/// The blocks `b` goes on to in the function `start` names: a `TierCount`
+/// to its hot block only in the first pass, a `Pick` to its `a` in the
+/// loop's function.
+pub(super) fn succs_of(lir: &Lir, b: u32, start: Start) -> [u32; 2] {
+    let last = lir.blocks[b as usize].last;
+    let Some(i) = lir.insts.get(last as usize) else {
+        return [NONE, NONE];
+    };
+    match (i.op, start) {
+        (Op::TierCount { .. }, Start::FirstPass) => [i.b, NONE],
+        (Op::Pick, Start::Loop) => [i.a, NONE],
+        _ => succs(lir, b),
+    }
+}
+
+/// The blocks the replay of the function `an` lays out goes on to from
+/// `b`: as [`succs_of`], but a `TierCount` to its continuation only outside
+/// the first pass (Cranelift and LLVM code does not count).
+pub(crate) fn replay_succs(lir: &Lir, an: &super::Analysis, b: u32) -> [u32; 2] {
     let last = lir.blocks[b as usize].last;
     match lir.insts.get(last as usize) {
-        Some(Inst {
-            op: Op::TierCount { .. },
-            ..
-        }) if hot_only => [s[0], NONE],
-        _ => s,
+        Some(i) if matches!(i.op, Op::TierCount { .. }) && an.func != Start::FirstPass => {
+            [i.c, NONE]
+        }
+        _ => succs_of(lir, b, an.func),
     }
 }

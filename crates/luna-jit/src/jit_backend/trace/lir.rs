@@ -137,6 +137,9 @@ pub(crate) enum Op {
     CallIndirect,
     /// Returns value `a`.
     Return,
+    /// To block `a` in the optimizing tier's loop function, to block `b` in
+    /// every other function made of the instructions (no arguments).
+    Pick,
     /// The count at `count` `+= 1`, then to block `b` when it equals `at`,
     /// else to block `c`.
     TierCount {

@@ -44,13 +44,7 @@ pub(crate) fn live_in_vars(
             live::for_defs(lir, i, |x| set(k, x));
         }
     }
-    let succs = |b: u32| -> [u32; 2] {
-        let last = lir.blocks[b as usize].last;
-        match lir.insts.get(last as usize).map(|i| (i.op, i)) {
-            Some((Op::TierCount { .. }, i)) => [i.c, NONE],
-            _ => live::succs(lir, b),
-        }
-    };
+    let succs = |b: u32| live::replay_succs(lir, an, b);
     let mut live = vec![0u64; n * words];
     let mut out = vec![0u64; words];
     let mut changed = true;
@@ -195,12 +189,7 @@ pub(crate) fn idoms(lir: &Lir, an: &live::Analysis) -> Vec<u32> {
     }
     let mut preds: Vec<Vec<u32>> = vec![Vec::new(); lir.blocks.len()];
     for &b in &an.order {
-        let last = lir.blocks[b as usize].last;
-        let s = match lir.insts.get(last as usize) {
-            Some(i) if matches!(i.op, Op::TierCount { .. }) => [i.c, NONE],
-            _ => live::succs(lir, b),
-        };
-        for t in s
+        for t in live::replay_succs(lir, an, b)
             .into_iter()
             .filter(|&t| t != NONE && rpo[t as usize] != NONE)
         {

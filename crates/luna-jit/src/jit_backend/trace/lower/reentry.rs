@@ -45,6 +45,11 @@ fn count_relink<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
 /// loop when the side trace left the registers of the kinds that loop is
 /// compiled for; otherwise on.
 ///
+/// In the optimizing tier's loop function, which counts nothing, a trace
+/// with a peeled first pass skips it: the gate goes on at the loop head
+/// when the side trace left the registers of the loop's kinds, and leaves
+/// at the loop head for the dispatcher otherwise (see [`loop_fn_gate`]).
+///
 /// With registers of other kinds, before the optimizing tier's code exists
 /// (the baseline code reaches the count first: the dispatcher moves the
 /// trace only at an entry), the trace leaves at the loop head, where the
@@ -65,6 +70,13 @@ fn fill_gate<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
         lw.bcx.ins().jump(start, &[]);
         return;
     }
+    if lw.blocks.peel.is_some() {
+        let (in_loop_fn, other) = (lw.bcx.create_block(), lw.bcx.create_block());
+        lw.bcx.pick(in_loop_fn, other);
+        switch_sealed(lw, in_loop_fn);
+        loop_fn_gate(lw, pl, rl);
+        switch_sealed(lw, other);
+    }
     let hot = lw.bcx.use_var(rl.hot);
     let go = lw.bcx.create_block();
     lw.bcx.ins().brif(hot, go, &[], start, &[]);
@@ -78,6 +90,29 @@ fn fill_gate<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
     emit_other_kinds(lw, pl, start);
     switch_sealed(lw, into_loop);
     emit_hot_back_edge(lw, pl);
+    lw.stored = stored;
+}
+
+/// The gate in the optimizing tier's loop function: on at the loop head
+/// past the peeled pass, whose end and this way in would otherwise both
+/// join the loop's body, when the side trace left the registers of the
+/// loop's kinds; else out at the loop head, where the dispatcher enters
+/// the trace again.
+fn loop_fn_gate<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
+    let ok = lw.bcx.use_var(rl.loop_ok);
+    let leave = lw.bcx.create_block();
+    lw.bcx.ins().brif(ok, lw.blocks.body_loop, &[], leave, &[]);
+    switch_sealed(lw, leave);
+    // what reg_state holds is not known here: every register is stored
+    let stored = std::mem::take(&mut lw.stored);
+    emit_store_back_and_return_pc(
+        &mut lw.bcx,
+        &lw.entry.regs_full[..pl.max_stack],
+        &lw.stored,
+        lw.entry.reg_state,
+        pl.record.head_pc,
+        lw.flush_ctx.as_ref(),
+    );
     lw.stored = stored;
 }
 

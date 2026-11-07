@@ -148,4 +148,12 @@ impl Lir {
         (inst.args_at, inst.n_args) = (at, n_then + n_else);
         CInst::from_u32(i)
     }
+
+    /// See [`Op::Pick`].
+    pub(super) fn pick_to(&mut self, loop_fn: Block, other: Block) {
+        self.edge(loop_fn);
+        self.edge(other);
+        let (a, b) = (loop_fn.as_u32(), other.as_u32());
+        self.push(Op::Pick, Ty::I64, NONE, a, b, NONE);
+    }
 }

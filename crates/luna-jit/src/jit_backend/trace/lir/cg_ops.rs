@@ -12,6 +12,7 @@ fn pure(op: Op) -> bool {
         Op::Store(_)
             | Op::StackStore(..)
             | Op::Jump
+            | Op::Pick
             | Op::Brif(_)
             | Op::TierCount { .. }
             | Op::Call
