@@ -49,6 +49,11 @@ impl Vm {
         prev
     }
 
+    /// The trace the step window is open for (its address; 0 none).
+    pub(in crate::vm::exec) fn trace_step_running(&self) -> usize {
+        self.jit.step.ct
+    }
+
     pub(in crate::vm::exec) fn trace_step_leave(&mut self, prev: RunningTrace) {
         (self.jit.step.ct, self.jit.step.frames) = prev;
     }

@@ -55,7 +55,7 @@ pub unsafe extern "C" fn luna_jit_due_words() -> i64 {
 // SAFETY: no other item in the link is named `luna_jit_side_cell_list`: only this crate
 // defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_side_cell_list(list: *const u32, reg_state: *const i64) -> i64 {
+pub unsafe extern "C" fn luna_jit_side_cell_list(list: *const u32, reg_state: *mut i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to
     // this call; `list`, unless null, starts with its kind, its length and
     // the registers its entries reach, which `reg_state` holds
@@ -67,9 +67,9 @@ pub unsafe extern "C" fn luna_jit_side_cell_list(list: *const u32, reg_state: *c
         (
             current_jit_vm(),
             std::slice::from_raw_parts(if n == 0 { std::ptr::dangling() } else { list }, n),
-            std::slice::from_raw_parts(
+            std::slice::from_raw_parts_mut(
                 if len == 0 {
-                    std::ptr::dangling()
+                    std::ptr::dangling_mut()
                 } else {
                     reg_state
                 },

@@ -54,7 +54,7 @@ pub trait VmJitAlloc {
     /// the trace's loop) on the frame on top, whose registers the running
     /// trace holds in `reg_state`: 1 when the checks pass, or after the
     /// stores; 0 otherwise.
-    fn jit_side_cell_list(&mut self, list: &[u32], reg_state: &[i64]) -> i64;
+    fn jit_side_cell_list(&mut self, list: &[u32], reg_state: &mut [i64]) -> i64;
     /// OP_CLOSURE for compiled code, in a frame of `cl` whose registers
     /// start at `base`: `None` when an allocation fails (compiled code may
     /// hold new objects only in registers, so no emergency collection
@@ -155,7 +155,7 @@ impl VmJitAlloc for crate::vm::Vm {
     fn jit_due_words(&self) -> *const usize {
         crate::vm::Vm::jit_due_words(self)
     }
-    fn jit_side_cell_list(&mut self, list: &[u32], reg_state: &[i64]) -> i64 {
+    fn jit_side_cell_list(&mut self, list: &[u32], reg_state: &mut [i64]) -> i64 {
         crate::vm::Vm::side_cell_list(self, list, reg_state)
     }
     #[inline]

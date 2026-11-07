@@ -67,7 +67,7 @@ impl Vm {
             self.tally_compiled_trace(&ct);
             let wired = self.wire_side_trace(&mut ct, a.side_parent);
             let ct = cache_trace(proto, ct);
-            hold_side_trace(wired, ct, &mut self.jit.counters.relink);
+            hold_side_trace(wired, ct, &mut self.jit.counters.relink, &proto);
             keep_inlined(proto, a.inlined);
             self.heap.barrier_back(proto);
             self.jit.counters.adopted += 1;
