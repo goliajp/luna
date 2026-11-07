@@ -21,7 +21,7 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1907** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1903** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 264 | files under a `tests/`, `benches/` or `examples/` directory, or whose name contains `tests` |
 | **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; thirty-three more in `luna_core::__private`, which is not public API, see §5 |
 | **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
@@ -32,7 +32,7 @@ the pattern CI counts (§4). Several `unsafe` blocks on one line count
 once; a block spread over several lines counts once; a comment that
 quotes the pattern counts too.
 
-Changes since the 1801 snapshot (net 106 more):
+Changes since the 1801 snapshot (net 102 more):
 
 - the stores into a table go through the table's handle (`Gc<Table>::set`,
   `set_int`, `try_set_existing`, `set_metatable`), which borrows the table
@@ -44,6 +44,9 @@ Changes since the 1801 snapshot (net 106 more):
 - `luna_jit_side_cell_list` runs a side cell's checks or stores for a
   trace's code that calls a side trace itself (the helper and its block
   reading the list and the registers, 2)
+- the JIT's helpers make their tables through two safe methods of the
+  Vm (`VmJitAlloc::{jit_new_table, jit_new_table_presized}`) instead of
+  borrowing its heap (4 fewer)
 - `__private::TableInternals::{set_unguarded, set_int_unguarded}` are
   `unsafe fn` (declaration and implementation, four sites): they skip
   the read-only test and the write barrier, which their callers, the
@@ -151,7 +154,7 @@ Changes since the 1801 snapshot (net 106 more):
 | | `jit_backend` (not its test files) | 79 | executable code memory (including the baseline trace tier's code pages), compiled-function entry points (the LLVM backend's trace entries among them), `Send` for handles that own JIT modules or code pages, `Send` and `Sync` for the record a baseline trace keeps to be lowered again for the optimizing tier, copying compiled code out to share it between Vms (the optimizing tier's loop function as well as its first pass), writing the optimizing tier's loop function into the trace's loop cell, which the baseline code reads at its back edge, the debug dump of a trace's machine code |
 | | unit-test files under `src/` (`capi/unit_tests.rs`, `jit_backend/chunk_tests_basic.rs`, `jit_backend/trace/tests/`) | 70 | tests that call compiled code or the `extern "C"` helpers directly |
 | | `tests/`, `benches/`, `examples/` | 57 | a C API state driven from Rust, a counting global allocator, the `send` overhead bench |
-| `luna-jit-helpers` | | 196 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
+| `luna-jit-helpers` | | 192 | the `luna_jit_*` `extern "C"` helpers compiled code calls (§3.5) |
 | `luna-jit-llvm` | `src/` | 11 | LLVM execution engines (one per compiled method or trace), `Send` for an engine compiled on the background compile thread, and the register-file GEPs |
 | | `tests/` | 34 | calling LLVM-compiled chunks |
 | `luna-runtime-helpers` | | 48 | the AOT binary's C entries, the linker-section walkers (§3.6), the PE header walk on Windows, the helper link anchor; 2 in its test of the exported helper symbols |
@@ -159,7 +162,7 @@ Changes since the 1801 snapshot (net 106 more):
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-fuzz` | | 1 | the heap the dump reader's target loads into |
 | `luna-jit-derive`, `luna-tools` | | 0 | |
-| **Total** | | **1907** | |
+| **Total** | | **1903** | |
 
 ## 3. Pattern catalog
 
@@ -317,7 +320,7 @@ Three CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **1907**, with no headroom;
+  The ceiling is the exact count, **1903**, with no headroom;
 - the same job runs `scripts/unsafe-accounting.py`, which puts every file
   in one row of the table in §2 and fails when a row, the table's total,
   the snapshot in §1 or the ceiling differs from the count in the tree,
@@ -792,7 +795,7 @@ wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 1907, the ceiling in ci.yml's unsafe-drift job
+# 1903, the ceiling in ci.yml's unsafe-drift job
 python3 scripts/unsafe-accounting.py
 # every row of §2, the totals and the ceiling against the tree
 cargo clippy --workspace --all-targets \

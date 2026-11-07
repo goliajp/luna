@@ -3,7 +3,7 @@
 
 use crate::current_jit_vm;
 use crate::table_new::unpack_table_ops;
-use luna_core::__private::{GcInternals, HeapInternals, ValueInternals, VmJitAlloc};
+use luna_core::__private::{GcInternals, ValueInternals, VmJitAlloc};
 use luna_core::__private::{RawVal, TableStores, VmHeap};
 use luna_core::runtime::{Gc, LuaStr, Table, Value};
 
@@ -196,10 +196,7 @@ fn materialize(
     (b, c, k): (u32, u32, bool),
     sunk: &Sunk,
 ) -> Option<Gc<Table>> {
-    // SAFETY: the heap stays in place
-    let g = unsafe { vm.heap_mut() }
-        .try_new_table_presized(b, c, k)
-        .ok()??;
+    let g = vm.jit_new_table_presized(b, c, k).ok()??;
     for (i, v) in sunk.arr().enumerate() {
         // SAFETY: `g` was just made in the Vm's heap, which stays in place, and `v` is one of its
         // values

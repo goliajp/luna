@@ -3,7 +3,6 @@
 use crate::jit::ExitTag;
 use crate::jit::JitVmRebindRestore;
 use crate::runtime::Heap;
-use crate::runtime::Table;
 use crate::runtime::TableError;
 use crate::runtime::Value;
 use crate::runtime::heap::Gc;
@@ -51,31 +50,6 @@ impl CompiledTraceInternals for crate::jit::CompiledTrace {
     #[inline]
     fn has_side_trace(&self, exit_idx: usize) -> bool {
         crate::jit::CompiledTrace::has_side_trace(self, exit_idx)
-    }
-}
-
-/// The internals of `Heap` luna's other crates use.
-pub trait HeapInternals {
-    /// A table sized by `NewTable`'s operands, as the interpreter makes it
-    /// (see `table::new_table_sizes`); `Ok(None)` for sizes past a table's
-    /// limit, an error when memory runs out.
-    fn try_new_table_presized(
-        &mut self,
-        b: u32,
-        c: u32,
-        k: bool,
-    ) -> Result<Option<Gc<Table>>, crate::runtime::table::TableError>;
-}
-
-impl HeapInternals for crate::runtime::Heap {
-    #[inline]
-    fn try_new_table_presized(
-        &mut self,
-        b: u32,
-        c: u32,
-        k: bool,
-    ) -> Result<Option<Gc<Table>>, crate::runtime::table::TableError> {
-        crate::runtime::Heap::try_new_table_presized(self, b, c, k)
     }
 }
 
