@@ -24,8 +24,6 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     let RuntimeHelpers {
         suppress_admit_id, ..
     } = lw.h.rt;
-    // the caller window: see `emit_tail`
-    let caller_regs: &[Variable] = &lw.entry.regs_full[..max_stack];
     // the back edge: a nil key exits after the loop (its kinds snapshot
     // says the slot is nil, not the entry's int); a key (and value) of the
     // tags the body was compiled for loops (R[A+2] = R[A+4]); another tag
@@ -73,17 +71,22 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     for k in nil_snapshot[first.min(n)..(first + nvars).min(n)].iter_mut() {
         *k = RegKind::Nil;
     }
-    emit_tagged_exit(
-        &mut lw.bcx,
-        suppress_admit_id,
-        caller_regs,
-        &lw.stored,
-        reg_state,
-        rop.pc + 1,
-        record.head_pc,
-        tag_side_local_2,
-        lw.flush_ctx.as_ref(),
-    );
+    if exit_calls(lw, pl, rop.pc + 1) {
+        emit_calling_exit(lw, pl, rop.pc + 1, tag_side_local_2);
+    } else {
+        emit_tagged_exit(
+            &mut lw.bcx,
+            suppress_admit_id,
+            // the caller window: see `emit_tail`
+            &lw.entry.regs_full[..max_stack],
+            &lw.stored,
+            reg_state,
+            rop.pc + 1,
+            record.head_pc,
+            tag_side_local_2,
+            lw.flush_ctx.as_ref(),
+        );
+    }
 
     lw.bcx.switch_to_block(not_nil_blk);
     lw.bcx.seal_block(not_nil_blk);
@@ -112,7 +115,8 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // were compiled for; the dispatcher must leave them there.
     emit_store_back_and_return(
         &mut lw.bcx,
-        caller_regs,
+        // the caller window: see `emit_tail`
+        &lw.entry.regs_full[..max_stack],
         &lw.stored,
         reg_state,
         (luna_core::__private::EXIT_KEEP_TFOR_VARS | u64::from(rop.pc)) as i64,
