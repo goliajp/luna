@@ -6,7 +6,7 @@
 //! |--------|--------------------------------------------------------------|
 //! | 0–31   | the pc the interpreter resumes at                            |
 //! | 32–52  | an inline side exit's site + 1, or under [`EXIT_TAGS_INDEX_BIT`] an index into the trace's `per_exit_tags`; 0 for a return through the trace's own tail |
-//! | 53     | free                                                         |
+//! | 53     | [`EXIT_RELINK`]                                              |
 //! | 54     | [`EXIT_TAGS_INDEX_BIT`]                                      |
 //! | 55     | [`EXIT_KEEP_TFOR_VARS`]                                      |
 //! | 56–62  | with bit 63 set: [`SIDE_SENT_DOWNREC_CODE`]; 0 otherwise     |
@@ -20,6 +20,11 @@ pub const EXIT_SITE_LIMIT: u32 = 1 << 21;
 
 /// Bits 32–52 of a return value, shifted down.
 pub(crate) const EXIT_SITE_MASK: u64 = EXIT_SITE_LIMIT as u64 - 1;
+
+/// Set by a side trace that ends at the head of the trace it links to,
+/// with that head in bits 0–31: the parent's code that called it goes on
+/// in its own loop. Read as the bare pc otherwise.
+pub const EXIT_RELINK: u64 = 1 << 53;
 
 /// Set when bits 32–52 hold an index into `per_exit_tags`.
 pub const EXIT_TAGS_INDEX_BIT: u64 = 1 << 54;
@@ -55,6 +60,7 @@ mod tests {
         let fields = [
             0xFFFF_FFFF,
             EXIT_SITE_MASK << 32,
+            EXIT_RELINK,
             EXIT_TAGS_INDEX_BIT,
             EXIT_KEEP_TFOR_VARS,
             0x7F << 56,
@@ -65,7 +71,7 @@ mod tests {
             assert_eq!(seen & f, 0, "{f:#x} overlaps");
             seen |= f;
         }
-        assert_eq!(seen, !(1 << 53));
+        assert_eq!(seen, u64::MAX);
         assert_eq!(u64::from(SIDE_SENT_DOWNREC_CODE) & !0x7F, 0);
     }
 }
