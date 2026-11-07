@@ -197,12 +197,6 @@ impl Replay<'_, '_> {
                     .ins()
                     .stack_store(types::I64, o0, self.slots[slot as usize], off);
             }
-            Op::Jump
-            | Op::Brif(_)
-            | Op::TierCount { .. }
-            | Op::Call
-            | Op::CallIndirect
-            | Op::Return => self.control(i),
             Op::VarRead => {
                 let v = self.b.use_var(self.vars[i.a as usize]);
                 self.set(i.dst, v);
@@ -211,6 +205,7 @@ impl Replay<'_, '_> {
                 let v = self.v(i.b);
                 self.b.def_var(self.vars[i.a as usize], v);
             }
+            _ => self.control(i),
         }
     }
 }

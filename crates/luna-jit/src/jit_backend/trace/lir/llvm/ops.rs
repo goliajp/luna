@@ -147,6 +147,15 @@ impl<'c> Gen<'c, '_> {
             | Op::StackStore(..)
             | Op::VarRead
             | Op::VarWrite => self.mem(i)?,
+            _ => self.control(i)?,
+        }
+        Ok(())
+    }
+
+    /// A branch, a call or a return.
+    fn control(&mut self, i: &Inst) -> R<()> {
+        let bb = self.b;
+        match i.op {
             Op::Jump => {
                 let args = self.args(i);
                 let to = self.edge(i.a, &args)?;
@@ -169,6 +178,7 @@ impl<'c> Gen<'c, '_> {
                 let v = self.v(i.a);
                 b(bb.build_return(Some(&v)))?;
             }
+            _ => unreachable!("not a branch, call or return"),
         }
         Ok(())
     }
