@@ -134,6 +134,7 @@ impl Default for SideCell {
     }
 }
 
-/// A trace's cells: per cell, the index of the typed exit it belongs to
-/// (into `per_exit_tags`), and the cell.
-pub type SideCells = Box<[(u32, Box<SideCell>)]>;
+/// A trace's cells, in one allocation that does not move while the trace
+/// lives (its code holds their addresses): per cell, the index of the typed
+/// exit it belongs to (into `per_exit_tags`), and the cell.
+pub type SideCells = Box<[(u32, SideCell)]>;

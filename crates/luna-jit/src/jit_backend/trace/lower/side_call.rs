@@ -28,7 +28,7 @@
 
 use super::*;
 use cranelift_codegen::ir::BlockArg;
-use luna_core::__private::{SideCell, trace_ran_side_slot};
+use luna_core::__private::{SideCell, SideCells, trace_ran_side_slot};
 
 /// What the trace's way back in needs, for a trace whose exits may run a
 /// side trace from its code.
@@ -100,12 +100,10 @@ pub(super) fn emit_calling_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u
         lw.entry.reg_state,
         lw.flush_ctx.as_ref(),
     );
-    let cell = Box::new(SideCell::new());
     let n = lw.side_cells.len() as u32;
-    let c = lw
-        .bcx
-        .reloc(RelocKind::SideCell(n), &*cell as *const SideCell as i64);
-    lw.side_cells.push((tags_idx, cell));
+    // the address is written in by `place_cells` once every cell is known
+    let c = lw.bcx.reloc(RelocKind::SideCell(n), 0);
+    lw.side_cells.push(tags_idx);
     let ret =
         luna_core::__private::EXIT_TAGS_INDEX_BIT | (u64::from(tags_idx) << 32) | u64::from(pc);
     let ret = lw.bcx.ins().iconst(types::I64, ret as i64);
@@ -125,6 +123,18 @@ pub(super) fn emit_calling_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u
     };
     let args = [c, ret, noted].map(BlockArg::Value);
     lw.bcx.calling_exit(n, call, &args);
+}
+
+/// The cells of the exits `exits` (typed exit per cell), allocated at once,
+/// with `bcx`'s relocations of them set to their addresses.
+pub(super) fn place_cells<E: Emit>(bcx: &mut E, exits: Vec<u32>) -> SideCells {
+    let cells: SideCells = exits.into_iter().map(|e| (e, SideCell::new())).collect();
+    for (kind, live) in bcx.relocs_mut() {
+        if let RelocKind::SideCell(n) = *kind {
+            *live = &cells[n as usize].1 as *const SideCell as i64;
+        }
+    }
+    cells
 }
 
 /// The call block, once every exit is lowered: the side trace of the cell

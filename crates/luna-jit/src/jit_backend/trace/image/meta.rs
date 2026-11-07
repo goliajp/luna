@@ -117,7 +117,7 @@ impl Meta {
             downrec_multi_way_count: self.downrec_multi_way_count,
             tier_up,
             side_cells: (self.side_cell_exits.iter())
-                .map(|&e| (e, Box::new(SideCell::new())))
+                .map(|&e| (e, SideCell::new()))
                 .collect(),
             link_pc: self.link_pc,
             loop_tags: self.loop_tags.clone(),
