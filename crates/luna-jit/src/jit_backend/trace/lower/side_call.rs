@@ -2,9 +2,10 @@
 //! own code, and the way back into the trace when that side trace ends at
 //! the trace's head (see `luna_core::__private::SideCell`).
 //!
-//! Such an exit stores the registers as any exit does, then reads its side
-//! cell. Empty, the exit returns as usual and the dispatcher takes over.
-//! Holding an entry, the exit counts the side trace's move to the
+//! Such an exit stores the registers as any exit does, then goes on at the
+//! trace's one call block with its side cell and its return. The call
+//! block reads the cell. Empty, it returns the exit's return as usual and
+//! the dispatcher takes over. Holding an entry, it counts the side trace's move to the
 //! optimizing tier (leaving it to the dispatcher once the count is
 //! reached), checks what the dispatcher checks before it runs a side trace
 //! (leaving the side trace to it when a check fails), and calls it on the
@@ -25,6 +26,7 @@
 //! one (see `reentry`).
 
 use super::*;
+use cranelift_codegen::ir::BlockArg;
 use luna_core::__private::{SideCell, trace_ran_side_slot};
 
 /// What the trace's way back in needs, for a trace whose exits may run a
@@ -35,6 +37,10 @@ pub(super) struct Relink {
     pub(super) reentry: Block,
     /// The relink block, once an exit branches to it.
     pub(super) block: Option<Block>,
+    /// The call block every calling exit goes on at, once one does: its
+    /// parameters are the exit's side cell, its return, and the word the
+    /// dispatcher reads to know the side trace ran (see [`emit_call_block`]).
+    pub(super) call: Option<Block>,
     /// Set by the exit that relinks: whether the side trace's registers
     /// may go on in the optimizing tier's loop.
     pub(super) loop_ok: Variable,
@@ -67,6 +73,7 @@ pub(super) fn open_reentry<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> Option<Relink
     Some(Relink {
         reentry,
         block: None,
+        call: None,
         loop_ok,
         hot,
     })
@@ -94,13 +101,41 @@ pub(super) fn emit_calling_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u
         .bcx
         .reloc(RelocKind::SideCell(n), &*cell as *const SideCell as i64);
     lw.side_cells.push((tags_idx, cell));
-    let out = lw.bcx.create_block();
-    let entry = emit_may_call(lw, c, out);
-    emit_call(lw, pl, c, entry, tags_idx);
-    switch_sealed(lw, out);
     let ret =
         luna_core::__private::EXIT_TAGS_INDEX_BIT | (u64::from(tags_idx) << 32) | u64::from(pc);
     let ret = lw.bcx.ins().iconst(types::I64, ret as i64);
+    let noted = lw.bcx.ins().iconst(types::I64, i64::from(tags_idx) + 1);
+    let rl = lw.relink.as_mut().expect("a calling exit has a way back");
+    let call = match rl.call {
+        Some(b) => b,
+        None => {
+            let b = lw.bcx.create_block();
+            for _ in 0..3 {
+                lw.bcx.append_block_param(b, types::I64);
+            }
+            rl.call = Some(b);
+            b
+        }
+    };
+    let args = [c, ret, noted].map(BlockArg::Value);
+    lw.bcx.ins().jump(call, &args);
+}
+
+/// The call block, once every exit is lowered: the side trace of the cell
+/// it is given called when the cell holds one and it may run, else the
+/// exit's return returned.
+pub(super) fn emit_call_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
+    let Some(call) = lw.relink.as_ref().and_then(|rl| rl.call) else {
+        return;
+    };
+    switch_sealed(lw, call);
+    let &[c, ret, noted] = lw.bcx.block_params(call) else {
+        unreachable!("the call block takes a cell, a return and a note")
+    };
+    let out = lw.bcx.create_block();
+    let entry = emit_may_call(lw, c, out);
+    emit_call(lw, pl, c, entry, noted);
+    switch_sealed(lw, out);
     lw.bcx.ins().return_(&[ret]);
 }
 
@@ -139,10 +174,10 @@ fn emit_may_call<E: Emit>(lw: &mut Lower<E>, c: Value, out: Block) -> Value {
     entry
 }
 
-/// The call of the side trace at `entry` (cell `c`'s), from the exit to
-/// typed exit `tags_idx`: on at the relink block when it goes on in this
-/// trace's loop, else its return returned, the exit noted.
-fn emit_call<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, c: Value, entry: Value, tags_idx: u32) {
+/// The call of the side trace at `entry` (cell `c`'s): on at the relink
+/// block when it goes on in this trace's loop, else its return returned,
+/// `noted` (the typed exit + 1) stored for the dispatcher.
+fn emit_call<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, c: Value, entry: Value, noted: Value) {
     let (reg_state, flags) = (lw.entry.reg_state, MemFlagsData::trusted());
     let sig = lw.entry.trace_fn_sig_ref;
     let call = lw.bcx.ins().call_indirect(sig, entry, &[reg_state]);
@@ -150,7 +185,6 @@ fn emit_call<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, c: Value, entry: Value, 
     let (back_blk, other) = (lw.bcx.create_block(), lw.bcx.create_block());
     super::side_link::emit_branch_on_return(lw, pl, c, r, back_blk, other);
     switch_sealed(lw, other);
-    let noted = lw.bcx.ins().iconst(types::I64, i64::from(tags_idx) + 1);
     let slot = 8 * trace_ran_side_slot(pl.window_size_us) as i32;
     lw.bcx.ins().store(flags, noted, reg_state, slot);
     lw.bcx.ins().return_(&[r]);
