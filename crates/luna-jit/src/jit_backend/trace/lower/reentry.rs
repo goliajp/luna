@@ -9,6 +9,7 @@ use super::*;
 /// and the dispatcher do before a call, the loop's iteration counted, on at
 /// the reentry block, which is then sealed.
 pub(super) fn emit_relink_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()> {
+    super::side_call::emit_call_block(lw, pl);
     let Some(rl) = lw.relink.take() else {
         return Some(());
     };
