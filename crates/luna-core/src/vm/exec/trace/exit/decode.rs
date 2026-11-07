@@ -2,7 +2,7 @@
 //! trace may have run) and the register write-back with the exit's tags.
 
 use super::*;
-use crate::jit::trace::CompiledTrace;
+use crate::jit::trace::{CompiledTrace, ExitTag};
 use crate::jit::trace_types::frame::{TRACE_FRAME_TAIL, trace_ran_side_slot};
 use crate::runtime::mem::LVec;
 
@@ -66,7 +66,13 @@ impl Vm {
         // from its own
         let off = ct.exit_frame_offset(exit);
         if child.head_pc != tentative.cont_pc
-            || !self.child_reads_stack_held_ok(base_us, off, entry_tags, &child.plans.entry_tags)
+            || !self.child_reads_stack_held_ok(
+                base_us,
+                off,
+                entry_tags,
+                ct.exit_tags_of(exit),
+                &child.plans.entry_tags,
+            )
         {
             return parent_only;
         }
@@ -129,14 +135,18 @@ impl Vm {
     }
 
     /// Whether a side trace may run on the registers as they are: a slot
-    /// the parent took unchecked (its runtime entry tag is ANY) but the
-    /// child reads holds, on the stack, a value of the tag the child was
-    /// compiled for. The child's register `i` is the parent's `off + i`.
+    /// the parent took unchecked (its runtime entry tag is ANY) and left
+    /// alone by the exit (`at_exit`), but the child reads, holds on the
+    /// stack a value of the tag the child was compiled for. A slot the exit
+    /// wrote holds its value in the registers, not yet on the stack, with
+    /// the tag wiring checked against the child's. The child's register
+    /// `i` is the parent's `off + i`.
     fn child_reads_stack_held_ok(
         &self,
         base_us: usize,
         off: usize,
         entry_tags: &[u8],
+        at_exit: &[ExitTag],
         child_entry: &[u8],
     ) -> bool {
         entry_tags
@@ -147,6 +157,9 @@ impl Vm {
             .all(|(i, (&p, &c))| {
                 p != crate::jit::trace::ENTRY_TAG_ANY
                     || c == crate::jit::trace::ENTRY_TAG_ANY
+                    || at_exit
+                        .get(off + i)
+                        .is_some_and(|&t| t != ExitTag::Untouched)
                     || self.stack[base_us + off + i].unpack().0 == c
             })
     }
