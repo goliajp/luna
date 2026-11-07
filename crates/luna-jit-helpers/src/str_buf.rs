@@ -100,9 +100,10 @@ pub unsafe extern "C" fn luna_jit_str_buf_concat(buf: i64, str_ptr: i64, op_pc: 
 /// into a fresh `LuaStr` via `heap.intern`, returning the raw ptr
 /// bits for the trace to write into the accumulator slot.
 ///
-/// Returns the LuaStr ptr as i64 on success, 0 past the 256KB hard cap or
-/// when the string cannot be allocated: a deopt is parked then, and the
-/// dispatcher drops the trace's registers.
+/// Returns the LuaStr ptr as i64 on success; 0 when the string is left for
+/// the dispatcher to make once the trace has returned (past the 256KB hard
+/// cap, or when it cannot be made here). `slot` is the accumulator's
+/// register in the trace's window.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread; `buf` came from
@@ -110,12 +111,12 @@ pub unsafe extern "C" fn luna_jit_str_buf_concat(buf: i64, str_ptr: i64, op_pc: 
 // SAFETY: no other item in the link is named `luna_jit_str_buf_intern`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_str_buf_intern(buf: i64) -> i64 {
+pub unsafe extern "C" fn luna_jit_str_buf_intern(buf: i64, slot: i64) -> i64 {
     if buf == 0 {
         return 0;
     }
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and `buf`
     // is a live boxed buffer only this call uses
     let (vm, buf) = unsafe { (current_jit_vm(), &mut *(buf as *mut LVec<u8>)) };
-    vm.jit_str_buf_intern(buf)
+    vm.jit_str_buf_intern(buf, slot as u32)
 }

@@ -97,7 +97,8 @@ pub(crate) fn current_base_addr<E: Emit>(
 
 pub(super) fn emit_flush_buf<E: Emit>(bcx: &mut E, ctx: &FlushCtx, regs: &[Variable]) {
     let buf_ptr = bcx.use_var(ctx.buf_var);
-    let call_inst = bcx.ins().call(ctx.intern_ref, &[buf_ptr]);
+    let slot = bcx.ins().iconst(types::I64, i64::from(ctx.accum_slot));
+    let call_inst = bcx.ins().call(ctx.intern_ref, &[buf_ptr, slot]);
     let str_ptr = bcx.inst_results(call_inst)[0];
     if let Some(&accum_var) = regs.get(ctx.accum_slot as usize) {
         bcx.def_var(accum_var, str_ptr);

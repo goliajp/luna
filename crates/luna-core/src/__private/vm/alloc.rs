@@ -2,9 +2,9 @@
 //! would at the same op.
 
 use crate::runtime::LuaClosure;
-use crate::runtime::Table;
 use crate::runtime::heap::Gc;
 use crate::runtime::mem::LVec;
+use crate::runtime::{Table, Value};
 use crate::vm::Vm;
 
 pub use crate::jit::abi::{JIT_GC_CALL, JIT_GC_PREV};
@@ -67,12 +67,11 @@ pub trait VmJitAlloc {
     /// (PUC's size of it, as the operands give it): then the interpreter
     /// runs it. A table the operands cannot give is the interpreter's too.
     fn jit_table_due(&self, b: u32, c: u32, k: bool) -> bool;
-    /// Park a deopt for an allocation compiled code could not make: the
-    /// dispatcher drops what the compiled code computed and the
-    /// interpreter runs the code again, allocating through its own path
-    /// (which may collect in an emergency, as compiled code may not: it
-    /// can hold new objects only in machine registers). The parked value
-    /// is never raised, so it allocates nothing.
+    /// Park a deopt for an allocation compiled code could not make: a
+    /// trace leaves at the op, which the interpreter runs, allocating
+    /// through its own path (which may collect in an emergency, as compiled
+    /// code may not: it can hold new objects only in machine registers).
+    /// The parked value is never raised, so it allocates nothing.
     fn jit_park_oom(&mut self);
     /// A trace's sunk site `site` makes its table this round (a `NewTable`
     /// sized by `b`, `c`, `k`): `true` when a collection step falls due
@@ -90,6 +89,17 @@ pub trait VmJitAlloc {
         site: usize,
         make: impl FnOnce(&mut Vm) -> Option<Gc<Table>>,
     ) -> Option<Gc<Table>>;
+    /// A sunk table a trace's exit could not make (`ops` as
+    /// `jit_sunk_table`'s callers pack its `NewTable`), its array values
+    /// `arr` and hash keys and values `hash` kept for the dispatcher to
+    /// make it: the odd word the exit writes where the table goes.
+    /// Allocates nothing.
+    fn jit_sunk_unmade(
+        &mut self,
+        ops: i64,
+        arr: impl ExactSizeIterator<Item = Value>,
+        hash: impl ExactSizeIterator<Item = (Value, Value)>,
+    ) -> i64;
     /// Pop a reusable buffer from the JIT accumulator buffer pool, or
     /// make an empty one when the pool is empty. The trace keeps it (as
     /// the boxed pointer the helper leaks) in a stack slot through the
@@ -121,14 +131,11 @@ pub trait VmJitAlloc {
         op_pc: u32,
     ) -> i64;
     /// Drain the accumulator buffer into a fresh string, returning its raw
-    /// pointer bits for the trace to write into the accumulator slot. The
-    /// buffer is left empty, its capacity kept, ready for release.
-    ///
-    /// Returns 0 when the string is past the hard cap or cannot be
-    /// allocated; a deopt is parked then, so the dispatcher drops the
-    /// trace's registers (the 0 among them) and the interpreter runs the
-    /// loop again.
-    fn jit_str_buf_intern(&mut self, buf: &mut LVec<u8>) -> i64;
+    /// pointer bits for the trace to write into the accumulator register
+    /// `slot` of its window. The buffer is left empty, its capacity kept,
+    /// ready for release. 0 when the string is left for the dispatcher to
+    /// make once the trace has returned.
+    fn jit_str_buf_intern(&mut self, buf: &mut LVec<u8>, slot: u32) -> i64;
 }
 
 impl VmJitAlloc for crate::vm::Vm {
@@ -179,6 +186,15 @@ impl VmJitAlloc for crate::vm::Vm {
         crate::vm::Vm::jit_sunk_make(self, site, make)
     }
     #[inline]
+    fn jit_sunk_unmade(
+        &mut self,
+        ops: i64,
+        arr: impl ExactSizeIterator<Item = Value>,
+        hash: impl ExactSizeIterator<Item = (Value, Value)>,
+    ) -> i64 {
+        crate::vm::Vm::jit_sunk_unmade(self, ops, arr, hash)
+    }
+    #[inline]
     unsafe fn jit_str_buf_acquire(&mut self) -> Box<LVec<u8>> {
         crate::vm::Vm::jit_str_buf_acquire(self)
     }
@@ -204,7 +220,7 @@ impl VmJitAlloc for crate::vm::Vm {
         crate::vm::Vm::jit_str_buf_concat(self, buf, piece, op_pc)
     }
     #[inline]
-    fn jit_str_buf_intern(&mut self, buf: &mut LVec<u8>) -> i64 {
-        crate::vm::Vm::jit_str_buf_intern(self, buf)
+    fn jit_str_buf_intern(&mut self, buf: &mut LVec<u8>, slot: u32) -> i64 {
+        crate::vm::Vm::jit_str_buf_intern(self, buf, slot)
     }
 }

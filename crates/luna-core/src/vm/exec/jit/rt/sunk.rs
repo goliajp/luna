@@ -16,6 +16,9 @@ pub(crate) struct TraceGhosts {
     /// concatenation: the one it entered with, or the record of a long
     /// one, which the buffer's string stands for once made
     pub(crate) accum: Option<crate::vm::exec::AccumLast>,
+    /// the string the trace entered its accumulation with, when its
+    /// bytes could not go into the buffer: they come before the buffer's
+    pub(crate) accum_prefix: Option<Gc<crate::runtime::LuaStr>>,
 }
 
 impl Vm {
@@ -28,6 +31,7 @@ impl Vm {
         }
         self.jit.ghosts[d].sunk.fill(None);
         self.jit.ghosts[d].accum = None;
+        self.jit.ghosts[d].accum_prefix = None;
         self.jit.ghost_depth = d + 1;
     }
 
@@ -93,8 +97,9 @@ impl Vm {
         let off = self.heap.counting_off();
         let t = make(self);
         self.heap.counting_on(off);
-        let g = self.jit_ghosts().sunk[site].take();
-        if let (Some(g), Some(t)) = (g, t) {
+        // one not made keeps the record for the dispatcher, which makes it
+        if let Some(t) = t {
+            let g = self.jit_ghosts().sunk[site].take().expect("counted");
             self.heap.ghost_table_made(g, t.hdr());
         }
         t

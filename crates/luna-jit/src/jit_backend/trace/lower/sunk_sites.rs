@@ -1,4 +1,5 @@
 use super::*;
+use luna_core::__private::{SUNK_WORDS_MAX, sunk_words};
 
 /// Declares the virtual registers of each sinkable table site, demoting
 /// the sites that cannot be sunk.
@@ -33,12 +34,8 @@ pub(super) fn alloc_sunk_sites<E: Emit>(
     //     a cmp, but we ALSO need to bail on body cmps that fire
     //     AFTER the site dies (no live binding to escape, but the
     //     trace still has a back-edge candidate).
-    //
-    // Note: looping traces (`opts.internal_loop = true`) that have
-    // any cmp in body are already excluded by the sweep escape
-    // rule. A ForLoop terminator escapes the bindings it carries
-    // (below the loop's `A + 4`). So we don't need an explicit
-    // `internal_loop` check here.
+    // (a looping trace needs no check of its own: the sweep escapes the
+    // bindings a ForLoop terminator carries, below the loop's `A + 4`)
     const MAX_SUNK_CAP: u32 = 8;
     let unsized_moves = moved_by_count(pl, escape);
     let return_a_for_sunk_check: Option<u32> = match end_idx_opt {
@@ -60,6 +57,8 @@ pub(super) fn alloc_sunk_sites<E: Emit>(
     let mut virt_vars: Vec<Option<Vec<Variable>>> = vec![None; escape.sites.len()];
     let mut virt_kinds: Vec<Option<Vec<RegKind>>> = vec![None; escape.sites.len()];
     let mut sunk_alloc_seen: u32 = 0;
+    // the room an exit has to keep the sunk tables it cannot make
+    let mut words = 0;
     for (idx, site) in escape.sites.iter_mut().enumerate() {
         if site.state != EscapeState::Sinkable {
             continue;
@@ -82,10 +81,12 @@ pub(super) fn alloc_sunk_sites<E: Emit>(
             || unsized_moves.contains(&(idx as u32))
             || array_cap > MAX_SUNK_CAP as usize
             || (site.inline_depth == 0 && return_a_for_sunk_check == Some(site.a))
+            || words + sunk_words(array_cap, n_hash) > SUNK_WORDS_MAX
         {
             site.state = EscapeState::Escaped;
             continue;
         }
+        words += sunk_words(array_cap, n_hash);
         // hash slot materialise is plumbed into
         // emit_materialize_live_sunk (extended helper signature
         // carries hash_keys + hash_raws + hash_kinds buffers), so no

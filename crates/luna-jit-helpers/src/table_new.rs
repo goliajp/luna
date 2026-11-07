@@ -21,11 +21,8 @@ use luna_core::__private::{GcInternals, HeapInternals, TableInternals, VmJitAllo
 pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    // A prior helper in this JIT entry parked a deopt
-    // request; short-circuit so we don't touch the heap unnecessarily.
-    // Returning a NULL ptr is safe because subsequent helpers also
-    // early-return on `jit_pending_err`, and the dispatcher will deopt
-    // to the interpreter as soon as the JIT entry returns.
+    // A prior helper in this JIT entry parked a deopt and the trace is
+    // leaving at that op: nothing more is made.
     if vm.jit().pending_err.is_some() {
         return 0;
     }
@@ -114,7 +111,9 @@ pub(crate) fn unpack_table_ops(ops: i64) -> (u32, u32, bool) {
 /// Before compiled code stores a constructor's list items up to index
 /// `last` (`SetList`): grow `t`'s array part to exactly `last` when it is
 /// smaller, as the interpreter's `SetList` does, so the stores that follow
-/// land in it.
+/// land in it. 1 when they will; 0 with a deopt parked when the part
+/// cannot grow, the caller then leaving at the `SetList` for the
+/// interpreter to run it.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread; `t` is a live table of
@@ -122,22 +121,23 @@ pub(crate) fn unpack_table_ops(ops: i64) -> (u32, u32, bool) {
 // SAFETY: no other item in the link is named `luna_jit_table_reserve_list`: only this crate
 // defines `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) {
+pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     if vm.jit().pending_err.is_some() {
-        return;
+        return 0;
     }
     // SAFETY: `t` is a live table of the Vm lent to this call (# Safety), grown in
     // place in its heap; `reserve_list` never runs the collector, and nothing
     // else refers into the table meanwhile
     let (table, heap) = unsafe { (table_arg(t).as_mut(), vm.heap_mut()) };
     match table.reserve_list(heap, last.max(0) as u64) {
-        Ok(()) => {}
+        Ok(()) => return 1,
         Err(luna_core::runtime::table::TableError::Overflow) => {
             vm.park_jit_error("table overflow");
         }
         // the interpreter runs the `SetList` again and grows the table
         Err(_) => vm.jit_park_oom(),
     }
+    0
 }

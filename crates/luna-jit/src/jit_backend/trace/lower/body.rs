@@ -136,8 +136,8 @@ pub(super) fn emit_ops<E: Emit>(
                 // Deopt path: flush buffer + store back + return pc.
                 lw.bcx.switch_to_block(deopt_blk);
                 lw.bcx.seal_block(deopt_blk);
-                // restored with the kinds the registers have here
-                guard_exit(lw, pl, rop.pc, i);
+                // from the idiom's first move, which compiled code skipped
+                guard_exit(lw, pl, record.ops[ba.pre1_idx].pc, ba.pre1_idx);
                 lw.bcx.switch_to_block(continue_blk);
                 lw.bcx.seal_block(continue_blk);
                 // a step due: leave after the idiom, the buffer flushed

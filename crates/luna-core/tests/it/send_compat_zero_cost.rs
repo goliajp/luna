@@ -102,12 +102,15 @@ fn boxed_t_cell_ptr_matches_boxed_cell_ptr() {
 /// existed (~2.2 KB on arm64). If Vm growth pushes past this, the
 /// assertion will surface so the bump can be reviewed before merge.
 /// Raised by one cache line from 8192 when the JIT's counters took the
-/// count of trace heads given up (8 bytes, making it exactly 8192).
+/// count of trace heads given up (8 bytes, making it exactly 8192), and by
+/// three more when the Vm took, at its end, what a trace's exit leaves for
+/// the dispatcher to make outside compiled code (the accumulated string,
+/// the frames and sunk tables, the room their values are kept in).
 #[test]
 fn vm_size_default_features_stays_modest() {
     let sz = std::mem::size_of::<luna_core::vm::Vm>();
     assert!(
-        sz < 8256,
+        sz < 8448,
         "Vm size grew unexpectedly under default features: {sz} bytes"
     );
 }

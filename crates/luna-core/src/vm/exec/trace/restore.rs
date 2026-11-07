@@ -221,6 +221,26 @@ const RAW_OF: [u8; 9] = {
     m
 };
 
+/// The value an exit writes back for a register of tag `t` holding
+/// payload `r`; `None` for one it leaves untouched.
+pub(in crate::vm::exec) fn exit_value(t: ExitTag, r: i64) -> Option<Value> {
+    let mut tag = RAW_OF[t as usize];
+    if tag == UNTOUCHED {
+        return None;
+    }
+    if tag == BOOL {
+        tag = raw::FALSE + (r & 1) as u8;
+    }
+    Some(raw_value(tag, r))
+}
+
+/// The value of raw tag `tag` (an entry tag) and payload `r`.
+pub(in crate::vm::exec) fn raw_value(tag: u8, r: i64) -> Value {
+    let mut v = Value::Nil;
+    put(&mut v, tag, r);
+    v
+}
+
 /// Writes the value of tag `tag` and payload word `r` to `dst`. The tags
 /// the write-back passes are a slot's entry tag (checked on entry) or the
 /// kind the exit analysis pins the register's payload to.

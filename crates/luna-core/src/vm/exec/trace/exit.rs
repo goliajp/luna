@@ -8,6 +8,8 @@ use crate::jit::trace::CompiledTrace;
 pub(in crate::vm::exec) mod decode;
 pub(in crate::vm::exec) mod inner;
 mod side;
+pub(in crate::vm::exec) mod unmade;
+mod unmade_frames;
 
 impl Vm {
     /// The trace `ct` entered at `pc` returned `continuation_pc`, its
@@ -83,9 +85,17 @@ impl Vm {
         let raw_ret = continuation_pc as u64;
         let src = self.trace_exit_source(cl, ct, raw_ret, reg_state, base_us, entry_tags);
         if src.ran && src.off > 0 {
-            self.trace_exit_restore_inner(
+            let off = src.off;
+            let failed = self.trace_exit_restore_inner(
                 cl, base_us, ct, raw_ret, src, pre_frames, reg_state, entry_tags,
             );
+            let unmade = self.unmade.any;
+            if let Some(pc) = unmade
+                .then(|| self.trace_exit_unmade_after(base_us, off, failed))
+                .flatten()
+            {
+                set_top_pc(&mut self.frames, pc);
+            }
             return;
         }
         let ExitSource {
@@ -103,6 +113,9 @@ impl Vm {
         let cont_pc = decoded.cont_pc;
         let exit_hit_idx = decoded.exit_hit_idx;
         let exit_tags_for_pc = decoded.exit_tags_for_pc;
+        let tags = (exit_tags_for_pc, child_ran.then_some(entry_tags));
+        let failed =
+            self.unmade_frames_at((shapes, site_id), tags, (0, base_us, max_stack), reg_state);
         // after a side trace ran, the per-tag path: `global_tag_res_kind`
         // classifies the parent's exit tags, not the child's
         let using_global_exit_tags = if child_ran {
@@ -144,30 +157,14 @@ impl Vm {
             }
             self.trace_restore_back_edge_kinds(base_us, ct, exit_tags_for_pc, keep, reg_state);
         }
-        // For non-inline exits the
-        // helper was never called (no metas chain for
-        // this cont_pc), so `frames.last()` is the
-        // trace head's frame and we set its pc to
-        // cont_pc as before. For inline exits the
-        // helper baked the side-exit PC into the
-        // innermost frame's `pc` at push time
-        // (chain.last().pc was overridden at emit),
-        // so this assignment to `frames.last_mut().pc
-        // = cont_pc` is a redundant-but-correct
-        // confirmation.
+        // before anything reads the stack the exit restored
+        let unmade = self.unmade.any;
+        let raise_at = unmade
+            .then(|| self.trace_exit_unmade_after(base_us, 0, failed))
+            .flatten();
         let _ = &per_exit_inline; // hold the Rc alive across dispatch
-        // For inline side-exits the
-        // helper has pushed N frames on top. The trace
-        // head frame is at `pre_frames - 1`; set its
-        // pc to `head_resume_pc` so when the chain
-        // eventually pops back to it, interp resumes
-        // PAST the trace's depth-0 Op::Call instead of
-        // restarting from `head_pc` and re-triggering
-        // dispatch (infinite loop). The innermost
-        // (helper-pushed) frame already has its pc
-        // baked in at compile time, but we still
-        // assign `cont_pc` below for parity with the
-        // non-inline path (no-op).
+        // an inline exit pushed frames above the head's, which resumes past
+        // its call into them: at `head_pc` it would dispatch the trace again
         if site_id > 0 {
             let idx = (site_id - 1) as usize;
             let head_resume_pc = decode_inline[idx].head_resume_pc;
@@ -176,6 +173,11 @@ impl Vm {
             {
                 f.pc = head_resume_pc;
             }
+        }
+        // a frame could not be made: the call into it raises the error
+        if let Some(pc) = raise_at {
+            set_top_pc(&mut self.frames, pc);
+            return;
         }
         let frames_len_now = self.frames.len();
         // SAFETY: the trace head's Lua frame is still on `frames` (an inline exit only pushed frames above it, and `pre_frames` counts it), so `frames` is not empty
@@ -226,4 +228,11 @@ fn is_tier_exit(ct: &CompiledTrace, cont_pc: u32) -> bool {
             .tier_up
             .as_ref()
             .is_some_and(|t| !t.tried.get() && t.count.get() == t.at)
+}
+
+/// Moves the frame on top of `frames`, a Lua frame, to `pc`.
+fn set_top_pc(frames: &mut [CallFrame], pc: u32) {
+    if let Some(CallFrame::Lua(f)) = frames.last_mut() {
+        f.pc = pc;
+    }
 }

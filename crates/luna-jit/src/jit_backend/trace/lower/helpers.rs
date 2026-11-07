@@ -212,13 +212,9 @@ fn declare_op_helpers<E: Emit>(bcx: &mut E) -> Option<OpHelpers> {
     let set_top_id = bcx
         .declare_function("luna_jit_set_top", Linkage::Import, &set_top_sig)
         .ok()?;
-    // `fn luna_jit_table_reserve_list(t, last)`: a SetList's array growth
-    let mut reserve_sig = bcx.make_signature();
-    reserve_sig.params.push(AbiParam::new(types::I64));
-    reserve_sig.params.push(AbiParam::new(types::I64));
-    let reserve_list_id = bcx
-        .declare_function("luna_jit_table_reserve_list", Linkage::Import, &reserve_sig)
-        .ok()?;
+    // `fn luna_jit_table_reserve_list(t, last) -> i64`: a SetList's array
+    // growth, 0 when the part cannot grow
+    let reserve_list_id = declare_i64_import(bcx, "luna_jit_table_reserve_list", 2)?;
 
     Some(OpHelpers {
         reserve_list_id,
@@ -270,8 +266,8 @@ fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHelpers> {
     // `fn luna_jit_str_buf_extend(buf, str_ptr) -> i64`.
     let str_buf_extend_id = declare_i64_import(bcx, "luna_jit_str_buf_extend", 2)?;
 
-    // `fn luna_jit_str_buf_intern(buf) -> i64`.
-    let str_buf_intern_id = declare_i64_import(bcx, "luna_jit_str_buf_intern", 1)?;
+    // `fn luna_jit_str_buf_intern(buf, slot) -> i64`.
+    let str_buf_intern_id = declare_i64_import(bcx, "luna_jit_str_buf_intern", 2)?;
     // Squelch unused warnings.
     let _ = (
         str_buf_acquire_id,

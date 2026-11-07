@@ -1,8 +1,7 @@
 //! Frame materialization for inline side exits.
 
 use crate::current_jit_vm;
-use luna_core::__private::VmJitState;
-use luna_core::__private::{GcInternals, VmJitAlloc, VmJitFrames};
+use luna_core::__private::{GcInternals, VmJitFrames};
 
 /// Runtime fire counter for the inline-chain reloc path. Every call to
 /// [`luna_jit_trace_materialize_frames`] from trace mcode (JIT-baked
@@ -27,9 +26,9 @@ pub fn trace_materialize_frames_fires() -> u64 {
 /// Walks `metas[0..n]` and pushes one
 /// `CallFrame::Lua` per entry onto `vm.frames` so the interp can
 /// resume at a depth>0 continuation PC after the trace side-exits.
-/// Returns `0` on success, non-zero to force the dispatcher into
-/// the deopt path. The lowerer emits the call site from cmp@d>0
-/// side-exit blocks.
+/// Returns `0` on success; -1 when a frame cannot be made, which the
+/// dispatcher then makes with the ones after it. The lowerer emits the
+/// call site from cmp@d>0 side-exit blocks.
 ///
 /// Invariants the caller (lowerer) enforces at compile time:
 /// - `closures[i]` is the closure frame `i` runs: the value its caller
@@ -62,12 +61,6 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    // Honour the existing deopt protocol: if any earlier helper in
-    // this JIT entry parked a deopt, don't push frames — the
-    // dispatcher will unwind via the deopt path.
-    if vm.jit().pending_err.is_some() {
-        return -1;
-    }
     let head_frame = match vm.jit_last_lua_frame() {
         Some(f) => f,
         // No live Lua frame at trace head — shouldn't happen under
@@ -83,15 +76,15 @@ pub unsafe extern "C" fn luna_jit_trace_materialize_frames(
         let cl =
             unsafe { luna_core::runtime::Gc::from_ptr(raw as *mut luna_core::runtime::LuaClosure) };
         let new_base = head_frame.base + m.base_offset;
-        // frames that cannot be made park a deopt: the dispatcher pops the
-        // ones pushed and the interpreter runs the loop again
+        // a frame that cannot be made here is the dispatcher's to make,
+        // with the ones after it, once the trace has returned
         if !vm.jit_ensure_stack((new_base + cl.proto.max_stack as u32) as usize)
             // SAFETY: `metas` and `closures` describe the frames the trace
             // inlined at this exit (# Safety), and the stack covers the
             // frame's registers (the `jit_ensure_stack` just above)
             || !unsafe { vm.jit_push_inlined_frame(cl, new_base, m.pc, m.nresults, m.n_varargs) }
         {
-            vm.jit_park_oom();
+            vm.jit_frames_unmade(i as u32);
             return -1;
         }
     }

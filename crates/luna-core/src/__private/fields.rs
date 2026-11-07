@@ -40,6 +40,8 @@ use std::sync::atomic::AtomicUsize;
 pub trait VmJitState {
     /// The JIT's state.
     fn jit(&self) -> &JitState;
+    /// What the dispatcher made for trace exits that could not.
+    fn jit_unmade_counts(&self) -> crate::vm::exec::UnmadeCounts;
     /// The JIT's state, to change.
     ///
     /// # Safety
@@ -68,6 +70,10 @@ impl VmJitState for Vm {
     #[inline(always)]
     fn jit(&self) -> &JitState {
         &self.jit
+    }
+
+    fn jit_unmade_counts(&self) -> crate::vm::exec::UnmadeCounts {
+        self.unmade.made
     }
 
     #[inline(always)]

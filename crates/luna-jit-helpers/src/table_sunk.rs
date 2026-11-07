@@ -3,9 +3,9 @@
 
 use crate::current_jit_vm;
 use crate::table_new::unpack_table_ops;
-use luna_core::__private::VmJitState;
 use luna_core::__private::{GcInternals, HeapInternals, ValueInternals, VmJitAlloc};
-use luna_core::__private::{TableStores, VmHeap};
+use luna_core::__private::{RawVal, TableStores, VmHeap};
+use luna_core::runtime::{Gc, LuaStr, Table, Value};
 
 /// A trace's sunk site makes its table this round (`ops` its `NewTable`'s
 /// packed operands, the site's number + 1 from bit 32): 1 when a
@@ -81,95 +81,134 @@ pub unsafe extern "C" fn luna_jit_materialize_sunk_table(
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to
     // this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
-        return 0;
-    }
     let cap_u = if cap > 0 { cap as usize } else { 0 };
     let n_hash_u = if n_hash > 0 { n_hash as usize } else { 0 };
+    // SAFETY: the buffers are as the caller's contract says (# Safety)
+    let sunk = unsafe {
+        Sunk::new(
+            cap_u,
+            raws_ptr,
+            kinds_ptr,
+            n_hash_u,
+            hash_keys_ptr,
+            hash_raws_ptr,
+            hash_kinds_ptr,
+        )
+    };
     // sized by the site's `NewTable`, as the interpreter would have made it
     let (b, c, k) = unpack_table_ops(ops);
-    // a table that cannot be made here, at an exit, parks a deopt: the
-    // dispatcher drops the trace's registers and the interpreter runs the
-    // loop again from the trace head
-    let site = sunk_site(ops);
-    let hash = (hash_keys_ptr, hash_raws_ptr, hash_kinds_ptr);
-    let t = vm.jit_sunk_make(site, |vm| {
-        // SAFETY: the buffers are as the caller's contract says (# Safety)
-        unsafe { materialize(vm, (b, c, k), cap_u, raws_ptr, kinds_ptr, n_hash_u, hash) }
-    });
-    t.map_or(0, |g| g.as_ptr() as i64)
+    let t = vm.jit_sunk_make(sunk_site(ops), |vm| materialize(vm, (b, c, k), &sunk));
+    match t {
+        Some(g) => g.as_ptr() as i64,
+        // a table that cannot be made here is the dispatcher's to make,
+        // from its contents kept now, once the trace has returned
+        None => vm.jit_sunk_unmade(ops, sunk.arr(), sunk.hash()),
+    }
 }
 
-/// The table of [`luna_jit_materialize_sunk_table`], made and filled; `None`
-/// with a deopt parked when it cannot be.
-///
-/// # Safety
-/// As [`luna_jit_materialize_sunk_table`]'s buffers.
-#[allow(clippy::too_many_arguments)]
-unsafe fn materialize(
-    vm: &mut luna_core::vm::Vm,
-    (b, c, k): (u32, u32, bool),
-    cap_u: usize,
-    raws_ptr: *const u64,
-    kinds_ptr: *const u8,
-    n_hash_u: usize,
-    (hash_keys_ptr, hash_raws_ptr, hash_kinds_ptr): (*const u64, *const u64, *const u8),
-) -> Option<luna_core::runtime::Gc<luna_core::runtime::Table>> {
-    // SAFETY: the heap stays in place
-    let g = match unsafe { vm.heap_mut() }.try_new_table_presized(b, c, k) {
-        Ok(Some(g)) => g,
-        Ok(None) => {
-            vm.park_jit_error("table overflow");
-            return None;
-        }
-        Err(_) => {
-            vm.jit_park_oom();
-            return None;
-        }
-    };
-    // Array slots.
-    for i in 0..cap_u {
-        // SAFETY: `i < cap`, and the first `cap` entries of the two
-        // buffers are readable and hold one value's payload and tag
-        // (# Safety)
-        let v = unsafe {
-            let raw = luna_core::__private::RawVal {
-                zero: *raws_ptr.add(i),
-            };
-            luna_core::runtime::Value::pack(*kinds_ptr.add(i), raw)
-        };
-        // SAFETY: `g` was just made in the Vm's heap, which stays in place, and `v` is one of its
-        // values (# Safety)
-        if unsafe { g.store_int(vm.heap_mut(), (i + 1) as i64, v) }.is_err() {
-            vm.jit_park_oom();
-            return None;
+/// The contents of a sunk table, in the buffers compiled code laid out.
+struct Sunk {
+    raws: *const u64,
+    kinds: *const u8,
+    cap: usize,
+    keys: *const u64,
+    hash_raws: *const u64,
+    hash_kinds: *const u8,
+    n_hash: usize,
+}
+
+impl Sunk {
+    /// # Safety
+    /// As [`luna_jit_materialize_sunk_table`]'s buffers, for as long as
+    /// the result is used.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn new(
+        cap: usize,
+        raws: *const u64,
+        kinds: *const u8,
+        n_hash: usize,
+        keys: *const u64,
+        hash_raws: *const u64,
+        hash_kinds: *const u8,
+    ) -> Sunk {
+        Sunk {
+            raws,
+            kinds,
+            cap,
+            keys,
+            hash_raws,
+            hash_kinds,
+            n_hash,
         }
     }
-    // Hash slots. Each entry is a
-    // (key_ptr: *const LuaStr, raw_bits, kind_byte) triple from
-    // the trace IR's stack-allocated buffers. The IR baked the
-    // const-string ptr at compile time from head_proto.consts.
-    for i in 0..n_hash_u {
-        // SAFETY: `i < n_hash`, and the first `n_hash` entries of the three
-        // buffers are readable and hold an interned key and one value's
-        // payload and tag (# Safety)
-        let (key, v) = unsafe {
-            let key = *hash_keys_ptr.add(i) as *mut luna_core::runtime::LuaStr;
-            let raw = luna_core::__private::RawVal {
-                zero: *hash_raws_ptr.add(i),
+
+    /// The array values, from index 1.
+    fn arr(&self) -> impl ExactSizeIterator<Item = Value> + '_ {
+        (0..self.cap).map(|i| {
+            // SAFETY: `i < cap`, and the first `cap` entries of the two
+            // buffers are readable and hold one live value's payload and
+            // tag (`Sunk::new`)
+            let v = unsafe {
+                Value::pack(
+                    *self.kinds.add(i),
+                    RawVal {
+                        zero: *self.raws.add(i),
+                    },
+                )
             };
-            (
-                luna_core::runtime::Gc::from_ptr(key),
-                luna_core::runtime::Value::pack(*hash_kinds_ptr.add(i), raw),
-            )
-        };
-        let key = luna_core::runtime::Value::Str(key);
+            not_sunk(v)
+        })
+    }
+
+    /// The hash keys (interned strings) and their values.
+    fn hash(&self) -> impl ExactSizeIterator<Item = (Value, Value)> + '_ {
+        (0..self.n_hash).map(|i| {
+            // SAFETY: `i < n_hash`, and the first `n_hash` entries of the
+            // three buffers are readable and hold an interned key and one
+            // live value's payload and tag (`Sunk::new`)
+            let (key, v) = unsafe {
+                (
+                    Gc::from_ptr(*self.keys.add(i) as *mut LuaStr),
+                    Value::pack(
+                        *self.hash_kinds.add(i),
+                        RawVal {
+                            zero: *self.hash_raws.add(i),
+                        },
+                    ),
+                )
+            };
+            (Value::Str(key), not_sunk(v))
+        })
+    }
+}
+
+/// `v`, which is no table the exit could not make: a sunk table stored in
+/// another makes it escape, so no sunk table holds one.
+fn not_sunk(v: Value) -> Value {
+    debug_assert!(!matches!(v, Value::Table(t) if t.as_ptr() as usize & 1 == 1));
+    v
+}
+
+/// The table of [`luna_jit_materialize_sunk_table`], made and filled;
+/// `None` when it cannot be.
+fn materialize(
+    vm: &mut luna_core::vm::Vm,
+    (b, c, k): (u32, u32, bool),
+    sunk: &Sunk,
+) -> Option<Gc<Table>> {
+    // SAFETY: the heap stays in place
+    let g = unsafe { vm.heap_mut() }
+        .try_new_table_presized(b, c, k)
+        .ok()??;
+    for (i, v) in sunk.arr().enumerate() {
+        // SAFETY: `g` was just made in the Vm's heap, which stays in place, and `v` is one of its
+        // values
+        unsafe { g.store_int(vm.heap_mut(), (i + 1) as i64, v) }.ok()?;
+    }
+    for (key, v) in sunk.hash() {
         // SAFETY: `g` was just made in the Vm's heap, which stays in place, and `key` and `v` are
-        // its values (# Safety)
-        if unsafe { g.store(vm.heap_mut(), key, v) }.is_err() {
-            vm.jit_park_oom();
-            return None;
-        }
+        // its values
+        unsafe { g.store(vm.heap_mut(), key, v) }.ok()?;
     }
     Some(g)
 }

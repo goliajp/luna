@@ -82,13 +82,11 @@ impl Vm {
         if dispatch_ok {
             debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
             // A recording in progress cannot see what the trace runs
-            // natively: it would resume after the trace with ops
-            // missing, and could close as a loop that never ran (a
-            // side trace of two ops returning its own head, which
-            // the dispatcher then entered forever). Drop it.
-            // Counted as a failure of that head: the per-head hot count
-            // would otherwise start the same doomed recording again and
-            // again.
+            // natively: it would resume after the trace with ops missing,
+            // and could close as a loop that never ran (a side trace of
+            // two ops returning its own head, entered forever). Dropped,
+            // and counted as a failure of that head, which would otherwise
+            // start the same recording again and again.
             if let Some(rec) = self.jit.active_trace.take() {
                 self.jit.counters.aborted += 1;
                 self.jit.counters.bump_close_cause("reached-compiled-trace");
@@ -123,23 +121,18 @@ impl Vm {
                 self.count_inline_kinds(ct.inline_kinds);
             }
 
+            // A helper that could not do its op (a metatable, no memory)
+            // parked a deopt and the trace left at that op: the exit is
+            // where the interpreter goes on, as for any guard, and it does
+            // the op itself. The mark stays up while the exit is restored
+            // (no side trace runs from it).
             if self.jit.pending_err.is_some() {
-                self.jit.pending_err = None;
-                self.jit.step.synced_exit = false;
-                self.jit.gc_exit = None;
                 self.jit.counters.deopt += 1;
-                // unwind the inlined frames helpers pushed; the trace's
-                // writes are discarded, the interpreter runs from `pc`
-                while self.frames.len() > pre_frames {
-                    self.pop_frame();
-                }
                 if is_downrec_entry {
-                    // as a guard miss: the next admit is suppressed so the
-                    // interpreter gets past `head_pc`
                     self.jit.counters.downrec_deopt += 1;
-                    self.jit.suppress_downrec_admit_once = true;
                 }
-            } else if is_downrec_entry && downrec_close_exit(continuation_pc) {
+            }
+            if is_downrec_entry && downrec_close_exit(continuation_pc) {
                 // a due step leaves through an exit, never the close
                 debug_assert!(self.jit.gc_exit.is_none());
                 self.trace_downrec_classify(pre_frames);
@@ -156,12 +149,18 @@ impl Vm {
                 );
                 ran = true;
             }
+            self.jit.pending_err = None;
+            debug_assert!(!self.unmade.any, "an exit left something unmade");
         }
         // the buffers back for the next dispatch, before a collection check
         // runs code that may dispatch
         self.jit.reg_state_buf = reg_state;
         self.jit.entry_tags_buf = entry_tags;
-        if let Some(op_pc) = self.jit.gc_exit.take() {
+        // an error raised at the exit comes first: the op raising it
+        // checks for no collection
+        if let Some(op_pc) = self.jit.gc_exit.take()
+            && self.jit.pending_raise.is_none()
+        {
             self.trace_gc_exit_check(op_pc);
         }
         ran
