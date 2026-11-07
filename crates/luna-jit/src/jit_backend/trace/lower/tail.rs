@@ -104,13 +104,17 @@ pub(super) fn emit_tail<E: Emit>(
         emit_back_edge(lw, pl, &tail);
     } else {
         // a side trace linked to the compiled trace it reached returns
-        // that trace's head
-        emit_store_back_and_return_pc(
+        // that trace's head, marked for the parent's code that called it
+        let ret = match record.link_pc {
+            Some(pc) => luna_core::__private::EXIT_RELINK | u64::from(pc),
+            None => u64::from(record.head_pc),
+        };
+        emit_store_back_and_return(
             &mut lw.bcx,
             caller_regs,
             &lw.stored,
             reg_state,
-            record.link_pc.unwrap_or(record.head_pc),
+            ret as i64,
             lw.flush_ctx.as_ref(),
         );
     }

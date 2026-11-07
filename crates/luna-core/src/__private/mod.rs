@@ -20,7 +20,7 @@ mod types;
 mod vm;
 
 pub use crate::jit::trace_types::exit_code::{
-    EXIT_KEEP_TFOR_VARS, EXIT_SITE_LIMIT, EXIT_TAGS_INDEX_BIT, SIDE_SENT_DOWNREC_CODE,
+    EXIT_KEEP_TFOR_VARS, EXIT_RELINK, EXIT_SITE_LIMIT, EXIT_TAGS_INDEX_BIT, SIDE_SENT_DOWNREC_CODE,
 };
 pub use crate::jit::trace_types::frame::{trace_count_slot, trace_passed_slot};
 pub use crate::runtime::dialect::Rules;
