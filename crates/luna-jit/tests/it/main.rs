@@ -173,6 +173,7 @@ mod trace_settable_const_key_sunk;
 mod trace_side_trace_compile_link;
 mod trace_side_trace_exit_owner;
 mod trace_side_trace_gate;
+mod trace_side_trace_stack_held;
 mod trace_side_trace_trigger;
 mod trace_str_len;
 mod trace_sunk_emit_in_loops;
