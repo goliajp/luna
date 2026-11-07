@@ -109,7 +109,8 @@ impl<M: Masm> Gen<'_, M> {
         let lir = self.lir;
         let args = &lir.args[i.args_at as usize..(i.args_at + i.n_args) as usize];
         match i.op {
-            Op::Jump => self.jump(i.a, args, next),
+            // the baseline code calls from every calling exit
+            Op::Jump | Op::CallingExit(_) => self.jump(i.a, args, next),
             // the baseline code is no loop's function of the optimizing tier
             Op::Pick => self.jump(i.b, &[], next),
             Op::Brif(n_then) => self.brif(i, n_then, next),

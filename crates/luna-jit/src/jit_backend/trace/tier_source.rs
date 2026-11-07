@@ -1,15 +1,19 @@
 //! What a baseline trace moves to the optimizing tier from.
 
-use super::image::TraceImage;
+use super::image::{Optimized, TraceImage};
 use super::*;
 use crate::jit_backend::storage::CraneliftJitStorage;
+use luna_core::__private::TierKept;
 use std::sync::Arc;
+
+mod place;
+pub(crate) use place::set_loop;
 
 /// What a baseline trace moves to the optimizing tier from: its
 /// instructions, this Vm's values of their relocations, the image it
 /// shares (to take the optimizing tier's code from, or give it to), and
 /// the record it was lowered from, when there is one, to lower it again
-/// for the optimizing tier ([`TierSource::optimizing_lir`]).
+/// for the optimizing tier ([`TierSource::into_optimizing`]).
 pub(crate) struct TierSource {
     pub(crate) lir: Arc<lir::Lir>,
     pub(crate) relocs: Vec<(RelocKind, i64)>,
@@ -33,66 +37,93 @@ unsafe impl Send for TierRecord {}
 unsafe impl Sync for TierRecord {}
 
 impl TierSource {
-    /// The instructions for the optimizing tier, with their relocations:
-    /// the record lowered again keeping values in registers to the exits
-    /// (`Lower::at_exits`), or the baseline tier's when there is no record
-    /// (a trace taken from another Vm's image) or the two lowerings'
-    /// relocations do not line up.
-    pub(crate) fn optimizing_lir(&self) -> (Arc<lir::Lir>, Vec<(RelocKind, i64)>) {
-        if let Some(r) = &self.record {
-            // the baseline tier's options: the same relocations (its
-            // iteration count among them), which the optimizing tier's
-            // code generators read past
-            if let Some((lir, _)) = lower::lower_trace_lir(&r.record, r.opts, r.float_only, true) {
-                // the relocations name the same things in the same order;
-                // their values are the baseline trace's, which the trace
-                // keeps alive (this lowering's own frame chains go with
-                // the trace it made, dropped here)
-                let same = lir.relocs.len() == self.relocs.len()
-                    && lir.relocs.iter().zip(&self.relocs).all(|(a, b)| a.0 == b.0);
-                let owned = same.then(|| Arc::new(lir.detach()));
-                lir.give();
-                if let Some(owned) = owned {
-                    return (owned, self.relocs.clone());
-                }
+    /// The source with the instructions for the optimizing tier and no
+    /// record: the record lowered again keeping values in registers to the
+    /// exits (`Lower::at_exits`), or the baseline tier's instructions when
+    /// there is no record (a trace taken from another Vm's image) or the
+    /// two lowerings' relocations do not line up.
+    pub(crate) fn into_optimizing(mut self: Box<Self>) -> Box<TierSource> {
+        let Some(r) = self.record.take() else {
+            return self;
+        };
+        // the baseline tier's options: the same relocations (its iteration
+        // count among them), which the optimizing tier's code generators
+        // read past
+        if let Some((lir, _)) = lower::lower_trace_lir(&r.record, r.opts, r.float_only, true) {
+            // the relocations name the same things in the same order;
+            // their values are the baseline trace's, which the trace keeps
+            // alive (this lowering's own frame chains go with the trace it
+            // made, dropped here)
+            let same = lir.relocs.len() == self.relocs.len()
+                && lir.relocs.iter().zip(&self.relocs).all(|(a, b)| a.0 == b.0);
+            let owned = same.then(|| Arc::new(lir.detach()));
+            lir.give();
+            if let Some(owned) = owned {
+                self.lir = owned;
             }
         }
-        (self.lir.clone(), self.relocs.clone())
+        self
     }
 }
 
+/// The calling exits of `ct`'s code that call its side traces from the
+/// optimizing tier's code: those whose side cell holds one now.
+pub(crate) fn calls_of(ct: &CompiledTrace) -> lir::Calls {
+    lir::Calls::Held(ct.side_cell_states().iter().map(|s| s.0).collect())
+}
+
+/// What the trace keeps of `src` to compile again once a side cell left
+/// empty by `calls` gets a side trace; nothing when none is left empty.
+/// `stale`: a cell got one since `calls` was read.
+pub(crate) fn kept(src: Box<TierSource>, calls: &lir::Calls, stale: bool) -> Option<TierKept> {
+    let lir::Calls::Held(held) = calls else {
+        return None;
+    };
+    held.contains(&false)
+        .then(|| TierKept { source: src, stale })
+}
+
 /// The optimizing tier's code for `ct`: taken from the image it shares when
-/// some Vm compiled it already, else compiled (and given to the image).
+/// some Vm compiled it for the same calling exits already, else compiled
+/// (and given to the image); with what the trace keeps to compile it again.
 pub(crate) fn tier_up(
     storage: &mut dyn luna_core::__private::JitStorage,
     ct: &CompiledTrace,
-) -> Option<TraceFn> {
-    let source = luna_core::__private::take_tier_source(ct)?;
-    let src = source.downcast::<TierSource>().ok()?;
-    clif_tier_up(storage, &src, ct)
+) -> (Option<TraceFn>, Option<TierKept>) {
+    let Some(source) = luna_core::__private::take_tier_source(ct) else {
+        return (None, None);
+    };
+    let Ok(src) = source.downcast::<TierSource>() else {
+        return (None, None);
+    };
+    let src = src.into_optimizing();
+    let calls = calls_of(ct);
+    let entry = clif_tier_up(storage, &src, ct, &calls);
+    let kept = entry.and_then(|_| kept(src, &calls, false));
+    (entry, kept)
 }
 
-/// Cranelift's code for the trace `src` holds. For a trace whose back edge
-/// calls the optimizing tier's loop (see `lower::handoff`), two functions:
-/// the loop, which goes into `ct`'s loop cell, and the first pass, which
-/// calls it and is returned as the entry.
+/// Cranelift's code for the trace `src` holds, its calling exits calling
+/// as `calls` says. For a trace whose back edge calls the optimizing
+/// tier's loop (see `lower::handoff`), two functions: the loop, which goes
+/// into `ct`'s loop cell, and the first pass, which calls it and is
+/// returned as the entry.
 pub(crate) fn clif_tier_up(
     storage: &mut dyn luna_core::__private::JitStorage,
     src: &TierSource,
     ct: &CompiledTrace,
+    calls: &lir::Calls,
 ) -> Option<TraceFn> {
     let head_pc = ct.head_pc();
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     let at_loop = src.lir.loop_entry.is_some();
-    if let Some(img) = &src.image
-        && let Some(code) = img.optimized.get()
-    {
-        return from_image(cs, src, img, code, ct);
+    if let Some(o) = src.image.as_ref().and_then(|img| img.optimized(calls)) {
+        return place::from_image(cs, src, &o, ct);
     }
-    let (lir, relocs) = src.optimizing_lir();
+    let lir = &src.lir;
     // the loop first, each function in a module of its own
     let looped = match at_loop {
-        true => Some(compile_loop(cs, &lir, &relocs, ct)?),
+        true => Some(compile_loop(cs, lir, &src.relocs, ct, calls)?),
         false => None,
     };
     let start = if at_loop {
@@ -100,76 +131,22 @@ pub(crate) fn clif_tier_up(
     } else {
         lir::Start::Whole
     };
-    let (ptr, sites) = compile_one(cs, &lir, &relocs, start, head_pc)?;
+    let (ptr, sites) = compile_one(cs, lir, &src.relocs, (start, calls), head_pc)?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     if let (Some(img), Some((len, sites))) = (&src.image, sites) {
         // SAFETY: `ptr..ptr + len` is the function just finalized, which
         // the storage keeps mapped; so is the loop's
-        let code = unsafe { reloc::copy_code(ptr, len, sites) };
-        let lcode = match looped {
-            // SAFETY: as for `code`: the loop's function, just finalized too
+        let entry = unsafe { reloc::copy_code(ptr, len, sites) };
+        let looped = match looped {
+            // SAFETY: as for `entry`: the loop's function, just finalized too
             Some((p, Some((n, s)))) => Some(unsafe { reloc::copy_code(p, n, s) }),
             _ => None,
         };
-        publish(cs, img, code, lcode, at_loop);
+        place::publish(cs, img, calls, (entry, looped), at_loop);
     }
     // SAFETY: `define_clif` declares the `TraceFn` signature, `(i64) -> i64`
     // in the platform calling convention, and `storage` now owns the module
     Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) })
-}
-
-/// The optimizing tier's code a shared image already holds for the trace
-/// `src` holds, placed in this Vm's code memory: the entry, and the loop
-/// into `ct`'s loop cell for a trace with one.
-fn from_image(
-    cs: &mut CraneliftJitStorage,
-    src: &TierSource,
-    img: &TraceImage,
-    code: &reloc::Code,
-    ct: &CompiledTrace,
-) -> Option<TraceFn> {
-    let head_pc = ct.head_pc();
-    let at_loop = src.lir.loop_entry.is_some();
-    let place = |cs: &mut CraneliftJitStorage, code: &reloc::Code| {
-        cs.baseline_code
-            .place_with(code.bytes.len(), |out| {
-                code.write_to(out, |k| src.relocs[k].1)
-            })
-            .ok()
-    };
-    if at_loop {
-        let p = place(cs, img.optimized_loop.get()?)?;
-        // SAFETY: the image's optimizing tier's loop of this trace, with
-        // this Vm's addresses written in
-        unsafe { set_loop(ct, p) };
-    }
-    let entry = place(cs, code)?;
-    super::code_dump::dump_len("tier-up-image", head_pc, entry, code.bytes.len());
-    // SAFETY: as in `install`: the optimizing tier's code for this
-    // trace, with this Vm's addresses written in
-    Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) })
-}
-
-/// The optimizing tier's code just compiled, and the loop beside it, kept
-/// in the shared image `img` for other Vms to take up.
-fn publish(
-    cs: &CraneliftJitStorage,
-    img: &TraceImage,
-    code: reloc::Code,
-    lcode: Option<reloc::Code>,
-    at_loop: bool,
-) {
-    let size = code.bytes.len() + lcode.as_ref().map_or(0, |c| c.bytes.len());
-    let ok = match lcode {
-        Some(l) => img.optimized_loop.set(l).is_ok(),
-        None => !at_loop,
-    };
-    if ok
-        && img.optimized.set(code).is_ok()
-        && let Some(engine) = &cs.engine
-    {
-        engine.cache().grew(size);
-    }
 }
 
 /// The optimizing tier's loop of the trace `ct`, compiled from `lir` in a
@@ -179,26 +156,28 @@ fn compile_loop(
     lir: &lir::Lir,
     relocs: &[(RelocKind, i64)],
     ct: &CompiledTrace,
+    calls: &lir::Calls,
 ) -> Option<(*const u8, Option<(usize, Vec<reloc::Site>)>)> {
-    let l = compile_one(cs, lir, relocs, lir::Start::Loop, ct.head_pc())?;
+    let l = compile_one(cs, lir, relocs, (lir::Start::Loop, calls), ct.head_pc())?;
     // SAFETY: the loop `define_clif` compiled for this trace, in the module
     // the storage now keeps
     unsafe { set_loop(ct, l.0) };
     Some(l)
 }
 
-/// The function `start` names compiled by Cranelift from `lir` in a module
-/// `cs` keeps: its code, and where its relocations sit.
+/// The function `start` names, its calling exits calling as `calls` says,
+/// compiled by Cranelift from `lir` in a module `cs` keeps: its code, and
+/// where its relocations sit.
 fn compile_one(
     cs: &mut CraneliftJitStorage,
     lir: &lir::Lir,
     relocs: &[(RelocKind, i64)],
-    start: lir::Start,
+    (start, calls): (lir::Start, &lir::Calls),
     head_pc: u32,
 ) -> Option<(*const u8, Option<(usize, Vec<reloc::Site>)>)> {
     let mut module =
         crate::jit_backend::send_jit_module::UnpublishedModule::new(build_trace_jit_module()?);
-    let id = lir::define_clif(lir, relocs, &mut *module, start)?;
+    let id = lir::define_clif(lir, relocs, &mut *module, start, calls)?;
     let sites = reloc::take_sites();
     module.finalize_definitions().ok()?;
     let ptr = module.get_finalized_function(id);
@@ -212,19 +191,4 @@ fn compile_one(
         _entry_raw: ptr,
     });
     Some((ptr, sites))
-}
-
-/// Puts the optimizing tier's loop at `p` into `ct`'s loop cell.
-///
-/// # Safety
-/// `p` is the optimizing tier's loop of `ct`'s code, mapped as long as the
-/// Vm holds `ct`.
-pub(crate) unsafe fn set_loop(ct: &CompiledTrace, p: *const u8) {
-    if let Some(t) = ct.tier_up() {
-        // SAFETY: by the caller, with the `TraceFn` ABI the loop is compiled
-        // with (`lir::define_clif`, `lir::compile_llvm`)
-        unsafe {
-            luna_core::__private::set_tier_up_loop(t, std::mem::transmute::<*const u8, TraceFn>(p))
-        };
-    }
 }

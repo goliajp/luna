@@ -28,7 +28,7 @@ mod x64;
 
 pub(crate) use clif::define as define_clif;
 pub(crate) use code::{CodeArena, assemble};
-pub(crate) use live::Start;
+pub(crate) use live::{Calls, Start};
 #[cfg(feature = "llvm-jit")]
 pub(crate) use llvm::compile as compile_llvm;
 pub(crate) use ty::Ty;
@@ -140,6 +140,11 @@ pub(crate) enum Op {
     /// To block `a` in the optimizing tier's loop function, to block `b` in
     /// every other function made of the instructions (no arguments).
     Pick,
+    /// An exit that may run side cell `n`'s side trace from the code: to
+    /// block `a` with `args` (the cell, the exit's return, the note for the
+    /// dispatcher) in a function whose [`Calls`] has `n`, else a return of
+    /// the exit's return (`args[1]`).
+    CallingExit(u32),
     /// The count at `count` `+= 1`, then to block `b` when it equals `at`,
     /// else to block `c`.
     TierCount {

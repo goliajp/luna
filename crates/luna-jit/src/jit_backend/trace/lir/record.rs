@@ -268,6 +268,9 @@ impl Emit for Lir {
     fn pick(&mut self, loop_fn: Block, other: Block) {
         self.pick_to(loop_fn, other);
     }
+    fn calling_exit(&mut self, n: u32, call: Block, args: &[BlockArg; 3]) {
+        self.jump_op(Op::CallingExit(n), call, args);
+    }
     fn tier_count(&mut self, count: super::Count, at: u32, hot: Block, cont: Block) {
         self.edge(hot);
         self.edge(cont);

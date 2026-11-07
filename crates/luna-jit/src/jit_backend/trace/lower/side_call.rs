@@ -124,7 +124,7 @@ pub(super) fn emit_calling_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u
         }
     };
     let args = [c, ret, noted].map(BlockArg::Value);
-    lw.bcx.ins().jump(call, &args);
+    lw.bcx.calling_exit(n, call, &args);
 }
 
 /// The call block, once every exit is lowered: the side trace of the cell

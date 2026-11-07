@@ -25,7 +25,7 @@ pub(crate) fn for_uses(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
             f(i.b);
             f(i.c);
         }
-        Op::Jump | Op::Call | Op::Brif(_) | Op::CallIndirect => {
+        Op::Jump | Op::CallingExit(_) | Op::Call | Op::Brif(_) | Op::CallIndirect => {
             if matches!(i.op, Op::Brif(_) | Op::CallIndirect) {
                 f(i.a);
             }
@@ -52,7 +52,7 @@ pub(crate) fn for_defs(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
     }
     match i.op {
         Op::VarWrite => f(nv + i.a),
-        Op::Jump => lir.block_params(i.a).iter().for_each(|&p| f(p)),
+        Op::Jump | Op::CallingExit(_) => lir.block_params(i.a).iter().for_each(|&p| f(p)),
         Op::Brif(_) => {
             lir.block_params(i.b).iter().for_each(|&p| f(p));
             lir.block_params(i.c).iter().for_each(|&p| f(p));
@@ -68,7 +68,7 @@ pub(crate) fn succs(lir: &Lir, b: u32) -> [u32; 2] {
     }
     let i = &lir.insts[last as usize];
     match i.op {
-        Op::Jump => [i.a, NONE],
+        Op::Jump | Op::CallingExit(_) => [i.a, NONE],
         Op::Pick => [i.b, NONE],
         // the guarded path is visited last, so it is laid out first
         Op::Brif(_) => [i.c, i.b],
@@ -91,10 +91,31 @@ pub(crate) enum Start {
     FirstPass,
 }
 
-/// The blocks `b` goes on to in the function `start` names: a `TierCount`
-/// to its hot block only in the first pass, a `Pick` to its `a` in the
-/// loop's function.
-pub(super) fn succs_of(lir: &Lir, b: u32, start: Start) -> [u32; 2] {
+/// The calling exits ([`Op::CallingExit`]) of a function made of a trace's
+/// instructions that go on to the call block, by side cell: all of them
+/// (the baseline tier's), or those whose cell held a side trace when the
+/// optimizing tier compiled the function, the others returning to the
+/// dispatcher.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Calls {
+    #[default]
+    All,
+    Held(Box<[bool]>),
+}
+
+impl Calls {
+    pub(crate) fn has(&self, n: u32) -> bool {
+        match self {
+            Calls::All => true,
+            Calls::Held(h) => h.get(n as usize).copied().unwrap_or(false),
+        }
+    }
+}
+
+/// The blocks `b` goes on to in the function `start` names, its calling
+/// exits going on as `calls` says: a `TierCount` to its hot block only in
+/// the first pass, a `Pick` to its `a` in the loop's function.
+pub(super) fn succs_of(lir: &Lir, b: u32, start: Start, calls: &Calls) -> [u32; 2] {
     let last = lir.blocks[b as usize].last;
     let Some(i) = lir.insts.get(last as usize) else {
         return [NONE, NONE];
@@ -102,6 +123,7 @@ pub(super) fn succs_of(lir: &Lir, b: u32, start: Start) -> [u32; 2] {
     match (i.op, start) {
         (Op::TierCount { .. }, Start::FirstPass) => [i.b, NONE],
         (Op::Pick, Start::Loop) => [i.a, NONE],
+        (Op::CallingExit(n), _) if !calls.has(n) => [NONE, NONE],
         _ => succs(lir, b),
     }
 }
@@ -115,6 +137,6 @@ pub(crate) fn replay_succs(lir: &Lir, an: &super::Analysis, b: u32) -> [u32; 2] 
         Some(i) if matches!(i.op, Op::TierCount { .. }) && an.func != Start::FirstPass => {
             [i.c, NONE]
         }
-        _ => succs_of(lir, b, an.func),
+        _ => succs_of(lir, b, an.func, &an.exits),
     }
 }

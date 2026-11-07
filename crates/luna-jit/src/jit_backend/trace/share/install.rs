@@ -2,6 +2,8 @@
 //! memory with this Vm's addresses written in.
 
 use super::*;
+use crate::jit_backend::trace::image::Optimized;
+use luna_core::__private::TierUp;
 
 /// `img` as a trace of this Vm: its code copied into this Vm's code memory
 /// with this Vm's addresses written in. `None` when a function it inlined
@@ -20,13 +22,17 @@ pub(super) fn install(
     let pick = pick_code(img);
     let mut ct = img
         .meta
-        .instantiate(pick.tiered, req.proto.call_hot_count());
+        .instantiate(pick.tiered && !pick.retiers, req.proto.call_hot_count());
     let relocs: Vec<(RelocKind, i64)> = img
         .sources
         .iter()
         .map(|s| Some((kind_of(s), value_of(s, &protos, req, &ct)?)))
         .collect::<Option<_>>()?;
-    if let Some(code) = pick.entry {
+    let (entry, looped) = match &pick.fresh {
+        Some(o) => (Some(&o.entry), o.looped.as_ref()),
+        None => (pick.code, None),
+    };
+    if let Some(code) = entry {
         let entry = place(cs, code, &relocs)?;
         super::code_dump::dump_len("image", ct.head_pc, entry, code.bytes.len());
         // SAFETY: the code is a copy of a trace compiled for code of this
@@ -35,16 +41,11 @@ pub(super) fn install(
         // releases its code
         ct.entry = unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) };
         cs.images.insert(entry as usize, img.id);
-        if let (Some(c), Some(t)) = (pick.looped, &ct.tier_up) {
+        if let (Some(c), Some(t)) = (looped, &ct.tier_up) {
             place_loop(cs, c, &relocs, t, ct.head_pc)?;
         }
-        if let (true, Some(t), Some(lir)) = (pick.keep_source, &mut ct.tier_up, &img.lir) {
-            *t.source_mut() = Some(Box::new(TierSource {
-                lir: lir.clone(),
-                relocs,
-                image: Some(img.clone()),
-                record: None,
-            }));
+        if let Some(t) = &mut ct.tier_up {
+            give_source(t, &pick, img, relocs);
         }
     }
     Some(AdoptedTrace {
@@ -64,17 +65,47 @@ pub(super) fn install(
     })
 }
 
+/// Gives the tier move `t` of a trace taken up from `img` the source to
+/// compile it from at the optimizing tier: to move, or, for code that is
+/// the optimizing tier's already and calls from no exit, to compile again
+/// once a side cell gets a side trace.
+fn give_source(
+    t: &mut TierUp,
+    pick: &Pick<'_>,
+    img: &Arc<TraceImage>,
+    relocs: Vec<(RelocKind, i64)>,
+) {
+    let Some(lir) = &img.lir else {
+        return;
+    };
+    let src = Box::new(TierSource {
+        lir: lir.clone(),
+        relocs,
+        image: Some(img.clone()),
+        record: None,
+    });
+    match (pick.keep_source, pick.retiers) {
+        (true, _) => *t.source_mut() = Some(src),
+        (false, true) => *t.kept_mut() = Some(src),
+        (false, false) => {}
+    }
+}
+
 /// Which of an image's code a Vm taking it up runs.
 struct Pick<'a> {
-    /// The entry: the optimizing tier's (its first pass when it has a
-    /// loop), else the baseline code.
-    entry: Option<&'a Code>,
-    /// The optimizing tier's loop, beside its first pass.
-    looped: Option<&'a Code>,
+    /// The optimizing tier's code compiled for no calling exit calling, as
+    /// a trace taken up has none of its side cells filled yet: the entry
+    /// (the first pass when it has a loop) and the loop beside it.
+    fresh: Option<Arc<Optimized>>,
+    /// The entry otherwise: the image's code.
+    code: Option<&'a Code>,
     /// The entry is the optimizing tier's whole trace: no tier move.
     tiered: bool,
     /// The trace keeps its source for the optimizing tier to compile.
     keep_source: bool,
+    /// The trace has side cells and the image the instructions to compile
+    /// it again for them at the optimizing tier.
+    retiers: bool,
 }
 
 /// A trace whose back edge calls the optimizing tier's loop keeps a tier
@@ -82,23 +113,18 @@ struct Pick<'a> {
 /// is the first pass, the loop beside it.
 fn pick_code(img: &TraceImage) -> Pick<'_> {
     let at_loop = img.sources.contains(&Source::TierLoop);
-    let baseline = img.code.as_ref().map(|(_, c)| c);
-    let optimized = img.optimized.get().or(match &img.code {
-        Some((Tier::Optimizing, c)) => Some(c),
-        _ => None,
-    });
-    let looped = img
-        .optimized_loop
-        .get()
-        .filter(|_| at_loop && optimized.is_some());
+    let cells = img.meta.side_cells();
+    let fresh = img
+        .optimized(&lir::Calls::Held(vec![false; cells].into()))
+        .filter(|o| !at_loop || o.looped.is_some());
+    let direct = matches!(img.code, Some((Tier::Optimizing, _)));
+    let tiered = !at_loop && (fresh.is_some() || direct);
     Pick {
-        entry: match (at_loop, looped) {
-            (true, None) => baseline,
-            _ => optimized.or(baseline),
-        },
-        looped,
-        tiered: optimized.is_some() && !at_loop,
-        keep_source: looped.or(optimized.filter(|_| !at_loop)).is_none(),
+        keep_source: fresh.is_none() && !tiered,
+        retiers: cells > 0 && img.lir.is_some(),
+        fresh,
+        code: img.code.as_ref().map(|(_, c)| c),
+        tiered,
     }
 }
 
