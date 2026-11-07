@@ -79,6 +79,7 @@ pub(super) enum Case {
     Pressure,
     Calls,
     ManyArgs,
+    LateParam,
 }
 
 const NO: &[BlockArg] = &[];
@@ -284,6 +285,7 @@ pub(super) fn emit<E: Sigs>(e: &mut E, case: &Case, p: Value) {
         }
         Case::Calls => calls(e, p),
         Case::ManyArgs => many_args(e, p),
+        Case::LateParam => late_param(e, p),
     }
     let r = ld(e, types::I64, 8);
     e.return_(&[r]);
