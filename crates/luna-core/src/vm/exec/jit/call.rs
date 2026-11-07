@@ -174,7 +174,7 @@ impl Vm {
             self.jit.pending_err.is_none(),
             "compiled code returned with a deopt parked and no hand-over"
         );
-        if !self.jit.handoff.is_empty() {
+        if self.jit.handoff.levels > 0 {
             return JitRun::Handed;
         }
         // Write result at func_slot, replacing the closure value, then

@@ -5,6 +5,8 @@
 use super::*;
 use crate::jit::trace::CompiledTrace;
 
+mod failed;
+
 impl Vm {
     /// The active recording reached a close condition.
     pub(in crate::vm::exec) fn trace_close_recording(&mut self) {
@@ -147,6 +149,9 @@ impl Vm {
             }
             let (result, cut) = self.compile_or_cut(&closed_record, opts, version);
             match result {
+                Some(ct) if self.trace_room(ct.window_size as usize).is_err() => {
+                    self.trace_closed_no_room();
+                }
                 Some(mut ct) => {
                     if let Some(m) = &mut self.jit.fail_memory {
                         m.compiled(&head_proto, head_pc_val);
@@ -164,37 +169,7 @@ impl Vm {
                     hold_side_trace(wired, ct);
                     self.jit.counters.compiled += 1;
                 }
-                None => {
-                    self.jit.counters.compile_failed += 1;
-                    if share {
-                        let jit = &mut self.jit;
-                        jit.trace_compiler.publish_failure(
-                            jit.storage.as_mut(),
-                            &closed_record,
-                            opts,
-                            version,
-                        );
-                    }
-                    if self.jit.trace_compiler.last_compile_checkpoint()
-                        == "bail:entry-tag-never-entered"
-                    {
-                        note_trace_never_entered(
-                            &mut self.jit.counters,
-                            head_proto,
-                            closed_record.head_pc,
-                            &closed_record.entry_tags,
-                        );
-                    } else {
-                        let c = &mut self.jit.counters;
-                        note_trace_compile_failure(c, head_proto, head_pc_val);
-                        let m = self.jit.fail_memory.get_or_insert_default();
-                        m.failed(&head_proto, closed_record.head_pc);
-                    }
-                    self.jit
-                        .counters
-                        .compile_failed_reasons
-                        .push(self.jit.trace_compiler.last_compile_checkpoint());
-                }
+                None => self.trace_closed_failed(&closed_record, opts, share.then_some(version)),
             }
         }
     }
@@ -242,10 +217,9 @@ impl Vm {
         (second, Some(shorter))
     }
 
-    /// The counters a compiled trace contributes to, and room for what its
-    /// exits may leave unmade, before it is installed.
+    /// The counters a compiled trace contributes to, before it is
+    /// installed.
     pub(in crate::vm::exec) fn tally_compiled_trace(&mut self, ct: &CompiledTrace) {
-        self.trace_exit_room(ct.window_size as usize);
         self.jit.counters.sinkable_seen += ct.sinkable_sites_seen as u64;
         self.jit.counters.accum_bufferable_seen += ct.accum_bufferable_seen as u64;
         self.jit.counters.sunk_alloc += ct.sunk_alloc_seen as u64;

@@ -25,7 +25,7 @@ impl Vm {
         ct: &CompiledTrace,
         continuation_pc: i64,
         pre_frames: usize,
-        reg_state: &mut Vec<i64>,
+        reg_state: &mut crate::runtime::mem::LVec<i64>,
         entry_tags: &[u8],
     ) {
         let synced = self.jit.step.synced_exit;
@@ -72,7 +72,7 @@ impl Vm {
         ct: &CompiledTrace,
         continuation_pc: i64,
         pre_frames: usize,
-        reg_state: &mut Vec<i64>,
+        reg_state: &mut crate::runtime::mem::LVec<i64>,
         entry_tags: &[u8],
         synced: bool,
     ) {

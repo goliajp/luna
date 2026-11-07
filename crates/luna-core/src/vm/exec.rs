@@ -42,8 +42,9 @@ mod hooks;
 pub mod host_c;
 mod index;
 pub(crate) mod reader_layers;
-pub(crate) use jit::handoff::HandoffFrame;
+
 use jit::handoff::JitRun;
+pub(crate) use jit::handoff::frames::HandoffMarks;
 pub(crate) use jit::levels::JitLimits;
 pub(crate) use jit::rt::TraceGhosts;
 pub(crate) use jit::rt::strbuf::{AccumLast, AccumUnmade};

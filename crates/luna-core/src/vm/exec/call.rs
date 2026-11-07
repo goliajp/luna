@@ -25,7 +25,7 @@ macro_rules! lua_call {
         if run != JitRun::NotRun {
             $vm.pending_tailcalls = tailcalls;
             if let Some(e) = $vm.jit.pending_raise.take() {
-                $vm.jit.handoff.clear();
+                $vm.jit.handoff = Default::default();
                 return Err(e);
             }
             if run == JitRun::Done {

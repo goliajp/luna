@@ -4,9 +4,9 @@ use crate::{current_jit_vm, str_arg};
 use luna_core::__private::VmJitAlloc;
 use luna_core::runtime::mem::LVec;
 
-/// Trace JIT helper:acquire a fresh accumulator
-/// buffer from the Vm's pool. Returns a `*mut LVec<u8>` boxed-leaked
-/// pointer that the trace fn keeps in a stack slot through the loop.
+/// Trace JIT helper:an empty accumulator buffer of the Vm's, as a
+/// `*mut LVec<u8>` the trace fn keeps in a stack slot through the loop; 0
+/// when there is no memory for one.
 ///
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread. The buffer goes back
@@ -17,14 +17,13 @@ use luna_core::runtime::mem::LVec;
 pub unsafe extern "C" fn luna_jit_str_buf_acquire() -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call; the
     // buffer goes back to it (# Safety)
-    Box::into_raw(unsafe { current_jit_vm().jit_str_buf_acquire() }) as i64
+    unsafe { current_jit_vm().jit_str_buf_acquire() as i64 }
 }
 
-/// Trace JIT helper:release a buffer back to the
-/// Vm's pool.
+/// Trace JIT helper:give a buffer back to the Vm.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `buf` came from
+/// Called from compiled code inside an `enter_jit` window on this thread; `buf` is 0 or came from
 /// `luna_jit_str_buf_acquire` on the same Vm and is not used again.
 // SAFETY: no other item in the link is named `luna_jit_str_buf_release`: only this crate defines
 // `luna_jit_` symbols, each once
@@ -33,19 +32,16 @@ pub unsafe extern "C" fn luna_jit_str_buf_release(buf: i64) {
     if buf == 0 {
         return;
     }
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and `buf`
-    // is the box `luna_jit_str_buf_acquire` leaked, released once, so this takes back ownership
-    let (vm, buf) = unsafe { (current_jit_vm(), Box::from_raw(buf as *mut LVec<u8>)) };
-    vm.jit_str_buf_release(buf);
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
+    let vm = unsafe { current_jit_vm() };
+    vm.jit_str_buf_release(buf as *const LVec<u8>);
 }
 
-/// Trace JIT helper:append a LuaStr's bytes to a
-/// previously-acquired accumulator buffer. The trace IR calls this
-/// at each loop iter inside the `s = s .. v` idiom.
+/// Trace JIT helper:start a previously-acquired accumulator buffer with
+/// the string the trace entered with.
 ///
-/// Returns 0 on success, -1 when `buf` or `str_ptr` is 0 or the buffer
-/// cannot grow (the trace exits at the concatenation and the interpreter
-/// performs it). Nothing here checks that `str_ptr` is a string: the
+/// Returns 0 on success, -1 when `str_ptr` is 0, `buf` is 0 or the buffer
+/// cannot grow. Nothing here checks that `str_ptr` is a string: the
 /// trace passes only string registers.
 ///
 /// # Safety
@@ -56,15 +52,15 @@ pub unsafe extern "C" fn luna_jit_str_buf_release(buf: i64) {
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_str_buf_extend(buf: i64, str_ptr: i64) -> i64 {
-    if buf == 0 || str_ptr == 0 {
+    if str_ptr == 0 {
         return -1;
     }
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call; `buf` is a
-    // live boxed buffer only this call uses, and `str_ptr` a live string
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call; `buf` is 0
+    // or a live buffer only this call uses, and `str_ptr` a live string
     let (vm, buf, s) = unsafe {
         (
             current_jit_vm(),
-            &mut *(buf as *mut LVec<u8>),
+            (buf as *mut LVec<u8>).as_mut(),
             str_arg(str_ptr),
         )
     };
@@ -103,20 +99,18 @@ pub unsafe extern "C" fn luna_jit_str_buf_concat(buf: i64, str_ptr: i64, op_pc: 
 /// Returns the LuaStr ptr as i64 on success; 0 when the string is left for
 /// the dispatcher to make once the trace has returned (past the 256KB hard
 /// cap, or when it cannot be made here). `slot` is the accumulator's
-/// register in the trace's window.
+/// register in the trace's window. With `buf` 0 the string is the one the
+/// trace entered with.
 ///
 /// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread; `buf` came from
+/// Called from compiled code inside an `enter_jit` window on this thread; `buf` is 0 or came from
 /// `luna_jit_str_buf_acquire` on the same Vm and has not been released.
 // SAFETY: no other item in the link is named `luna_jit_str_buf_intern`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn luna_jit_str_buf_intern(buf: i64, slot: i64) -> i64 {
-    if buf == 0 {
-        return 0;
-    }
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call, and `buf`
-    // is a live boxed buffer only this call uses
-    let (vm, buf) = unsafe { (current_jit_vm(), &mut *(buf as *mut LVec<u8>)) };
+    // is 0 or a live buffer only this call uses
+    let (vm, buf) = unsafe { (current_jit_vm(), (buf as *mut LVec<u8>).as_mut()) };
     vm.jit_str_buf_intern(buf, slot as u32)
 }

@@ -21,6 +21,9 @@ impl Drop for Vm {
             unsafe { uv.as_mut() }.set_closed(Value::Nil);
             self.heap.upval_closed(uv);
         }
+        // the room exits keep values in is declared after the context it
+        // came from, which would go first
+        drop(self.unmade.roots.take());
         let id = self.jit_owner_id;
         // SAFETY: the finalizers were the last Lua code this Vm runs, and
         // its functions (the only holders of entry points compiled for it)

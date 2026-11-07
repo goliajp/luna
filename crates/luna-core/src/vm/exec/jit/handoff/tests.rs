@@ -3,7 +3,6 @@
 //! fails at the `SETLIST` and no test program hands a level over there:
 //! the frame is made here.
 
-use super::HandoffFrame;
 use crate::runtime::{Gc, LuaClosure, Value};
 use crate::version::LuaVersion;
 use crate::vm::exec::Vm;
@@ -30,11 +29,10 @@ fn top_at(pc: usize) -> (u32, u32) {
     let max = u32::from(f.proto.max_stack);
     let func_slot = vm.top;
     let base = func_slot + 1;
-    vm.jit.handoff.push(HandoffFrame {
-        base,
-        pc: pc as u32,
-        vals: vec![Value::Nil; max as usize],
-    });
+    vm.jit.levels_slot = base;
+    vm.grow_stack((base + max) as usize).unwrap();
+    let vals = std::iter::repeat_n(Value::Nil, max as usize);
+    vm.jit_handoff_frame(None, pc as u32, vals);
     vm.jit_resume_handoff(f, func_slot, 1, false).unwrap();
     (vm.top - base, max)
 }

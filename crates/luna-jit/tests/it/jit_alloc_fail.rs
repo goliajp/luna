@@ -248,6 +248,7 @@ fn a_method_jit_call_that_cannot_allocate_runs_in_the_interpreter() {
     }
 }
 
+mod buffers;
 mod exhausted;
 mod method;
 mod rerun;

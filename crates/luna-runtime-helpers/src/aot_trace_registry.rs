@@ -274,7 +274,7 @@ unsafe fn walk_meta_section(
         // window the meta entry carries, holding no address of the cells
         // made here, linked into the binary's text segment; `proto` is a
         // live prototype the Vm just loaded
-        unsafe {
+        let parked = unsafe {
             let ct = CompiledTrace::from_aot_meta(
                 trace_entry,
                 decoded.header.head_pc,
@@ -284,7 +284,10 @@ unsafe fn walk_meta_section(
                 plans,
                 per_exit_inline_decoded,
             );
-            luna_core::__private::install_aot_trace(vm, proto, ct);
+            luna_core::__private::install_aot_trace(vm, proto, ct)
+        };
+        if !parked {
+            continue;
         }
         installed += 1;
         if probe_on {

@@ -14,14 +14,19 @@ impl Vm {
     /// Park an AOT binary's precompiled `trace` on `proto.traces`, where
     /// the dispatcher enters it at its `head_pc` as it would a trace the
     /// JIT compiled. `__private::install_aot_trace` states what the trace
-    /// must be.
+    /// must be. `false`, the trace not parked, when there is no room for
+    /// what running it needs (see [`Vm::trace_room`]).
     pub(crate) fn install_aot_trace(
         &mut self,
         proto: crate::runtime::Gc<crate::runtime::function::Proto>,
         trace: crate::jit::trace::CompiledTrace,
-    ) {
-        self.trace_exit_room(trace.window_size as usize);
+    ) -> bool {
+        if self.trace_room(trace.window_size as usize).is_err() {
+            self.jit.counters.install_no_room += 1;
+            return false;
+        }
         cache_trace(proto, trace);
+        true
     }
 
     /// Walk the proto tree

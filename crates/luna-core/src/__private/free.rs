@@ -102,6 +102,8 @@ pub fn string_inlinable_builtin(name: &[u8]) -> Option<crate::runtime::Builtin> 
 /// side's resolver: the dispatcher then enters it at its `head_pc` as it
 /// would a trace the JIT compiled. Nothing is checked or deduplicated; a
 /// second trace at the same `head_pc` is entered only if the first is not.
+/// `false` when the Vm has no memory for what running the trace needs:
+/// the trace is not parked then.
 ///
 /// # Safety
 /// `trace` meets [`crate::jit::CompiledTrace::from_parts`]'s conditions,
@@ -112,8 +114,8 @@ pub unsafe fn install_aot_trace(
     vm: &mut Vm,
     proto: Gc<crate::runtime::function::Proto>,
     trace: crate::jit::CompiledTrace,
-) {
-    vm.install_aot_trace(proto, trace);
+) -> bool {
+    vm.install_aot_trace(proto, trace)
 }
 
 /// Takes the source `trace` would be compiled from at the optimizing tier,

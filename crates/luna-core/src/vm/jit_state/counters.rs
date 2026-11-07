@@ -24,6 +24,10 @@ pub struct JitCounters {
     pub adopted: u64,
     /// Count of closed traces the lowerer rejected.
     pub compile_failed: u64,
+    /// Traces compiled or adopted but not installed: the Vm had no memory
+    /// for what running them needs. Not a failure of their head, which is
+    /// recorded again once it is hot.
+    pub install_no_room: u64,
     /// Number of trace dispatch entries.
     pub dispatched: u64,
     /// Number of trace entries that came back with `jit_pending_err` set.

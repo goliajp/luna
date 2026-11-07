@@ -3,7 +3,7 @@
 //! trace has returned, where the interpreter's allocation rules apply.
 
 use super::*;
-use crate::runtime::mem::Oom;
+use crate::runtime::mem::{LVec, MemRef, Oom};
 use crate::runtime::table::TableError;
 
 /// The most words of the room an exit keeps unmade sunk tables in that one
@@ -31,7 +31,6 @@ pub struct UnmadeCounts {
 
 /// What the exit a trace took left unmade. The Vm keeps it last, away from
 /// the fields the interpreter reads on every op.
-#[derive(Default)]
 pub(crate) struct ExitUnmade {
     /// Anything is: the accumulated string, frames or sunk tables.
     pub(crate) any: bool,
@@ -46,17 +45,42 @@ pub(crate) struct ExitUnmade {
     /// exit could not: the sunk tables' contents, then, while frames are
     /// pushed, the trace's registers. Reserved when a trace is installed,
     /// so the exit and the dispatcher never grow it.
-    pub(crate) roots: Vec<Value>,
+    pub(crate) roots: LVec<Value>,
+}
+
+impl ExitUnmade {
+    pub(crate) fn new(mem: MemRef) -> ExitUnmade {
+        ExitUnmade {
+            any: false,
+            accum: None,
+            made: UnmadeCounts::default(),
+            frames: None,
+            roots: LVec::new(mem),
+        }
+    }
+}
+
+/// `v` onto `roots`, which has room for it (see [`Vm::trace_room`]).
+pub(super) fn push_root(roots: &mut LVec<Value>, v: Value) {
+    roots.push(v).expect("room reserved with the trace");
 }
 
 impl Vm {
     /// Before a trace of `window` registers is installed: room for what its
-    /// exits may leave unmade. A side trace's registers start inside its
-    /// parent's window, so twice the widest window covers theirs.
-    pub(in crate::vm::exec) fn trace_exit_room(&mut self, window: usize) {
+    /// exits may leave unmade, and the dispatcher's buffers for a call of
+    /// it. A side trace's registers start inside its parent's window, so
+    /// twice the widest window covers theirs. A trace there is no room for
+    /// is not installed: it would run out where nothing can fail.
+    pub(in crate::vm::exec) fn trace_room(&mut self, window: usize) -> Result<(), Oom> {
         let roots = &mut self.unmade.roots;
         debug_assert!(roots.is_empty());
-        roots.reserve(SUNK_WORDS_MAX + 2 * window);
+        roots.reserve(SUNK_WORDS_MAX + 2 * window)?;
+        let jit = &mut self.jit;
+        super::super::dispatch::words::reserve(
+            &mut jit.reg_state_buf,
+            &mut jit.entry_tags_buf,
+            window,
+        )
     }
 
     /// A sunk table the exit could not make (`ops` its `NewTable`'s packed
@@ -73,14 +97,16 @@ impl Vm {
         let roots = &mut self.unmade.roots;
         let at = roots.len();
         debug_assert!(at + sunk_words(arr.len(), hash.len()) <= roots.capacity());
-        roots.push(Value::Int(ops));
-        roots.push(Value::Int(level as i64));
-        roots.push(Value::Int(arr.len() as i64));
-        roots.push(Value::Int(hash.len() as i64));
-        roots.extend(arr);
+        push_root(roots, Value::Int(ops));
+        push_root(roots, Value::Int(level as i64));
+        push_root(roots, Value::Int(arr.len() as i64));
+        push_root(roots, Value::Int(hash.len() as i64));
+        for v in arr {
+            push_root(roots, v);
+        }
         for (k, v) in hash {
-            roots.push(k);
-            roots.push(v);
+            push_root(roots, k);
+            push_root(roots, v);
         }
         self.unmade.any = true;
         ((at as i64) << 1) | 1
@@ -142,8 +168,8 @@ impl Vm {
                 self.stack[i] = Value::Nil;
                 let at = (t.as_ptr() as usize >> 1) as i64;
                 let roots = &mut self.unmade.roots;
-                roots.push(Value::Int(i as i64));
-                roots.push(Value::Int(at));
+                push_root(roots, Value::Int(i as i64));
+                push_root(roots, Value::Int(at));
             }
         }
         let mut at = 0;

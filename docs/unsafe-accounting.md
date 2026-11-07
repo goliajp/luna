@@ -21,9 +21,9 @@ public API) see [`security.md`](security.md) §5.
 
 | Metric | Count | Notes |
 |---|---:|---|
-| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1909** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
+| `unsafe` sites in all crates (every `.rs` file under `crates/`) | **1907** | CI ceiling in `.github/workflows/ci.yml::unsafe-drift` |
 | of which in tests, benches and examples | 264 | files under a `tests/`, `benches/` or `examples/` directory, or whose name contains `tests` |
-| **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; thirty-four more in `luna_core::__private`, which is not public API, see §5 |
+| **`pub unsafe fn` in the public API** | **1** | `MemOwner::raw`; thirty-three more in `luna_core::__private`, which is not public API, see §5 |
 | **`pub unsafe extern "C" fn`** | 208 | the C API (143), the `luna_jit_*` helpers compiled code calls (59, re-exported by `luna-jit`), the AOT entries (6); see §5 |
 | **`unsafe impl Send` / `Sync`** | 13 | see §5 |
 
@@ -131,7 +131,7 @@ Changes since the 1801 snapshot (net 108 more):
 | | `vm/exec` (other) | 96 | `Gc` handle mutation, frame and stack bookkeeping, coroutine resume, trace entry and exit register copies, the runtime entry points compiled code calls, and what the C API needs from the VM (`host_c`: a thread's C stack and state, C userdata blocks, a continuation's frame) |
 | | `runtime/heap*`, `runtime/gc_hooks` | 176 | the intrusive mark-sweep heap: allocation, marking, sweeping, finalisation (the lists of objects with finalizers and of those due), the `Gc<T>` handle, the debug check of the slow-store bit; the collector checks of the test-only builds (`gc-verify`: the freed-address probes, the tricolour and string-count checks) |
 | | `runtime/puc` | 138 | the model of PUC's allocations: the records it keeps over raw object headers (the parser's tables and frames a collection step marks, 5.1's environment records, the objects PUC makes and luna does not yet, the strings a load sets aside), its marking and sweeping of them, the 5.5 sizer |
-| | `__private` (`luna_core::__private`) | 66 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, the two table stores that leave the read-only test and the write barrier to the JIT's helpers, the table stores and write barriers that must be given the object's own heap, the VM's heap and the JIT state borrowed mutably, the tier-up source put back on a trace, the optimizing tier's loop function written into a trace's loop cell, the method entry a background compile hands over, the containers made on a context, the JIT entries that take register words (`jit_concat_regs`, `jit_gc_step`) or a string buffer (`jit_str_buf_acquire`), and the JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
+| | `__private` (`luna_core::__private`) | 64 | the internals luna's own crates use: the `unsafe fn`s among them (a `Gc` from a pointer, its exclusive borrow, a value from its array encoding, the host's allocation function, the two table stores that leave the read-only test and the write barrier to the JIT's helpers, the table stores and write barriers that must be given the object's own heap, the VM's heap and the JIT state borrowed mutably, the tier-up source put back on a trace, the optimizing tier's loop function written into a trace's loop cell, the method entry a background compile hands over, the containers made on a context, the JIT entries that take register words (`jit_concat_regs`, `jit_gc_step`), and the JIT entries that trust compiled code's frame layout) and the blocks that forward to them |
 | | `runtime/table*` | 54 | the table's raw layout: the node array, the slab-backed array part, tag-driven marking |
 | | `runtime/mem` | 93 | the allocation context and the containers whose blocks come from it (§3.8): raw blocks from the system allocator or the host's `lua_Alloc`, the freed blocks a system-allocator context keeps for reuse, the vector's and boxed slice's initialised prefix, a push into room the caller made, the host's allocation function read without a lock (`send`) |
 | | `runtime` (other) | 43 | string headers and their trailing bytes, the value tag/payload encoding (and its copy as a tag byte and a payload word between references), closure upvalue storage |
@@ -154,7 +154,7 @@ Changes since the 1801 snapshot (net 108 more):
 | `llvm-jit-probe` | | 2 | the LLVM toolchain probe |
 | `luna-fuzz` | | 1 | the heap the dump reader's target loads into |
 | `luna-jit-derive`, `luna-tools` | | 0 | |
-| **Total** | | **1909** | |
+| **Total** | | **1907** | |
 
 ## 3. Pattern catalog
 
@@ -312,7 +312,7 @@ Three CI checks cover `unsafe`:
 - the `unsafe-drift` job in `.github/workflows/ci.yml` counts the sites
   in every `.rs` file under `crates/` on every push, `luna-jit-llvm`
   included although CI does not build it, and fails above the ceiling.
-  The ceiling is the exact count, **1909**, with no headroom;
+  The ceiling is the exact count, **1907**, with no headroom;
 - the same job runs `scripts/unsafe-accounting.py`, which puts every file
   in one row of the table in §2 and fails when a row, the table's total,
   the snapshot in §1 or the ceiling differs from the count in the tree,
@@ -780,14 +780,14 @@ does not need it. The public API needs no `unsafe` but `MemOwner::raw`.
 Test and bench code adds three more `unsafe impl`s that are not part of
 any library: two `GlobalAlloc` wrappers over `System` (a poisoning one
 in `luna-core/tests/gc_stress_poison.rs`, a counting one in
-`luna-jit/tests/jit_code_freed_with_vm.rs`) and `Send` for the no-op
+`luna-jit/tests/jit_code_freed_with_vm/main.rs`) and `Send` for the no-op
 wrapper in `luna-jit/benches/bench_send_overhead.rs`.
 
 ## 6. Reproducing the counts
 
 ```sh
 grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' crates | wc -l
-# 1909, the ceiling in ci.yml's unsafe-drift job
+# 1907, the ceiling in ci.yml's unsafe-drift job
 python3 scripts/unsafe-accounting.py
 # every row of §2, the totals and the ceiling against the tree
 cargo clippy --workspace --all-targets \

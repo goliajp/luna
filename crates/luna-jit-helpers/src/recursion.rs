@@ -187,8 +187,7 @@ pub unsafe extern "C" fn luna_jit_handoff_frame(pc: i64, base: i64, regs: i64, n
         .as_chunks::<2>()
         .0
         .iter()
-        .map(|&[tag, payload]| reg_value(tag, payload, float_only))
-        .collect();
+        .map(|&[tag, payload]| reg_value(tag, payload, float_only));
     let base = u32::try_from(base).ok();
     // SAFETY: compiled code hands over only a level it is running, at an
     // instruction of that level's function, with its registers (# Safety)

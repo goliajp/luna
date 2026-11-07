@@ -12,6 +12,7 @@
 //! `pending_err` from `extern "C"` functions) reach it through
 //! `luna_core::__private`, outside the public API.
 
+use crate::runtime::mem::{LBox, LVec, MemRef};
 use crate::vm::error::LuaError;
 
 mod counters;
@@ -92,7 +93,7 @@ pub struct JitState {
     pub pending_err: Option<LuaError>,
 
     /// The trace dispatcher's `reg_state`, kept between entries.
-    pub reg_state_buf: Vec<i64>,
+    pub reg_state_buf: LVec<i64>,
 
     /// Roots: values compiled code holds only in registers while it calls a
     /// helper that can collect. The address of the innermost list (0 none):
@@ -100,17 +101,16 @@ pub struct JitState {
     /// tag and payload words. Linked for the call, unlinked after.
     pub ssa_roots: usize,
 
-    /// Reusable string accumulator buffers, in the allocation context.
-    pub str_buf_pool: Vec<crate::runtime::mem::LVec<u8>>,
-
-    /// Cap on the buffer pool size.
-    pub str_buf_pool_cap: usize,
+    /// The string accumulator buffers: the first `str_bufs_free` kept for
+    /// reuse, the others held by the traces running now.
+    pub(crate) str_bufs: LVec<LBox<LVec<u8>>>,
+    pub(crate) str_bufs_free: u32,
     /// The records of PUC's objects each running trace stands for
     /// (`TraceGhosts`), by the depth of nested trace runs, and that depth.
     pub(crate) ghosts: Vec<crate::vm::exec::TraceGhosts>,
     pub(crate) ghost_depth: usize,
     /// Companion buffer for `entry_tags` (one u8 per register at entry).
-    pub entry_tags_buf: Vec<u8>,
+    pub entry_tags_buf: LVec<u8>,
 
     /// The trace running now, for a collection step it runs in place.
     pub(crate) step: crate::vm::exec::TraceStep,
@@ -162,9 +162,9 @@ pub struct JitState {
     pub levels_base: u32,
     /// the slot of the compiled call's level 0 (its base)
     pub levels_slot: u32,
-    /// the frames of the compiled levels handed to the interpreter,
-    /// deepest first
-    pub(crate) handoff: Vec<crate::vm::exec::HandoffFrame>,
+    /// where the compiled levels handed to the interpreter left their
+    /// frames on the stack
+    pub(crate) handoff: crate::vm::exec::HandoffMarks,
     /// heads that failed to compile, by their function's content; boxed
     /// on the first failure, since most Vms never have one
     pub(crate) fail_memory: Option<Box<crate::vm::exec::FailMemory>>,
@@ -221,8 +221,8 @@ impl JitState {
     /// `Vm::new_inner` calls this; the `luna` crate's
     /// `Vm::new_minimal_with_jit` then swaps the backends to
     /// `CraneliftBackend` via `Vm::install_jit_backend`, which turns
-    /// both flags on.
-    pub fn with_null_backend() -> JitState {
+    /// both flags on. Its buffers allocate through `mem`.
+    pub fn with_null_backend(mem: MemRef) -> JitState {
         JitState {
             enabled: false,
             gate: false,
@@ -246,13 +246,13 @@ impl JitState {
             gc_exit: None,
             levels_base: 0,
             levels_slot: 0,
-            handoff: Vec::new(),
+            handoff: Default::default(),
             fail_memory: None,
-            reg_state_buf: Vec::new(),
+            reg_state_buf: LVec::new(mem),
             ssa_roots: 0,
-            str_buf_pool: Vec::new(),
-            str_buf_pool_cap: 4,
-            entry_tags_buf: Vec::new(),
+            str_bufs: LVec::new(mem),
+            str_bufs_free: 0,
+            entry_tags_buf: LVec::new(mem),
             ghosts: Vec::new(),
             ghost_depth: 0,
             step: Default::default(),

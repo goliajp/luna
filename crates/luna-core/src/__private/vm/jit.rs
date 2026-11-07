@@ -33,7 +33,14 @@ pub trait VmJitFrames {
     ///
     /// # Safety
     /// `base` and `pc` are a level compiled code is running: `pc` an instruction of that level's function, `vals` its registers.
-    unsafe fn jit_handoff_frame(&mut self, base: Option<u32>, pc: u32, vals: Vec<Value>);
+    /// Where the frame cannot be kept for want of memory, the memory
+    /// error is the call's: it is raised where compiled code was entered.
+    unsafe fn jit_handoff_frame(
+        &mut self,
+        base: Option<u32>,
+        pc: u32,
+        vals: impl ExactSizeIterator<Item = Value>,
+    );
     /// How many levels compiled code has handed to the interpreter and the
     /// interpreter has not taken up yet.
     fn jit_handed_levels(&self) -> usize;
@@ -192,12 +199,17 @@ pub trait VmJitFrames {
 
 impl VmJitFrames for crate::vm::Vm {
     #[inline]
-    unsafe fn jit_handoff_frame(&mut self, base: Option<u32>, pc: u32, vals: Vec<Value>) {
+    unsafe fn jit_handoff_frame(
+        &mut self,
+        base: Option<u32>,
+        pc: u32,
+        vals: impl ExactSizeIterator<Item = Value>,
+    ) {
         crate::vm::Vm::jit_handoff_frame(self, base, pc, vals)
     }
     #[inline]
     fn jit_handed_levels(&self) -> usize {
-        self.jit.handoff.len()
+        crate::vm::Vm::jit_handed_levels(self)
     }
     #[inline]
     fn jit_limits(&self, cl: Gc<LuaClosure>, base: u32) -> JitLimits {

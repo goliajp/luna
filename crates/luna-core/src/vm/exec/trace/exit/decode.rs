@@ -4,6 +4,7 @@
 use super::*;
 use crate::jit::trace::CompiledTrace;
 use crate::jit::trace_types::frame::TRACE_FRAME_TAIL;
+use crate::runtime::mem::LVec;
 
 impl Vm {
     /// Which trace's exit shapes decode `raw_ret`: a side trace's when one
@@ -14,7 +15,7 @@ impl Vm {
         cl: Gc<LuaClosure>,
         ct: &CompiledTrace,
         raw_ret: u64,
-        reg_state: &mut Vec<i64>,
+        reg_state: &mut LVec<i64>,
         base_us: usize,
         entry_tags: &[u8],
     ) -> ExitSource {
@@ -34,7 +35,7 @@ impl Vm {
         cl: Gc<LuaClosure>,
         ct: &CompiledTrace,
         raw_ret: u64,
-        reg_state: &mut Vec<i64>,
+        reg_state: &mut LVec<i64>,
         base_us: usize,
         entry_tags: &[u8],
     ) -> ExitSource {
@@ -64,6 +65,9 @@ impl Vm {
         {
             return parent_only;
         }
+        if !child_frame_in(reg_state, off, &child) {
+            return parent_only;
+        }
         // The child's registers start at the frame the exit resumes in.
         // Past that frame they are its own scratch slots, which start at
         // zero as on any entry; the parent left nothing there that is
@@ -77,9 +81,6 @@ impl Vm {
                 Some(CallFrame::Lua(f)) => {
                     let frame_end = off + f.closure.proto.max_stack as usize;
                     let need = off + child.window_size as usize;
-                    if reg_state.len() < need {
-                        reg_state.resize(need, 0);
-                    }
                     if need > frame_end {
                         reg_state[frame_end..need].fill(0);
                     }
@@ -88,7 +89,6 @@ impl Vm {
                 _ => return parent_only,
             }
         };
-        child_frame_in(reg_state, off, &child);
         let cent = child.current_entry();
         self.count_side_trace_run(off);
         let child_raw_ret = {
@@ -150,12 +150,11 @@ impl Vm {
 /// `reg_state[off]`, its register 0. A side trace never counts in its
 /// call's words (`wire_side_trace` refuses one that does), so it reads none
 /// of them, and the parent's registers they may lie on stay as they are.
-fn child_frame_in(reg_state: &mut Vec<i64>, off: usize, child: &CompiledTrace) {
+/// `false` when it cannot grow: the child does not run.
+fn child_frame_in(reg_state: &mut LVec<i64>, off: usize, child: &CompiledTrace) -> bool {
     debug_assert!(!child.call_count, "a side trace counting per call");
     let tail = off + child.window_size as usize + TRACE_FRAME_TAIL;
-    if reg_state.len() < tail {
-        reg_state.resize(tail, 0);
-    }
+    reg_state.len() >= tail || reg_state.resize(tail, 0).is_ok()
 }
 
 /// Which trace's exit decodes a trace's return.

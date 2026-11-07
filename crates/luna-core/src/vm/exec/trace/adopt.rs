@@ -55,9 +55,15 @@ impl Vm {
             };
             jit.trace_compiler.adopt_traces(jit.storage.as_mut(), &req)
         };
-        let any = !adopted.is_empty();
+        let mut any = false;
         for a in adopted {
             let mut ct = a.trace;
+            // no room for what running it needs: not installed
+            if self.trace_room(ct.window_size as usize).is_err() {
+                self.jit.counters.install_no_room += 1;
+                continue;
+            }
+            any = true;
             self.tally_compiled_trace(&ct);
             let wired = self.wire_side_trace(&mut ct, a.side_parent);
             let ct = cache_trace(proto, ct);

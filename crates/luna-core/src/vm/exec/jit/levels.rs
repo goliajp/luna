@@ -42,7 +42,8 @@ impl Vm {
         if self.g.frame_size != u32::MAX && self.frames_in_use() >= self.g.frame_size {
             self.grow_frames()?;
         }
-        self.grow_stack((base + max) as usize)?;
+        // as long as PUC's, for the levels it enters (see `jit_limits`)
+        self.grow_stack((base + max).max(self.g.stack_last) as usize)?;
         self.jit.levels_base = self.g.frames_native;
         self.jit.levels_slot = base;
         self.g.frames_native += 1;
@@ -96,7 +97,10 @@ impl Vm {
     /// frame reaches the stack's end tests the stack; the level that grows
     /// 5.1's array or takes a new `CallInfo` (and in 5.2 any level while a
     /// collection step could fall due) is a number of levels deeper, each
-    /// at least the smallest self call's step above the one before.
+    /// at least the smallest self call's step above the one before. The
+    /// stack luna has reaches PUC's end while compiled levels run
+    /// ([`Vm::jit_enter_levels`], [`Vm::jit_self_level`]): a level hands
+    /// its frame over onto it (see `handoff::frames`).
     pub(crate) fn jit_limits(&self, cl: Gc<LuaClosure>, base: u32) -> JitLimits {
         let p = cl.proto;
         let (nparams, max) = (u32::from(p.num_params), u32::from(p.max_stack));
@@ -141,6 +145,13 @@ impl Vm {
         let gc = matches!(self.version, LuaVersion::Lua53 | LuaVersion::Lua54);
         if let Err(e) = self.check_lua_stack(base + nparams, max, gc) {
             return Err(self.jit_positioned(cl, e));
+        }
+        // the stack as long as PUC's, for the levels up to the next check
+        // to hand their frames over onto: without it the interpreter makes
+        // the call, and grows the stack as it does, where it may collect
+        let need = self.g.stack_last as usize;
+        if self.stack.len() < need && self.stack.resize(need, Value::Nil).is_err() {
+            return Ok(None);
         }
         if self.g.frame_size != u32::MAX
             && self.frames_in_use() >= self.g.frame_size
