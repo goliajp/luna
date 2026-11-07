@@ -10,12 +10,7 @@ pub(crate) const MAX_ITERS: u32 = 3000;
 impl Gen<'_, '_> {
     /// A whole program.
     pub(crate) fn program(&mut self) -> String {
-        let mut frame = FRAME.to_string();
-        for k in ["NUM1", "NUM2", "NUM3"] {
-            let v = self.special_num();
-            frame = frame.replacen(k, &v, 1);
-        }
-        self.out.push_str(&frame);
+        self.frame();
         self.functions();
         self.user_calls = true;
         self.fuel = 40;
@@ -24,6 +19,16 @@ impl Gen<'_, '_> {
         }
         self.out.push_str(DUMP);
         std::mem::take(&mut self.out)
+    }
+
+    /// The fixed frame, its three numbers picked.
+    pub(crate) fn frame(&mut self) {
+        let mut frame = FRAME.to_string();
+        for k in ["NUM1", "NUM2", "NUM3"] {
+            let v = self.special_num();
+            frame = frame.replacen(k, &v, 1);
+        }
+        self.out.push_str(&frame);
     }
 
     fn functions(&mut self) {
@@ -130,7 +135,7 @@ impl Gen<'_, '_> {
         if self.iters == 1 && self.user_calls && self.pick(3) == 0 {
             return self.loop_stmt();
         }
-        match self.pick(22) {
+        match self.pick(23) {
             0 => {
                 let (v, e) = (self.num_var_target(), self.num(0));
                 self.line(&format!("{v} = {e}"));
@@ -182,14 +187,22 @@ impl Gen<'_, '_> {
             15 => self.meta_stmt(),
             16 if self.user_calls => self.call_stmt(),
             17 if self.iters <= 64 => self.line("collectgarbage()"),
-            18 if self.user_calls && self.ind == 0 => self.reentry_calls(),
-            19 if self.user_calls && self.ind == 0 => self.gc_kernel(),
-            20 if self.user_calls && self.ind == 0 => self.carry_kernel(),
-            21 if self.user_calls && self.ind == 0 => self.nested_kernel(),
+            k @ 18..=22 if self.user_calls && self.ind == 0 => self.kernel(k),
             _ => {
                 let e = self.num(1);
                 self.line(&format!("n1, x = va({e}, x)"));
             }
+        }
+    }
+
+    /// One of the kernels the main chunk runs.
+    fn kernel(&mut self, k: u32) {
+        match k {
+            18 => self.reentry_calls(),
+            19 => self.gc_kernel(),
+            20 => self.carry_kernel(),
+            21 => self.nested_kernel(),
+            _ => self.rerun_kernel(),
         }
     }
 
