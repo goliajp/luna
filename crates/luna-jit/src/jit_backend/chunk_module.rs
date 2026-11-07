@@ -65,7 +65,6 @@ fn method_helper(name: &str) -> Option<*const u8> {
         "luna_jit_math_fn_is_library" => luna_jit_math_fn_is_library as *const u8,
         "luna_jit_math1" => luna_jit_math1 as *const u8,
         "luna_jit_for_scale" => luna_jit_for_scale as *const u8,
-        "luna_jit_park_deopt" => luna_jit_park_deopt as *const u8,
         "luna_jit_no_deopt_parked" => luna_jit_no_deopt_parked as *const u8,
         "luna_jit_enter_ctx" => luna_jit_enter_ctx as *const u8,
         "luna_jit_handoff_frame" => luna_jit_handoff_frame as *const u8,

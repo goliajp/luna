@@ -522,7 +522,9 @@ jobs:
   # VM's heap went behind the VM's methods and a table's public stores
   # onto its handle (Gc<Table>::set and the rest borrow the table in one
   # block, so their callers lost theirs; the JIT's stores that skip the
-  # read-only test and the barrier became four unsafe fns) to 1762.
+  # read-only test and the barrier became four unsafe fns) to 1762. The
+  # deopt-parking helper no code generator calls went (the helper and its
+  # block) to 1905.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -537,7 +539,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=1907
+          ceiling=1905
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then
