@@ -70,6 +70,7 @@ impl Lir {
                     len: b.len,
                     params_at: b.params_at,
                     n_params: b.n_params,
+                    cold: b.cold,
                     ..BlockData::default()
                 })
                 .collect(),

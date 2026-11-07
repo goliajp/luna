@@ -28,6 +28,9 @@ pub(crate) trait Ins {
     fn create_block(&mut self) -> Block;
     fn switch_to_block(&mut self, b: Block);
     fn seal_block(&mut self, b: Block);
+    /// Lays block `b` out after the others: a path the code seldom takes.
+    fn set_cold_block(&mut self, b: Block);
+    fn current_block(&self) -> Option<Block>;
     fn append_block_param(&mut self, b: Block, ty: Type) -> Value;
     fn append_block_params_for_function_params(&mut self, b: Block);
     fn block_params(&self, b: Block) -> &[Value];

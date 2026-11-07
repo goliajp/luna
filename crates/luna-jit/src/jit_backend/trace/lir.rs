@@ -214,6 +214,9 @@ pub(crate) struct BlockData {
     pub(crate) preds: u32,
     pub(crate) sealed: bool,
     pub(crate) entered: bool,
+    /// Laid out after the others by the Cranelift replay (the baseline
+    /// keeps its own order, which its allocator relies on).
+    pub(crate) cold: bool,
     /// The variables' values at the end of the only predecessor so far:
     /// `(offset, len)` in [`Lir::snaps`], offset `NONE` for none.
     pub(crate) inherit: (u32, u32),

@@ -2,7 +2,7 @@
 //! trace ended at its head (see `side_call`), and the gate after the checks
 //! before the loop.
 
-use super::side_call::{Relink, switch_sealed};
+use super::side_call::{Relink, cold_block, switch_sealed};
 use super::*;
 
 /// The relink block, once everything else is lowered: what the entry block
@@ -78,7 +78,7 @@ fn count_relink<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
         return;
     };
     let (count, at) = (count_at(lw, pl, t), t.at());
-    let hot = lw.bcx.create_block();
+    let hot = cold_block(lw);
     lw.bcx.tier_count(count, at, hot, rl.reentry);
     switch_sealed(lw, hot);
     let one = lw.bcx.ins().iconst(types::I64, 1);
