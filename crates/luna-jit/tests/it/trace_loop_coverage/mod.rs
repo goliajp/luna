@@ -61,7 +61,16 @@ fn show(vs: &[Value]) -> String {
 /// function and the number of trace entries the last call made: through
 /// the dispatcher, or from another trace's side trace linking to it.
 fn run_both(src: &str, args: &[Value], times: usize) -> (Vm, Gc<LuaClosure>, u64) {
-    let mut vm = trace_vm();
+    run_both_in((trace_vm(), interp_vm()), src, args, times)
+}
+
+/// [`run_both`] in the Vms `vms`: the trace JIT's and the interpreter's.
+fn run_both_in(
+    (mut vm, mut iv): (Vm, Vm),
+    src: &str,
+    args: &[Value],
+    times: usize,
+) -> (Vm, Gc<LuaClosure>, u64) {
     let f = function(&mut vm, src);
     let mut last = Vec::new();
     for _ in 0..times {
@@ -72,7 +81,6 @@ fn run_both(src: &str, args: &[Value], times: usize) -> (Vm, Gc<LuaClosure>, u64
     let again = call(&mut vm, f, args);
     let entries = entered(&mut vm) - before;
     assert_eq!(show(&again), show(&last));
-    let mut iv = interp_vm();
     let fi = function(&mut iv, src);
     let want = call(&mut iv, fi, args);
     assert_eq!(
