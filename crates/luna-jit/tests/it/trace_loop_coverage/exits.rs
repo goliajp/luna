@@ -22,9 +22,26 @@ fn a_comparison_s_other_branch_runs_inside_the_trace() {
     assert_eq!(entries, 1);
 }
 
+/// A Vm with the string hash seed `seed` (where a rehash puts a key
+/// follows it), the trace JIT on with `jit`, as `trace_vm` and `interp_vm`.
+fn seeded(seed: u32, jit: bool) -> Vm {
+    let mut vm = Vm::new_minimal_with_hash_seed(LuaVersion::Lua54, seed);
+    luna_jit::install_default_jit(&mut vm);
+    vm.open_all_libs().expect("libs");
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(jit);
+    vm
+}
+
 /// An inline array or field read whose slot no longer holds what the
 /// trace was recorded with (a key past the array part, a field moved by a
 /// rehash) leaves the trace, and the loop goes on in the trace.
+///
+/// The rehash moves `o.a` off the one node `{a = 1}` has only where the
+/// grown part's node 0 is not where `a` goes, which the hash seed decides
+/// (about one seed in 32 keeps it there): the Vms take a seed that moves
+/// it, and the function returns whether `a` comes first by `next`, which a
+/// key in node 0 would.
 #[test]
 fn an_inline_read_that_misses_leaves_the_trace_and_comes_back() {
     let src = "
@@ -40,13 +57,17 @@ fn an_inline_read_that_misses_leaves_the_trace_and_comes_back() {
                     for k = 1, 20 do o['k' .. k] = k end
                 end
             end
-            return s
+            return s, next(o) == 'a' and 1 or 0
         end";
-    let (mut vm, f, _) = run_both(src, &[], 3);
+    let (mut vm, f, _) = run_both_in((seeded(2, true), seeded(2, false)), src, &[], 3);
     let relinks =
         |f: Gc<LuaClosure>| -> u64 { f.proto.traces().iter().map(|t| t.side_relinks()).sum() };
     let (entries0, relinks0) = (vm.trace_dispatched_count(), relinks(f));
-    call(&mut vm, f, &[]);
+    let r = call(&mut vm, f, &[]);
+    assert!(
+        matches!(r[1], Value::Int(0)),
+        "the rehash left `a` in node 0: take another seed"
+    );
     let entries = vm.trace_dispatched_count() - entries0;
     let relinked = relinks(f) - relinks0;
     // the outer loop only: the side trace from the exit at `i == 200`
