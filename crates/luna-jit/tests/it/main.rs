@@ -169,6 +169,7 @@ mod trace_reentry_kinds;
 mod trace_relink;
 mod trace_relink_tier;
 mod trace_reload_reuse;
+mod trace_retier;
 mod trace_self_link_body;
 mod trace_seti_sunk_emit;
 mod trace_setlist_var_count_emit;
