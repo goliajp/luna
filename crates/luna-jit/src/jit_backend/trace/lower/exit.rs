@@ -110,6 +110,10 @@ pub(super) fn guard_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, i: 
             &mut lw.defined_aot_data,
         );
         lw.materialize_emit_count += mat_count;
+        if exit_calls(lw, pl, side_exit_pc) {
+            emit_calling_exit(lw, pl, side_exit_pc, tag_side_local);
+            return;
+        }
         emit_tagged_exit(
             &mut lw.bcx,
             suppress_admit_id,

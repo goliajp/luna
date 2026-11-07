@@ -40,3 +40,42 @@ pub unsafe extern "C" fn luna_jit_due_words() -> i64 {
     let vm = unsafe { current_jit_vm() };
     vm.jit_due_words() as i64
 }
+
+/// Runs the list `list` of one of the running trace's side cells: the
+/// dispatcher's checks before the side trace runs (with the stack's tags
+/// `list` names; none when null), or its stores to the stack when it goes
+/// on in the trace's loop (see `luna_core::__private::SideCell`). 1 when
+/// the checks pass, or after the stores; 0 otherwise.
+///
+/// # Safety
+/// Called from compiled code inside an `enter_jit` window on this thread,
+/// by the running trace: `list` is null or a list of one of its side cells
+/// (its kind, its length, the registers it reaches, then its entries) and
+/// `reg_state` its register buffer, at least that many registers long.
+// SAFETY: no other item in the link is named `luna_jit_side_cell_list`: only this crate
+// defines `luna_jit_` symbols, each once
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn luna_jit_side_cell_list(list: *const u32, reg_state: *const i64) -> i64 {
+    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to
+    // this call; `list`, unless null, starts with its kind, its length and
+    // the registers its entries reach, which `reg_state` holds
+    let (vm, list, regs) = unsafe {
+        let (n, len) = match list.is_null() {
+            true => (0, 0),
+            false => (3 + *list.add(1) as usize, *list.add(2) as usize),
+        };
+        (
+            current_jit_vm(),
+            std::slice::from_raw_parts(if n == 0 { std::ptr::dangling() } else { list }, n),
+            std::slice::from_raw_parts(
+                if len == 0 {
+                    std::ptr::dangling()
+                } else {
+                    reg_state
+                },
+                len,
+            ),
+        )
+    };
+    vm.jit_side_cell_list(list, regs)
+}

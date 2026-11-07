@@ -42,6 +42,7 @@ fn helper_registry() -> Vec<Helper> {
         h!(luna_jit_new_table, 0, true),
         h!(luna_jit_new_table_sized, 1, true),
         h!(luna_jit_materialize_sunk_table, 8, true),
+        h!(luna_jit_side_cell_list, 2, true),
         h!(luna_jit_table_set_int, 3, false),
         h!(luna_jit_table_set_raw, 4, false),
         h!(luna_jit_table_set_field, 4, false),

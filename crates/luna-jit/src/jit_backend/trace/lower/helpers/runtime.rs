@@ -29,6 +29,9 @@ pub(in crate::jit_backend::trace::lower) struct RuntimeHelpers {
     pub(in crate::jit_backend::trace::lower) head_closure_id: FuncId,
     pub(in crate::jit_backend::trace::lower) materialize_id: FuncId,
     pub(in crate::jit_backend::trace::lower) mat_sunk_id: FuncId,
+    /// `luna_jit_side_cell_list(list, reg_state) -> ok`: a side cell's
+    /// checks or stores (see `side_call`)
+    pub(in crate::jit_backend::trace::lower) side_cell_list_id: FuncId,
 }
 
 /// An imported helper taking `n_params` `i64`s and returning one.
@@ -131,6 +134,7 @@ pub(super) fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHel
     //   cap, arr_raws, arr_kinds, n_hash, hash_keys, hash_raws, hash_kinds
     // Returns: heap table raw payload (i64 Gc<Table> ptr).
     let mat_sunk_id = declare_i64_import(bcx, "luna_jit_materialize_sunk_table", 8)?;
+    let side_cell_list_id = declare_i64_import(bcx, "luna_jit_side_cell_list", 2)?;
 
     Some(RuntimeHelpers {
         str_buf_acquire_id,
@@ -154,5 +158,6 @@ pub(super) fn declare_runtime_helpers<E: Emit>(bcx: &mut E) -> Option<RuntimeHel
         head_closure_id,
         materialize_id,
         mat_sunk_id,
+        side_cell_list_id,
     })
 }

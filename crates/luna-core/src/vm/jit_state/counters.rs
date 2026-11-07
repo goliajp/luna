@@ -38,6 +38,12 @@ pub struct JitCounters {
     pub side_trace_compiled: u64,
     /// Side traces that compiled but failed the shape-match gate.
     pub side_trace_shape_mismatch: u64,
+    /// Side traces wired to an exit, by what became of the exit's side
+    /// cell: the parent's code runs them (0), or not because the exit has
+    /// no cell (1), the side trace is wider than the parent (2), does not
+    /// end at the parent's head (3), the exit resumes in another frame (4),
+    /// or the parent may not be entered with what it leaves (5).
+    pub relink: [u64; 6],
     /// Dispatches of traces holding each kind of inlined code, by the bit
     /// of [`crate::jit::trace::CompiledTraceParts::inline_kinds`].
     pub inline_kind_dispatched: [u64; 4],

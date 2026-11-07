@@ -99,13 +99,20 @@ pub(super) struct Lower<E: Emit> {
     /// Every way to the op being lowered passed a check for a collection
     /// with nothing that may allocate since (see `gc_due`).
     pub(super) gc_quiet: bool,
+    /// The cells of the exits that run a side trace from the code, by
+    /// typed exit (see `luna_core::__private::SideCell`).
+    pub(super) side_cells: Vec<(u32, Box<SideCell>)>,
+    /// The way back in of a trace whose exits run side traces from its code.
+    pub(super) relink: Option<super::side_call::Relink>,
 }
 
 impl<E: Emit> Lower<E> {
     /// Where the body starts after the prechecks.
     #[inline]
     pub(super) fn body_start(&self) -> Block {
-        self.blocks.peel.unwrap_or(self.blocks.body_loop)
+        (self.blocks.gate)
+            .or(self.blocks.peel)
+            .unwrap_or(self.blocks.body_loop)
     }
 
     /// The variable of register `i` (of the window and the inline frames).

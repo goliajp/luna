@@ -88,9 +88,22 @@ impl Vm {
 }
 
 /// Hands the cached side trace `child` to the parent `wired` names.
-pub(in crate::vm::exec) fn hold_side_trace(wired: Option<Wired>, child: TArc<CompiledTrace>) {
+/// The parent holds it before its side cell, if any, hands the child's
+/// entry to its code; what became of the cell is counted in `counts`.
+pub(in crate::vm::exec) fn hold_side_trace(
+    wired: Option<Wired>,
+    child: TArc<CompiledTrace>,
+    counts: &mut [u64; 6],
+) {
     if let Some((parent, exit)) = wired {
-        parent.side_children.borrow_mut()[exit as usize] = Some(child);
+        let exit = exit as usize;
+        let mut held = parent.side_children.borrow_mut();
+        // an exit is wired once (`has_side_trace`): its cell never hands
+        // over another child's code
+        debug_assert!(held[exit].is_none(), "exit {exit} wired twice");
+        held[exit] = Some(TArc::clone(&child));
+        drop(held);
+        counts[super::relink::relink_fill(&parent, exit, &child) as usize] += 1;
     }
 }
 

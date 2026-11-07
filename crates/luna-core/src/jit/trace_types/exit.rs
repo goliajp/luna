@@ -107,21 +107,31 @@ pub fn exit_tags_match_entry_tags(
                 None | Some(&ENTRY_TAG_ANY) => return false,
                 Some(&t) => t,
             },
-            ExitTag::Int => crate::runtime::value::raw::INT,
-            ExitTag::Float => crate::runtime::value::raw::FLOAT,
-            ExitTag::Table => crate::runtime::value::raw::TABLE,
-            ExitTag::Closure => crate::runtime::value::raw::CLOSURE,
-            ExitTag::Nil => crate::runtime::value::raw::NIL,
-            ExitTag::Str => crate::runtime::value::raw::STR,
-            // a trace takes a boolean of either value under `raw::FALSE`
-            ExitTag::Bool => crate::runtime::value::raw::FALSE,
-            ExitTag::Native => crate::runtime::value::raw::NATIVE,
+            t => exit_tag_raw(t).unwrap_or(ENTRY_TAG_ANY),
         };
         if child != expected {
             return false;
         }
     }
     true
+}
+
+/// The entry tag a value an exit tagged `t` is entered with; `None` for
+/// [`ExitTag::Untouched`], which names no tag.
+pub(crate) fn exit_tag_raw(t: ExitTag) -> Option<u8> {
+    use crate::runtime::value::raw;
+    Some(match t {
+        ExitTag::Untouched => return None,
+        ExitTag::Int => raw::INT,
+        ExitTag::Float => raw::FLOAT,
+        ExitTag::Table => raw::TABLE,
+        ExitTag::Closure => raw::CLOSURE,
+        ExitTag::Nil => raw::NIL,
+        ExitTag::Str => raw::STR,
+        // a trace takes a boolean of either value under `raw::FALSE`
+        ExitTag::Bool => raw::FALSE,
+        ExitTag::Native => raw::NATIVE,
+    })
 }
 
 use super::exit_code::{EXIT_SITE_MASK, EXIT_TAGS_INDEX_BIT};

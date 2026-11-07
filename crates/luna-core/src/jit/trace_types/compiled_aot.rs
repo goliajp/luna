@@ -74,6 +74,9 @@ impl CompiledTrace {
             // install), so the candidate count is always `0`.
             downrec_multi_way_count: 0,
             tier_up: None,
+            side_cells: Box::new([]),
+            link_pc: None,
+            loop_tags: None,
         };
         // SAFETY: `entry` is as the parts state and holds no address of
         // the cells made above (# Safety)
