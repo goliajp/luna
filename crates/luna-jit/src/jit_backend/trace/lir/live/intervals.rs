@@ -71,12 +71,12 @@ pub(super) fn extend(lir: &Lir, an: &mut Analysis, nv: u32) {
         entry_vars,
         read,
         loops,
-        weight,
         ..
     } = an;
-    // the function's parameter arrives in the entry block
+    // the function's parameter arrives in the entry block: it holds its
+    // register from there, whatever the block does before reading it
     if lir.arg0 != NONE {
-        touch(start, end, weight, lir.arg0, 0, 0);
+        start[lir.arg0 as usize] = 0;
     }
     // a value nothing reads needs no register (its pure instruction is not
     // emitted; a call's result is dropped)

@@ -65,6 +65,29 @@ pub(super) fn count_loop<E: Sigs>(e: &mut E, p: Value) {
     out(e, p, 1, iv);
 }
 
+/// An entry block that writes variables and jumps on before anything reads
+/// the parameter: the parameter still holds its register from the entry.
+pub(super) fn late_param<E: Sigs>(e: &mut E, p: Value) {
+    let vars: Vec<_> = (0..4).map(|_| e.declare_var(types::I64)).collect();
+    for (k, &var) in vars.iter().enumerate() {
+        let c = e.iconst(types::I64, 3 * k as i64 + 1);
+        e.def_var(var, c);
+    }
+    let next = e.create_block();
+    e.jump(next, NO);
+    e.seal_block(next);
+    e.switch_to_block(next);
+    let mut acc = e.load(types::I64, mem(), p, at(0));
+    for &var in &vars {
+        let v = e.use_var(var);
+        let m = e.imul(acc, v);
+        acc = e.iadd(m, v);
+    }
+    let y = e.load(types::I64, mem(), p, at(1));
+    let r = e.bxor(acc, y);
+    out(e, p, 0, r);
+}
+
 /// More values live at once than either target has registers.
 pub(super) fn pressure<E: Sigs>(e: &mut E, x: Value, y: Value) -> Value {
     let ints: Vec<Value> = (1..=40i64)

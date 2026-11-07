@@ -235,4 +235,5 @@ fn control_flow_variables_and_spills_match_cranelift() {
     check(&Case::Pressure, &ins);
     check(&Case::Calls, &ins);
     check(&Case::ManyArgs, &ins);
+    check(&Case::LateParam, &ins);
 }
