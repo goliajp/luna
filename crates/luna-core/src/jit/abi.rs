@@ -4,7 +4,7 @@
 //! the interpreter dispatcher in [`crate::vm::exec`] routes through
 //! to invoke the JIT codegen. Two implementations exist:
 //!
-//! - [`NullJitBackend`] (in this file) — does nothing; the default
+//! - [`NullJitBackend`] (in `null`) — does nothing; the default
 //!   for [`crate::vm::Vm::new_minimal`] in luna-core.
 //! - `CraneliftBackend` (in the `luna` crate, `luna::jit_backend`) —
 //!   delegates to Cranelift. Installed by `luna::install_default_jit`
@@ -15,6 +15,9 @@ use crate::jit::trace_types::{CompileOptions, CompiledTrace, TraceRecord};
 use crate::runtime::Gc;
 use crate::runtime::LuaClosure;
 use crate::runtime::function::Proto;
+
+mod null;
+pub use null::NullJitBackend;
 
 /// `Vm::jit_gc_due`'s op: the one before the pc compiled code resumes at.
 pub const JIT_GC_PREV: u32 = u32::MAX;
@@ -139,6 +142,8 @@ pub unsafe trait IntChunkCompiler {
 /// Each compiled or adopted trace, and each entry `tier_up` returns, meets
 /// the conditions of [`CompiledTrace::from_parts`] for the recording (or
 /// the trace) it was asked for, and lives as long as the Vm's JIT storage.
+/// A source `tier_up_keeping` keeps is one `tier_up` may be given for the
+/// trace it was asked about.
 pub unsafe trait TraceCompiler {
     /// Attempt to lower `record` into native code under `opts`. Returns
     /// `None` if the lowerer bailed at any checkpoint.
@@ -201,6 +206,23 @@ pub unsafe trait TraceCompiler {
         None
     }
 
+    /// [`TraceCompiler::tier_up`], handing back, once the backend is done
+    /// with the move, what it compiles `ct` from again: the Vm keeps it and
+    /// asks for the move again, giving it back as the tier source, when one
+    /// of `ct`'s side cells gets a side trace (the optimizing tier's code
+    /// may leave the exits of cells empty when it was compiled to the
+    /// dispatcher). The default keeps nothing.
+    fn tier_up_keeping(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        ct: &CompiledTrace,
+    ) -> (
+        Option<crate::jit::trace::TraceFn>,
+        Option<crate::jit::trace_types::tier_up::TierKept>,
+    ) {
+        (self.tier_up(storage, ct), None)
+    }
+
     /// Installs, for the recording `req` describes, traces some `Vm`
     /// sharing compiled code with this one already compiled for code of
     /// the same content: the trace itself, then the side traces of it that
@@ -240,54 +262,5 @@ pub unsafe trait TraceCompiler {
         version: crate::version::LuaVersion,
     ) {
         let _ = (storage, record, opts, version);
-    }
-}
-
-/// No-op backend installed by [`crate::vm::Vm::new_minimal`] in
-/// luna-core. Both calls report "nothing compiled" so the interp
-/// dispatcher always takes the standard path. Embedders who want a
-/// real JIT either depend on the `luna` crate (whose
-/// `Vm::new_minimal_with_jit` swaps in `CraneliftBackend`) or write
-/// their own `IntChunkCompiler` / `TraceCompiler` implementation.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NullJitBackend;
-
-// SAFETY: it compiles nothing
-unsafe impl IntChunkCompiler for NullJitBackend {
-    fn try_compile(
-        &self,
-        _: &mut dyn crate::jit::JitStorage,
-        _: Gc<Proto>,
-        _: bool,
-        _: bool,
-    ) -> CompileResult {
-        CompileResult::Skipped
-    }
-
-    fn enter(&self, _: *mut crate::vm::Vm, _: Option<Gc<LuaClosure>>) -> JitVmGuard {
-        // The TLS slots stay whatever they were — no JIT mcode will
-        // execute under a NullJitBackend (try_compile returned
-        // Skipped, so no Proto reaches JitProtoState::Compiled, and
-        // try_compile_trace returns None so no CompiledTrace ever
-        // dispatches), so the helpers never read those TLS values.
-        // JitVmGuard's drop is already a no-op (see the comment on
-        // `JitVmGuard::drop` in `mod.rs`).
-        crate::jit::noop_jit_guard()
-    }
-}
-
-// SAFETY: it compiles nothing
-unsafe impl TraceCompiler for NullJitBackend {
-    fn try_compile_trace(
-        &self,
-        _: &mut dyn crate::jit::JitStorage,
-        _: &TraceRecord,
-        _: CompileOptions,
-    ) -> Option<CompiledTrace> {
-        None
-    }
-
-    fn last_compile_checkpoint(&self) -> &'static str {
-        "null-backend"
     }
 }

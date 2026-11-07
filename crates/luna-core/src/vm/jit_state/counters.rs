@@ -8,6 +8,9 @@ pub struct JitCounters {
     pub closed: u64,
     /// Traces moved to the optimizing tier.
     pub tiered_up: u64,
+    /// Traces at the optimizing tier compiled again: one of their side
+    /// cells got a side trace their code did not call.
+    pub retiered: u64,
     /// Functions the method JIT compiled.
     pub method_compiled: u64,
     /// Functions whose method JIT code a backend replaced in the background (`Proto::jit_next`).
