@@ -34,6 +34,12 @@ impl Ins for Lir {
     fn seal_block(&mut self, b: Block) {
         self.seal(b)
     }
+    fn set_cold_block(&mut self, b: Block) {
+        self.blocks[b.as_u32() as usize].cold = true;
+    }
+    fn current_block(&self) -> Option<Block> {
+        (self.cur != NONE).then(|| Block::from_u32(self.cur))
+    }
     fn append_block_param(&mut self, b: Block, ty: Type) -> Value {
         let d = self.new_value(Ty::of(ty));
         self.add_block_param(b.as_u32(), d);

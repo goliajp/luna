@@ -15,6 +15,8 @@ macro_rules! forward_ins {
         fn create_block(&mut self) -> Block { self$(.$field)?.create_block() }
         fn switch_to_block(&mut self, b: Block) { self$(.$field)?.switch_to_block(b) }
         fn seal_block(&mut self, b: Block) { self$(.$field)?.seal_block(b) }
+        fn set_cold_block(&mut self, b: Block) { self$(.$field)?.set_cold_block(b) }
+        fn current_block(&self) -> Option<Block> { self$(.$field)?.current_block() }
         fn append_block_param(&mut self, b: Block, ty: Type) -> Value { self$(.$field)?.append_block_param(b, ty) }
         fn append_block_params_for_function_params(&mut self, b: Block) { self$(.$field)?.append_block_params_for_function_params(b) }
         fn block_params(&self, b: Block) -> &[Value] { self$(.$field)?.block_params(b) }

@@ -88,6 +88,9 @@ pub(super) fn exit_calls<E: Emit>(lw: &Lower<E>, pl: &Plan<'_>, pc: u32) -> bool
 /// A depth-0 exit to `pc` restoring through `per_exit_tags[tags_idx]`
 /// that runs its side trace from the code (see the module comment).
 pub(super) fn emit_calling_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u32, tags_idx: u32) {
+    if let Some(b) = lw.bcx.current_block() {
+        lw.bcx.set_cold_block(b);
+    }
     emit_store_back(
         &mut lw.bcx,
         &lw.entry.regs_full[..pl.max_stack],
@@ -110,6 +113,7 @@ pub(super) fn emit_calling_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u
         Some(b) => b,
         None => {
             let b = lw.bcx.create_block();
+            lw.bcx.set_cold_block(b);
             for _ in 0..3 {
                 lw.bcx.append_block_param(b, types::I64);
             }
@@ -132,7 +136,7 @@ pub(super) fn emit_call_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     let &[c, ret, noted] = lw.bcx.block_params(call) else {
         unreachable!("the call block takes a cell, a return and a note")
     };
-    let out = lw.bcx.create_block();
+    let out = cold_block(lw);
     let entry = emit_may_call(lw, c, out);
     emit_call(lw, pl, c, entry, noted);
     switch_sealed(lw, out);
@@ -146,7 +150,7 @@ pub(super) fn emit_call_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
 fn emit_may_call<E: Emit>(lw: &mut Lower<E>, c: Value, out: Block) -> Value {
     let (at, flags) = (SideCell::offsets(), MemFlagsData::trusted());
     let entry = lw.bcx.ins().load(types::I64, flags, c, at.entry);
-    let count_blk = lw.bcx.create_block();
+    let count_blk = cold_block(lw);
     lw.bcx.ins().brif(entry, count_blk, &[], out, &[]);
     switch_sealed(lw, count_blk);
     let cp = lw.bcx.ins().load(types::I64, flags, c, at.count);
@@ -158,13 +162,13 @@ fn emit_may_call<E: Emit>(lw: &mut Lower<E>, c: Value, out: Block) -> Value {
         .bcx
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, n1, limit);
-    let check_blk = lw.bcx.create_block();
+    let check_blk = cold_block(lw);
     lw.bcx.ins().brif(reached, out, &[], check_blk, &[]);
     switch_sealed(lw, check_blk);
     // the exit left nothing for the dispatcher to do (a deopt, a collection
     // check, something to make), and the slots the side trace reads that
     // this trace does not check hold the tags it reads them as
-    let call_blk = lw.bcx.create_block();
+    let call_blk = cold_block(lw);
     let check = lw.bcx.ins().load(types::I64, flags, c, at.check);
     let f = lw.bcx.import_func(lw.h.rt.side_cell_list_id);
     let ok = lw.bcx.ins().call(f, &[check, lw.entry.reg_state]);
@@ -182,7 +186,7 @@ fn emit_call<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, c: Value, entry: Value, 
     let sig = lw.entry.trace_fn_sig_ref;
     let call = lw.bcx.ins().call_indirect(sig, entry, &[reg_state]);
     let r = lw.bcx.inst_results(call)[0];
-    let (back_blk, other) = (lw.bcx.create_block(), lw.bcx.create_block());
+    let (back_blk, other) = (cold_block(lw), cold_block(lw));
     super::side_link::emit_branch_on_return(lw, pl, c, r, back_blk, other);
     switch_sealed(lw, other);
     let slot = 8 * trace_ran_side_slot(pl.window_size_us) as i32;
@@ -198,10 +202,25 @@ fn emit_call<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, c: Value, entry: Value, 
     let rl = lw.relink.as_mut().expect("a calling exit has a way back");
     let (loop_ok, block) = (
         rl.loop_ok,
-        *rl.block.get_or_insert_with(|| lw.bcx.create_block()),
+        match rl.block {
+            Some(b) => b,
+            None => {
+                let b = lw.bcx.create_block();
+                lw.bcx.set_cold_block(b);
+                *rl.block.insert(b)
+            }
+        },
     );
     lw.bcx.def_var(loop_ok, ok);
     lw.bcx.ins().jump(block, &[]);
+}
+
+/// A new block on the way of a side trace run from the code, which the
+/// loop seldom takes.
+pub(super) fn cold_block<E: Emit>(lw: &mut Lower<E>) -> Block {
+    let b = lw.bcx.create_block();
+    lw.bcx.set_cold_block(b);
+    b
 }
 
 pub(super) fn switch_sealed<E: Emit>(lw: &mut Lower<E>, b: Block) {
@@ -217,7 +236,7 @@ fn emit_back_stores<E: Emit>(lw: &mut Lower<E>, c: Value) {
     let k = lw.bcx.ins().iadd_imm_s(k, 1);
     lw.bcx.ins().store(flags, k, c, at.relinks);
     let back = lw.bcx.ins().load(types::I64, flags, c, at.back);
-    let (store_blk, done) = (lw.bcx.create_block(), lw.bcx.create_block());
+    let (store_blk, done) = (cold_block(lw), cold_block(lw));
     lw.bcx.ins().brif(back, store_blk, &[], done, &[]);
     switch_sealed(lw, store_blk);
     let f = lw.bcx.import_func(lw.h.rt.side_cell_list_id);

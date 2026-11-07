@@ -102,7 +102,11 @@ impl<'a, 'f> Replay<'a, 'f> {
     ) -> Self {
         let mut blocks = vec![None; lir.blocks.len()];
         for &blk in &an.order {
-            blocks[blk as usize] = Some(b.create_block());
+            let cb = b.create_block();
+            if lir.blocks[blk as usize].cold && blk != root {
+                b.set_cold_block(cb);
+            }
+            blocks[blk as usize] = Some(cb);
         }
         let mut vals = vec![None; lir.value_ty.len()];
         let entry = blocks[root as usize].expect("the entry block");
