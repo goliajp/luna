@@ -78,18 +78,27 @@ pub(super) fn emit_for_loop_tail<E: Emit>(
     let exit_blk = lw.bcx.create_block();
     lw.bcx.ins().brif(cond, continue_blk, &[], exit_blk, &[]);
 
-    // exit branch: side-exit at forloop.pc + 1.
+    // exit branch: side-exit at forloop.pc + 1, a typed exit of its own
+    // when it may run a side trace from the code (a loop the trace leaves
+    // there often goes on into another compiled loop)
     lw.bcx.switch_to_block(exit_blk);
     lw.bcx.seal_block(exit_blk);
-    emit_store_back_and_return_pc(
-        &mut lw.bcx,
-        // the caller window: see `emit_tail`
-        &lw.entry.regs_full[..max_stack],
-        &lw.stored,
-        reg_state,
-        rop.pc + 1,
-        lw.flush_ctx.as_ref(),
-    );
+    if exit_calls(lw, pl, rop.pc + 1) {
+        let tags_idx = lw
+            .per_exit_kinds
+            .push(rop.pc + 1, &lw.current_kinds[..max_stack]);
+        emit_calling_exit(lw, pl, rop.pc + 1, tags_idx);
+    } else {
+        emit_store_back_and_return_pc(
+            &mut lw.bcx,
+            // the caller window: see `emit_tail`
+            &lw.entry.regs_full[..max_stack],
+            &lw.stored,
+            reg_state,
+            rop.pc + 1,
+            lw.flush_ctx.as_ref(),
+        );
+    }
 
     // continue branch: step the index and go back.
     lw.bcx.switch_to_block(continue_blk);
