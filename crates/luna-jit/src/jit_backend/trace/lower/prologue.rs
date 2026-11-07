@@ -209,6 +209,10 @@ pub(super) struct HeadBlocks {
     pub(super) ro_precheck: Option<Block>,
     /// The block before the loop head that checks a 5.3 loop's step sign.
     pub(super) step_precheck: Option<Block>,
+    /// Between the checks and the loop, for a trace whose side traces may
+    /// go on in its loop: on in the optimizing tier's loop when a relink
+    /// found it hot (see `side_call`).
+    pub(super) gate: Option<Block>,
     /// The first pass of a looping body with temporaries (see `peel`).
     pub(super) peel: Option<Block>,
     pub(super) body_loop: Block,
@@ -217,7 +221,7 @@ pub(super) struct HeadBlocks {
 /// Creates the loop head (and the math-fold precheck block, when the
 /// folds are checked once, and the first pass's) and jumps to the first
 /// from the entry block.
-pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> HeadBlocks {
+pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>, gate: bool) -> HeadBlocks {
     let Plan {
         record,
         effective_end,
@@ -235,12 +239,14 @@ pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> HeadBlocks 
     // the step sign of a 5.3 integer loop (see `step_guard`)
     let step_precheck = pl.step_guard.is_some().then(|| bcx.create_block());
 
+    let gate = gate.then(|| bcx.create_block());
     let peel = (pl.peel_end > 0).then(|| bcx.create_block());
     let body_loop = bcx.create_block();
     bcx.ins().jump(
         precheck
             .or(ro_precheck)
             .or(step_precheck)
+            .or(gate)
             .or(peel)
             .unwrap_or(body_loop),
         &[],
@@ -252,6 +258,7 @@ pub(super) fn open_body_loop<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> HeadBlocks 
         precheck,
         ro_precheck,
         step_precheck,
+        gate,
         peel,
         body_loop,
     }

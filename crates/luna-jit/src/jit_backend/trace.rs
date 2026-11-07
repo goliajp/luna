@@ -23,7 +23,7 @@ use luna_core::vm::isa::{Inst, Op};
 // codegen entry points side-by-side.
 use luna_core::__private::{
     AdoptRequest, AdoptedTrace, CompileOptions, CompiledTrace, CompiledTraceParts,
-    FrameMaterializeInfo, InlineSideExit, RecordedOp, TierUp, TraceRecord,
+    FrameMaterializeInfo, InlineSideExit, RecordedOp, SideCell, TierUp, TraceRecord,
 };
 pub use luna_core::jit::trace_types::*;
 

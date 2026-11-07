@@ -524,7 +524,9 @@ jobs:
   # block, so their callers lost theirs; the JIT's stores that skip the
   # read-only test and the barrier became four unsafe fns) to 1762. The
   # deopt-parking helper no code generator calls went (the helper and its
-  # block) to 1905.
+  # block) to 1905, and the helper running a side cell's checks and
+  # stores for a trace that calls its side traces itself (the helper and
+  # its block) to 1907.
   # docs/unsafe-accounting.md has the count per crate and module
   # and why each kind of site exists. Each justified unsafe addition
   # needs an explicit ceiling bump to the new exact count. Never widen to
@@ -539,7 +541,7 @@ jobs:
         run: |
           count=$(grep -rE --include='*.rs' 'unsafe (\{|fn |impl |trait |extern )' \
                   crates | wc -l | tr -d ' ')
-          ceiling=1905
+          ceiling=1907
           echo "first-party unsafe sites: $count (ceiling $ceiling)"
           echo "per-module counts and reasons: docs/unsafe-accounting.md"
           if [ "$count" -gt "$ceiling" ]; then

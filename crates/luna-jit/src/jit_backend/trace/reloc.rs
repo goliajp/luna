@@ -230,6 +230,8 @@ pub(crate) enum RelocKind {
     TierCell,
     /// The cell holding the optimizing tier's loop (see `lower::handoff`).
     TierLoop,
+    /// Side cell `n` of the trace (see `luna_core::__private::SideCell`).
+    SideCell(u32),
 }
 
 /// The name of the data symbol Cranelift code reads relocation `n` from.

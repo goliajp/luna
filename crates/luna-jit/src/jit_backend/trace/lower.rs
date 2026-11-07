@@ -25,6 +25,7 @@ mod peel;
 mod plan;
 mod prologue;
 mod readonly;
+mod side_call;
 mod state;
 mod step_guard;
 mod sunk_sites;
@@ -55,6 +56,7 @@ use peel::*;
 use plan::*;
 use prologue::*;
 use readonly::*;
+use side_call::*;
 use state::{Known, Lower, UpvalReads, entry_values};
 use step_guard::*;
 use sunk_sites::*;
@@ -222,8 +224,10 @@ fn emit_trace<E: Emit>(
     let mut escape = escape;
     let sunk = alloc_sunk_sites(&mut bcx, pl, &mut escape);
     let flush_ctx = start_accum(&mut bcx, pl, h, &head.regs_full);
-    let blocks = open_body_loop(&mut bcx, pl);
+    let relink = open_reentry(&mut bcx, pl);
+    let blocks = open_body_loop(&mut bcx, pl, relink.is_some() && count_at > 0);
     let mut lower = begin_body(bcx, pl, h, head, escape, sunk, flush_ctx, blocks);
+    lower.relink = relink;
     if count_at > 0 {
         let calls_at = pl.record.head_proto.call_hot_count();
         lower.tier_count = Some(Box::new(TierUp::new(
@@ -245,6 +249,7 @@ fn emit_trace<E: Emit>(
     if let Some(lc) = loop_copy {
         emit_loop_copy(lw, pl, lc)?;
     }
+    emit_relink_block(lw, pl)?;
     // last, so that it takes nothing from the blocks lowered before it
     emit_loop_entry(lw)?;
     if !exits_fit(lower.per_exit_inline_vec.len(), lower.per_exit_kinds.len()) {

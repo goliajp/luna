@@ -129,6 +129,7 @@ fn kind_of(s: &Source) -> RelocKind {
         Source::Chain(n) => RelocKind::Chain(*n),
         Source::TierCell => RelocKind::TierCell,
         Source::TierLoop => RelocKind::TierLoop,
+        Source::SideCell(n) => RelocKind::SideCell(*n),
     }
 }
 
@@ -162,6 +163,8 @@ fn value_of(
             let t = ct.tier_up.as_ref()?;
             luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64
         }
+        // this Vm's cell: every Vm wires its own side traces
+        Source::SideCell(n) => &*ct.side_cells.get(*n as usize)?.1 as *const SideCell as i64,
     })
 }
 

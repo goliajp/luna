@@ -224,7 +224,12 @@ const RAW_OF: [u8; 9] = {
 /// The value an exit writes back for a register of tag `t` holding
 /// payload `r`; `None` for one it leaves untouched.
 pub(in crate::vm::exec) fn exit_value(t: ExitTag, r: i64) -> Option<Value> {
-    let mut tag = RAW_OF[t as usize];
+    exit_value_of(t as u8, r)
+}
+
+/// [`exit_value`] for the exit tag whose discriminant is `d`.
+pub(in crate::vm::exec) fn exit_value_of(d: u8, r: i64) -> Option<Value> {
+    let mut tag = RAW_OF[d as usize];
     if tag == UNTOUCHED {
         return None;
     }

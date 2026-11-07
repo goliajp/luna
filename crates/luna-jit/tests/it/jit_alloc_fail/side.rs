@@ -50,9 +50,12 @@ fn side_run(v: LuaVersion, src: &str, k: usize, once: bool) -> (String, u64, boo
     };
     let compiled = (cl.proto.protos.first())
         .is_some_and(|p| matches!(p.jit_state(), JitProtoState::Compiled { .. }));
+    // a side trace the parent's code runs and that goes on in its loop
+    // never returns to the dispatcher, which counts the others
+    let relinked: u64 = cl.proto.traces().iter().map(|t| t.side_relinks()).sum();
     (
         r,
-        vm.trace_side_trace_run_count(),
+        vm.trace_side_trace_run_count() + relinked,
         vm.jit().pending_err.is_none(),
         compiled,
         seen.load(Relaxed),

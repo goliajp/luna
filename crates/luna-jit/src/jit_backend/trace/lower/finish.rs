@@ -22,6 +22,11 @@ pub(super) struct Emitted {
     pub(super) write_only_kinds: Result<Vec<(u16, ExitTag)>, ()>,
     /// See `Lower::counts_per_call`.
     pub(super) counts_per_call: bool,
+    /// See `Lower::side_cells`.
+    pub(super) side_cells: Vec<(u32, Box<SideCell>)>,
+    /// The head frame's kinds at the back edge into the optimizing tier's
+    /// loop, for a trace with one.
+    pub(super) loop_kinds: Option<Vec<RegKind>>,
 }
 
 impl<E: Emit> Lower<E> {
@@ -44,6 +49,9 @@ impl<E: Emit> Lower<E> {
             loop_entry,
             write_only_kinds,
             counts_per_call,
+            side_cells,
+            back_edge_kinds,
+            loops,
             ..
         } = self;
         let mut bcx = bcx;
@@ -67,6 +75,8 @@ impl<E: Emit> Lower<E> {
                 tier_count,
                 write_only_kinds,
                 counts_per_call,
+                side_cells,
+                loop_kinds: back_edge_kinds.filter(|_| loops),
             },
         )
     }
@@ -89,6 +99,8 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         tier_count,
         write_only_kinds,
         counts_per_call,
+        side_cells,
+        loop_kinds,
     } = em;
     let (current_kinds, dispatchable, dispatch_off_reason) = apply_tail_kinds_and_gates(
         pl,
@@ -225,6 +237,9 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
         tier_up: tier_count,
+        side_cells: side_cells.into(),
+        link_pc: record.link_pc,
+        loop_tags: loop_kinds.map(|k| kinds_to_exit_tags(&k[..max_stack]).into()),
     }
 }
 

@@ -292,3 +292,6 @@ fn select_installable(
 
 #[cfg(test)]
 mod strkey_section_tests;
+
+#[cfg(test)]
+mod relink_tests;

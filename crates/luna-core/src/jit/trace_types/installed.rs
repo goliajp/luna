@@ -121,6 +121,12 @@ pub struct CompiledTrace {
     pub(crate) downrec_link: Option<(u32, u32)>,
     pub(crate) downrec_multi_way_count: u8,
     pub(crate) tier_up: Option<Box<TierUp>>,
+    /// See [`CompiledTraceParts::side_cells`].
+    pub(crate) side_cells: super::side_cell::SideCells,
+    /// See [`CompiledTraceParts::link_pc`].
+    pub(crate) link_pc: Option<u32>,
+    /// See [`CompiledTraceParts::loop_tags`].
+    pub(crate) loop_tags: Option<Box<[ExitTag]>>,
     /// The code counts in this call's word of `reg_state`, not in
     /// `tier_up`'s cell: it has a `tier_up` and its plans count
     /// [`plans::PassCount::PerCall`] (see `frame::trace_count_slot`).
@@ -168,8 +174,14 @@ impl CompiledTrace {
     ///   stores the registers the loop head reads first and returns what
     ///   the loop returns.
     /// - The cells whose addresses that code holds are the ones `parts`
-    ///   owns: the `chain` of each of `per_exit_inline`, and the count and
-    ///   the loop cell of `tier_up`.
+    ///   owns: the `chain` of each of `per_exit_inline`, the count and the
+    ///   loop cell of `tier_up`, and `side_cells`.
+    /// - Code that reads a side cell calls the entry it holds, when that is
+    ///   not null, at the typed exit the cell belongs to, with the exit's
+    ///   registers in `reg_state`; it goes on at its loop's start when that
+    ///   returns with [`crate::__private::EXIT_RELINK`], and otherwise
+    ///   returns what it returned, noting the exit in the word past the
+    ///   window (see `frame::trace_ran_side_slot`).
     /// - The `tier_up` source, if any, was made for this trace by the
     ///   backend that compiled it, in the JIT storage of the Vm it is
     ///   installed on.
@@ -197,13 +209,39 @@ impl CompiledTrace {
             is_inline_abort_close, dispatch_off_reason, sinkable_sites_seen,
             accum_bufferable_seen, sunk_alloc_seen, materialize_emit_count, closure_seen,
             inline_kinds, inline_depth, body_writes, downrec_link, downrec_multi_way_count,
-            tier_up);
+            tier_up, side_cells, link_pc, loop_tags);
         let side_children = TRefLock::new(vec![None; ct.exit_hit_counts.len()].into_boxed_slice());
         Self {
             call_count,
             side_children,
             ..ct
         }
+    }
+
+    /// The times side traces its code ran went on in its loop, over its
+    /// side cells (each count wrapping at `u32::MAX`).
+    pub fn side_relinks(&self) -> u64 {
+        self.side_cells
+            .iter()
+            .map(|(_, c)| u64::from(c.relinks()))
+            .sum()
+    }
+
+    /// Per side cell: whether it holds a side trace's entry, and whether
+    /// that is the side trace's optimizing tier's.
+    pub fn side_cell_states(&self) -> Vec<(bool, bool)> {
+        let held = self.side_children.borrow();
+        (self.side_cells.iter())
+            .map(|(e, c)| {
+                let child = held.get(self.per_exit_inline.len() + *e as usize);
+                let optimized = child.cloned().flatten().and_then(|ch| {
+                    let o = ch.tier_up.as_ref()?.optimized.get();
+                    (!o.is_null()).then_some(o)
+                });
+                let entry = c.entry.get();
+                (!entry.is_null(), optimized.is_some_and(|o| o == entry))
+            })
+            .collect()
     }
 
     /// The entry to call: the optimizing tier's once it exists.

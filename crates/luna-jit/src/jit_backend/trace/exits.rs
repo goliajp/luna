@@ -127,6 +127,19 @@ pub(super) fn emit_store_back_and_return<E: Emit>(
     ret: i64,
     flush_ctx: Option<&FlushCtx>,
 ) {
+    emit_store_back(bcx, regs, stored, reg_state, flush_ctx);
+    let ret_val = bcx.ins().iconst(types::I64, ret);
+    bcx.ins().return_(&[ret_val]);
+}
+
+/// The stores of [`emit_store_back_and_return`], without the return.
+pub(super) fn emit_store_back<E: Emit>(
+    bcx: &mut E,
+    regs: &[Variable],
+    stored: &[Option<Value>],
+    reg_state: Value,
+    flush_ctx: Option<&FlushCtx>,
+) {
     if let Some(ctx) = flush_ctx {
         emit_flush_buf(bcx, ctx, regs);
     }
@@ -140,8 +153,6 @@ pub(super) fn emit_store_back_and_return<E: Emit>(
         let offset = (idx as i32) * 8;
         bcx.ins().store(MemFlagsData::new(), val, reg_state, offset);
     }
-    let ret_val = bcx.ins().iconst(types::I64, ret);
-    bcx.ins().return_(&[ret_val]);
 }
 
 /// `use_var` seen through aliases: past a merge the SSA builder can hand

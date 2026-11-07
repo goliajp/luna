@@ -22,8 +22,8 @@ pub(in crate::vm::exec) fn reserve(
 /// grown only when a trace wider than any before runs; the window's
 /// registers past the frame's `max_stack`, which marshal-in fills, are
 /// zero. The words past the window are left as they are: the ones the call
-/// reads are set by [`count_in`] and the down-recursion entry. `false` when
-/// it cannot grow: the trace is not entered.
+/// reads are set by [`count_in`], the dispatcher and the down-recursion
+/// entry. `false` when it cannot grow: the trace is not entered.
 #[inline(always)]
 pub(super) fn frame_in(reg_state: &mut LVec<i64>, window: usize, max_stack: usize) -> bool {
     if reg_state.len() < window + TRACE_FRAME_TAIL

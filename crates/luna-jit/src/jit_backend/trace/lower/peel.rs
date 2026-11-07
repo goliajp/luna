@@ -157,7 +157,7 @@ pub(super) fn emit_loop_copy<E: Emit>(
         at,
         stored,
     } = lc;
-    let Some(back) = lw.back_edge_kinds.take() else {
+    let Some(back) = lw.back_edge_kinds.clone() else {
         // nothing loops back: the loop head is never reached
         lw.bcx.seal_block(join);
         return Some(());

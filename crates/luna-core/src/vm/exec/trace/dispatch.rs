@@ -2,6 +2,7 @@
 //! interpreter is about to run, and resuming the interpreter where it exits.
 
 use super::*;
+use crate::jit::trace_types::frame::trace_ran_side_slot;
 use crate::runtime::mem::LVec;
 use downrec::downrec_close_exit;
 
@@ -101,6 +102,9 @@ impl Vm {
             }
             self.jit_ghosts_enter();
             words::count_in(&ct, &mut reg_state, window_size_us);
+            if !ct.side_cells.is_empty() {
+                reg_state[trace_ran_side_slot(window_size_us)] = 0;
+            }
             let running = self.trace_step_enter(&*ct);
             let continuation_pc = {
                 let vm_ptr: *mut Vm = self;

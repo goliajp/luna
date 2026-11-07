@@ -53,6 +53,8 @@ pub(super) fn begin_body<E: Emit>(
         gc_quiet: false,
         ro_invariant,
         ro_checked: Vec::new(),
+        side_cells: Vec::new(),
+        relink: None,
     }
 }
 

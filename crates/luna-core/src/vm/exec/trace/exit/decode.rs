@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::jit::trace::CompiledTrace;
-use crate::jit::trace_types::frame::TRACE_FRAME_TAIL;
+use crate::jit::trace_types::frame::{TRACE_FRAME_TAIL, trace_ran_side_slot};
 use crate::runtime::mem::LVec;
 
 impl Vm {
@@ -19,13 +19,17 @@ impl Vm {
         base_us: usize,
         entry_tags: &[u8],
     ) -> ExitSource {
-        let src = self.exit_source_of(cl, ct, raw_ret, reg_state, base_us, entry_tags);
+        let src = match ran_from_code(ct, raw_ret, reg_state) {
+            Some(src) => src,
+            None => self.exit_source_of(cl, ct, raw_ret, reg_state, base_us, entry_tags),
+        };
         // a side trace runs one pass for each return through here, and the
         // dispatcher never enters it: count the pass as its entry
         if src.ran
             && let Some(c) = &src.child
         {
             self.count_towards_tier_up(c, cl.proto.call_hot_count.get());
+            super::super::relink::relink_refresh(ct, src.exit, c);
         }
         src
     }
@@ -44,6 +48,7 @@ impl Vm {
             body: raw_ret,
             ran: false,
             off: 0,
+            exit: 0,
         };
         if self.exit_runs_no_side(ct) {
             return parent_only;
@@ -102,6 +107,7 @@ impl Vm {
             body: child_raw_ret as u64,
             ran: true,
             off,
+            exit,
         }
     }
 
@@ -167,4 +173,30 @@ pub(in crate::vm::exec) struct ExitSource {
     pub(in crate::vm::exec) ran: bool,
     /// The register of the parent's window the side trace's register 0 is.
     pub(in crate::vm::exec) off: usize,
+    /// The parent's exit the side trace ran from (as `exit_hit_counts`
+    /// numbers them), when one ran.
+    pub(in crate::vm::exec) exit: usize,
+}
+
+/// The side trace `ct`'s code ran from a side cell and returned from, when
+/// it noted one (see `frame::trace_ran_side_slot`): its return, `raw_ret`,
+/// is decoded with its exits. It runs at the exit's frame, the head's.
+fn ran_from_code(ct: &CompiledTrace, raw_ret: u64, reg_state: &[i64]) -> Option<ExitSource> {
+    if ct.side_cells.is_empty() {
+        return None;
+    }
+    let noted = reg_state[trace_ran_side_slot(ct.window_size as usize)];
+    let exit = ct.per_exit_inline.len() + usize::try_from(noted).ok()?.checked_sub(1)?;
+    let child = ct.side_children.borrow().get(exit).cloned().flatten();
+    debug_assert!(
+        child.is_some(),
+        "exit {exit} ran a side trace it does not hold"
+    );
+    Some(ExitSource {
+        child,
+        body: raw_ret,
+        ran: true,
+        off: 0,
+        exit,
+    })
 }
