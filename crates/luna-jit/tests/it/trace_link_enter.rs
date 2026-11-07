@@ -150,3 +150,52 @@ fn a_side_trace_wired_before_the_trace_it_ends_at_links_once_that_is_cached() {
         assert!(c.relink[6] > 0 && c.links > 0, "{v:?}: {:?}", c.relink);
     }
 }
+
+/// What `src` returns, as text, with the trace JIT on or off, and the side
+/// cell fills by reason.
+fn run_fills(v: LuaVersion, src: &str, jit: bool) -> (String, [u64; 8]) {
+    let mut vm = luna_jit::new_with_jit(v);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(jit);
+    let cl = vm.load(src.as_bytes(), b"=nolink").expect("load");
+    let r = match vm.call_value(Value::Closure(cl), &[]) {
+        Ok(r) => format!("{r:?}"),
+        Err(e) => format!("error: {}", vm.error_text(&e)),
+    };
+    (r, vm.jit_counters_mut().relink)
+}
+
+/// A side trace from a loop's last exit that ends where its function
+/// returns ends at no loop head: its cell is counted as having no trace to
+/// link to (7), not as one whose loop head has no trace yet (3).
+#[test]
+fn a_side_trace_ending_at_no_loop_head_is_counted_apart() {
+    let bodies = [
+        "local n = 0
+         for i = 1, 300 do n = n + i end
+         return n",
+        "local n, buf = 0, ''
+         for i = 1, 300 do
+           local k = 'item:' .. i .. ':' .. (i % 7)
+           n = n + #k
+           buf = buf .. k
+           if #buf > 600 then buf = '' end
+         end
+         return n + #buf",
+    ];
+    for (s, body) in bodies.iter().enumerate() {
+        let src = format!(
+            "local function f() {body} end
+             local total = 0
+             for k = 1, 60 do total = total + f() end
+             return total"
+        );
+        for v in VERSIONS {
+            let (want, _) = run_fills(v, &src, false);
+            let (got, fills) = run_fills(v, &src, true);
+            assert_eq!(got, want, "{v:?} shape {s}");
+            assert!(fills[7] > 0, "{v:?} shape {s}: {fills:?}");
+            assert_eq!(fills[3], 0, "{v:?} shape {s}: {fills:?}");
+        }
+    }
+}
