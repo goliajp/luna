@@ -18,7 +18,7 @@ mod intervals;
 mod operands;
 use intervals::{coalesce_var_reads, extend, number};
 use operands::succs_of;
-pub(crate) use operands::{Start, for_defs, for_uses, replay_succs};
+pub(crate) use operands::{Calls, Start, for_defs, for_uses, replay_succs};
 
 #[derive(Default)]
 pub(crate) struct Analysis {
@@ -56,6 +56,8 @@ pub(crate) struct Analysis {
     /// The function laid out: its `TierCount`s and `Pick`s go on as
     /// [`Start`] says.
     pub(crate) func: Start,
+    /// Which of its calling exits go on to the call block.
+    pub(crate) exits: Calls,
     depth: Vec<i32>,
     writes: Vec<Vec<u32>>,
     /// `(value, variable, position)` of each variable read.
@@ -73,7 +75,7 @@ fn reset<T: Clone>(v: &mut Vec<T>, n: usize, x: T) {
 /// Reverse post-order of the blocks reachable from block `root`, into
 /// `an.order`.
 fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
-    let func = an.func;
+    let (func, exits) = (an.func, &an.exits);
     let n = lir.blocks.len();
     reset(&mut an.seen, n, false);
     an.order.clear();
@@ -88,7 +90,7 @@ fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
             continue;
         }
         top.1 += 1;
-        let s = succs_of(lir, b, func)[k as usize];
+        let s = succs_of(lir, b, func, exits)[k as usize];
         if s != NONE && !an.seen[s as usize] {
             an.seen[s as usize] = true;
             an.stack.push((s, 0));
@@ -99,12 +101,14 @@ fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
 
 /// Fills `an` for `lir`, reusing its buffers.
 pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
-    analyze_from(lir, an, Start::Whole);
+    analyze_from(lir, an, Start::Whole, &Calls::All);
 }
 
-/// [`analyze`] for the function `start` names.
-pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, start: Start) {
+/// [`analyze`] for the function `start` names, its calling exits going on
+/// as `calls` says.
+pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, start: Start, calls: &Calls) {
     an.func = start;
+    an.exits.clone_from(calls);
     let root = match (start, &lir.loop_entry) {
         (Start::Loop, Some(e)) => e.block,
         _ => 0,
@@ -147,7 +151,7 @@ fn place_loops(lir: &Lir, an: &mut Analysis) {
     for &b in &an.order {
         let (lo, hi) = an.block_at[b as usize];
         if hi > lo {
-            for s in succs_of(lir, b, an.func) {
+            for s in succs_of(lir, b, an.func, &an.exits) {
                 if s != NONE && an.block_at[s as usize].0 <= lo {
                     an.loops.push((2 * an.block_at[s as usize].0, 2 * hi - 1));
                 }

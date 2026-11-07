@@ -83,18 +83,51 @@ pub(crate) struct TraceImage {
     pub(crate) side_parent: Option<(u32, usize, u64)>,
     /// `None` for a trace nothing can enter, which keeps no code.
     pub(crate) code: Option<(Tier, Code)>,
-    /// The optimizing tier's code, once some Vm compiled it: for a trace
-    /// whose back edge calls the optimizing tier's loop, its first pass,
-    /// set after `optimized_loop`.
-    pub(crate) optimized: std::sync::OnceLock<Code>,
-    /// The optimizing tier's loop of such a trace.
-    pub(crate) optimized_loop: std::sync::OnceLock<Code>,
+    /// The optimizing tier's code, each for the calling exits it was
+    /// compiled for, once some Vm compiled it (see [`TraceImage::optimized`]).
+    optimized: std::sync::Mutex<Vec<std::sync::Arc<Optimized>>>,
     /// The baseline code's instructions, for a Vm that moves the trace to
     /// the optimizing tier before any other did.
     pub(crate) lir: Option<std::sync::Arc<lir::Lir>>,
     /// Bytes this image takes, roughly.
     pub(crate) size: usize,
 }
+
+/// The optimizing tier's code of a trace, compiled for the calling exits
+/// `calls`: the entry, for a trace whose back edge calls the optimizing
+/// tier's loop its first pass, and that loop.
+pub(crate) struct Optimized {
+    pub(crate) calls: lir::Calls,
+    pub(crate) entry: Code,
+    pub(crate) looped: Option<Code>,
+}
+
+/// The most codes of the optimizing tier an image keeps, each for other
+/// calling exits.
+const OPTIMIZED_KEPT: usize = 8;
+
+impl TraceImage {
+    /// The optimizing tier's code for the calling exits `calls`, once some
+    /// Vm compiled it.
+    pub(crate) fn optimized(&self, calls: &lir::Calls) -> Option<std::sync::Arc<Optimized>> {
+        let kept = self.optimized.lock().expect(POISON);
+        kept.iter().find(|o| o.calls == *calls).cloned()
+    }
+
+    /// Keeps `o` for other Vms to take up, unless the image keeps code for
+    /// its calling exits already or as many codes as it may: whether it
+    /// kept it.
+    pub(crate) fn keep_optimized(&self, o: Optimized) -> bool {
+        let mut kept = self.optimized.lock().expect(POISON);
+        if kept.len() >= OPTIMIZED_KEPT || kept.iter().any(|k| k.calls == o.calls) {
+            return false;
+        }
+        kept.push(std::sync::Arc::new(o));
+        true
+    }
+}
+
+const POISON: &str = "nothing panics holding an image's codes";
 
 /// What compiling a shared trace hands [`build`]: its code, if any, and its relocations' values.
 pub(crate) struct Captured {
@@ -147,8 +180,7 @@ pub(crate) fn build(
         meta,
         side_parent,
         code: cap.code,
-        optimized: std::sync::OnceLock::new(),
-        optimized_loop: std::sync::OnceLock::new(),
+        optimized: std::sync::Mutex::default(),
         lir: cap.lir,
         size,
     })

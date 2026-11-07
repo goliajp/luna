@@ -52,7 +52,7 @@ pub(crate) fn write(lir: &Lir, an: &Analysis, al: &Allocation, code: &[u8]) {
                 .collect();
             let (a, b2, c2) = match i.op {
                 Op::VarRead | Op::VarWrite => (format!("var{}", i.a), name(i.b), String::new()),
-                Op::Jump => (format!("block{}", i.a), String::new(), String::new()),
+                Op::Jump | Op::CallingExit(_) => (format!("block{}", i.a), name(NONE), name(NONE)),
                 Op::Brif(_) => (name(i.a), format!("block{}", i.b), format!("block{}", i.c)),
                 Op::Call => (format!("fn{}", i.a), String::new(), String::new()),
                 Op::Load(_) | Op::Uload8(_) | Op::Store(_) => {

@@ -195,10 +195,10 @@ pub(super) fn compile_trace_cranelift(
 }
 
 /// Compiles a baseline trace again with Cranelift, from the instructions the
-/// baseline tier ran (see `TraceCompiler::tier_up`).
+/// baseline tier ran (see `TraceCompiler::tier_up_keeping`).
 pub(crate) fn tier_up_trace(
     storage: &mut dyn luna_core::__private::JitStorage,
     ct: &CompiledTrace,
-) -> Option<TraceFn> {
+) -> (Option<TraceFn>, Option<luna_core::__private::TierKept>) {
     super::tier_source::tier_up(storage, ct)
 }

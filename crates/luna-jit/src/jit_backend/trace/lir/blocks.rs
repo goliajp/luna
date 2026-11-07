@@ -114,8 +114,18 @@ impl Lir {
         b: Block,
         args: impl IntoIterator<Item = &'a BlockArg>,
     ) -> CInst {
+        self.jump_op(Op::Jump, b, args)
+    }
+
+    /// `op`, a [`Op::Jump`] or [`Op::CallingExit`], to `b` with `args`.
+    pub(super) fn jump_op<'a>(
+        &mut self,
+        op: Op,
+        b: Block,
+        args: impl IntoIterator<Item = &'a BlockArg>,
+    ) -> CInst {
         self.edge(b);
-        let i = self.push(Op::Jump, Ty::I64, NONE, b.as_u32(), NONE, NONE);
+        let i = self.push(op, Ty::I64, NONE, b.as_u32(), NONE, NONE);
         let at = self.args.len() as u32;
         let n = self.push_block_args(args);
         let inst = &mut self.insts[i as usize];

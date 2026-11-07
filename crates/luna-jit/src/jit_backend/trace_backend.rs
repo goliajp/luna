@@ -41,6 +41,17 @@ unsafe impl TraceCompiler for CraneliftBackend {
         storage: &mut dyn luna_core::__private::JitStorage,
         ct: &CompiledTrace,
     ) -> Option<luna_core::jit::trace::TraceFn> {
+        trace::tier_up_trace(storage, ct).0
+    }
+
+    fn tier_up_keeping(
+        &self,
+        storage: &mut dyn luna_core::__private::JitStorage,
+        ct: &CompiledTrace,
+    ) -> (
+        Option<luna_core::jit::trace::TraceFn>,
+        Option<luna_core::__private::TierKept>,
+    ) {
         trace::tier_up_trace(storage, ct)
     }
 

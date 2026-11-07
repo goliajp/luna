@@ -60,6 +60,8 @@ struct Replay<'a, 'f> {
     /// relinks across has to keep it.
     hoisted: Vec<Option<Variable>>,
     start: live::Start,
+    /// The calling exits that go on to the call block.
+    calls: Calls,
     /// In the loop's function, per value the loop head takes from the back
     /// edges (see `LoopEntry::inherit`): the variable it was taken from, and
     /// the block the replay defined it in (`NONE` before).

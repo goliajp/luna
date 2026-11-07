@@ -183,6 +183,14 @@ pub(crate) trait Emit: Ins {
         let _ = loop_fn;
         self.jump(other, &[]);
     }
+    /// An exit through side cell `n` (see `lower::side_call`): on to `call`
+    /// with `args` (the cell, the exit's return, the note), or, in a
+    /// function of the optimizing tier compiled while the cell held no side
+    /// trace, a return of the exit's return.
+    fn calling_exit(&mut self, n: u32, call: Block, args: &[BlockArg; 3]) {
+        let _ = n;
+        self.jump(call, args);
+    }
     /// Block `at` starts the optimizing tier's loop, which reads the
     /// registers (the variables `regs`, register `i` at `reg_state + 8 i`)
     /// the loop reads before writing them (see `lower::handoff`). Only the

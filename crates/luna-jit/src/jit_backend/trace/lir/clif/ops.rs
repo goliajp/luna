@@ -70,23 +70,29 @@ impl Replay<'_, '_> {
         }
     }
 
+    /// Replays a jump: a `Pick`'s to the block the function takes, a calling
+    /// exit's to the call block, or a return of the exit's return when the
+    /// function's calling exits leave its cell to the dispatcher.
+    fn goto(&mut self, i: &Inst) {
+        let a = self.args(i);
+        let to = match i.op {
+            Op::Pick if self.start == live::Start::Loop => i.a,
+            Op::Pick => i.b,
+            Op::CallingExit(n) if !self.calls.has(n) => {
+                self.b.ins().return_(&a[1..2]);
+                return;
+            }
+            _ => i.a,
+        };
+        let target = self.blocks[to as usize].expect("reachable");
+        let ba = self.block_args(&a);
+        self.b.ins().jump(target, &ba);
+    }
+
     /// Replays a branch, a call or a return.
     pub(super) fn control(&mut self, i: &Inst) {
         match i.op {
-            Op::Jump => {
-                let a = self.args(i);
-                let target = self.blocks[i.a as usize].expect("reachable");
-                let ba = self.block_args(&a);
-                self.b.ins().jump(target, &ba);
-            }
-            Op::Pick => {
-                let to = match self.start {
-                    live::Start::Loop => i.a,
-                    _ => i.b,
-                };
-                let target = self.blocks[to as usize].expect("reachable");
-                self.b.ins().jump(target, &[]);
-            }
+            Op::Jump | Op::Pick | Op::CallingExit(_) => self.goto(i),
             Op::Brif(n_then) => {
                 let a = self.args(i);
                 let (ta, ea) = a.split_at(n_then as usize);

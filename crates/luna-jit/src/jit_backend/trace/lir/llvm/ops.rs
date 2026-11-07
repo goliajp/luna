@@ -169,6 +169,15 @@ impl<'c> Gen<'c, '_> {
                 let to = self.edge(to, &[])?;
                 b(bb.build_unconditional_branch(to))?;
             }
+            Op::CallingExit(n) if self.calls.has(n) => {
+                let args = self.args(i);
+                let to = self.edge(i.a, &args)?;
+                b(bb.build_unconditional_branch(to))?;
+            }
+            Op::CallingExit(_) => {
+                let v = self.v(self.lir.args[i.args_at as usize + 1]);
+                b(bb.build_return(Some(&v)))?;
+            }
             Op::Brif(n_then) => self.brif(i, n_then)?,
             // only the baseline tier counts iterations
             // the first pass's function goes on in the loop's (see

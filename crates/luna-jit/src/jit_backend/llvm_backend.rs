@@ -79,6 +79,14 @@ unsafe impl TraceCompiler for LlvmBackend {
     }
 
     fn tier_up(&self, storage: &mut dyn JitStorage, ct: &CompiledTrace) -> Option<TraceFn> {
+        super::trace::tier_up_llvm(storage, ct, self.llvm_after).0
+    }
+
+    fn tier_up_keeping(
+        &self,
+        storage: &mut dyn JitStorage,
+        ct: &CompiledTrace,
+    ) -> (Option<TraceFn>, Option<luna_core::__private::TierKept>) {
         super::trace::tier_up_llvm(storage, ct, self.llvm_after)
     }
 }

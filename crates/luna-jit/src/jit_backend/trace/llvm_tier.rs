@@ -8,7 +8,9 @@
 //! code up the next time the trace is entered (see
 //! `TraceCompiler::tier_up`).
 
+use super::tier_source::{TierSource, calls_of, kept};
 use super::*;
+use luna_core::__private::TierKept;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -50,8 +52,13 @@ fn install(storage: &mut dyn luna_core::__private::JitStorage, c: Compiled) -> O
     Some(unsafe { std::mem::transmute::<usize, TraceFn>(entry) })
 }
 
-fn compile(lir: &lir::Lir, relocs: &[(RelocKind, i64)], start: lir::Start) -> Compiled {
-    lir::compile_llvm(lir, relocs, start).map(|(e, p)| (e as usize, p))
+fn compile(
+    lir: &lir::Lir,
+    relocs: &[(RelocKind, i64)],
+    start: lir::Start,
+    calls: &lir::Calls,
+) -> Compiled {
+    lir::compile_llvm(lir, relocs, start, calls).map(|(e, p)| (e as usize, p))
 }
 
 /// The optimizing tier's code of a baseline trace: for one whose back edge
@@ -59,13 +66,14 @@ fn compile(lir: &lir::Lir, relocs: &[(RelocKind, i64)], start: lir::Start) -> Co
 /// the first pass, else the whole trace.
 type Tiered = (Option<Compiled>, Compiled);
 
-fn compile_tier(lir: &lir::Lir, relocs: &[(RelocKind, i64)], at_loop: bool) -> Tiered {
-    match at_loop {
+fn compile_tier(src: &TierSource, calls: &lir::Calls) -> Tiered {
+    let (lir, relocs) = (&*src.lir, &src.relocs[..]);
+    match lir.loop_entry.is_some() {
         true => (
-            Some(compile(lir, relocs, lir::Start::Loop)),
-            compile(lir, relocs, lir::Start::FirstPass),
+            Some(compile(lir, relocs, lir::Start::Loop, calls)),
+            compile(lir, relocs, lir::Start::FirstPass, calls),
         ),
-        false => (None, compile(lir, relocs, lir::Start::Whole)),
+        false => (None, compile(lir, relocs, lir::Start::Whole, calls)),
     }
 }
 
@@ -100,7 +108,7 @@ pub(super) fn compile_trace_llvm(
         lir.give();
         return Some(compiled);
     }
-    let c = compile(&lir, &lir.relocs, lir::Start::Whole);
+    let c = compile(&lir, &lir.relocs, lir::Start::Whole, &lir::Calls::All);
     lir.give();
     compiled.entry = install(storage, c)?;
     Some(compiled)
@@ -110,13 +118,18 @@ pub(super) fn compile_trace_llvm(
 /// tier source meanwhile.
 struct Pending {
     /// What LLVM compiles, until it is handed to the compile thread.
-    source: Option<Box<share::TierSource>>,
+    source: Option<Box<TierSource>>,
+    /// What was handed to the compile thread and the calling exits it
+    /// compiles for: kept once LLVM's code is installed.
+    handed: Option<(Box<TierSource>, lir::Calls)>,
     /// Set by the compile thread once `delay` has passed since the tier-up.
     due: Arc<AtomicBool>,
     /// Set by the compile thread once `done` holds the result.
     ready: Arc<AtomicBool>,
     done: Arc<Mutex<Option<Tiered>>>,
 }
+
+type TierUp = (Option<TraceFn>, Option<TierKept>);
 
 /// [`super::tier_source::tier_up`] for the LLVM backend: the baseline trace `ct`
 /// compiled again by LLVM.
@@ -133,29 +146,36 @@ pub(crate) fn tier_up_llvm(
     storage: &mut dyn luna_core::__private::JitStorage,
     ct: &CompiledTrace,
     delay: Option<std::time::Duration>,
-) -> Option<TraceFn> {
-    let source = luna_core::__private::take_tier_source(ct)?;
+) -> TierUp {
+    let Some(source) = luna_core::__private::take_tier_source(ct) else {
+        return (None, None);
+    };
     let source = match source.downcast::<Pending>() {
         Ok(p) => return pending(storage, ct, p),
-        Err(s) => s.downcast::<share::TierSource>().ok()?,
+        Err(s) => match s.downcast::<TierSource>() {
+            Ok(s) => s.into_optimizing(),
+            Err(_) => return (None, None),
+        },
     };
+    let calls = calls_of(ct);
     let Some(delay) = delay else {
-        let (lir, relocs) = source.optimizing_lir();
-        let at_loop = source.lir.loop_entry.is_some();
-        let entry = install_tier(storage, ct, compile_tier(&lir, &relocs, at_loop))?;
-        super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
-        return Some(entry);
+        let entry = install_tier(storage, ct, compile_tier(&source, &calls));
+        if let Some(e) = entry {
+            super::code_dump::dump("tier-up-llvm", ct.head_pc(), e as *const u8);
+        }
+        return (entry, entry.and_then(|_| kept(source, &calls, false)));
     };
-    let entry = super::tier_source::clif_tier_up(storage, &source, ct);
+    let entry = super::tier_source::clif_tier_up(storage, &source, ct, &calls);
     let mut p = Pending {
         source: None,
+        handed: None,
         due: Arc::default(),
         ready: Arc::default(),
         done: Arc::default(),
     };
     let now = std::time::Instant::now();
     if delay.is_zero() {
-        hand_over(storage, &p, source, now);
+        hand_over(storage, &mut p, source, calls_of(ct), now);
     } else {
         p.source = Some(source);
         let due = p.due.clone();
@@ -167,56 +187,73 @@ pub(crate) fn tier_up_llvm(
     }
     // SAFETY: the pending compile of the source taken from `ct` above
     unsafe { luna_core::__private::put_tier_source(ct, Box::new(p)) };
-    entry
+    (entry, None)
 }
 
 /// A later entry of a trace whose LLVM compile is pending: LLVM's code
-/// once it is ready, else `None` (handing the source to the compile thread
-/// once `delay` has passed).
+/// once it is ready, with what the trace keeps to compile again, else
+/// `None` (handing the source to the compile thread once `delay` has
+/// passed).
 fn pending(
     storage: &mut dyn luna_core::__private::JitStorage,
     ct: &CompiledTrace,
     mut p: Box<Pending>,
-) -> Option<TraceFn> {
+) -> TierUp {
     if p.ready.load(Ordering::Acquire) {
-        let c = p.done.lock().expect(POISON).take()?;
+        let Some(c) = p.done.lock().expect(POISON).take() else {
+            return (None, None);
+        };
         // written on the compile thread
         luna_core::jit::code_fence();
-        let entry = install_tier(storage, ct, c)?;
-        super::code_dump::dump("tier-up-llvm", ct.head_pc(), entry as *const u8);
-        return Some(entry);
+        let entry = install_tier(storage, ct, c);
+        let Some(e) = entry else {
+            return (None, None);
+        };
+        super::code_dump::dump("tier-up-llvm", ct.head_pc(), e as *const u8);
+        let kept = p.handed.take().and_then(|(src, calls)| {
+            let stale = calls != calls_of(ct);
+            kept(src, &calls, stale)
+        });
+        return (entry, kept);
     }
     if p.due.load(Ordering::Relaxed)
         && let Some(src) = p.source.take()
     {
-        hand_over(storage, &p, src, std::time::Instant::now());
+        let now = std::time::Instant::now();
+        hand_over(storage, &mut p, src, calls_of(ct), now);
     }
     // SAFETY: the pending compile of the source just taken from `ct`
     unsafe { luna_core::__private::put_tier_source(ct, p) };
-    None
+    (None, None)
 }
 
-/// Has the compile thread compile `src` for `p`.
+/// Has the compile thread compile `src` for `p`, its calling exits calling
+/// as `calls` says.
 fn hand_over(
     storage: &mut dyn luna_core::__private::JitStorage,
-    p: &Pending,
-    src: Box<share::TierSource>,
+    p: &mut Pending,
+    src: Box<TierSource>,
+    calls: lir::Calls,
     now: std::time::Instant,
 ) {
     let (ready, done) = (p.ready.clone(), p.done.clone());
-    // lowered here: the record stays on the Vm's thread
-    let (lir, relocs) = src.optimizing_lir();
-    let at_loop = src.lir.loop_entry.is_some();
+    let job = TierSource {
+        lir: src.lir.clone(),
+        relocs: src.relocs.clone(),
+        image: None,
+        record: None,
+    };
+    let c = calls.clone();
     let ticket = crate::jit_backend::llvm_thread::submit(
         Box::new(move || {
-            *done.lock().expect(POISON) = Some(compile_tier(&lir, &relocs, at_loop));
+            *done.lock().expect(POISON) = Some(compile_tier(&job, &c));
             ready.store(true, Ordering::Release);
         }),
         now,
     );
     push_ticket(storage, ticket);
+    p.handed = Some((src, calls));
 }
-
 fn push_ticket(
     storage: &mut dyn luna_core::__private::JitStorage,
     ticket: crate::jit_backend::llvm_thread::Ticket,

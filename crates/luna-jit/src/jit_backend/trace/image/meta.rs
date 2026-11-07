@@ -124,6 +124,11 @@ impl Meta {
         }
     }
 
+    /// How many side cells the trace has.
+    pub(crate) fn side_cells(&self) -> usize {
+        self.side_cell_exits.len()
+    }
+
     pub(super) fn size(&self) -> usize {
         std::mem::size_of::<Meta>()
             + self.plans.byte_size()

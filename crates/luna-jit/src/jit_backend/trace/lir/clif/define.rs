@@ -4,10 +4,12 @@ use super::*;
 
 /// The blocks the replay of `i` branches to (of a `TierCount`, which
 /// Cranelift code does not count, the continuation only, or the hot block
-/// only in `Start::FirstPass`; of a `Pick`, its `a` in `Start::Loop`).
-fn targets(i: &Inst, start: Start) -> [Option<u32>; 2] {
+/// only in `Start::FirstPass`; of a `Pick`, its `a` in `Start::Loop`; of a
+/// calling exit `calls` has not, none).
+fn targets(i: &Inst, start: Start, calls: &Calls) -> [Option<u32>; 2] {
     match i.op {
         Op::Jump => [Some(i.a), None],
+        Op::CallingExit(n) if calls.has(n) => [Some(i.a), None],
         Op::Pick if start == Start::Loop => [Some(i.a), None],
         Op::Pick => [Some(i.b), None],
         Op::Brif(_) => [Some(i.b), Some(i.c)],
@@ -26,12 +28,13 @@ type EntryReads<'e> = (&'e LoopEntry, (Vec<bool>, Vec<(u32, u32)>));
 /// calls the loop (see `lower::handoff`; `None` when `lir` has no loop
 /// entry, or one the replay cannot start from).
 /// `relocs`: the addresses the relocations stand for in the Vm the code is
-/// for.
+/// for; `calls`: the calling exits that go on to the call block.
 pub(crate) fn define<M: Module>(
     lir: &Lir,
     relocs: &[(crate::jit_backend::trace::RelocKind, i64)],
     module: &mut M,
     start: Start,
+    calls: &Calls,
 ) -> Option<FuncId> {
     let entry_at = match (&lir.loop_entry, start) {
         (_, Start::Whole) => None,
@@ -43,7 +46,7 @@ pub(crate) fn define<M: Module>(
         _ => 0,
     };
     let mut an = live::Analysis::default();
-    live::analyze_from(lir, &mut an, start);
+    live::analyze_from(lir, &mut an, start, calls);
     let reads = match (entry_at, start) {
         (Some(e), Start::Loop) => Some((e, entry::live_in_vars(lir, &an, e)?)),
         _ => None,
@@ -135,6 +138,7 @@ impl<'a, 'f> Replay<'a, 'f> {
             hoisted: vec![None; reloc_gv.len()],
             reloc_gv,
             start,
+            calls: an.exits.clone(),
             ivars: Vec::new(),
             defs: vec![None; lir.value_ty.len()],
             idom: Vec::new(),
@@ -156,12 +160,12 @@ fn stack_slots(lir: &Lir, b: &mut FunctionBuilder<'_>) -> Vec<cranelift_codegen:
 }
 
 /// Per block, how many branches the replay takes to it.
-fn count_preds(lir: &Lir, an: &live::Analysis, start: Start) -> Vec<u32> {
+fn count_preds(lir: &Lir, an: &live::Analysis) -> Vec<u32> {
     let mut preds = vec![0u32; lir.blocks.len()];
     for &blk in &an.order {
         let (lo, hi) = an.block_at[blk as usize];
         for c in lo..hi {
-            for t in targets(&lir.insts[an.code[c as usize] as usize], start)
+            for t in targets(&lir.insts[an.code[c as usize] as usize], an.func, &an.exits)
                 .into_iter()
                 .flatten()
             {
@@ -187,7 +191,7 @@ fn replay_blocks(
     // every block left open until the end, Cranelift's SSA construction
     // gives loop heads and merges a parameter for each variable read there,
     // and the loop carries all of them
-    let mut preds = count_preds(lir, an, r.start);
+    let mut preds = count_preds(lir, an);
     let mut sealed = vec![false; lir.blocks.len()];
     for &blk in &an.order {
         let cb = r.blocks[blk as usize].expect("laid out");
@@ -225,7 +229,7 @@ fn replay_blocks(
 /// Counts the branches `i` takes, sealing each block whose last
 /// predecessor this is.
 fn branched(r: &mut Replay<'_, '_>, i: &Inst, preds: &mut [u32], sealed: &mut [bool]) {
-    for t in targets(i, r.start).into_iter().flatten() {
+    for t in targets(i, r.start, &r.calls).into_iter().flatten() {
         preds[t as usize] -= 1;
         if preds[t as usize] == 0 {
             r.b.seal_block(r.blocks[t as usize].expect("laid out"));
