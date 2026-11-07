@@ -25,6 +25,11 @@
 //! code exists, it leaves at the loop head for the dispatcher to move the
 //! trace, and after, it goes on in its own loop with the count set back by
 //! one (see `reentry`).
+//!
+//! The baseline tier's code has no call block: its exits read the cell
+//! themselves and go on to a call stub shared by every trace, which does
+//! what the call block does and enters the relink block as a function of
+//! its own (see `super::super::lir::stub`).
 
 use super::*;
 use cranelift_codegen::ir::BlockArg;
@@ -211,19 +216,18 @@ fn emit_call<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, c: Value, entry: Value, 
         .ins()
         .load(types::I32, flags, c, SideCell::offsets().loop_ok);
     let ok = lw.bcx.ins().uextend(types::I64, ok);
+    // the relink block takes it from the word, as it does from the
+    // baseline tier's call stub (see `reentry::count_relink`)
+    lw.bcx.ins().store(flags, ok, reg_state, slot);
     let rl = lw.relink.as_mut().expect("a calling exit has a way back");
-    let (loop_ok, block) = (
-        rl.loop_ok,
-        match rl.block {
-            Some(b) => b,
-            None => {
-                let b = lw.bcx.create_block();
-                lw.bcx.set_cold_block(b);
-                *rl.block.insert(b)
-            }
-        },
-    );
-    lw.bcx.def_var(loop_ok, ok);
+    let block = match rl.block {
+        Some(b) => b,
+        None => {
+            let b = lw.bcx.create_block();
+            lw.bcx.set_cold_block(b);
+            *rl.block.insert(b)
+        }
+    };
     lw.bcx.ins().jump(block, &[]);
 }
 

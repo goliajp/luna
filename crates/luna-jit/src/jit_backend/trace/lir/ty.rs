@@ -36,3 +36,9 @@ impl Ty {
         }
     }
 }
+
+/// A memory access's flags as the replay needs them (the lowerer only uses
+/// `MemFlagsData::new()` and `MemFlagsData::trusted()`): `1` for trusted.
+pub(super) fn trusted(flags: impl Into<cranelift_codegen::ir::MemFlagsData>) -> u32 {
+    u32::from(flags.into().notrap())
+}

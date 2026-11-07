@@ -129,6 +129,10 @@ pub(crate) trait Masm {
     /// Argument `k` goes in integer or float register `k` (Win64), rather
     /// than in the next free register of its class.
     const POSITIONAL_ARGS: bool;
+    /// Where a calling exit leaves what the call stub takes (see
+    /// `super::stub`): caller-saved registers in every ABI of the target,
+    /// apart from [`Masm::SCRATCH`].
+    const STUB_ARGS: [u8; 6];
 
     fn new_label(&mut self) -> Label;
     fn bind(&mut self, l: Label);
@@ -182,6 +186,11 @@ pub(crate) trait Masm {
     /// 16) at the stack pointer.
     fn prologue(&mut self, saved: &[u8], fsaved: &[u8], locals: u32);
     fn epilogue_ret(&mut self);
+    /// As [`Masm::epilogue_ret`], but on at the address in `r` (a
+    /// [`Masm::SCRATCH`] register) instead of returning.
+    fn epilogue_jmp(&mut self, r: u8);
+    /// `d` = the address of `l`, relative to the code (it moves with it).
+    fn lea_label(&mut self, d: u8, l: Label);
     fn new(b: Bufs) -> Self;
     /// The buffers back, `bytes` holding the code.
     fn finish(self) -> Bufs;

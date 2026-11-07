@@ -21,7 +21,7 @@ pub(crate) struct A64 {
     code: Vec<u32>,
     bytes: Vec<u8>,
     labels: Vec<u32>,
-    /// (instruction index, label, kind: 0 = b, 1 = b.cond / cbz / cbnz)
+    /// (instruction index, label, kind: 0 = b, 1 = b.cond / cbz / cbnz / adr)
     fixups: Vec<(u32, u32, u8)>,
     sites: Vec<crate::jit_backend::trace::reloc::Site>,
     /// `ldr` (literal) instructions loading relocation `n`, by index: the
@@ -54,6 +54,7 @@ impl Masm for A64 {
     const FRET: u8 = 0;
     const CALL_SHADOW: u32 = 0;
     const POSITIONAL_ARGS: bool = false;
+    const STUB_ARGS: [u8; 6] = [0, 1, 2, 3, 4, 5];
 
     fn new_label(&mut self) -> Label {
         self.labels.push(NONE);
@@ -260,27 +261,22 @@ impl Masm for A64 {
         self.put(0xD63F_0000 | (u32::from(r) << 5));
     }
     fn prologue(&mut self, saved: &[u8], fsaved: &[u8], locals: u32) {
-        self.saved.clear();
-        self.saved.extend_from_slice(saved);
-        self.fsaved.clear();
-        self.fsaved.extend_from_slice(fsaved);
-        self.locals = locals;
-        let save = 8 * (saved.len() + fsaved.len()) as u32;
-        self.total = locals + save.div_ceil(16) * 16;
-        // stp x29, x30, [sp, #-16]!; mov x29, sp
-        self.put(0xA9BF_7BFD);
-        self.put(0x9100_03FD);
-        let t = i64::from(self.total);
-        self.add_any(31, 31, -t);
-        self.save_restore(true);
+        self.push_frame(saved, fsaved, locals);
     }
     fn epilogue_ret(&mut self) {
-        self.save_restore(false);
-        let t = i64::from(self.total);
-        self.add_any(31, 31, t);
-        // ldp x29, x30, [sp], #16; ret
-        self.put(0xA8C1_7BFD);
+        self.pop_frame();
+        // ret
         self.put(0xD65F_03C0);
+    }
+    fn epilogue_jmp(&mut self, r: u8) {
+        self.pop_frame();
+        // br r
+        self.put(0xD61F_0000 | (u32::from(r) << 5));
+    }
+    fn lea_label(&mut self, d: u8, l: Label) {
+        // adr d, l: the word offset in immhi, as a b.cond's
+        self.branch_fix(l, 1);
+        self.put(0x1000_0000 | u32::from(d));
     }
     fn new(b: Bufs) -> A64 {
         let Bufs {

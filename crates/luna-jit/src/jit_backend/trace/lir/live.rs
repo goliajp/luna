@@ -73,12 +73,24 @@ fn reset<T: Clone>(v: &mut Vec<T>, n: usize, x: T) {
 }
 
 /// Reverse post-order of the blocks reachable from block `root`, into
-/// `an.order`.
+/// `an.order`; with the baseline tier's call stub, then those of the relink
+/// block not reached so, after them.
 fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
-    let (func, exits) = (an.func, &an.exits);
-    let n = lir.blocks.len();
-    reset(&mut an.seen, n, false);
+    reset(&mut an.seen, lir.blocks.len(), false);
     an.order.clear();
+    layout_from(lir, an, root);
+    an.order.reverse();
+    if let (Calls::Stub, Some(r)) = (&an.exits, lir.relink) {
+        let at = an.order.len();
+        layout_from(lir, an, r.block);
+        an.order[at..].reverse();
+    }
+}
+
+/// The blocks reachable from `root` not seen yet, in post-order, appended to
+/// `an.order`.
+fn layout_from(lir: &Lir, an: &mut Analysis, root: u32) {
+    let (func, exits) = (an.func, &an.exits);
     an.stack.clear();
     an.stack.push((root, 0));
     an.seen[root as usize] = true;
@@ -96,16 +108,10 @@ fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
             an.stack.push((s, 0));
         }
     }
-    an.order.reverse();
 }
 
-/// Fills `an` for `lir`, reusing its buffers.
-pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
-    analyze_from(lir, an, Start::Whole, &Calls::All);
-}
-
-/// [`analyze`] for the function `start` names, its calling exits going on
-/// as `calls` says.
+/// Fills `an` for the function of `lir` that `start` names, its calling
+/// exits going on as `calls` says, reusing its buffers.
 pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, start: Start, calls: &Calls) {
     an.func = start;
     an.exits.clone_from(calls);

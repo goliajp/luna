@@ -8,6 +8,7 @@
 //! last store" comparisons working, which is what keeps exits small.
 
 use super::record::{mask, v, val};
+use super::ty::trusted;
 use super::*;
 use crate::jit_backend::trace::Ins;
 use cranelift_codegen::ir::condcodes::CondCode;
@@ -17,12 +18,6 @@ use cranelift_codegen::ir::{
     Value,
 };
 use cranelift_frontend::Variable;
-
-/// A memory access's flags as the replay needs them (the lowerer only uses
-/// `MemFlagsData::new()` and `MemFlagsData::trusted()`): `1` for trusted.
-fn trusted(flags: impl Into<MemFlagsData>) -> u32 {
-    u32::from(flags.into().notrap())
-}
 
 impl Ins for Lir {
     fn create_block(&mut self) -> Block {
@@ -39,6 +34,14 @@ impl Ins for Lir {
     }
     fn mark_reentry(&mut self, b: Block) {
         self.blocks[b.as_u32() as usize].reentry = true;
+    }
+    fn mark_relink(&mut self, b: Block, head_pc: u32, ran_off: i32) {
+        let block = b.as_u32();
+        self.relink = Some(Relink {
+            block,
+            head_pc,
+            ran_off,
+        });
     }
     fn current_block(&self) -> Option<Block> {
         (self.cur != NONE).then(|| Block::from_u32(self.cur))

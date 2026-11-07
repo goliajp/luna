@@ -33,6 +33,7 @@ impl Lir {
                 l.cur = NONE;
                 l.unsupported = None;
                 l.loop_entry = None;
+                l.relink = None;
                 l.inherited.clear();
                 l.pending_inherit = None;
                 l
@@ -86,6 +87,7 @@ impl Lir {
             bparams: self.bparams.clone(),
             arg0: self.arg0,
             loop_entry: self.loop_entry.clone(),
+            relink: self.relink,
             ..Lir::new()
         }
     }

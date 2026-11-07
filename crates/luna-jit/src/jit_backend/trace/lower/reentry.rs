@@ -16,16 +16,26 @@ pub(super) fn emit_relink_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     };
     if let Some(block) = rl.block {
         switch_sealed(lw, block);
-        count_relink(lw, pl, &rl);
+        let ran = 8 * luna_core::__private::trace_ran_side_slot(pl.window_size_us) as i32;
+        lw.bcx.mark_relink(block, pl.record.head_pc, ran);
+        count_relink(lw, pl, &rl, ran);
     }
     lw.bcx.seal_block(rl.reentry);
     fill_gate(lw, pl, &rl);
 }
 
-/// The loop's iteration counted as at the back edge; reached, `hot` is 1,
-/// else 0. On at the reentry block.
-fn count_relink<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
+/// Whether the side trace may go on in the optimizing tier's loop taken
+/// from the word at `reg_state + ran`, where it was left for the relink
+/// block, and the word cleared for the dispatcher; then the loop's iteration
+/// counted as at the back edge: reached, `hot` is 1, else 0. On at the
+/// reentry block. Only `reg_state` is live here: the baseline tier's code
+/// enters the block as a function of its own (see `super::super::lir::Relink`).
+fn count_relink<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink, ran: i32) {
+    let (reg_state, flags) = (lw.entry.reg_state, MemFlagsData::trusted());
+    let ok = lw.bcx.ins().load(types::I64, flags, reg_state, ran);
+    lw.bcx.def_var(rl.loop_ok, ok);
     let z = lw.bcx.ins().iconst(types::I64, 0);
+    lw.bcx.ins().store(flags, z, reg_state, ran);
     lw.bcx.def_var(rl.hot, z);
     let Some(t) = lw.tier_count.as_ref().filter(|_| lw.loops) else {
         lw.bcx.ins().jump(rl.reentry, &[]);
