@@ -4,7 +4,7 @@
 use crate::{current_jit_vm, table_arg};
 use luna_core::__private::VmHeap;
 use luna_core::__private::VmJitState;
-use luna_core::__private::{GcInternals, HeapInternals, TableInternals, VmJitAlloc};
+use luna_core::__private::{GcInternals, TableInternals, VmJitAlloc};
 
 /// Allocate an empty `Gc<Table>` on the active Vm's heap.
 /// Returns the Gc pointer pun'd to `i64`. Allocating never collects, but
@@ -26,8 +26,7 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
     if vm.jit().pending_err.is_some() {
         return 0;
     }
-    // SAFETY: the heap stays in place
-    match unsafe { vm.heap_mut() }.try_new_table() {
+    match vm.jit_new_table() {
         Ok(g) => g.as_ptr() as i64,
         // compiled code leaves at the `NewTable`, and the interpreter
         // allocates, collecting in an emergency as compiled code may not
@@ -57,8 +56,7 @@ pub unsafe extern "C" fn luna_jit_new_table_sized(ops: i64) -> i64 {
         return 0;
     }
     let (b, c, k) = unpack_table_ops(ops);
-    // SAFETY: the heap stays in place
-    match unsafe { vm.heap_mut() }.try_new_table_presized(b, c, k) {
+    match vm.jit_new_table_presized(b, c, k) {
         Ok(Some(g)) => g.as_ptr() as i64,
         Ok(None) => {
             vm.park_jit_error("table overflow");
@@ -92,8 +90,7 @@ pub unsafe extern "C" fn luna_jit_chunk_new_table(ops: i64, presized: i64) -> i6
         return 0;
     }
     let (b, c, k) = unpack_table_ops(presized);
-    // SAFETY: the heap stays in place
-    match unsafe { vm.heap_mut() }.try_new_table_presized(b, c, k) {
+    match vm.jit_new_table_presized(b, c, k) {
         Ok(Some(g)) => g.as_ptr() as i64,
         _ => 0,
     }

@@ -73,6 +73,20 @@ pub trait VmJitAlloc {
     /// (PUC's size of it, as the operands give it): then the interpreter
     /// runs it. A table the operands cannot give is the interpreter's too.
     fn jit_table_due(&self, b: u32, c: u32, k: bool) -> bool;
+    /// A new empty table in the Vm's heap; an error when memory runs out
+    /// (no emergency collection runs: compiled code may hold new objects
+    /// only in registers).
+    fn jit_new_table(&mut self) -> Result<Gc<Table>, crate::runtime::mem::Oom>;
+    /// A table sized by `NewTable`'s operands, as the interpreter makes it
+    /// (see `table::new_table_sizes`), in the Vm's heap; `Ok(None)` for
+    /// sizes past a table's limit, an error when memory runs out (no
+    /// emergency collection runs, as for [`Self::jit_new_table`]).
+    fn jit_new_table_presized(
+        &mut self,
+        b: u32,
+        c: u32,
+        k: bool,
+    ) -> Result<Option<Gc<Table>>, crate::runtime::table::TableError>;
     /// Park a deopt for an allocation compiled code could not make: a
     /// trace leaves at the op, which the interpreter runs, allocating
     /// through its own path (which may collect in an emergency, as compiled
@@ -170,6 +184,19 @@ impl VmJitAlloc for crate::vm::Vm {
     #[inline]
     fn jit_table_due(&self, b: u32, c: u32, k: bool) -> bool {
         crate::vm::Vm::jit_table_due(self, b, c, k)
+    }
+    #[inline]
+    fn jit_new_table(&mut self) -> Result<Gc<Table>, crate::runtime::mem::Oom> {
+        self.heap.try_new_table()
+    }
+    #[inline]
+    fn jit_new_table_presized(
+        &mut self,
+        b: u32,
+        c: u32,
+        k: bool,
+    ) -> Result<Option<Gc<Table>>, crate::runtime::table::TableError> {
+        self.heap.try_new_table_presized(b, c, k)
     }
     #[inline]
     fn jit_park_oom(&mut self) {
