@@ -16,7 +16,7 @@ pub use crate::jit::trace_types::record::{FieldIcSnapshot, RecordedOp, TraceReco
 pub use crate::jit::trace_types::self_link::{DownRecClose, RetfRecord};
 pub use crate::jit::trace_types::side_cell::{SideCell, SideCellOffsets, SideCells};
 pub use crate::jit::trace_types::side_exit::{FrameMaterializeInfo, HotExitInfo, InlineSideExit};
-pub use crate::jit::trace_types::tier_up::TierUp;
+pub use crate::jit::trace_types::tier_up::{TierKept, TierUp};
 pub use crate::runtime::builtin::Builtin;
 pub use crate::runtime::value::raw::RawVal;
 pub use crate::stdio::host::HostStdout;

@@ -184,11 +184,18 @@ pub(in crate::vm::exec) fn relink_fill(
     if parent.exit_frame_offset(exit) != 0 {
         return Fill::Frame;
     }
-    match child.link_pc {
+    let f = match child.link_pc {
         Some(pc) if pc == parent.head_pc => fill_relink(parent, exit, child, cell),
         Some(pc) => onward::fill_link(parent, exit, child, cell, proto, pc),
         None => Fill::NoLinkPc,
+    };
+    // the optimizing tier's code may leave this exit to the dispatcher
+    if matches!(f, Fill::Filled | Fill::Linked)
+        && let Some(t) = &parent.tier_up
+    {
+        t.retier();
     }
+    f
 }
 
 /// `relink_fill` for a child that ends at the parent's head.

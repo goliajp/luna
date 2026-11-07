@@ -6,6 +6,22 @@ use super::*;
 /// What the backend compiles a trace from at the optimizing tier.
 pub(crate) type Source = Box<dyn std::any::Any + Send + Sync>;
 
+/// The times a trace at the optimizing tier is compiled again at most
+/// (see [`TierUp::retier`]).
+pub(crate) const RETIER_CAP: u32 = 4;
+
+/// What a backend hands back with the optimizing tier's code to compile
+/// the trace from again (see `TraceCompiler::tier_up_keeping`).
+pub struct TierKept {
+    /// The source to compile the trace from, made for it by the backend
+    /// as the tier source it took.
+    pub source: Box<dyn std::any::Any + Send + Sync>,
+    /// One of the trace's side cells got a side trace since the backend
+    /// read them for the code it hands back, whose exit does not call it:
+    /// the move again is due at once.
+    pub stale: bool,
+}
+
 /// A trace on its way to the optimizing tier. The dispatcher writes its
 /// count and entry; the backend reads them, gives the source, and writes
 /// the loop and `tried` through `__private::set_tier_up_loop`.
@@ -31,6 +47,13 @@ pub struct TierUp {
     pub(crate) tried: TCellBool,
     /// What the backend compiles the trace from; taken when it does.
     pub(crate) source: TRefLock<Option<Source>>,
+    /// What the backend compiles the trace from again once at the
+    /// optimizing tier, moved to `source` by [`TierUp::retier`].
+    pub(crate) kept: TRefLock<Option<Source>>,
+    /// The moves again asked for so far.
+    pub(crate) retiers: TCellU32,
+    /// The move asked for is a move again, until the backend is done.
+    pub(crate) retiering: TCellBool,
 }
 
 impl TierUp {
@@ -46,6 +69,9 @@ impl TierUp {
             looped: TCellPtr::null(),
             tried: TCellBool::new(false),
             source: TRefLock::new(None),
+            kept: TRefLock::new(None),
+            retiers: TCellU32::new(0),
+            retiering: TCellBool::new(false),
         }
     }
 
@@ -54,6 +80,32 @@ impl TierUp {
     /// `__private::put_tier_source`).
     pub fn source_mut(&mut self) -> impl std::ops::DerefMut<Target = Option<Source>> + '_ {
         self.source.borrow_mut()
+    }
+
+    /// What the backend compiles the trace from again once at the
+    /// optimizing tier, while the trace is still the backend's own (see
+    /// [`TierUp::source_mut`]): for code taken from another Vm that is
+    /// already the optimizing tier's.
+    pub fn kept_mut(&mut self) -> impl std::ops::DerefMut<Target = Option<Source>> + '_ {
+        self.kept.borrow_mut()
+    }
+
+    /// Asks for the move again at the next entry, from the source kept,
+    /// when there is one and fewer than [`RETIER_CAP`] moves again were
+    /// asked for: one of the trace's side cells just got a side trace, which
+    /// the optimizing tier's code calls only once compiled again.
+    pub(crate) fn retier(&self) {
+        if self.retiers.get() >= RETIER_CAP {
+            return;
+        }
+        let Some(s) = self.kept.borrow_mut().take() else {
+            return;
+        };
+        *self.source.borrow_mut() = Some(s);
+        self.retiers.set(self.retiers.get() + 1);
+        self.retiering.set(true);
+        self.tried.set(false);
+        self.count.set(self.at.saturating_sub(1));
     }
 
     /// The cell counting the trace's iterations and entries, whose address
