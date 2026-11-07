@@ -55,8 +55,10 @@ struct Replay<'a, 'f> {
     /// Relocations read once, in the entry block, for every use: the
     /// trace module is compiled without optimization, which would leave
     /// a string key or a function checked against read anew at each use
-    /// inside the loop ([`HOISTED`]).
-    hoisted: Vec<Option<Value>>,
+    /// inside the loop ([`HOISTED`]). Each is a variable, read again at
+    /// the reentry block (see [`BlockData::reentry`](super::BlockData::reentry)) so that no call a trace
+    /// relinks across has to keep it.
+    hoisted: Vec<Option<Variable>>,
     start: live::Start,
     /// In the loop's function, per value the loop head takes from the back
     /// edges (see `LoopEntry::inherit`): the variable it was taken from, and
@@ -110,7 +112,7 @@ impl Replay<'_, '_> {
             }
             Op::Reloc(n) => {
                 let v = match self.hoisted[n as usize] {
-                    Some(v) => v,
+                    Some(var) => self.b.use_var(var),
                     None => self
                         .b
                         .ins()

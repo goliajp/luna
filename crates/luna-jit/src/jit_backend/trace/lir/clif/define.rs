@@ -196,6 +196,8 @@ fn replay_blocks(
                 r.read_regs(&e.regs, reads);
                 r.own_reg_state();
             }
+        } else if lir.blocks[blk as usize].reentry {
+            ops::rehoist(r);
         }
         // a block no branch reaches (the entry, or the hot exit of a
         // `TierCount`, which the replay does not take) is sealed as it starts
