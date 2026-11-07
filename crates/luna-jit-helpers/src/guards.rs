@@ -36,24 +36,6 @@ pub unsafe extern "C" fn luna_jit_suppress_trace_admit() {
     unsafe { current_jit_vm().jit_mut() }.suppress_downrec_admit_once = true;
 }
 
-/// Parks a deopt for the running method-JIT call, which then returns at
-/// once: the dispatcher discards its result and runs the call in the
-/// interpreter. Used where compiled code finds, before doing anything
-/// observable, that it cannot compute the result.
-///
-/// # Safety
-/// Called from compiled code inside an `enter_jit` window on this thread.
-// SAFETY: no other item in the link is named `luna_jit_park_deopt`: only this crate defines
-// `luna_jit_` symbols, each once
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn luna_jit_park_deopt() {
-    // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
-    let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_none() {
-        vm.park_jit_error("JIT deopt: compiled code cannot run this call");
-    }
-}
-
 /// Whether `_ENV.<lib>.<name>` of the running closure (`lib` being `math`
 /// or `string`) is still the library function the JIT inlined for
 /// `<lib>.<name>(...)`: 1 if it is, 0 otherwise. Raw reads suffice: a

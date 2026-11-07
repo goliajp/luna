@@ -18,7 +18,7 @@ unsafe impl Sync for PinnedFn {}
 /// static alive in the final object — which transitively pins each
 /// `luna_jit_*` symbol the static references.
 ///
-/// The number of entries (56) must match the number of
+/// The number of entries (55) must match the number of
 /// `pub unsafe extern "C" fn luna_jit_*` in
 /// `crates/luna-jit/src/jit_backend/mod.rs`. If luna-jit ever
 /// adds a 47th helper, this array must grow in lock-step
@@ -26,7 +26,7 @@ unsafe impl Sync for PinnedFn {}
 /// link with `undefined reference to luna_jit_<new>`.
 #[used]
 #[unsafe(no_mangle)]
-static LUNA_AOT_HELPER_PIN: [PinnedFn; 56] = [
+static LUNA_AOT_HELPER_PIN: [PinnedFn; 55] = [
     PinnedFn(jb::luna_jit_new_table as AnyFn),
     PinnedFn(jb::luna_jit_new_table_sized as AnyFn),
     PinnedFn(jb::luna_jit_materialize_sunk_table as AnyFn),
@@ -66,7 +66,6 @@ static LUNA_AOT_HELPER_PIN: [PinnedFn; 56] = [
     PinnedFn(jb::luna_jit_upval_get_checked as AnyFn),
     PinnedFn(jb::luna_jit_upval_of_checked as AnyFn),
     PinnedFn(jb::luna_jit_op_self_checked as AnyFn),
-    PinnedFn(jb::luna_jit_park_deopt as AnyFn),
     PinnedFn(jb::luna_jit_suppress_trace_admit as AnyFn),
     PinnedFn(jb::luna_jit_gc_due as AnyFn),
     PinnedFn(jb::luna_jit_due_words as AnyFn),
@@ -199,7 +198,6 @@ pub fn force_link_jit_helpers() -> usize {
             let _ = jb::luna_jit_upval_get_checked(0, 0, std::ptr::null_mut());
             let _ = jb::luna_jit_upval_of_checked(0, 0, 0, std::ptr::null_mut());
             let _ = jb::luna_jit_op_self_checked(0, 0, 0, std::ptr::null_mut());
-            jb::luna_jit_park_deopt();
             jb::luna_jit_suppress_trace_admit();
             let _ = jb::luna_jit_gc_due(0, 0, std::ptr::null());
             let _ = jb::luna_jit_due_words();

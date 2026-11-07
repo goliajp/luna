@@ -54,7 +54,6 @@ fn helper_registry() -> Vec<Helper> {
         h!(luna_jit_upval_get, 1, true),
         h!(luna_jit_upval_is_int, 1, true),
         h!(luna_jit_no_deopt_parked, 0, true),
-        h!(luna_jit_park_deopt, 0, false),
         h!(luna_jit_enter_ctx, 1, false),
         h!(luna_jit_handoff_frame, 4, false),
         h!(luna_jit_self_level, 4, true),
