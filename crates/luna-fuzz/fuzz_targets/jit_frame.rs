@@ -64,3 +64,44 @@ end
 print("end", n1, n2, n3, x, s, cnt, psum, hits, nhits, #seq, obj.v)
 print(dump(t)) print(dump(Mstore)) print(dump(arr)) print(dump(c))
 "#;
+
+/// Addresses (`table: 0x…`) differ between two Vms.
+pub(crate) fn mask_addresses(s: &str) -> String {
+    // the program can also print an address upper-cased (`0X7B…`) or
+    // reversed (`…b7x0`)
+    let b = s.as_bytes();
+    let hex = |k: usize| b.get(k).is_some_and(u8::is_ascii_hexdigit);
+    let x = |k: usize| matches!(b.get(k), Some(b'x' | b'X'));
+    let mut out = String::with_capacity(s.len());
+    let mut start = 0;
+    let mut k = 0;
+    while k < b.len() {
+        if b[k] == b'0' && x(k + 1) && hex(k + 2) {
+            let mut e = k + 2;
+            while hex(e) {
+                e += 1;
+            }
+            out.push_str(&s[start..k]);
+            out.push_str("ADDR");
+            start = e;
+            k = e;
+        } else if hex(k) && !hex(k.wrapping_sub(1)) {
+            let mut e = k;
+            while hex(e) {
+                e += 1;
+            }
+            if x(e) && b.get(e + 1) == Some(&b'0') && e - k >= 2 {
+                out.push_str(&s[start..k]);
+                out.push_str("ADDR");
+                start = e + 2;
+                k = e + 2;
+            } else {
+                k = e;
+            }
+        } else {
+            k += 1;
+        }
+    }
+    out.push_str(&s[start..]);
+    out
+}
