@@ -99,9 +99,9 @@ pub(super) struct Lower<E: Emit> {
     /// Every way to the op being lowered passed a check for a collection
     /// with nothing that may allocate since (see `gc_due`).
     pub(super) gc_quiet: bool,
-    /// The cells of the exits that run a side trace from the code, by
-    /// typed exit (see `luna_core::__private::SideCell`).
-    pub(super) side_cells: Vec<(u32, Box<SideCell>)>,
+    /// Per exit that runs a side trace from the code, its typed exit: side
+    /// cell `n`'s (see `side_call::place_cells`).
+    pub(super) side_cells: Vec<u32>,
     /// The way back in of a trace whose exits run side traces from its code.
     pub(super) relink: Option<super::side_call::Relink>,
 }

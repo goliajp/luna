@@ -33,9 +33,7 @@ pub(crate) trait Ins {
     fn current_block(&self) -> Option<Block>;
     /// Block `b` is the reentry block of a trace that relinks (see
     /// `lower::side_call`). Only the baseline tier's instructions keep it.
-    fn mark_reentry(&mut self, b: Block) {
-        let _ = b;
-    }
+    fn mark_reentry(&mut self, _b: Block) {}
     fn append_block_param(&mut self, b: Block, ty: Type) -> Value;
     fn append_block_params_for_function_params(&mut self, b: Block);
     fn block_params(&self, b: Block) -> &[Value];
@@ -179,29 +177,27 @@ pub(crate) trait Emit: Ins {
     fn tier_count(&mut self, count: Count, at: u32, hot: Block, cont: Block);
     /// To `loop_fn` in the optimizing tier's loop function made of the
     /// baseline tier's instructions, to `other` in every other function.
-    fn pick(&mut self, loop_fn: Block, other: Block) {
-        let _ = loop_fn;
+    fn pick(&mut self, _loop_fn: Block, other: Block) {
         self.jump(other, &[]);
     }
     /// An exit through side cell `n` (see `lower::side_call`): on to `call`
     /// with `args` (the cell, the exit's return, the note), or, in a
     /// function of the optimizing tier compiled while the cell held no side
     /// trace, a return of the exit's return.
-    fn calling_exit(&mut self, n: u32, call: Block, args: &[BlockArg; 3]) {
-        let _ = n;
+    fn calling_exit(&mut self, _n: u32, call: Block, args: &[BlockArg; 3]) {
         self.jump(call, args);
     }
     /// Block `at` starts the optimizing tier's loop, which reads the
     /// registers (the variables `regs`, register `i` at `reg_state + 8 i`)
     /// the loop reads before writing them (see `lower::handoff`). Only the
     /// baseline tier's instructions keep it.
-    fn set_loop_entry(&mut self, at: Block, regs: &[Variable]) {
-        let _ = (at, regs);
-    }
+    fn set_loop_entry(&mut self, _at: Block, _regs: &[Variable]) {}
     /// The address `live`, which means something only in the Vm the trace
     /// is compiled for. The code another Vm installs gets that Vm's address
     /// of the same `kind` written over it (see `super::image`).
     fn reloc(&mut self, kind: RelocKind, live: i64) -> Value;
+    /// The relocations [`Emit::reloc`] made, each with its address.
+    fn relocs_mut(&mut self) -> &mut [(RelocKind, i64)];
     /// Flags for a table's length state (`alimit`, the 5.5 length hint):
     /// in Cranelift IR a memory region of their own, so storing to them
     /// does not make the code load the table's other fields again.
@@ -295,5 +291,8 @@ impl<M: Module> Emit for ClifEmit<'_, '_, M> {
         self.b
             .ins()
             .symbol_value(cranelift_codegen::ir::types::I64, gv)
+    }
+    fn relocs_mut(&mut self) -> &mut [(RelocKind, i64)] {
+        &mut self.relocs
     }
 }

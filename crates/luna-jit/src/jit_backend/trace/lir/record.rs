@@ -294,4 +294,7 @@ impl Emit for Lir {
         let n = self.reloc_index(kind, live);
         self.def(Op::Reloc(n), Ty::I64, NONE, NONE, NONE)
     }
+    fn relocs_mut(&mut self) -> &mut [(super::super::RelocKind, i64)] {
+        &mut self.relocs
+    }
 }

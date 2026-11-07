@@ -22,8 +22,8 @@ pub(super) struct Emitted {
     pub(super) write_only_kinds: Result<Vec<(u16, ExitTag)>, ()>,
     /// See `Lower::counts_per_call`.
     pub(super) counts_per_call: bool,
-    /// See `Lower::side_cells`.
-    pub(super) side_cells: Vec<(u32, Box<SideCell>)>,
+    /// See `side_call::place_cells`.
+    pub(super) side_cells: luna_core::__private::SideCells,
     /// The head frame's kinds at the back edge into the optimizing tier's
     /// loop, for a trace with one.
     pub(super) loop_kinds: Option<Vec<RegKind>>,
@@ -35,7 +35,7 @@ impl<E: Emit> Lower<E> {
     pub(super) fn into_emitted(self, downrec: (Option<(u32, u32)>, u8)) -> (E, Emitted) {
         let Lower {
             entry,
-            bcx,
+            mut bcx,
             current_kinds,
             dispatchable,
             dispatch_off_reason,
@@ -54,7 +54,7 @@ impl<E: Emit> Lower<E> {
             loops,
             ..
         } = self;
-        let mut bcx = bcx;
+        let side_cells = super::side_call::place_cells(&mut bcx, side_cells);
         if let Some(at) = loop_entry {
             bcx.set_loop_entry(at, &entry.regs_full);
         }
@@ -180,8 +180,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         entry: placeholder_trace_fn,
         n_ops: record.ops.len() as u32,
         dispatchable,
-        // real window_size ≥ max_stack; the
-        // dispatcher reads this to size its reg_state buffer.
+        // real window_size ≥ max_stack; the dispatcher reads this to size its reg_state buffer
         window_size,
         plans,
         is_inline_abort_close: inline_abort_idx_opt.is_some(),
@@ -237,7 +236,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
         tier_up: tier_count,
-        side_cells: side_cells.into(),
+        side_cells,
         link_pc: record.link_pc,
         loop_tags: loop_kinds.map(|k| kinds_to_exit_tags(&k[..max_stack]).into()),
     }
