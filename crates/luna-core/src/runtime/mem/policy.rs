@@ -28,6 +28,17 @@ macro_rules! policy {
         /// trace gets at most one side trace, itself a trace; a function is
         /// compiled whole once. A host that must bound every byte the Vm
         /// takes turns the JIT off.
+        ///
+        /// The requests the policy sees, their sizes and their order, are
+        /// how this version of the Vm happens to allocate: they change with
+        /// the JIT on or off (compiled code keeps in machine registers and
+        /// native frames what the interpreter keeps in its stacks) and from
+        /// one version to the next, and are not part of the compatibility
+        /// promise. A program a policy makes fail one way may run through
+        /// with the JIT on, or fail elsewhere. A host that needs a limit
+        /// with the same outcome either way sets it with
+        /// [`Vm::set_memory_cap`](crate::vm::Vm::set_memory_cap), under
+        /// which no compiled code runs.
         pub trait MemoryPolicy $($bound)* {
             /// A block is about to grow from `old` bytes to `new` (`old` is
             /// 0 for a new block); `in_use` is what the Vm has allocated so
