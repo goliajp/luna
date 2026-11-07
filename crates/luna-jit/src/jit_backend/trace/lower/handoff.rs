@@ -58,13 +58,8 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     } = *pl;
     let (reg_state, sig) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
     if let Some(t) = &lw.tier_count {
-        let cell_addr = luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64;
         let (count, at) = (count_at(lw, pl, t), t.at());
-        let cell = lw.bcx.reloc(RelocKind::TierLoop, cell_addr);
-        let f = lw
-            .bcx
-            .ins()
-            .load(types::I64, MemFlagsData::trusted(), cell, 0);
+        let f = load_loop_cell(&mut lw.bcx, t);
         let (go, out) = (lw.bcx.create_block(), lw.bcx.create_block());
         lw.bcx.ins().brif(f, go, &[], out, &[]);
         lw.bcx.switch_to_block(go);
@@ -93,6 +88,13 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         record.head_pc,
         lw.flush_ctx.as_ref(),
     );
+}
+
+/// The optimizing tier's loop of the trace `t` moves, null until compiled.
+pub(super) fn load_loop_cell<E: Emit>(bcx: &mut E, t: &TierUp) -> Value {
+    let cell_addr = luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64;
+    let cell = bcx.reloc(RelocKind::TierLoop, cell_addr);
+    bcx.ins().load(types::I64, MemFlagsData::trusted(), cell, 0)
 }
 
 /// Before the hand-over to the optimizing tier's loop: the accumulated
@@ -138,7 +140,12 @@ pub(super) fn count_at<E: Emit>(lw: &Lower<E>, pl: &Plan<'_>, t: &TierUp) -> Cou
 /// Before the hand-over to the optimizing tier's loop: the count set back
 /// to `at - 1`, and for a count in this call's word its mark of a pass into
 /// the loop set.
-fn mark_pass_into_loop<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, count: Count, at: u32) {
+pub(super) fn mark_pass_into_loop<E: Emit>(
+    lw: &mut Lower<E>,
+    pl: &Plan<'_>,
+    count: Count,
+    at: u32,
+) {
     let back = lw
         .bcx
         .ins()
