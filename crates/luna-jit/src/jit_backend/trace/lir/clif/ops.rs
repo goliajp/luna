@@ -151,7 +151,18 @@ pub(super) fn hoist(
         .collect();
     keep.sort_by_key(|&n| std::cmp::Reverse(in_loops[n]));
     for &n in keep.iter().take(HOISTED) {
-        let v = r.b.ins().symbol_value(types::I64, r.reloc_gv[n]);
-        r.hoisted[n] = Some(v);
+        let var = r.b.declare_var(types::I64);
+        r.hoisted[n] = Some(var);
+    }
+    rehoist(r);
+}
+
+/// Reads the relocations [`Replay::hoisted`] keeps into their variables.
+pub(super) fn rehoist(r: &mut Replay<'_, '_>) {
+    for (n, var) in r.hoisted.iter().enumerate() {
+        if let Some(var) = *var {
+            let v = r.b.ins().symbol_value(types::I64, r.reloc_gv[n]);
+            r.b.def_var(var, v);
+        }
     }
 }

@@ -217,7 +217,11 @@ fn emit_trace<E: Emit>(
     count_at: u32,
     at_exits: bool,
 ) -> Option<(E, Emitted)> {
-    let head = emit_entry(&mut bcx, pl);
+    let (reg_state, sig) = open_entry(&mut bcx);
+    // a trace that relinks enters again here, past the entry block, and
+    // redoes all that follows: what reg_state holds is all that is carried
+    let relink = open_reentry(&mut bcx, pl);
+    let head = emit_entry(&mut bcx, pl, reg_state, sig);
     // a variable: `loop_entry` reads the address again (see `handoff`)
     let due_words = emit_due_words(&mut bcx, pl)?.map(|w| {
         let var = bcx.declare_var(types::I64);
@@ -227,7 +231,6 @@ fn emit_trace<E: Emit>(
     let mut escape = escape;
     let sunk = alloc_sunk_sites(&mut bcx, pl, &mut escape);
     let flush_ctx = start_accum(&mut bcx, pl, h, &head.regs_full);
-    let relink = open_reentry(&mut bcx, pl);
     let blocks = open_body_loop(&mut bcx, pl, relink.is_some() && count_at > 0);
     let mut lower = begin_body(bcx, pl, h, head, escape, sunk, flush_ctx, blocks);
     lower.relink = relink;
@@ -252,7 +255,7 @@ fn emit_trace<E: Emit>(
     if let Some(lc) = loop_copy {
         emit_loop_copy(lw, pl, lc)?;
     }
-    emit_relink_block(lw, pl)?;
+    emit_relink_block(lw, pl);
     // last, so that it takes nothing from the blocks lowered before it
     emit_loop_entry(lw)?;
     if !exits_fit(lower.per_exit_inline_vec.len(), lower.per_exit_kinds.len()) {

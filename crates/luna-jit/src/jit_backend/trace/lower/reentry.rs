@@ -1,71 +1,25 @@
-//! The relink block a trace's code enters itself again at after a side
-//! trace ended at its head (see `side_call`), and the gate after the checks
-//! before the loop.
+//! The relink block a trace's code goes through after a side trace ended
+//! at its head, on to the reentry block (see `side_call`), and the gate
+//! after the checks before the loop.
 
 use super::side_call::{Relink, cold_block, switch_sealed};
 use super::*;
 
-/// The relink block, once everything else is lowered: what the entry block
-/// and the dispatcher do before a call, the loop's iteration counted, on at
-/// the reentry block, which is then sealed.
-pub(super) fn emit_relink_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<()> {
+/// The relink block, once everything else is lowered: the loop's iteration
+/// counted, on at the reentry block, which redoes what follows the entry
+/// block (the registers read from `reg_state`, the collection words, the
+/// accumulator, the checks before the loop) and is then sealed.
+pub(super) fn emit_relink_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
     super::side_call::emit_call_block(lw, pl);
     let Some(rl) = lw.relink.take() else {
-        return Some(());
+        return;
     };
     if let Some(block) = rl.block {
         switch_sealed(lw, block);
-        reload_registers(lw, pl);
-        if let Some(var) = lw.due_words {
-            let w = read_due_words(&mut lw.bcx)?;
-            lw.bcx.def_var(var, w);
-        }
-        restart_accum(lw);
         count_relink(lw, pl, &rl);
     }
     lw.bcx.seal_block(rl.reentry);
     fill_gate(lw, pl, &rl);
-    Some(())
-}
-
-/// The registers as the entry block reads them: the head frame's from
-/// `reg_state`, the inline frames' zero (in `reg_state` too).
-fn reload_registers<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
-    let reg_state = lw.entry.reg_state;
-    for i in 0..pl.window_size_us {
-        let var = lw.entry.regs_full[i];
-        let v = if i < pl.max_stack {
-            lw.bcx
-                .ins()
-                .load(types::I64, MemFlagsData::new(), reg_state, (i as i32) * 8)
-        } else {
-            let z = lw.bcx.ins().iconst(types::I64, 0);
-            lw.bcx
-                .ins()
-                .store(MemFlagsData::new(), z, reg_state, (i as i32) * 8);
-            z
-        };
-        lw.bcx.def_var(var, v);
-    }
-    let z = lw.bcx.ins().iconst(types::I64, 0);
-    lw.bcx.def_var(lw.entry.tforcall_tag_var, z);
-    lw.bcx.def_var(lw.entry.tforcall_val_tag_var, z);
-}
-
-/// The accumulator's buffer started again from its string, as on entry
-/// (the exit flushed it before calling the side trace).
-fn restart_accum<E: Emit>(lw: &mut Lower<E>) {
-    let Some(ctx) = &lw.flush_ctx else {
-        return;
-    };
-    let (buf_var, slot) = (ctx.buf_var, ctx.accum_slot as usize);
-    let acquire = lw.bcx.import_func(lw.h.rt.str_buf_acquire_id);
-    let extend = lw.bcx.import_func(lw.h.rt.str_buf_extend_id);
-    let call = lw.bcx.ins().call(acquire, &[]);
-    let buf = lw.bcx.inst_results(call)[0];
-    lw.bcx.def_var(buf_var, buf);
-    let accum = lw.bcx.use_var(lw.entry.regs_full[slot]);
-    lw.bcx.ins().call(extend, &[buf, accum]);
 }
 
 /// The loop's iteration counted as at the back edge; reached, `hot` is 1,

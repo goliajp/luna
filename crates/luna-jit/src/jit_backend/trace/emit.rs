@@ -31,6 +31,11 @@ pub(crate) trait Ins {
     /// Lays block `b` out after the others: a path the code seldom takes.
     fn set_cold_block(&mut self, b: Block);
     fn current_block(&self) -> Option<Block>;
+    /// Block `b` is the reentry block of a trace that relinks (see
+    /// `lower::side_call`). Only the baseline tier's instructions keep it.
+    fn mark_reentry(&mut self, b: Block) {
+        let _ = b;
+    }
     fn append_block_param(&mut self, b: Block, ty: Type) -> Value;
     fn append_block_params_for_function_params(&mut self, b: Block);
     fn block_params(&self, b: Block) -> &[Value];

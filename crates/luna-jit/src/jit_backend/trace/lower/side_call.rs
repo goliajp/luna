@@ -11,9 +11,10 @@
 //! (leaving the side trace to it when a check fails), and calls it on the
 //! same registers. A side trace that returns
 //! [`EXIT_RELINK`] has ended at this trace's head: its stores to the stack
-//! made, the trace enters itself again at the relink block, which does what
-//! the entry block and the dispatcher do before a call, and goes on where
-//! the entry block does, ahead of the checks before the loop. Any other
+//! made, the trace goes through the relink block to the reentry block,
+//! which the entry block also goes on at and which does all the code does
+//! once per entry (the registers read from `reg_state`, the checks before
+//! the loop), so that only `reg_state` is carried across the call. Any other
 //! return is returned, the exit noted for the dispatcher to decode it with
 //! the side trace's exits.
 //!
@@ -56,8 +57,8 @@ pub(super) fn relinks(pl: &Plan<'_>) -> bool {
     pl.record.side_trace_parent.is_none() && pl.downrec_idx_opt.is_none() && !pl.opts.aot
 }
 
-/// In the entry block, once it is done: the reentry block the entry and
-/// the relink blocks go on at, made current (unsealed).
+/// In the entry block, right after its parameter: the reentry block the
+/// entry and the relink blocks go on at, made current (unsealed).
 pub(super) fn open_reentry<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> Option<Relink> {
     if !relinks(pl) {
         return None;
@@ -68,6 +69,7 @@ pub(super) fn open_reentry<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> Option<Relink
     bcx.def_var(loop_ok, z);
     bcx.def_var(hot, z);
     let reentry = bcx.create_block();
+    bcx.mark_reentry(reentry);
     bcx.ins().jump(reentry, &[]);
     bcx.switch_to_block(reentry);
     Some(Relink {

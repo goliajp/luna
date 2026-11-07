@@ -9,54 +9,40 @@ pub(super) struct EntryRegs {
     pub(super) tforcall_val_tag_var: Variable,
 }
 
-/// Emits the entry block: loads the caller window from `reg_state`,
-/// zeroes the inline frames' registers and declares the trace-wide
-/// variables.
-pub(super) fn emit_entry<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> EntryRegs {
-    let Plan {
-        max_stack,
-        window_size_us,
-        ..
-    } = *pl;
-    // Two-block layout for the trace body:
-    //
-    // - `entry` is the function entry — receives the `reg_state`
-    //   pointer as block param 0, loads each Lua reg from memory
-    //   into a cranelift Variable, then unconditionally jumps to
-    //   `body_loop`. The reg-load prelude runs *once* per
-    //   dispatcher entry.
-    // - `body_loop` is the loop head. The recorded op IR emits
-    //   into it (or into successor blocks split off by cmp brifs).
-    //   At the trace's clean close — when no `Op::Call` has
-    //   truncated it — the tail emits a jump *back* to `body_loop`,
-    //   so subsequent iterations stay inside the JIT'd code until
-    //   a cmp side-exits. The dispatcher's per-iter marshal
-    //   overhead amortizes across however many iterations the
-    //   trace runs internally.
-    //
-    // Cranelift `FunctionBuilder` handles the back-edge phis
-    // automatically: every reg's Variable gets a phi at
-    // `body_loop`'s entry merging the entry-from-`entry` def
-    // (initial load) with the loop-back def (the previous
-    // iteration's writes). We delay sealing `body_loop` until
-    // after the tail emits its back-edge so cranelift knows both
-    // predecessors.
+/// The function's entry block, made current and sealed: the `reg_state`
+/// parameter and the trace functions' signature, imported once so that
+/// an exit can call a side trace.
+pub(super) fn open_entry<E: Emit>(bcx: &mut E) -> (Value, cranelift_codegen::ir::SigRef) {
     let entry = bcx.create_block();
     bcx.append_block_params_for_function_params(entry);
     bcx.switch_to_block(entry);
     bcx.seal_block(entry);
     let reg_state = bcx.block_params(entry)[0];
+    let mut sig = bcx.make_signature();
+    sig.params.push(AbiParam::new(types::I64));
+    sig.returns.push(AbiParam::new(types::I64));
+    (reg_state, bcx.import_signature(sig))
+}
 
-    // import the `TraceFn` ABI signature once so
-    // every side-exit emit can `call_indirect` into a child side
-    // trace. Matches the parent's own signature (`(I64) -> I64`).
-    let trace_fn_sig_ref: cranelift_codegen::ir::SigRef = {
-        let mut sig = bcx.make_signature();
-        sig.params.push(AbiParam::new(types::I64));
-        sig.returns.push(AbiParam::new(types::I64));
-        bcx.import_signature(sig)
-    };
-
+/// Loads the caller window from `reg_state`, zeroes the inline frames'
+/// registers and declares the trace-wide variables, in the current block:
+/// the entry block, or the reentry block a trace that relinks enters
+/// again at (see `side_call`).
+///
+/// The registers are loaded once per entry; the loop head after the
+/// checks merges them with what the back edge leaves, and is sealed once
+/// the tail has emitted the back edge.
+pub(super) fn emit_entry<E: Emit>(
+    bcx: &mut E,
+    pl: &Plan<'_>,
+    reg_state: Value,
+    trace_fn_sig_ref: cranelift_codegen::ir::SigRef,
+) -> EntryRegs {
+    let Plan {
+        max_stack,
+        window_size_us,
+        ..
+    } = *pl;
     // `regs_full` is sized to `window_size_us`, big
     // enough for every inlined frame's register window. Slots
     // [0..max_stack) are loaded from reg_state (caller-marshalled);

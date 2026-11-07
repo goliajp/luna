@@ -217,6 +217,10 @@ pub(crate) struct BlockData {
     /// Laid out after the others by the Cranelift replay (the baseline
     /// keeps its own order, which its allocator relies on).
     pub(crate) cold: bool,
+    /// The block a trace that relinks enters again at, past its entry block
+    /// (see `lower::side_call`): what the code reads once per entry is read
+    /// again there.
+    pub(crate) reentry: bool,
     /// The variables' values at the end of the only predecessor so far:
     /// `(offset, len)` in [`Lir::snaps`], offset `NONE` for none.
     pub(crate) inherit: (u32, u32),
