@@ -40,7 +40,8 @@ impl Vm {
         }
         self.heap.trace_line(format_args!("X"));
         // what is above PUC's `L->top` at the allocation is dead
-        let top = self.alloc_top();
+        // and what compiled levels handed over wrote above it
+        let top = self.alloc_top().max(self.jit.handoff.hi);
         let live_top = std::mem::replace(&mut self.gc_top, top);
         let lo = (top as usize).min(self.stack.len());
         self.stack[lo..].fill(Value::Nil);

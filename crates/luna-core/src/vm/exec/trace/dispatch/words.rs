@@ -3,38 +3,57 @@
 
 use crate::jit::trace::CompiledTrace;
 use crate::jit::trace_types::frame::{TRACE_FRAME_TAIL, trace_count_slot, trace_passed_slot};
+use crate::runtime::mem::{LVec, Oom};
+
+/// The Vm's buffers grown for a call of a trace whose window is `window`
+/// registers wide, when the trace is installed: a dispatch then grows them
+/// only while another dispatch holds them.
+pub(in crate::vm::exec) fn reserve(
+    reg_state: &mut LVec<i64>,
+    entry_tags: &mut LVec<u8>,
+    window: usize,
+) -> Result<(), Oom> {
+    grow(reg_state, window + TRACE_FRAME_TAIL)?;
+    grow(entry_tags, window)
+}
 
 /// Readies the Vm's buffer `reg_state` for a call of a trace whose window is
 /// `window` registers wide: at least the window and the words past it,
 /// grown only when a trace wider than any before runs; the window's
 /// registers past the frame's `max_stack`, which marshal-in fills, are
 /// zero. The words past the window are left as they are: the ones the call
-/// reads are set by [`count_in`] and the down-recursion entry.
+/// reads are set by [`count_in`] and the down-recursion entry. `false` when
+/// it cannot grow: the trace is not entered.
 #[inline(always)]
-pub(super) fn frame_in(reg_state: &mut Vec<i64>, window: usize, max_stack: usize) {
-    if reg_state.len() < window + TRACE_FRAME_TAIL {
-        grow(reg_state, window + TRACE_FRAME_TAIL);
+pub(super) fn frame_in(reg_state: &mut LVec<i64>, window: usize, max_stack: usize) -> bool {
+    if reg_state.len() < window + TRACE_FRAME_TAIL
+        && grow(reg_state, window + TRACE_FRAME_TAIL).is_err()
+    {
+        return false;
     }
     // registers past the frame are an inlined function's
     if window > max_stack {
         reg_state[max_stack..window].fill(0);
     }
+    true
 }
 
 /// Readies the Vm's buffer `entry_tags` to hold the tags of a frame of
 /// `max_stack` registers: grown only when a frame larger than any before
 /// enters, never cut, so the dispatch passes on its first `max_stack`.
+/// `false` when it cannot grow: the trace is not entered.
 #[inline(always)]
-pub(super) fn tags_in(entry_tags: &mut Vec<u8>, max_stack: usize) {
-    if entry_tags.len() < max_stack {
-        grow(entry_tags, max_stack);
-    }
+pub(super) fn tags_in(entry_tags: &mut LVec<u8>, max_stack: usize) -> bool {
+    entry_tags.len() >= max_stack || grow(entry_tags, max_stack).is_ok()
 }
 
 #[cold]
 #[inline(never)]
-fn grow<T: Copy + Default>(buf: &mut Vec<T>, len: usize) {
-    buf.resize(len, T::default());
+fn grow<T: Copy + Default>(buf: &mut LVec<T>, len: usize) -> Result<(), Oom> {
+    if buf.len() < len {
+        buf.resize(len, T::default())?;
+    }
+    Ok(())
 }
 
 /// A trace that counts in this call's word (`CompiledTrace::call_count`)

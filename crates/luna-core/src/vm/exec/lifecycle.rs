@@ -193,7 +193,7 @@ impl Vm {
             native_window_panic: 0,
             // JIT state lives in the `JitState` sidecar; the `luna` crate's
             // constructors swap in `CraneliftBackend` for callers that want it
-            jit: crate::vm::jit_state::JitState::with_null_backend(),
+            jit: crate::vm::jit_state::JitState::with_null_backend(mem),
             // host roots ticket pool for the `Lua` facade
             host_roots: LVec::new(mem),
             // the macro registry, with the built-ins (`@quote`, `@unquote`,
@@ -236,7 +236,7 @@ impl Vm {
             buf_spare: LVec::new(mem),
             _mem: mem_owner,
             state_complete: false,
-            unmade: Default::default(),
+            unmade: crate::vm::exec::ExitUnmade::new(mem),
         })
     }
 

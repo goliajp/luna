@@ -1,6 +1,7 @@
 //! The string buffer a trace builds an accumulated concatenation in.
 
 use super::*;
+use crate::runtime::mem::{LBox, LVec};
 
 /// What the string of a trace's accumulator buffer stands for (see
 /// `TraceGhosts::accum`).
@@ -12,42 +13,70 @@ pub(crate) enum AccumLast {
     Long(crate::runtime::puc::api::GhostRef),
 }
 
+/// The most accumulator buffers kept for reuse.
+const STR_BUFS_KEPT: usize = 4;
+
 impl Vm {
-    /// Pop a reusable buffer from the JIT accumulator buffer pool, or
-    /// make an empty one when the pool is empty. The trace keeps it (as
-    /// the boxed pointer the helper leaks) in a stack slot through the
-    /// loop and appends each piece to it.
-    pub(crate) fn jit_str_buf_acquire(&mut self) -> Box<crate::runtime::mem::LVec<u8>> {
-        let buf = self.jit.str_buf_pool.pop();
+    /// A buffer for a trace's accumulator, empty: one kept for reuse, or a
+    /// new one. The trace keeps the pointer in a stack slot through the
+    /// loop and appends each piece to the buffer; the Vm holds the buffer
+    /// until the trace gives it back ([`Vm::jit_str_buf_release`]). Null
+    /// when there is no memory for a new one: the trace's first
+    /// concatenation then leaves, and the interpreter makes it.
+    pub(crate) fn jit_str_buf_acquire(&mut self) -> *mut LVec<u8> {
         let g = self.jit_ghosts();
         g.accum = None;
         g.accum_prefix = None;
-        Box::new(buf.unwrap_or_else(|| crate::runtime::mem::LVec::new(self.heap.mem())))
+        let mem = self.heap.mem();
+        let jit = &mut self.jit;
+        // the kept buffers come first, the ones traces hold after them
+        let free = jit.str_bufs_free as usize;
+        if free > 0 {
+            jit.str_bufs_free -= 1;
+            let buf: &mut LVec<u8> = &mut jit.str_bufs[free - 1];
+            return buf;
+        }
+        let made = LBox::new(mem, LVec::new(mem)).and_then(|b| jit.str_bufs.push(b));
+        match (made, jit.str_bufs.last_mut()) {
+            (Ok(()), Some(buf)) => &mut **buf,
+            _ => std::ptr::null_mut(),
+        }
     }
 
-    /// Return a previously-acquired buffer to the
-    /// pool, dropping any excess past `jit_str_buf_pool_cap`. The
-    /// buffer is `clear`ed (capacity retained) so the next acquire
-    /// gets a ready-to-extend buffer.
-    #[allow(clippy::boxed_local)] // the trace held the buffer boxed; it comes back that way
-    pub(crate) fn jit_str_buf_release(&mut self, mut buf: Box<crate::runtime::mem::LVec<u8>>) {
-        buf.clear();
-        if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
-            self.jit.str_buf_pool.push(buf.take());
+    /// Take back the buffer at `buf`, which a trace had from
+    /// [`Vm::jit_str_buf_acquire`]: emptied (its capacity kept) for the
+    /// next one, or freed when enough are kept.
+    pub(crate) fn jit_str_buf_release(&mut self, buf: *const LVec<u8>) {
+        let jit = &mut self.jit;
+        let free = jit.str_bufs_free as usize;
+        let held = jit.str_bufs[free..]
+            .iter()
+            .position(|b| std::ptr::eq(&**b, buf))
+            .expect("a buffer the Vm handed out");
+        jit.str_bufs[free + held].clear();
+        jit.str_bufs.swap(free, free + held);
+        if free < STR_BUFS_KEPT {
+            jit.str_bufs_free += 1;
+        } else {
+            jit.str_bufs.remove(free);
         }
     }
 
     /// Start an accumulator buffer with the string the trace entered with.
     /// When the buffer cannot hold it, the string is kept aside: the trace
     /// goes on appending, and the exit leaves the string to the dispatcher
-    /// (see [`Vm::jit_str_buf_intern`]). `false` then.
+    /// (see [`Vm::jit_str_buf_intern`]). `false` then, and when there is no
+    /// buffer.
     pub(crate) fn jit_str_buf_extend(
         &mut self,
-        buf: &mut crate::runtime::mem::LVec<u8>,
+        buf: Option<&mut LVec<u8>>,
         piece: Gc<crate::runtime::LuaStr>,
     ) -> bool {
         let g = self.jit_ghosts();
         g.accum = Some(AccumLast::Entry(piece));
+        let Some(buf) = buf else {
+            return false;
+        };
         if buf.extend_from_slice(piece.as_bytes()).is_ok() {
             return true;
         }
@@ -64,7 +93,7 @@ impl Vm {
     /// the op.
     pub(crate) fn jit_str_buf_concat(
         &mut self,
-        buf: &mut crate::runtime::mem::LVec<u8>,
+        buf: &mut LVec<u8>,
         piece: Gc<crate::runtime::LuaStr>,
         op_pc: u32,
     ) -> i64 {
@@ -104,15 +133,20 @@ impl Vm {
     /// (no allocation: the buffer's block moves) and the dispatcher makes
     /// the string outside compiled code, where the interpreter's
     /// allocation rules apply, before the 0 reaches anything else.
-    pub(crate) fn jit_str_buf_intern(
-        &mut self,
-        buf: &mut crate::runtime::mem::LVec<u8>,
-        slot: u32,
-    ) -> i64 {
+    ///
+    /// With no buffer nothing was appended (the first concatenation left):
+    /// the string is the one the trace entered with.
+    pub(crate) fn jit_str_buf_intern(&mut self, buf: Option<&mut LVec<u8>>, slot: u32) -> i64 {
         let g = self.jit_ghosts();
         // the string PUC made last is this one
         let last = g.accum.take();
         let prefix = g.accum_prefix.take();
+        let Some(buf) = buf else {
+            let Some(AccumLast::Entry(e)) = last else {
+                unreachable!("a trace with no accumulator buffer appended to its string")
+            };
+            return e.as_ptr() as i64;
+        };
         if prefix.is_none()
             && let Some(AccumLast::Entry(e)) = last
             && e.as_bytes() == &buf[..]
@@ -208,9 +242,13 @@ impl Vm {
                 Err(e) => self.jit.pending_raise = Some(e),
             }
         }
+        // the block back into a kept buffer, unless that one is larger
         bytes.clear();
-        if self.jit.str_buf_pool.len() < self.jit.str_buf_pool_cap {
-            self.jit.str_buf_pool.push(bytes);
+        let jit = &mut self.jit;
+        if let Some(k) = (jit.str_bufs_free as usize).checked_sub(1)
+            && jit.str_bufs[k].capacity() < bytes.capacity()
+        {
+            *jit.str_bufs[k] = bytes;
         }
     }
 }
@@ -219,7 +257,7 @@ impl Vm {
 /// [`Vm::jit_str_buf_intern`]).
 pub(crate) struct AccumUnmade {
     prefix: Option<Gc<crate::runtime::LuaStr>>,
-    bytes: crate::runtime::mem::LVec<u8>,
+    bytes: LVec<u8>,
     /// the accumulator's register in the trace's window
     slot: u32,
     last: Option<AccumLast>,

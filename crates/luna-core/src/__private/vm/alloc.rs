@@ -100,24 +100,21 @@ pub trait VmJitAlloc {
         arr: impl ExactSizeIterator<Item = Value>,
         hash: impl ExactSizeIterator<Item = (Value, Value)>,
     ) -> i64;
-    /// Pop a reusable buffer from the JIT accumulator buffer pool, or
-    /// make an empty one when the pool is empty. The trace keeps it (as
-    /// the boxed pointer the helper leaks) in a stack slot through the
-    /// loop and appends each piece to it.
-    ///
-    /// # Safety
-    /// The buffer goes back to this Vm (`jit_str_buf_release`) or is
-    /// dropped before the Vm is: it is a block of the Vm's context.
-    unsafe fn jit_str_buf_acquire(&mut self) -> Box<LVec<u8>>;
-    /// Return a previously-acquired buffer to the
-    /// pool, dropping any excess past `jit_str_buf_pool_cap`. The
-    /// buffer is `clear`ed (capacity retained) so the next acquire
-    /// gets a ready-to-extend buffer.
-    fn jit_str_buf_release(&mut self, buf: Box<LVec<u8>>);
-    /// Append a piece's bytes to an accumulator buffer; `false`, the
-    /// buffer as it was, when it cannot grow.
-    fn jit_str_buf_extend(&mut self, buf: &mut LVec<u8>, piece: Gc<crate::runtime::LuaStr>)
-    -> bool;
+    /// An empty accumulator buffer, which the Vm holds until it is given
+    /// back (`jit_str_buf_release`): one kept for reuse or a new one; null
+    /// when there is no memory for a new one.
+    fn jit_str_buf_acquire(&mut self) -> *mut LVec<u8>;
+    /// Take back the buffer at `buf`, one `jit_str_buf_acquire` handed
+    /// out: emptied (its capacity kept) for the next one, or freed when
+    /// enough are kept.
+    fn jit_str_buf_release(&mut self, buf: *const LVec<u8>);
+    /// Start an accumulator buffer with the string the trace entered with;
+    /// `false`, the buffer as it was, when it cannot grow or there is none.
+    fn jit_str_buf_extend(
+        &mut self,
+        buf: Option<&mut LVec<u8>>,
+        piece: Gc<crate::runtime::LuaStr>,
+    ) -> bool;
     /// The `CONCAT` at `op_pc` of a trace's accumulated concatenation:
     /// `piece` appended to the buffer, and the string PUC makes of the two
     /// counted (a short one made for real, so that it is found as PUC's
@@ -135,7 +132,7 @@ pub trait VmJitAlloc {
     /// `slot` of its window. The buffer is left empty, its capacity kept,
     /// ready for release. 0 when the string is left for the dispatcher to
     /// make once the trace has returned.
-    fn jit_str_buf_intern(&mut self, buf: &mut LVec<u8>, slot: u32) -> i64;
+    fn jit_str_buf_intern(&mut self, buf: Option<&mut LVec<u8>>, slot: u32) -> i64;
 }
 
 impl VmJitAlloc for crate::vm::Vm {
@@ -195,17 +192,17 @@ impl VmJitAlloc for crate::vm::Vm {
         crate::vm::Vm::jit_sunk_unmade(self, ops, arr, hash)
     }
     #[inline]
-    unsafe fn jit_str_buf_acquire(&mut self) -> Box<LVec<u8>> {
+    fn jit_str_buf_acquire(&mut self) -> *mut LVec<u8> {
         crate::vm::Vm::jit_str_buf_acquire(self)
     }
     #[inline]
-    fn jit_str_buf_release(&mut self, buf: Box<LVec<u8>>) {
+    fn jit_str_buf_release(&mut self, buf: *const LVec<u8>) {
         crate::vm::Vm::jit_str_buf_release(self, buf)
     }
     #[inline]
     fn jit_str_buf_extend(
         &mut self,
-        buf: &mut LVec<u8>,
+        buf: Option<&mut LVec<u8>>,
         piece: Gc<crate::runtime::LuaStr>,
     ) -> bool {
         crate::vm::Vm::jit_str_buf_extend(self, buf, piece)
@@ -220,7 +217,7 @@ impl VmJitAlloc for crate::vm::Vm {
         crate::vm::Vm::jit_str_buf_concat(self, buf, piece, op_pc)
     }
     #[inline]
-    fn jit_str_buf_intern(&mut self, buf: &mut LVec<u8>, slot: u32) -> i64 {
+    fn jit_str_buf_intern(&mut self, buf: Option<&mut LVec<u8>>, slot: u32) -> i64 {
         crate::vm::Vm::jit_str_buf_intern(self, buf, slot)
     }
 }

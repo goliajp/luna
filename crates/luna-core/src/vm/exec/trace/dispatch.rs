@@ -2,6 +2,7 @@
 //! interpreter is about to run, and resuming the interpreter where it exits.
 
 use super::*;
+use crate::runtime::mem::LVec;
 use downrec::downrec_close_exit;
 
 mod entry;
@@ -62,15 +63,16 @@ impl Vm {
         // the Vm's buffers, taken for the dispatch and put back on every
         // way out; `reg_state` covers the trace's window, which may exceed
         // the frame
-        let mut entry_tags: Vec<u8> = std::mem::take(&mut self.jit.entry_tags_buf);
-        words::tags_in(&mut entry_tags, max_stack);
+        let mem = self.heap.mem();
+        let mut entry_tags = std::mem::replace(&mut self.jit.entry_tags_buf, LVec::new(mem));
         // a trace that closes by down-recursion (whether or not it is also
         // dispatchable) guards on the caller's saved pc, in the word just
         // past the window
         let is_downrec_entry = ct.downrec_link.is_some();
-        let mut reg_state: Vec<i64> = std::mem::take(&mut self.jit.reg_state_buf);
-        words::frame_in(&mut reg_state, window_size_us, max_stack);
-        let dispatch_ok = self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
+        let mut reg_state = std::mem::replace(&mut self.jit.reg_state_buf, LVec::new(mem));
+        let dispatch_ok = words::tags_in(&mut entry_tags, max_stack)
+            && words::frame_in(&mut reg_state, window_size_us, max_stack)
+            && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
             && self.trace_marshal_in(
                 &ct,
                 base_us,

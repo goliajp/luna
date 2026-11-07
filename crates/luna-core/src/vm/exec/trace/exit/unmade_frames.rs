@@ -98,7 +98,7 @@ impl Vm {
                 },
                 None => Value::Nil,
             };
-            self.unmade.roots.push(v);
+            super::unmade::push_root(&mut self.unmade.roots, v);
         }
     }
 }
