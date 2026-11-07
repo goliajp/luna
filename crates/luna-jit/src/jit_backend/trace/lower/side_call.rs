@@ -17,9 +17,12 @@
 //! the side trace's exits.
 //!
 //! The relink block counts an iteration of the loop, as the back edge
-//! does; once the count is reached, and the side trace leaves the
-//! registers of the kinds the loop is compiled for, the gate after the
-//! checks goes on in the optimizing tier's loop.
+//! does; once the count is reached, the gate after the checks goes on in
+//! the optimizing tier's loop when the side trace leaves the registers of
+//! the kinds the loop is compiled for; else, before the optimizing tier's
+//! code exists, it leaves at the loop head for the dispatcher to move the
+//! trace, and after, it goes on in its own loop with the count set back by
+//! one (see `reentry`).
 
 use super::*;
 use luna_core::__private::{EXIT_RELINK, SideCell, trace_ran_side_slot};
@@ -35,8 +38,8 @@ pub(super) struct Relink {
     /// Set by the exit that relinks: whether the side trace's registers
     /// may go on in the optimizing tier's loop.
     pub(super) loop_ok: Variable,
-    /// Set by the relink block: the loop's count is reached and the gate
-    /// goes on in the optimizing tier's loop.
+    /// Set by the relink block: the loop's count is reached, and the gate
+    /// moves on to the optimizing tier.
     pub(super) hot: Variable,
 }
 
