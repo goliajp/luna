@@ -177,6 +177,12 @@ pub(crate) trait Emit: Ins {
     /// Adds one to the `u32` at `count`, then to `hot` once it is `at`, else
     /// to `cont`. Only the baseline tier counts: Cranelift IR goes to `cont`.
     fn tier_count(&mut self, count: Count, at: u32, hot: Block, cont: Block);
+    /// To `loop_fn` in the optimizing tier's loop function made of the
+    /// baseline tier's instructions, to `other` in every other function.
+    fn pick(&mut self, loop_fn: Block, other: Block) {
+        let _ = loop_fn;
+        self.jump(other, &[]);
+    }
     /// Block `at` starts the optimizing tier's loop, which reads the
     /// registers (the variables `regs`, register `i` at `reg_state + 8 i`)
     /// the loop reads before writing them (see `lower::handoff`). Only the

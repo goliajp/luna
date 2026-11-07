@@ -161,6 +161,14 @@ impl<'c> Gen<'c, '_> {
                 let to = self.edge(i.a, &args)?;
                 b(bb.build_unconditional_branch(to))?;
             }
+            Op::Pick => {
+                let to = match self.start {
+                    super::super::Start::Loop => i.a,
+                    _ => i.b,
+                };
+                let to = self.edge(to, &[])?;
+                b(bb.build_unconditional_branch(to))?;
+            }
             Op::Brif(n_then) => self.brif(i, n_then)?,
             // only the baseline tier counts iterations
             // the first pass's function goes on in the loop's (see

@@ -18,7 +18,7 @@ mod intervals;
 mod operands;
 use intervals::{coalesce_var_reads, extend, number};
 use operands::succs_of;
-pub(crate) use operands::{Start, for_defs, for_uses, succs};
+pub(crate) use operands::{Start, for_defs, for_uses, replay_succs};
 
 #[derive(Default)]
 pub(crate) struct Analysis {
@@ -53,8 +53,9 @@ pub(crate) struct Analysis {
     read: Vec<bool>,
     /// (loop head position, back edge position)
     pub(crate) loops: Vec<(u32, u32)>,
-    /// A `TierCount` goes on to its hot block only (see [`Start::FirstPass`]).
-    hot_only: bool,
+    /// The function laid out: its `TierCount`s and `Pick`s go on as
+    /// [`Start`] says.
+    pub(crate) func: Start,
     depth: Vec<i32>,
     writes: Vec<Vec<u32>>,
     /// `(value, variable, position)` of each variable read.
@@ -72,7 +73,7 @@ fn reset<T: Clone>(v: &mut Vec<T>, n: usize, x: T) {
 /// Reverse post-order of the blocks reachable from block `root`, into
 /// `an.order`.
 fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
-    let hot_only = an.hot_only;
+    let func = an.func;
     let n = lir.blocks.len();
     reset(&mut an.seen, n, false);
     an.order.clear();
@@ -87,7 +88,7 @@ fn layout(lir: &Lir, an: &mut Analysis, root: u32) {
             continue;
         }
         top.1 += 1;
-        let s = succs_of(lir, b, hot_only)[k as usize];
+        let s = succs_of(lir, b, func)[k as usize];
         if s != NONE && !an.seen[s as usize] {
             an.seen[s as usize] = true;
             an.stack.push((s, 0));
@@ -103,7 +104,7 @@ pub(crate) fn analyze(lir: &Lir, an: &mut Analysis) {
 
 /// [`analyze`] for the function `start` names.
 pub(crate) fn analyze_from(lir: &Lir, an: &mut Analysis, start: Start) {
-    an.hot_only = start == Start::FirstPass;
+    an.func = start;
     let root = match (start, &lir.loop_entry) {
         (Start::Loop, Some(e)) => e.block,
         _ => 0,
@@ -146,7 +147,7 @@ fn place_loops(lir: &Lir, an: &mut Analysis) {
     for &b in &an.order {
         let (lo, hi) = an.block_at[b as usize];
         if hi > lo {
-            for s in succs_of(lir, b, an.hot_only) {
+            for s in succs_of(lir, b, an.func) {
                 if s != NONE && an.block_at[s as usize].0 <= lo {
                     an.loops.push((2 * an.block_at[s as usize].0, 2 * hi - 1));
                 }

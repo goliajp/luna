@@ -265,6 +265,9 @@ impl Emit for Lir {
             inherit,
         });
     }
+    fn pick(&mut self, loop_fn: Block, other: Block) {
+        self.pick_to(loop_fn, other);
+    }
     fn tier_count(&mut self, count: super::Count, at: u32, hot: Block, cont: Block) {
         self.edge(hot);
         self.edge(cont);

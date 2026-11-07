@@ -4,10 +4,12 @@ use super::*;
 
 /// The blocks the replay of `i` branches to (of a `TierCount`, which
 /// Cranelift code does not count, the continuation only, or the hot block
-/// only in `Start::FirstPass`).
+/// only in `Start::FirstPass`; of a `Pick`, its `a` in `Start::Loop`).
 fn targets(i: &Inst, start: Start) -> [Option<u32>; 2] {
     match i.op {
         Op::Jump => [Some(i.a), None],
+        Op::Pick if start == Start::Loop => [Some(i.a), None],
+        Op::Pick => [Some(i.b), None],
         Op::Brif(_) => [Some(i.b), Some(i.c)],
         Op::TierCount { .. } if start == Start::FirstPass => [Some(i.b), None],
         Op::TierCount { .. } => [Some(i.c), None],

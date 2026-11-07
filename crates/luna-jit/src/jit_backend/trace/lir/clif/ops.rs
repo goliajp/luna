@@ -79,6 +79,14 @@ impl Replay<'_, '_> {
                 let ba = self.block_args(&a);
                 self.b.ins().jump(target, &ba);
             }
+            Op::Pick => {
+                let to = match self.start {
+                    live::Start::Loop => i.a,
+                    _ => i.b,
+                };
+                let target = self.blocks[to as usize].expect("reachable");
+                self.b.ins().jump(target, &[]);
+            }
             Op::Brif(n_then) => {
                 let a = self.args(i);
                 let (ta, ea) = a.split_at(n_then as usize);
