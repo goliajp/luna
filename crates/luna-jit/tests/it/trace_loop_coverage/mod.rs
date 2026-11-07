@@ -58,7 +58,8 @@ fn show(vs: &[Value]) -> String {
 
 /// Run `f(args)` `times` times under the trace JIT and once more under the
 /// interpreter; the last results must agree. Returns the trace Vm, the
-/// function and the number of trace entries the last call made.
+/// function and the number of trace entries the last call made: through
+/// the dispatcher, or from another trace's side trace linking to it.
 fn run_both(src: &str, args: &[Value], times: usize) -> (Vm, Gc<LuaClosure>, u64) {
     let mut vm = trace_vm();
     let f = function(&mut vm, src);
@@ -66,9 +67,10 @@ fn run_both(src: &str, args: &[Value], times: usize) -> (Vm, Gc<LuaClosure>, u64
     for _ in 0..times {
         last = call(&mut vm, f, args);
     }
-    let before = vm.trace_dispatched_count();
+    let entered = |vm: &mut Vm| vm.trace_dispatched_count() + vm.jit_counters_mut().links;
+    let before = entered(&mut vm);
     let again = call(&mut vm, f, args);
-    let entries = vm.trace_dispatched_count() - before;
+    let entries = entered(&mut vm) - before;
     assert_eq!(show(&again), show(&last));
     let mut iv = interp_vm();
     let fi = function(&mut iv, src);
