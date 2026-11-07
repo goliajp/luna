@@ -19,16 +19,12 @@ pub(super) fn emit_sequence_op<E: Emit>(
     let regs: &[Variable] = oc.regs;
     match oc.op {
         Op::SetList => {
-            // `R[A][C+i] := R[A+i]` for i in
-            // 1..=effective_b. effective_b = bytecode B if B>0,
-            // else recorder's var_count snapshot (top - A - 1
-            // at the op). For sunk path, effective_b == cap
-            // (validated in escape sweep).
+            // `R[A][C+i] := R[A+i]` for i in 1..=effective_b: B, or for
+            // B = 0 the recorder's `var_count` (top - A - 1 at the op; the
+            // cap on the sunk path, checked by the escape sweep)
             let b_bytecode = ins.b() as usize;
             let effective_b = if b_bytecode == 0 {
-                // Unreachable on the sunk path (the escape sweep
-                // already mark_escaped on None). The helper path
-                // bails compile too — None means no live top.
+                // no live top: the sweep escaped a sunk site already
                 record.ops[i].var_count? as usize
             } else {
                 b_bytecode
@@ -76,10 +72,14 @@ pub(super) fn emit_sequence_op<E: Emit>(
             }
             let t = lw.bcx.use_var(regs[a]);
             // the array part first grows to the last index, as the
-            // interpreter's SetList does; the stores then land in it
+            // interpreter's SetList does (0 when it cannot: the interpreter
+            // runs the op); the stores then land in it
             let last = lw.bcx.ins().iconst(types::I64, c_off + effective_b as i64);
             let reserve = lw.bcx.import_func(reserve_list_id);
-            lw.bcx.ins().call(reserve, &[t, last]);
+            let grown = lw.bcx.ins().call(reserve, &[t, last]);
+            let grown = lw.bcx.inst_results(grown)[0];
+            let ok = lw.bcx.ins().icmp_imm_s(IntCC::NotEqual, grown, 0);
+            guard!(lw, pl, ok, i, rop.pc);
             for ii in 1..=effective_b {
                 let key = lw.bcx.ins().iconst(types::I64, c_off + ii as i64);
                 let src_kind = k_op(&lw.current_kinds, (off + a + ii) as u32);
@@ -88,8 +88,7 @@ pub(super) fn emit_sequence_op<E: Emit>(
                     return None;
                 }
                 let val = lw.bcx.use_var(regs[a + ii]);
-                // Always stored: SetList fills the fresh table of a
-                // constructor, which has no metatable, at integer keys.
+                // always stored: the constructor's fresh table has no metatable
                 let _ = emit_table_set(&mut lw.bcx, &set_ids, t, key, RegKind::Int, val, src_kind);
             }
         }

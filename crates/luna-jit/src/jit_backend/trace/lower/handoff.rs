@@ -70,9 +70,7 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         lw.bcx.switch_to_block(go);
         lw.bcx.seal_block(go);
         mark_pass_into_loop(lw, pl, count, at);
-        if let Some(ctx) = &lw.flush_ctx {
-            emit_flush_buf(&mut lw.bcx, ctx, &lw.entry.regs_full);
-        }
+        emit_flush_into_loop(lw, pl);
         for (idx, &v) in lw.entry.regs_full.iter().enumerate() {
             let val = use_var_resolved(&mut lw.bcx, v);
             if lw.stored.get(idx).copied().flatten() != Some(val) {
@@ -95,6 +93,32 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
         record.head_pc,
         lw.flush_ctx.as_ref(),
     );
+}
+
+/// Before the hand-over to the optimizing tier's loop: the accumulated
+/// string made. One the helper leaves to the dispatcher (0 in the register)
+/// goes no further: the trace leaves at the loop head instead, its buffer
+/// drained already.
+fn emit_flush_into_loop<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
+    let Some(ctx) = &lw.flush_ctx else {
+        return;
+    };
+    emit_flush_buf(&mut lw.bcx, ctx, &lw.entry.regs_full);
+    let s = lw.bcx.use_var(lw.entry.regs_full[ctx.accum_slot as usize]);
+    let (made, unmade) = (lw.bcx.create_block(), lw.bcx.create_block());
+    lw.bcx.ins().brif(s, made, &[], unmade, &[]);
+    lw.bcx.switch_to_block(unmade);
+    lw.bcx.seal_block(unmade);
+    emit_store_back_and_return_pc(
+        &mut lw.bcx,
+        &lw.entry.regs_full[..pl.max_stack],
+        &lw.stored,
+        lw.entry.reg_state,
+        pl.record.head_pc,
+        None,
+    );
+    lw.bcx.switch_to_block(made);
+    lw.bcx.seal_block(made);
 }
 
 /// Where the back edge counts: in this call's word of the register buffer

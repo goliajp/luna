@@ -20,9 +20,7 @@ impl Vm {
         proto: crate::runtime::Gc<crate::runtime::function::Proto>,
         trace: crate::jit::trace::CompiledTrace,
     ) {
-        let _ = self; // resolver passes &mut Vm for symmetry with future
-        // pending-install + hash-walk variants; nothing on `self` to
-        // mutate today because the install target lives on the Proto.
+        self.trace_exit_room(trace.window_size as usize);
         cache_trace(proto, trace);
     }
 

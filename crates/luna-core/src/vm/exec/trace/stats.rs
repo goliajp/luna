@@ -129,8 +129,8 @@ impl Vm {
 
     /// Number of trace entries that came back with
     /// `jit_pending_err` set (typically a metatable shadowed an
-    /// index inside a helper, forcing the dispatcher to fall back
-    /// to the interpreter without committing the trace's result).
+    /// index inside a helper, or compiled code could not allocate):
+    /// the trace left at that op, which the interpreter runs.
     pub fn trace_deopt_count(&self) -> u64 {
         self.jit.counters.deopt
     }

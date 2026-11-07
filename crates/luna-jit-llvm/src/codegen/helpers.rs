@@ -64,7 +64,7 @@ fn helper_registry() -> Vec<Helper> {
         h!(luna_jit_str_buf_acquire, 0, true),
         h!(luna_jit_str_buf_release, 1, false),
         h!(luna_jit_str_buf_extend, 2, true),
-        h!(luna_jit_str_buf_intern, 1, true),
+        h!(luna_jit_str_buf_intern, 2, true),
         h!(luna_jit_op_tforcall, 6, true),
         h!(luna_jit_stack_tag, 1, true),
         h!(luna_jit_spill_to_stack, 3, false),

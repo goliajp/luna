@@ -458,4 +458,7 @@ pub struct Vm {
     /// construction finished (PUC `completestate`): an allocation that
     /// fails may run an emergency collection from now on
     pub(super) state_complete: bool,
+    /// What a trace's exit left for the dispatcher to make; last, so that
+    /// it moves no field the interpreter's hot paths read
+    pub(crate) unmade: crate::vm::exec::ExitUnmade,
 }

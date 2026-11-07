@@ -236,6 +236,7 @@ impl Vm {
             buf_spare: LVec::new(mem),
             _mem: mem_owner,
             state_complete: false,
+            unmade: Default::default(),
         })
     }
 

@@ -25,6 +25,10 @@ impl Vm {
         key_out: &mut i64,
         val_out: &mut i64,
     ) -> i64 {
+        // a spill before it failed: the trace leaves at the op
+        if self.jit.pending_err.is_some() {
+            return -1;
+        }
         let Some(f) = self.jit_last_lua_frame() else {
             return -1;
         };
@@ -64,9 +68,7 @@ impl Vm {
             false
         };
         if !took_fast_path {
-            // slow path: copy R[A..=A+2] → R[A+4..=A+6], then
-            // route through begin_call. Lua-closure iters would push
-            // a Lua frame mid-trace → deopt.
+            // R[A..=A+2] to R[A+4..=A+6], called (a Lua iterator leaves)
             self.stack[(first + 2) as usize] = self.stack[control as usize];
             self.stack[(first + 1) as usize] = self.stack[(abs + 1) as usize];
             self.stack[first as usize] = self.stack[abs as usize];
@@ -83,9 +85,7 @@ impl Vm {
                 return -1;
             }
         }
-        // Batched writeback — fill the caller's buffers with the
-        // raw bits of R[A+2] / R[A+4] / R[A+5], which the trace reads
-        // back from them.
+        // the raw bits of R[A+2] / R[A+4] / R[A+5], for the trace to read
         // SAFETY: every `RawVal` `unpack` returns has all 8 bytes initialised (`RawVal::NIL` for nil and booleans), so reading them as `zero` is defined
         let ctrl_raw = unsafe { self.stack[control as usize].unpack().1.zero };
         let (key_tag, key_rv) = self.stack[first as usize].unpack();

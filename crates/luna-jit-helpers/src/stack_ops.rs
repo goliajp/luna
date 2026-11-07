@@ -17,6 +17,10 @@ use luna_core::__private::{ValueInternals, VmJitAlloc, VmJitFrames};
 pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
+    // a spill before it failed: the trace leaves at the op with nothing closed
+    if vm.jit().pending_err.is_some() {
+        return 1;
+    }
     vm.jit_op_close(start_offset as u32)
 }
 

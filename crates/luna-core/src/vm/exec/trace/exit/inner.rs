@@ -9,6 +9,8 @@ impl Vm {
     /// The trace `ct` (head frame at `base_us`, `pre_frames` frames before
     /// it ran) returned `raw_ret` from an exit inside an inlined function,
     /// and `src` names the side trace that then ran from that exit's frame.
+    /// `Some` when a frame of the side trace's own inline exit could not be
+    /// made (see [`Self::trace_push_unmade_frames`]).
     #[allow(clippy::too_many_arguments)]
     pub(in crate::vm::exec) fn trace_exit_restore_inner(
         &mut self,
@@ -20,16 +22,14 @@ impl Vm {
         pre_frames: usize,
         reg_state: &[i64],
         entry_tags: &[u8],
-    ) {
+    ) -> Option<(LuaError, u32)> {
         let ExitSource {
             child, body, off, ..
         } = src;
         let child = child.expect("a side trace ran");
         let parent = ct.plans.decode(raw_ret);
         let own = child.plans.decode(body);
-        if let Some(c) = child.exit_hit_counts.get(own.exit_hit_idx) {
-            c.set(c.get().saturating_add(1));
-        }
+        bump(child.exit_hit_counts.get(own.exit_hit_idx));
         // the exit that rebuilt frames for the side trace to start in
         let site = &ct.per_exit_inline[(parent.site_id - 1) as usize];
         let child_frame = pre_frames - 1 + site.chain.len();
@@ -39,13 +39,15 @@ impl Vm {
             off,
             child.plans.entry_tags.len(),
         );
+        let at = (off, base_us, cl.proto.max_stack as usize);
+        let failed = self.unmade_frames_at((&child, own.site_id), (&tags, None), at, reg_state);
         let keep = match &self.frames[child_frame] {
             CallFrame::Lua(f) => keep_tfor_vars(&f.closure.proto, body, own.cont_pc, off),
             CallFrame::Cont(_) => unreachable!("the side trace's frame is a Lua frame"),
         };
         self.trace_restore_slots(
             base_us,
-            cl.proto.max_stack as usize,
+            at.2,
             keep.clone(),
             false,
             crate::jit::trace::TagResKind::Mixed,
@@ -57,6 +59,7 @@ impl Vm {
         self.trace_restore_back_edge_kinds(base_us, ct, &tags, keep, reg_state);
         let head_resume = site.head_resume_pc;
         self.resume_inner_frames(pre_frames, child_frame, head_resume, &child, &own);
+        failed
     }
 }
 
@@ -113,4 +116,11 @@ fn composed_exit_tags(
         }
     }
     tags
+}
+
+/// One more hit of an exit, saturating.
+fn bump(c: Option<&crate::jit::send_compat::TCellU32>) {
+    if let Some(c) = c {
+        c.set(c.get().saturating_add(1));
+    }
 }

@@ -141,7 +141,7 @@ pub fn force_link_jit_helpers() -> usize {
         unsafe {
             let _ = jb::luna_jit_new_table();
             let _ = jb::luna_jit_new_table_sized(0);
-            jb::luna_jit_table_reserve_list(0, 0);
+            let _ = jb::luna_jit_table_reserve_list(0, 0);
             let _ = jb::luna_jit_materialize_sunk_table(
                 0,
                 0,
@@ -167,7 +167,7 @@ pub fn force_link_jit_helpers() -> usize {
             let _ = jb::luna_jit_str_buf_acquire();
             jb::luna_jit_str_buf_release(0);
             let _ = jb::luna_jit_str_buf_extend(0, 0);
-            let _ = jb::luna_jit_str_buf_intern(0);
+            let _ = jb::luna_jit_str_buf_intern(0, 0);
             let _ = jb::luna_jit_op_tforcall(
                 0,
                 0,

@@ -44,8 +44,7 @@ impl Vm {
             ran: false,
             off: 0,
         };
-        // a collection-check exit runs no side trace: the check is the op's
-        if !ct.has_any_side_wired.get() || self.jit.gc_exit.is_some() {
+        if self.exit_runs_no_side(ct) {
             return parent_only;
         }
         // the side trace wired to the exit taken runs here, not from the
@@ -104,6 +103,16 @@ impl Vm {
             ran: true,
             off,
         }
+    }
+
+    /// Whether the exit `ct` took runs no side trace: none is wired, or
+    /// the exit is a collection check (the check is the op's), at an op a
+    /// helper could not do, or one whose registers are not all made yet.
+    fn exit_runs_no_side(&self, ct: &CompiledTrace) -> bool {
+        !ct.has_any_side_wired.get()
+            || self.jit.gc_exit.is_some()
+            || self.jit.pending_err.is_some()
+            || self.unmade.any
     }
 
     fn count_side_trace_run(&mut self, off: usize) {

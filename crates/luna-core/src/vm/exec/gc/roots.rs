@@ -113,18 +113,11 @@ impl Vm {
     /// objects.
     fn mark_running(&self, m: &mut crate::runtime::heap::Marker) {
         // Root the running thread's live registers (PUC marks [stack, top)).
-        // `gc_top` is the instruction-level cursor of the last GC
-        // safe-point: allocation safe-points set it via
-        // `checkpoint(live_top)`, and `begin_call` raises it
-        // to the callee's argument top when entering a native — PUC's
-        // `L->top = func + 1 + nargs` C-call discipline. Without that
-        // raise, an explicit `collectgarbage()` collected with a STALE
-        // cursor from some earlier (lower) safe-point and freed its own
-        // caller's register-held strings
-        // (STATUS_ACCESS_VIOLATION on Windows / ASAN heap-use-after-free
-        // on Linux). Values stranded above the cursor stay
-        // excluded so weak-table entries are not spuriously pinned
-        // (gc.lua:544 suspended-coroutine collection).
+        // `gc_top` is the cursor of the last safe point: allocation safe
+        // points set it (`checkpoint(live_top)`), and `begin_call` raises it
+        // to a native's argument top (PUC's `L->top = func + 1 + nargs`), or
+        // a `collectgarbage()` would free its caller's registers. Values
+        // above it stay unmarked, so weak tables do not keep them.
         let live = (self.gc_top as usize).min(self.stack.len());
         for &v in self.stack[..live].iter() {
             // a record of 5.1's opening that stands for a table there
@@ -140,6 +133,10 @@ impl Vm {
         // a load's parser objects, above its C function's slots on PUC's
         // stack
         self.heap.mark_load_slots(m);
+        // what a trace's exit left for the dispatcher to make
+        for &v in &self.unmade.roots {
+            m.value(v);
+        }
         let mut list = self.jit.ssa_roots;
         while list != 0 {
             let w = list as *const i64;

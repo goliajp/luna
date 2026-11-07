@@ -34,17 +34,24 @@ impl Vm {
     /// `[0..need)`. Extends with Nil if shorter. Called by the
     /// frame-materialization helper before pushing an inlined frame
     /// whose register window may exceed the current stack length.
-    /// `false` when the stack cannot grow: the caller parks a deopt.
+    /// `false` when the stack cannot grow.
     pub(crate) fn jit_ensure_stack(&mut self, need: usize) -> bool {
         self.stack.len() >= need || self.stack.resize(need, Value::Nil).is_ok()
     }
 
-    /// Park a deopt for an allocation compiled code could not make: the
-    /// dispatcher drops what the compiled code computed and the
-    /// interpreter runs the code again, allocating through its own path
-    /// (which may collect in an emergency, as compiled code may not: it
-    /// can hold new objects only in machine registers). The parked value
-    /// is never raised, so it allocates nothing.
+    /// An inline exit pushed `pushed` of its frames and could not push
+    /// the next: the dispatcher pushes the rest
+    /// ([`Self::trace_push_unmade_frames`]).
+    pub(crate) fn jit_frames_unmade(&mut self, pushed: u32) {
+        self.unmade.frames = Some(pushed);
+        self.unmade.any = true;
+    }
+
+    /// Park a deopt for an allocation compiled code could not make: a
+    /// trace leaves at the op, which the interpreter runs, allocating
+    /// through its own path (which may collect in an emergency, as compiled
+    /// code may not: it can hold new objects only in machine registers).
+    /// The parked value is never raised, so it allocates nothing.
     pub(crate) fn jit_park_oom(&mut self) {
         if self.jit.pending_err.is_none() {
             self.jit.pending_err = Some(LuaError(Value::Nil));

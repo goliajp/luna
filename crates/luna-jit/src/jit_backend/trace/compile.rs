@@ -59,8 +59,7 @@ impl TraceHandle {
 /// op emits a cranelift `call` to the matching `luna_jit_*` helper
 /// (`Linkage::Import`, resolved via `JITBuilder::symbol`); helpers
 /// short-circuit on `vm.jit.pending_err` so a metatable-bearing
-/// table parks a deopt request the dispatcher can
-/// detect after the trace returns. The clean-close tail stores
+/// table parks a deopt, and the trace leaves at that op. The clean-close tail stores
 /// reg state back and returns `head_pc as i64`.
 ///
 /// Returns `None` if:
@@ -83,8 +82,8 @@ impl TraceHandle {
 /// the active Vm in the `JIT_VM` thread-local — the table helpers
 /// pick that up to reach `vm.heap`. After the call, the caller
 /// must inspect `vm.jit.pending_err` to decide whether a metatable
-/// deopt fired; on `Some`, treat the trace's result as invalid and
-/// re-run the work through the interpreter.
+/// deopt fired; on `Some`, the trace left at the op the helper could
+/// not do, which the interpreter runs from the exit.
 ///
 /// This is a convenience wrapper for callers that don't need to
 /// pick options — it forwards to

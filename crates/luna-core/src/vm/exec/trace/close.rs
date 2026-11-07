@@ -242,12 +242,10 @@ impl Vm {
         (second, Some(shorter))
     }
 
-    /// The counters a compiled trace contributes to.
+    /// The counters a compiled trace contributes to, and room for what its
+    /// exits may leave unmade, before it is installed.
     pub(in crate::vm::exec) fn tally_compiled_trace(&mut self, ct: &CompiledTrace) {
-        // Tally Sinkable sites
-        // + actually-sunk-emit sites + materialise
-        // emit sites before moving `ct` into
-        // Proto.traces.
+        self.trace_exit_room(ct.window_size as usize);
         self.jit.counters.sinkable_seen += ct.sinkable_sites_seen as u64;
         self.jit.counters.accum_bufferable_seen += ct.accum_bufferable_seen as u64;
         self.jit.counters.sunk_alloc += ct.sunk_alloc_seen as u64;

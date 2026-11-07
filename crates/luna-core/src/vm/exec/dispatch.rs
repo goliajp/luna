@@ -122,12 +122,13 @@ impl Vm {
         }
         // A trace cached for `pc` runs on the frame's registers, and the
         // interpreter goes on at its exit; one that comes back with
-        // `pending_err` parked is a deopt, and the interpreter runs from `pc`
-        // (the trace stays cached). Compiled code ticks no instruction budget
-        // and checks no memory cap: while one is armed, every loop stays in the
-        // interpreter. After a down-recursion trace's deopt the interpreter runs
-        // its head op once (`suppress_downrec_admit_once`, read and cleared
-        // here), or the trace would be admitted again forever.
+        // `pending_err` parked left at the op a helper could not do, which
+        // the interpreter runs (the trace stays cached). Compiled code ticks
+        // no instruction budget and checks no memory cap: while one is armed,
+        // every loop stays in the interpreter. After a down-recursion trace
+        // leaves at its head the interpreter runs the head op once
+        // (`suppress_downrec_admit_once`, read and cleared here), or the
+        // trace would be admitted again forever.
         let admit = trace_on && cl.proto.has_dispatchable_trace.get() && !self.limited;
         let downrec_admit_blocked =
             admit && std::mem::take(&mut self.jit.suppress_downrec_admit_once);

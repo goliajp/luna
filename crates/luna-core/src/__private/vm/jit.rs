@@ -67,8 +67,12 @@ pub trait VmJitFrames {
     /// `[0..need)`. Extends with Nil if shorter. Called by the
     /// frame-materialization helper before pushing an inlined frame
     /// whose register window may exceed the current stack length.
-    /// `false` when the stack cannot grow: the caller parks a deopt.
+    /// `false` when the stack cannot grow.
     fn jit_ensure_stack(&mut self, need: usize) -> bool;
+    /// The frame-materialization helper pushed the first `pushed` frames
+    /// of an inline exit and could not push the next: the dispatcher
+    /// pushes the rest once the trace has returned.
+    fn jit_frames_unmade(&mut self, pushed: u32);
     /// Trace JIT path for `Op::Close A`. Predicts whether
     /// `__close` handlers would run (any active tbc slot ≥ from
     /// holding a non-nil/false Value); if so, returns 1 without doing
@@ -216,6 +220,10 @@ impl VmJitFrames for crate::vm::Vm {
     #[inline]
     fn jit_ensure_stack(&mut self, need: usize) -> bool {
         crate::vm::Vm::jit_ensure_stack(self, need)
+    }
+    #[inline]
+    fn jit_frames_unmade(&mut self, pushed: u32) {
+        crate::vm::Vm::jit_frames_unmade(self, pushed)
     }
     #[inline]
     fn jit_op_close(&mut self, start_offset: u32) -> i64 {
