@@ -37,7 +37,7 @@ const SRC: &str = "
 
 /// The results with the trace JIT on or off, and with it on, the side
 /// trace runs and the cell fills of the last call.
-fn run(v: LuaVersion, jit: bool) -> (Vec<Value>, u64, [u64; 6]) {
+fn run(v: LuaVersion, jit: bool) -> (Vec<Value>, u64, [u64; 8]) {
     let mut vm = luna_jit::new_with_jit(v);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(jit);

@@ -90,10 +90,14 @@ impl Vm {
 /// Hands the cached side trace `child` to the parent `wired` names.
 /// The parent holds it before its side cell, if any, hands the child's
 /// entry to its code; what became of the cell is counted in `counts`.
+/// A cached trace that is no side trace (`wired` is `None`) is linked to
+/// by the side traces of `proto` that end at its head (see
+/// `relink::link_late`).
 pub(in crate::vm::exec) fn hold_side_trace(
     wired: Option<Wired>,
     child: TArc<CompiledTrace>,
-    counts: &mut [u64; 6],
+    counts: &mut [u64; 8],
+    proto: &crate::runtime::Proto,
 ) {
     if let Some((parent, exit)) = wired {
         let exit = exit as usize;
@@ -103,7 +107,9 @@ pub(in crate::vm::exec) fn hold_side_trace(
         debug_assert!(held[exit].is_none(), "exit {exit} wired twice");
         held[exit] = Some(TArc::clone(&child));
         drop(held);
-        counts[super::relink::relink_fill(&parent, exit, &child) as usize] += 1;
+        counts[super::relink::relink_fill(&parent, exit, &child, proto) as usize] += 1;
+    } else {
+        super::relink::link_late(&child, proto, counts);
     }
 }
 

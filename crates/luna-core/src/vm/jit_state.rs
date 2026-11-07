@@ -94,6 +94,12 @@ pub struct JitState {
 
     /// The trace dispatcher's `reg_state`, kept between entries.
     pub reg_state_buf: LVec<i64>,
+    /// The links compiled code took since the dispatches running began, as
+    /// `[parent, typed exit, linked trace]` (the traces by their index in
+    /// the frame's prototype's list); room for `LINK_DEPTH` is kept.
+    pub(crate) link_trail: LVec<[u32; 3]>,
+    /// Where the innermost dispatch's links start in `link_trail`.
+    pub(crate) link_base: usize,
 
     /// Roots: values compiled code holds only in registers while it calls a
     /// helper that can collect. The address of the innermost list (0 none):
@@ -249,6 +255,8 @@ impl JitState {
             handoff: Default::default(),
             fail_memory: None,
             reg_state_buf: LVec::new(mem),
+            link_trail: LVec::new(mem),
+            link_base: 0,
             ssa_roots: 0,
             str_bufs: LVec::new(mem),
             str_bufs_free: 0,

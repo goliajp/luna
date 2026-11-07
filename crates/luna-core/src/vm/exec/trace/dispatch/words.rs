@@ -62,7 +62,7 @@ fn grow<T: Copy + Default>(buf: &mut LVec<T>, len: usize) -> Result<(), Oom> {
 /// mark of a pass into the loop cleared. Any other trace reads neither
 /// word: its code counts in the trace's count cell.
 #[inline(always)]
-pub(super) fn count_in(ct: &CompiledTrace, regs: &mut [i64], window: usize) {
+pub(in crate::vm::exec) fn count_in(ct: &CompiledTrace, regs: &mut [i64], window: usize) {
     if ct.call_count
         && let Some(t) = &ct.tier_up
     {
@@ -76,7 +76,7 @@ pub(super) fn count_in(ct: &CompiledTrace, regs: &mut [i64], window: usize) {
 /// After the call: the low half of the call's count word back into the
 /// trace's count (see [`count_in`]).
 #[inline(always)]
-pub(super) fn count_out(ct: &CompiledTrace, regs: &[i64], window: usize) {
+pub(in crate::vm::exec) fn count_out(ct: &CompiledTrace, regs: &[i64], window: usize) {
     if ct.call_count
         && let Some(t) = &ct.tier_up
     {

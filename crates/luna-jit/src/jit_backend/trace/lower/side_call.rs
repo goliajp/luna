@@ -25,7 +25,7 @@
 //! one (see `reentry`).
 
 use super::*;
-use luna_core::__private::{EXIT_RELINK, SideCell, trace_ran_side_slot};
+use luna_core::__private::{SideCell, trace_ran_side_slot};
 
 /// What the trace's way back in needs, for a trace whose exits may run a
 /// side trace from its code.
@@ -147,9 +147,8 @@ fn emit_call<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, c: Value, entry: Value, 
     let sig = lw.entry.trace_fn_sig_ref;
     let call = lw.bcx.ins().call_indirect(sig, entry, &[reg_state]);
     let r = lw.bcx.inst_results(call)[0];
-    let relinked = lw.bcx.ins().band_imm_u(r, EXIT_RELINK as i64);
     let (back_blk, other) = (lw.bcx.create_block(), lw.bcx.create_block());
-    lw.bcx.ins().brif(relinked, back_blk, &[], other, &[]);
+    super::side_link::emit_branch_on_return(lw, pl, c, r, back_blk, other);
     switch_sealed(lw, other);
     let noted = lw.bcx.ins().iconst(types::I64, i64::from(tags_idx) + 1);
     let slot = 8 * trace_ran_side_slot(pl.window_size_us) as i32;

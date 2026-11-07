@@ -41,7 +41,26 @@ pub struct SideCell {
     pub(crate) own: TCellU32,
     /// What [`SideCell::back`] and [`SideCell::check`] point at.
     pub(crate) lists: TRefLock<(Box<[u32]>, Box<[u32]>)>,
+    /// The head of the trace the side trace links to, another trace of the
+    /// same frame whose entry it was checked against; `u32::MAX` when none.
+    pub(crate) link_pc: TCellU32,
+    /// The list the code hands `luna_jit_side_cell_list` to enter the
+    /// linked trace (in `link_lists`); null when none.
+    pub(crate) link: TCellPtr,
+    /// What entering the linked trace takes: the list `link` points at, the
+    /// checks (as `check`'s), the stores (as `back`'s), and each slot's
+    /// entry tag as the linked trace is entered ([`LINK_TAG_KEPT`] where it
+    /// is the one the side trace's parent was entered with).
+    pub(crate) link_lists: TRefLock<LinkLists>,
 }
+
+/// The links compiled code takes in a row before it leaves the next to the
+/// dispatcher: each takes a native frame of the linked trace's code.
+pub(crate) const LINK_DEPTH: usize = 8;
+
+/// In a side cell's entry tags of the linked trace: the slot holds what the
+/// side trace's parent was entered with.
+pub(crate) const LINK_TAG_KEPT: u8 = 0xFE;
 
 /// Where the code finds each field of a [`SideCell`], in bytes.
 #[derive(Clone, Copy, Debug)]
@@ -60,7 +79,14 @@ pub struct SideCellOffsets {
     pub loop_ok: i32,
     /// [`SideCell::relinks`]'s.
     pub relinks: i32,
+    /// [`SideCell::link_pc`]'s.
+    pub link_pc: i32,
+    /// [`SideCell::link`]'s.
+    pub link: i32,
 }
+
+/// See [`SideCell::link_lists`].
+pub(crate) type LinkLists = (Box<[u32]>, Box<[u32]>, Box<[u32]>, Box<[u8]>);
 
 impl SideCell {
     /// An empty cell: no side trace runs from it.
@@ -75,6 +101,9 @@ impl SideCell {
             relinks: TCellU32::new(0),
             own: TCellU32::new(0),
             lists: TRefLock::new((Box::new([]), Box::new([]))),
+            link_pc: TCellU32::new(u32::MAX),
+            link: TCellPtr::null(),
+            link_lists: TRefLock::new(Default::default()),
         }
     }
 
@@ -88,6 +117,8 @@ impl SideCell {
             at: std::mem::offset_of!(SideCell, at) as i32,
             loop_ok: std::mem::offset_of!(SideCell, loop_ok) as i32,
             relinks: std::mem::offset_of!(SideCell, relinks) as i32,
+            link_pc: std::mem::offset_of!(SideCell, link_pc) as i32,
+            link: std::mem::offset_of!(SideCell, link) as i32,
         }
     }
 

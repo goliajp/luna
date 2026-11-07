@@ -7,6 +7,7 @@ use crate::runtime::mem::LVec;
 use downrec::downrec_close_exit;
 
 mod entry;
+mod linked;
 pub(in crate::vm::exec) mod words;
 
 impl Vm {
@@ -106,31 +107,29 @@ impl Vm {
                 reg_state[trace_ran_side_slot(window_size_us)] = 0;
             }
             let running = self.trace_step_enter(&*ct);
+            let links_from = std::mem::replace(&mut self.jit.link_base, self.jit.link_trail.len());
+            let start = self.jit.link_base;
             let continuation_pc = {
                 let vm_ptr: *mut Vm = self;
                 let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                // SAFETY: `entry_fn` is the entry of `ct`, a compiled trace `cl.proto.traces` keeps alive; `reg_state` was sized above to at least the trace's window and the three words past it and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
-                unsafe { entry_fn(reg_state.as_mut_ptr()) }
+                let mut entry = entry_fn;
+                loop {
+                    // SAFETY: `entry` is the entry of `ct`, a compiled trace `cl.proto.traces` keeps alive, or of a trace of the same list `trace_link_again` entered after it, both checked to take this frame's registers as they are; `reg_state` was sized above to at least the trace's window and the three words past it (no narrower than the other's) and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
+                    let r = unsafe { entry(reg_state.as_mut_ptr()) };
+                    match self.trace_link_again(cl.proto, &ct, start, r, &mut reg_state) {
+                        Some(next) => entry = next,
+                        None => break r,
+                    }
+                }
             };
             self.trace_step_leave(running);
-            words::count_out(&ct, &reg_state, window_size_us);
+            // the trace whose code returned: the last one linked to, if any
+            let ct =
+                (self.trace_links_taken(cl.proto, links_from, start, &mut entry_tags[..max_stack]))
+                    .unwrap_or(ct);
+            words::count_out(&ct, &reg_state, ct.window_size as usize);
             self.jit.ghost_depth -= 1;
-            self.jit.counters.dispatched += 1;
-            if ct.inline_kinds != 0 {
-                self.count_inline_kinds(ct.inline_kinds);
-            }
-
-            // A helper that could not do its op (a metatable, no memory)
-            // parked a deopt and the trace left at that op: the exit is
-            // where the interpreter goes on, as for any guard, and it does
-            // the op itself. The mark stays up while the exit is restored
-            // (no side trace runs from it).
-            if self.jit.pending_err.is_some() {
-                self.jit.counters.deopt += 1;
-                if is_downrec_entry {
-                    self.jit.counters.downrec_deopt += 1;
-                }
-            }
+            self.trace_count_dispatch(&ct, is_downrec_entry);
             if is_downrec_entry && downrec_close_exit(continuation_pc) {
                 // a due step leaves through an exit, never the close
                 debug_assert!(self.jit.gc_exit.is_none());

@@ -18,6 +18,14 @@ use crate::jit::trace::{CompiledTrace, ENTRY_TAG_ANY, ExitTag};
 use crate::jit::trace_types::exit_tag_raw;
 use crate::jit::trace_types::side_cell::SideCell;
 
+mod enter;
+mod list;
+mod onward;
+
+pub(in crate::vm::exec) use onward::link_late;
+
+use list::{SideList, list_of};
+
 /// The cell of `parent`'s exit `exit` (as `exit_hit_counts` numbers them).
 fn cell_of(parent: &CompiledTrace, exit: usize) -> Option<&SideCell> {
     let typed = exit.checked_sub(parent.per_exit_inline.len())? as u32;
@@ -125,28 +133,6 @@ fn stores_at_relink(parent: &CompiledTrace, tags: &[Option<ExitTag>]) -> Vec<(us
         .collect()
 }
 
-/// What a list of [`SideList`] kind `kind` over `slots` holds for the code
-/// (see `Vm::side_cell_list`): the kind, the number of slots, the registers
-/// they reach, then `(slot << 8) | tag` for each; empty when there are
-/// none.
-fn list_of(kind: SideList, slots: &[(usize, u8)]) -> Box<[u32]> {
-    let Some(&(last, _)) = slots.last() else {
-        return Box::new([]);
-    };
-    let mut out = vec![kind as u32, slots.len() as u32, last as u32 + 1];
-    out.extend(slots.iter().map(|&(i, t)| (i as u32) << 8 | u32::from(t)));
-    out.into()
-}
-
-/// What a side cell's list does.
-#[derive(Clone, Copy)]
-enum SideList {
-    /// Checks the stack slots hold the entry tags given.
-    Check = 0,
-    /// Stores the registers to the stack slots with the exit tags given.
-    Store = 1,
-}
-
 /// What became of a side cell when a side trace was wired to its exit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::vm::exec) enum Fill {
@@ -158,22 +144,30 @@ pub(in crate::vm::exec) enum Fill {
     NoCell,
     /// The side trace's window is wider than the parent's.
     Wider,
-    /// The side trace does not end at the parent's head.
+    /// The side trace ends at the head of a trace other than the parent,
+    /// and no trace of the parent's frame it may enter starts there (yet).
     NotHead,
     /// The exit resumes in another frame.
     Frame,
-    /// The dispatcher would not enter the parent with the registers the side
-    /// trace leaves.
+    /// The dispatcher would not enter the parent (or the trace the side
+    /// trace links to) with the registers the side trace leaves.
     NotEnterable,
+    /// The parent's code runs the side trace and enters the trace it links
+    /// to, another of the frame's.
+    Linked,
+    /// The side trace ends at no trace's head.
+    NoLinkPc,
 }
 
 /// Fills the cell of `parent`'s exit `exit` for `child`, just wired there,
 /// when the parent's code may run it (see the module comment); otherwise
-/// the exit leaves to the dispatcher, which runs the child.
+/// the exit leaves to the dispatcher, which runs the child. `proto` is the
+/// parent's, whose traces a child ending at another head links to.
 pub(in crate::vm::exec) fn relink_fill(
     parent: &CompiledTrace,
     exit: usize,
     child: &CompiledTrace,
+    proto: &crate::runtime::Proto,
 ) -> Fill {
     let Some(cell) = cell_of(parent, exit) else {
         return Fill::NoCell;
@@ -187,20 +181,51 @@ pub(in crate::vm::exec) fn relink_fill(
     if child.window_size > parent.window_size {
         return Fill::Wider;
     }
-    if child.link_pc != Some(parent.head_pc) {
-        return Fill::NotHead;
-    }
     if parent.exit_frame_offset(exit) != 0 {
         return Fill::Frame;
     }
+    match child.link_pc {
+        Some(pc) if pc == parent.head_pc => fill_relink(parent, exit, child, cell),
+        Some(pc) => onward::fill_link(parent, exit, child, cell, proto, pc),
+        None => Fill::NoLinkPc,
+    }
+}
+
+/// `relink_fill` for a child that ends at the parent's head.
+fn fill_relink(
+    parent: &CompiledTrace,
+    exit: usize,
+    child: &CompiledTrace,
+    cell: &SideCell,
+) -> Fill {
     let tags = tags_at_relink(parent, exit, child);
     if !enterable(parent, &tags) {
         return Fill::NotEnterable;
     }
+    fill_cell(
+        cell,
+        child,
+        &stores_at_relink(parent, &tags),
+        &reads_unchecked(parent, exit, child),
+        goes_on_in_loop(parent, &tags),
+    );
+    Fill::Filled
+}
+
+/// Hands `child` to `cell` with its stores at going on in the parent's
+/// loop, its checks before it runs and whether its registers may go on in
+/// the optimizing tier's loop.
+fn fill_cell(
+    cell: &SideCell,
+    child: &CompiledTrace,
+    stores: &[(usize, u8)],
+    checks: &[(usize, u8)],
+    loop_ok: bool,
+) {
     let mut lists = cell.lists.borrow_mut();
     *lists = (
-        list_of(SideList::Store, &stores_at_relink(parent, &tags)),
-        list_of(SideList::Check, &reads_unchecked(parent, exit, child)),
+        list_of(SideList::Store, stores),
+        list_of(SideList::Check, checks),
     );
     let at = |l: &[u32]| {
         if l.is_empty() {
@@ -212,10 +237,9 @@ pub(in crate::vm::exec) fn relink_fill(
     cell.back.set(at(&lists.0));
     cell.check.set(at(&lists.1));
     drop(lists);
-    cell.loop_ok.set(u32::from(goes_on_in_loop(parent, &tags)));
+    cell.loop_ok.set(u32::from(loop_ok));
     count_for(cell, child);
     cell.entry.set(child.current_entry() as *const u8);
-    Fill::Filled
 }
 
 /// Points `cell`'s count at `child`'s move to the optimizing tier: the code
@@ -252,36 +276,5 @@ pub(in crate::vm::exec) fn relink_refresh(
     {
         count_for(cell, child);
         cell.entry.set(child.current_entry() as *const u8);
-    }
-}
-
-impl Vm {
-    /// Runs a side cell's list (see [`list_of`]) on the frame on top, whose
-    /// registers the trace's code holds in `reg_state`: 1 when the checks
-    /// pass, or after the stores. An empty list is the checks with no slot
-    /// to check. The checks are the dispatcher's before it runs a side
-    /// trace (`exit_runs_no_side`, `child_reads_stack_held_ok`).
-    pub(crate) fn side_cell_list(&mut self, list: &[u32], reg_state: &[i64]) -> i64 {
-        let store = list.first() == Some(&(SideList::Store as u32));
-        if !store
-            && (self.jit.gc_exit.is_some() || self.jit.pending_err.is_some() || self.unmade.any)
-        {
-            return 0;
-        }
-        let Some(CallFrame::Lua(f)) = self.frames.last() else {
-            return 0;
-        };
-        let base = f.base as usize;
-        for &e in list.get(3..).unwrap_or_default() {
-            let (slot, tag) = ((e >> 8) as usize, e as u8);
-            if !store {
-                if self.stack[base + slot].unpack().0 != tag {
-                    return 0;
-                }
-            } else if let Some(v) = restore::exit_value_of(tag, reg_state[slot]) {
-                self.stack[base + slot] = v;
-            }
-        }
-        1
     }
 }

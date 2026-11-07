@@ -27,6 +27,7 @@ mod prologue;
 mod readonly;
 mod reentry;
 mod side_call;
+mod side_link;
 mod state;
 mod step_guard;
 mod sunk_sites;

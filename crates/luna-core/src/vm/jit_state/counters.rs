@@ -40,10 +40,22 @@ pub struct JitCounters {
     pub side_trace_shape_mismatch: u64,
     /// Side traces wired to an exit, by what became of the exit's side
     /// cell: the parent's code runs them (0), or not because the exit has
-    /// no cell (1), the side trace is wider than the parent (2), does not
-    /// end at the parent's head (3), the exit resumes in another frame (4),
-    /// or the parent may not be entered with what it leaves (5).
-    pub relink: [u64; 6],
+    /// no cell (1), the side trace is wider than the parent (2), ends at
+    /// the head of a trace other than the parent where no trace of its
+    /// frame starts (3), the exit resumes in another frame (4),
+    /// or the parent (or the trace it links to) may not be entered with
+    /// what it leaves (5), or the parent's code runs them and enters the
+    /// other trace of the frame they end at (6), or not because the side
+    /// trace ends at no trace's head (7). A cell left empty for want
+    /// of a trace at the head the side trace ends at moves from 3 once one
+    /// is cached there.
+    pub relink: [u64; 8],
+    /// The times compiled code entered the trace a side trace links to
+    /// without the dispatcher.
+    pub links: u64,
+    /// Of `links`, the ones the dispatcher took after the code left them,
+    /// the links in a row at their limit.
+    pub links_redispatched: u64,
     /// Dispatches of traces holding each kind of inlined code, by the bit
     /// of [`crate::jit::trace::CompiledTraceParts::inline_kinds`].
     pub inline_kind_dispatched: [u64; 4],

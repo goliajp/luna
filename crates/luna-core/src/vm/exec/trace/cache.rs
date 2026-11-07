@@ -198,6 +198,9 @@ pub(in crate::vm::exec) fn cache_trace(
         proto.trace_call_head_settled.set(true);
     }
     let ct = TArc::new(ct);
+    // side cells link traces of one prototype by plain pointers, relying on
+    // this list never losing a trace: removing one must clear those links
+    // first
     proto.traces.borrow_mut().push(ct.clone());
     ct
 }
