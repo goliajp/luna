@@ -172,7 +172,8 @@ pub unsafe extern "C" fn luna_jit_self_level(
 /// # Safety
 /// Called from compiled code inside an `enter_jit` window on this thread;
 /// `regs` points at `2 * n` readable words, each pair one register's tag
-/// and payload.
+/// and payload; the Vm's stack holds the `n` registers from `base` (as
+/// entering the level makes room for them).
 // SAFETY: no other item in the link is named `luna_jit_handoff_frame`: only this crate defines
 // `luna_jit_` symbols, each once
 #[unsafe(no_mangle)]

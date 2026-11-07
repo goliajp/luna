@@ -33,6 +33,10 @@ pub trait VmJitFrames {
     ///
     /// # Safety
     /// `base` and `pc` are a level compiled code is running: `pc` an instruction of that level's function, `vals` its registers.
+    /// The stack holds the level's registers from its base: compiled
+    /// code the Vm entered from a call (`Vm::jit_enter_levels`) or a
+    /// level it entered after (`Vm::jit_self_level`) has that room. Called
+    /// past the stack's end, it panics.
     /// Where the frame cannot be kept for want of memory, the memory
     /// error is the call's: it is raised where compiled code was entered.
     unsafe fn jit_handoff_frame(

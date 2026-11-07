@@ -5,9 +5,10 @@
 //! read as its raw bits, and a call through an upvalue that no longer
 //! held the running function still went to the running function.
 
+use luna_core::__private::{VmJitFrames, VmJitState};
 use luna_core::jit::{CompileResult, IntChunkCompiler};
+use luna_core::runtime::Value;
 use luna_core::vm::isa::Op;
-use luna_core::{__private::VmJitFrames, runtime::Value};
 use luna_jit::LuaVersion;
 use luna_jit_llvm::{LlvmBackend, LlvmJitStorage};
 
@@ -65,6 +66,10 @@ fn inner(
     else {
         panic!("inner function did not compile")
     };
+    // the stack the level hands its frame over onto, as entering it from
+    // a call makes room
+    let end = vm.jit().levels_slot as usize + usize::from(cl.proto.max_stack);
+    assert!(vm.jit_ensure_stack(end), "no room for the level");
     (*cl, entry)
 }
 
