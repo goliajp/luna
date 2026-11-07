@@ -101,50 +101,57 @@ fn a_side_trace_replacing_a_folded_function_is_seen() {
     );
 }
 
-/// `CC(a, b)`, a `__concat` metamethod: "x", having marked the table in
-/// the global `MARK` read-only on its 3000th call, as a host function may.
-fn cc(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, luna_jit::vm::LuaError> {
-    let key = Value::Str(vm.intern("CN"));
-    let n = match vm.globals().get(key) {
-        Value::Int(n) => n + 1,
-        _ => 1,
+/// `NEXT(_, k)`, a generic-for iterator: `k + 1` up to 30000, having
+/// marked the table in the global `MARK` read-only when called with 12000,
+/// as a host function may.
+fn next_marking(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, luna_jit::vm::LuaError> {
+    // 5.1 and 5.2 count in floats
+    let (k, float) = match vm.nat_arg(fs, nargs, 1) {
+        Value::Int(k) => (k, false),
+        Value::Float(k) => (k as i64, true),
+        v => unreachable!("a number control variable: {v:?}"),
     };
-    vm.set_global("CN", Value::Int(n)).expect("CN");
-    if n == 3000
+    if k == 12000
         && let Value::Table(t) = vm.globals().get(Value::Str(vm.intern("MARK")))
     {
         vm.set_readonly(t, true);
     }
-    let x = Value::Str(vm.intern("x"));
-    Ok(vm.nat_return(fs, &[x]))
+    let next = match (k < 30000, float) {
+        (false, _) => Value::Nil,
+        (true, false) => Value::Int(k + 1),
+        (true, true) => Value::Float((k + 1) as f64),
+    };
+    Ok(vm.nat_return(fs, &[next]))
 }
 
-fn with_cc(vm: &mut Vm) {
-    let f = vm.native(cc);
-    vm.set_global("CC", f).expect("CC");
+fn with_next(vm: &mut Vm) {
+    let f = vm.native(next_marking);
+    vm.set_global("NEXT", f).expect("NEXT");
 }
 
-/// A side trace whose concatenation's metamethod, a host function, marks
-/// read-only the table its parent stores into, tested once before the
-/// loop: the store raises as in the interpreter. Compiled code runs no
-/// metamethod: the side trace leaves at the concatenation each time (the
-/// parent's code runs it, and it returns through its own exit), so it never
-/// goes on in the parent's loop here.
+/// A side trace whose iterator call, a host function, marks read-only the
+/// table its parent stores into: going on in the loop, the parent's store
+/// raises as in the interpreter. The side trace ends at the generic for's
+/// back-edge, after the call, so each time it goes on in the loop it has
+/// run the host function; `k == 12000` is on its path (`k % 4 == 0`).
+///
+/// In a side trace host code runs only there (a call, a metamethod or a
+/// collection leaves it through its own exit), so its parent has the same
+/// call in its loop and tests nothing read-only once before the loop.
 #[test]
 fn a_side_trace_marking_a_table_read_only_is_seen() {
-    let src = "local t = {} MARK = t \
-               local o = setmetatable({}, {__concat = CC}) \
-               for i = 1, 30000 do \
-                 t[1] = i \
-                 if i % 4 == 0 then local _ = o .. 'a' end \
+    let src = "local t = {} MARK = t local s = 0 \
+               for k in NEXT, nil, 0 do \
+                 t[1] = k \
+                 if k % 4 == 0 then s = s + 1 end \
                end \
-               return t[1]";
+               return t[1], s";
     for v in VERSIONS {
-        let (want, ..) = run_in(v, src, false, with_cc);
-        let (got, n, _) = run_in(v, src, true, with_cc);
+        let (want, ..) = run_in(v, src, false, with_next);
+        let (got, n, _) = run_in(v, src, true, with_next);
         assert_eq!(got, want, "{v:?}");
         assert!(want.contains("readonly table"), "{v:?}: {want}");
-        assert_eq!(n, 0, "{v:?}: a side trace went on in the loop");
+        assert!(n > 0, "{v:?}: no side trace went on in the loop");
     }
 }
 

@@ -143,21 +143,33 @@ pub(super) fn emit_tfor_loop_tail<E: Emit>(
     // next iteration's values, which the interpreter must get back
     lw.current_kinds[vars.clone()].copy_from_slice(&tail_kinds[vars]);
     lw.current_kinds[a + 2] = tail_kinds[a + 2];
-    if do_internal_loop
+    let internal = do_internal_loop
         && body_pc == record.head_pc
-        && loop_kinds_match(&tail_kinds, &lw.head_kinds)
-    {
+        && loop_kinds_match(&tail_kinds, &lw.head_kinds);
+    // a side trace linked to the trace whose head the loop goes back to
+    // goes on there as that trace's own back-edge would
+    let relinks = record.link_pc == Some(body_pc);
+    if (internal || relinks) && pl.rules().is_some_and(|r| r.check_on_return()) {
         // the step the iterator's return made due (5.1) is the
         // interpreter's
-        if pl.rules().is_some_and(|r| r.check_on_return()) {
-            let call_pc = record.ops[for_loop_idx - 1].pc;
-            gc_due_exit_as(lw, pl, for_loop_idx, body_pc, call_pc);
-        }
+        let call_pc = record.ops[for_loop_idx - 1].pc;
+        gc_due_exit_as(lw, pl, for_loop_idx, body_pc, call_pc);
+    }
+    if internal {
         emit_back_edge(lw, pl, &tail_kinds);
+    } else if relinks {
+        emit_store_back_and_return(
+            &mut lw.bcx,
+            &lw.entry.regs_full[..max_stack],
+            &lw.stored,
+            reg_state,
+            (luna_core::__private::EXIT_RELINK | u64::from(body_pc)) as i64,
+            lw.flush_ctx.as_ref(),
+        );
     } else {
         emit_store_back_and_return_pc(
             &mut lw.bcx,
-            caller_regs,
+            &lw.entry.regs_full[..max_stack],
             &lw.stored,
             reg_state,
             body_pc,
