@@ -136,37 +136,9 @@ impl<M: Masm> Gen<'_, M> {
                     self.m.store(Width::of(i.ty), x, M::SP, o);
                 }
             }
-            Op::Jump => {
-                let lir = self.lir;
-                let args = &lir.args[i.args_at as usize..(i.args_at + i.n_args) as usize];
-                self.jump(i.a, args, next);
-            }
-            Op::Brif(n_then) => self.brif(&i, n_then, next),
-            Op::TierCount { .. } => self.tier_count(&i, next),
-            Op::Call | Op::CallIndirect => {
-                let lir = self.lir;
-                let (f, addr) = match i.op {
-                    Op::Call => {
-                        let f = &lir.funcs[i.a as usize];
-                        (f, Some(f.addr))
-                    }
-                    _ => (&lir.sigs[i.b as usize], None),
-                };
-                let params = lir.params(f);
-                if addr == Some(0) || Self::stack_args(params).is_none() {
-                    return Err("call");
-                }
-                self.call(&i, addr, params);
-            }
-            Op::Return => {
-                if i.a != NONE {
-                    let r = self.src(i.a, 0);
-                    self.m.mov(M::RET, r);
-                }
-                self.m.epilogue_ret();
-            }
             Op::VarRead => self.copy(i.dst, nv + i.a),
             Op::VarWrite => self.copy(nv + i.a, i.b),
+            _ => return self.control(&i, next),
         }
         Ok(())
     }
