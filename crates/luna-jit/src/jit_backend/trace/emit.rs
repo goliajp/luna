@@ -34,6 +34,8 @@ pub(crate) trait Ins {
     /// Block `b` is the reentry block of a trace that relinks (see
     /// `lower::side_call`). Only the baseline tier's instructions keep it.
     fn mark_reentry(&mut self, _b: Block) {}
+    /// Block `b` is its relink block (see [`super::lir::Relink`]); as `mark_reentry`.
+    fn mark_relink(&mut self, _b: Block, _head_pc: u32, _ran_off: i32) {}
     fn append_block_param(&mut self, b: Block, ty: Type) -> Value;
     fn append_block_params_for_function_params(&mut self, b: Block);
     fn block_params(&self, b: Block) -> &[Value];

@@ -29,6 +29,10 @@ pub(crate) fn for_uses(lir: &Lir, i: &Inst, mut f: impl FnMut(u32)) {
             if matches!(i.op, Op::Brif(_) | Op::CallIndirect) {
                 f(i.a);
             }
+            // the baseline tier's exit hands `reg_state` to the call stub
+            if matches!(i.op, Op::CallingExit(_)) {
+                f(lir.arg0);
+            }
             for &x in &lir.args[i.args_at as usize..(i.args_at + i.n_args) as usize] {
                 f(x);
             }
@@ -92,15 +96,17 @@ pub(crate) enum Start {
 }
 
 /// The calling exits ([`Op::CallingExit`]) of a function made of a trace's
-/// instructions that go on to the call block, by side cell: all of them
-/// (the baseline tier's), or those whose cell held a side trace when the
-/// optimizing tier compiled the function, the others returning to the
-/// dispatcher.
+/// instructions that go on to the call block, by side cell: all of them, or
+/// those whose cell held a side trace when the optimizing tier compiled the
+/// function, the others returning to the dispatcher; or none, in the
+/// baseline tier's code, whose exits go on to the shared call stub and
+/// whose relink block is a second entry (see [`super::super::Relink`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Calls {
     #[default]
     All,
     Held(Box<[bool]>),
+    Stub,
 }
 
 impl Calls {
@@ -108,6 +114,7 @@ impl Calls {
         match self {
             Calls::All => true,
             Calls::Held(h) => h.get(n as usize).copied().unwrap_or(false),
+            Calls::Stub => false,
         }
     }
 }

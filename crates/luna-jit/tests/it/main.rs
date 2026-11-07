@@ -94,6 +94,7 @@ mod send_vm_jit_smoke;
 mod stack_overflow;
 mod table_len_jit;
 mod trace_back_edge_kinds;
+mod trace_baseline_stub;
 mod trace_call_c_zero_single_return;
 mod trace_call_exit_sunk_table;
 mod trace_call_reentry_close;

@@ -67,6 +67,33 @@ impl A64 {
         self.fixups.push((self.code.len() as u32, l.0, kind));
     }
 
+    /// Saves the frame record, `saved` and `fsaved`, and reserves `locals`
+    /// bytes below them.
+    pub(super) fn push_frame(&mut self, saved: &[u8], fsaved: &[u8], locals: u32) {
+        self.saved.clear();
+        self.saved.extend_from_slice(saved);
+        self.fsaved.clear();
+        self.fsaved.extend_from_slice(fsaved);
+        self.locals = locals;
+        let save = 8 * (saved.len() + fsaved.len()) as u32;
+        self.total = locals + save.div_ceil(16) * 16;
+        // stp x29, x30, [sp, #-16]!; mov x29, sp
+        self.put(0xA9BF_7BFD);
+        self.put(0x9100_03FD);
+        let t = i64::from(self.total);
+        self.add_any(31, 31, -t);
+        self.save_restore(true);
+    }
+
+    /// Undoes [`A64::push_frame`].
+    pub(super) fn pop_frame(&mut self) {
+        self.save_restore(false);
+        let t = i64::from(self.total);
+        self.add_any(31, 31, t);
+        // ldp x29, x30, [sp], #16
+        self.put(0xA8C1_7BFD);
+    }
+
     pub(super) fn save_restore(&mut self, store: bool) {
         let base = self.locals as i32;
         let n = self.saved.len();

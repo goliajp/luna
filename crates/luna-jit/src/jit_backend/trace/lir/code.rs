@@ -120,7 +120,7 @@ pub(crate) fn assemble(lir: &Lir, arena: &mut CodeArena, capture: bool) -> Assem
     }
     let mut w = WORK.with(|w| w.borrow_mut().take()).unwrap_or_default();
     let Work { an, al, masm, cg } = &mut *w;
-    live::analyze(lir, an);
+    live::analyze_from(lir, an, live::Start::Whole, &live::Calls::Stub);
     alloc::allocate(lir, an, [&Target::INT, &Target::FLT], al);
     let out = cg::generate(lir, an, al, Target::new(std::mem::take(masm)), cg)?;
     dump::write(lir, an, al, &out.bytes);

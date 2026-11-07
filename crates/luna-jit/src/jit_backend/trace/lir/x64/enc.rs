@@ -48,6 +48,40 @@ impl X64 {
         }
     }
 
+    /// Saves `saved` and reserves `locals` bytes past them, the stack
+    /// pointer left 16-byte aligned.
+    pub(super) fn push_frame(&mut self, saved: &[u8], locals: u32) {
+        self.saved = saved.to_vec();
+        for &r in saved {
+            if r >= 8 {
+                self.code.push(0x41);
+            }
+            self.code.push(0x50 | (r & 7));
+        }
+        // the return address and the pushes leave rsp 8 + 8k mod 16
+        let pushed = 8 + 8 * saved.len() as u32;
+        self.frame = locals + (16 - pushed % 16) % 16;
+        if self.frame > 0 {
+            self.op(&[], true, &[0x81], 5, Rm::Reg(RSP), false);
+            self.imm32(self.frame as i32);
+        }
+    }
+
+    /// Undoes [`X64::push_frame`].
+    pub(super) fn pop_frame(&mut self) {
+        if self.frame > 0 {
+            self.op(&[], true, &[0x81], 0, Rm::Reg(RSP), false);
+            self.imm32(self.frame as i32);
+        }
+        for k in (0..self.saved.len()).rev() {
+            let r = self.saved[k];
+            if r >= 8 {
+                self.code.push(0x41);
+            }
+            self.code.push(0x58 | (r & 7));
+        }
+    }
+
     pub(super) fn imm32(&mut self, v: i32) {
         self.code.extend_from_slice(&v.to_le_bytes());
     }

@@ -59,6 +59,7 @@ impl Masm for X64 {
     const FRET: u8 = 0;
     const CALL_SHADOW: u32 = abi::SHADOW;
     const POSITIONAL_ARGS: bool = abi::POSITIONAL;
+    const STUB_ARGS: [u8; 6] = [RCX, RDX, 8, 9, RAX, R10];
 
     fn new_label(&mut self) -> Label {
         self.labels.push(NONE);
@@ -319,34 +320,22 @@ impl Masm for X64 {
             fsaved.is_empty(),
             "no callee-saved float register is allocated"
         );
-        self.saved = saved.to_vec();
-        for &r in saved {
-            if r >= 8 {
-                self.code.push(0x41);
-            }
-            self.code.push(0x50 | (r & 7));
-        }
-        // the return address and the pushes leave rsp 8 + 8k mod 16
-        let pushed = 8 + 8 * saved.len() as u32;
-        self.frame = locals + (16 - pushed % 16) % 16;
-        if self.frame > 0 {
-            self.op(&[], true, &[0x81], 5, Rm::Reg(RSP), false);
-            self.imm32(self.frame as i32);
-        }
+        self.push_frame(saved, locals);
     }
     fn epilogue_ret(&mut self) {
-        if self.frame > 0 {
-            self.op(&[], true, &[0x81], 0, Rm::Reg(RSP), false);
-            self.imm32(self.frame as i32);
-        }
-        for k in (0..self.saved.len()).rev() {
-            let r = self.saved[k];
-            if r >= 8 {
-                self.code.push(0x41);
-            }
-            self.code.push(0x58 | (r & 7));
-        }
+        self.pop_frame();
         self.code.push(0xC3);
+    }
+    fn epilogue_jmp(&mut self, r: u8) {
+        self.pop_frame();
+        self.op(&[], false, &[0xFF], 4, Rm::Reg(r), false);
+    }
+    fn lea_label(&mut self, d: u8, l: Label) {
+        // lea d, [rip + rel32]
+        self.code
+            .extend_from_slice(&[0x48 | ((d >> 3) << 2), 0x8D, ((d & 7) << 3) | 5]);
+        self.fixups.push((self.code.len() as u32, l.0, 0));
+        self.imm32(0);
     }
     fn new(b: Bufs) -> X64 {
         let Bufs {

@@ -19,6 +19,7 @@ mod masm;
 mod pmove;
 mod record;
 mod spare;
+mod stub;
 mod ty;
 
 #[cfg(all(target_arch = "aarch64", not(windows)))]
@@ -211,6 +212,18 @@ pub(crate) struct LoopEntry {
     pub(crate) inherit: Vec<(u32, u32)>,
 }
 
+/// The relink block of a trace that relinks (see `lower::reentry`), which
+/// the baseline tier's code enters as a function of its own from the shared
+/// call stub, and what that stub needs to know of the trace: the head the
+/// side trace ends at to go on in the trace's loop, and where the trace
+/// notes a side trace it ran (`luna_core::__private::trace_ran_side_slot`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Relink {
+    pub(crate) block: u32,
+    pub(crate) head_pc: u32,
+    pub(crate) ran_off: i32,
+}
+
 /// A function a trace calls, or the signature of one it calls indirectly.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Callee {
@@ -252,6 +265,7 @@ pub(crate) struct Lir {
     pub(crate) pending_inherit: Option<(u32, (u32, u32))>,
     /// Where the optimizing tier's loop starts (see `lower::handoff`).
     pub(crate) loop_entry: Option<LoopEntry>,
+    pub(crate) relink: Option<Relink>,
     /// `(block, snapshot)` of each block that took the values its
     /// predecessors agree on (see `Lir::edge`).
     pub(crate) inherited: Vec<(u32, (u32, u32))>,
