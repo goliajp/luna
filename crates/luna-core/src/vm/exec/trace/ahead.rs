@@ -1,8 +1,9 @@
 //! Traces taken up ahead of their loop heads.
 //!
-//! The first trace a function takes up from another Vm brings the traces of
-//! the function's other loop heads with it, so that the code of all of them
-//! is placed in one batch and turns executable at once. They are held
+//! The first trace a function takes up (compiled by another Vm, or by an
+//! earlier load of the same code) brings the traces of the function's other
+//! loop heads with it, so that the code of all of them is placed in one
+//! batch and turns executable at once. They are held
 //! beside the function, not among its traces (a head has one trace), until
 //! the interpreter first takes a back-edge to their head: there, with the
 //! registers that will enter it, a trace whose entry tags admit them is
@@ -17,7 +18,9 @@
 //! threshold: its slot in the loop counts is set to the threshold. Another
 //! loop whose head shares that slot may reach the threshold first; it then
 //! starts recording (or taking up a trace) that much sooner, and the held
-//! head counts from zero again, its check made once it is hot.
+//! head counts from zero again, its check made once it is hot. That takes an
+//! interpreted loop reaching the slot between the two, which no held head of
+//! the `diff_puc` test corpus met.
 
 use super::cache::keep_inlined;
 use super::*;
