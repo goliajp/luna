@@ -50,7 +50,7 @@ pub(super) fn emit_table_set<E: Emit>(
 /// sequence BEFORE the existing store-back loop, so the
 /// accumulator slot holds a real LuaStr ptr by the time the
 /// dispatcher restores from reg_state.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct FlushCtx {
     pub(super) buf_var: Variable,
     pub(super) accum_slot: u32,

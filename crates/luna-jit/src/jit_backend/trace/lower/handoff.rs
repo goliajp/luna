@@ -13,6 +13,7 @@
 //! code and the rest of the loop in the optimizing tier's, with nothing
 //! added inside either loop.
 
+use super::relinks::{Ctx, Tier};
 use super::*;
 use crate::jit_backend::trace::lir::Count;
 use luna_core::__private::EXIT_LOOP_AGAIN;
@@ -50,60 +51,56 @@ pub(super) fn emit_loop_entry<E: Emit>(lw: &mut Lower<E>) -> Option<()> {
     Some(())
 }
 
-/// The back edge's way once its count reaches `at`, in the current block:
-/// on into the optimizing tier's loop when the trace's loop cell holds it,
-/// else out at the loop head, where the dispatcher moves the trace on.
-pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
-    let Plan {
-        record, max_stack, ..
-    } = *pl;
-    let (reg_state, sig) = (lw.entry.reg_state, lw.entry.trace_fn_sig_ref);
-    if let Some(t) = &lw.tier_count {
-        let (count, at) = (count_at(lw, pl, t), t.at());
-        let f = load_loop_cell(&mut lw.bcx, t);
-        let (go, out) = (lw.bcx.create_block(), lw.bcx.create_block());
-        lw.bcx.ins().brif(f, go, &[], out, &[]);
-        lw.bcx.switch_to_block(go);
-        lw.bcx.seal_block(go);
-        mark_pass_into_loop(lw, pl, count, at);
-        emit_flush_into_loop(lw, pl);
-        for (idx, &v) in lw.entry.regs_full.iter().enumerate() {
-            let val = use_var_resolved(&mut lw.bcx, v);
-            if lw.stored.get(idx).copied().flatten() != Some(val) {
-                lw.bcx
-                    .ins()
+/// The back edge's way once its count reaches `at`, in the current block
+/// (`stored`: what `reg_state` holds there): on into the optimizing tier's
+/// loop when the trace's loop cell holds it, else out at the loop head,
+/// where the dispatcher moves the trace on.
+pub(super) fn emit_hot_back_edge<E: Emit>(bcx: &mut E, cx: &Ctx<'_>, stored: &[Option<Value>]) {
+    let reg_state = cx.reg_state;
+    if let Some(t) = &cx.tier {
+        let f = load_loop_cell(bcx, t);
+        let (go, out) = (bcx.create_block(), bcx.create_block());
+        bcx.ins().brif(f, go, &[], out, &[]);
+        bcx.switch_to_block(go);
+        bcx.seal_block(go);
+        mark_pass_into_loop(bcx, cx, t);
+        emit_flush_into_loop(bcx, cx, stored);
+        for (idx, &v) in cx.regs.iter().enumerate() {
+            let val = use_var_resolved(bcx, v);
+            if stored.get(idx).copied().flatten() != Some(val) {
+                bcx.ins()
                     .store(MemFlagsData::new(), val, reg_state, (idx as i32) * 8);
             }
         }
         // called again for as long as it asks (see `reentry::loop_fn_gate`)
-        let (call_blk, done) = (lw.bcx.create_block(), lw.bcx.create_block());
-        lw.bcx.ins().jump(call_blk, &[]);
-        lw.bcx.switch_to_block(call_blk);
-        let call = lw.bcx.ins().call_indirect(sig, f, &[reg_state]);
-        let r = lw.bcx.inst_results(call)[0];
-        let again = (lw.bcx.ins()).icmp_imm_s(IntCC::Equal, r, EXIT_LOOP_AGAIN as i64);
-        lw.bcx.ins().brif(again, call_blk, &[], done, &[]);
-        lw.bcx.seal_block(call_blk);
-        lw.bcx.switch_to_block(done);
-        lw.bcx.seal_block(done);
-        lw.bcx.ins().return_(&[r]);
-        lw.bcx.switch_to_block(out);
-        lw.bcx.seal_block(out);
+        let (call_blk, done) = (bcx.create_block(), bcx.create_block());
+        bcx.ins().jump(call_blk, &[]);
+        bcx.switch_to_block(call_blk);
+        let call = bcx.ins().call_indirect(cx.sig, f, &[reg_state]);
+        let r = bcx.inst_results(call)[0];
+        let again = (bcx.ins()).icmp_imm_s(IntCC::Equal, r, EXIT_LOOP_AGAIN as i64);
+        bcx.ins().brif(again, call_blk, &[], done, &[]);
+        bcx.seal_block(call_blk);
+        bcx.switch_to_block(done);
+        bcx.seal_block(done);
+        bcx.ins().return_(&[r]);
+        bcx.switch_to_block(out);
+        bcx.seal_block(out);
     }
     emit_store_back_and_return_pc(
-        &mut lw.bcx,
-        &lw.entry.regs_full[..max_stack],
-        &lw.stored,
+        bcx,
+        &cx.regs[..cx.max_stack],
+        stored,
         reg_state,
-        record.head_pc,
-        lw.flush_ctx.as_ref(),
+        cx.head_pc,
+        cx.flush,
     );
 }
 
-/// The optimizing tier's loop of the trace `t` moves, null until compiled.
-pub(super) fn load_loop_cell<E: Emit>(bcx: &mut E, t: &TierUp) -> Value {
-    let cell_addr = luna_core::__private::tier_up_loop_cell(t) as *const TCellPtr as i64;
-    let cell = bcx.reloc(RelocKind::TierLoop, cell_addr);
+/// The optimizing tier's loop of the trace `t` counts for, null until
+/// compiled.
+pub(super) fn load_loop_cell<E: Emit>(bcx: &mut E, t: &Tier) -> Value {
+    let cell = bcx.reloc(RelocKind::TierLoop, t.loop_cell);
     bcx.ins().load(types::I64, MemFlagsData::trusted(), cell, 0)
 }
 
@@ -111,37 +108,37 @@ pub(super) fn load_loop_cell<E: Emit>(bcx: &mut E, t: &TierUp) -> Value {
 /// string made. One the helper leaves to the dispatcher (0 in the register)
 /// goes no further: the trace leaves at the loop head instead, its buffer
 /// drained already.
-fn emit_flush_into_loop<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
-    let Some(ctx) = &lw.flush_ctx else {
+fn emit_flush_into_loop<E: Emit>(bcx: &mut E, cx: &Ctx<'_>, stored: &[Option<Value>]) {
+    let Some(ctx) = cx.flush else {
         return;
     };
-    emit_flush_buf(&mut lw.bcx, ctx, &lw.entry.regs_full);
-    let s = lw.bcx.use_var(lw.entry.regs_full[ctx.accum_slot as usize]);
-    let (made, unmade) = (lw.bcx.create_block(), lw.bcx.create_block());
-    lw.bcx.ins().brif(s, made, &[], unmade, &[]);
-    lw.bcx.switch_to_block(unmade);
-    lw.bcx.seal_block(unmade);
+    emit_flush_buf(bcx, ctx, cx.regs);
+    let s = bcx.use_var(cx.regs[ctx.accum_slot as usize]);
+    let (made, unmade) = (bcx.create_block(), bcx.create_block());
+    bcx.ins().brif(s, made, &[], unmade, &[]);
+    bcx.switch_to_block(unmade);
+    bcx.seal_block(unmade);
     emit_store_back_and_return_pc(
-        &mut lw.bcx,
-        &lw.entry.regs_full[..pl.max_stack],
-        &lw.stored,
-        lw.entry.reg_state,
-        pl.record.head_pc,
+        bcx,
+        &cx.regs[..cx.max_stack],
+        stored,
+        cx.reg_state,
+        cx.head_pc,
         None,
     );
-    lw.bcx.switch_to_block(made);
-    lw.bcx.seal_block(made);
+    bcx.switch_to_block(made);
+    bcx.seal_block(made);
 }
 
 /// Where the back edge counts: in this call's word of the register buffer
-/// when the trace has written-only registers, whose exits tell a call
-/// before its first back edge from one past it (see
+/// (at `reg_state`) when the trace has written-only registers, whose exits
+/// tell a call before its first back edge from one past it (see
 /// `luna_core::__private::trace_count_slot`), else in the count cell the
 /// trace's calls share.
-pub(super) fn count_at<E: Emit>(lw: &Lower<E>, pl: &Plan<'_>, t: &TierUp) -> Count {
+pub(super) fn count_at(reg_state: Value, pl: &Plan<'_>, t: &TierUp) -> Count {
     if pl.write_only.iter().any(|w| *w) {
         let off = 8 * luna_core::__private::trace_count_slot(pl.window_size_us) as i32;
-        Count::Frame(lw.entry.reg_state, off)
+        Count::Frame(reg_state, off)
     } else {
         Count::Cell(t.count() as *const TCellU32 as i64)
     }
@@ -150,30 +147,22 @@ pub(super) fn count_at<E: Emit>(lw: &Lower<E>, pl: &Plan<'_>, t: &TierUp) -> Cou
 /// Before the hand-over to the optimizing tier's loop: the count set back
 /// to `at - 1`, and for a count in this call's word its mark of a pass into
 /// the loop set.
-pub(super) fn mark_pass_into_loop<E: Emit>(
-    lw: &mut Lower<E>,
-    pl: &Plan<'_>,
-    count: Count,
-    at: u32,
-) {
-    let back = lw
-        .bcx
+pub(super) fn mark_pass_into_loop<E: Emit>(bcx: &mut E, cx: &Ctx<'_>, t: &Tier) {
+    let back = bcx
         .ins()
-        .iconst(types::I32, i64::from(at.saturating_sub(1)));
+        .iconst(types::I32, i64::from(t.at.saturating_sub(1)));
     let flags = MemFlagsData::trusted();
-    let (reg_state, off) = match count {
+    let (reg_state, off) = match t.count {
         Count::Cell(cell) => {
-            let count = lw.bcx.reloc(RelocKind::TierCell, cell);
-            lw.bcx.ins().store(flags, back, count, 0);
+            let count = bcx.reloc(RelocKind::TierCell, cell);
+            bcx.ins().store(flags, back, count, 0);
             return;
         }
         Count::Frame(reg_state, off) => (reg_state, off),
     };
-    lw.bcx.ins().store(flags, back, reg_state, off);
-    let window = pl.window_size_us;
-    let one = lw.bcx.ins().iconst(types::I64, 1);
-    let passed_off = 8 * luna_core::__private::trace_passed_slot(window) as i32;
-    lw.bcx
-        .ins()
+    bcx.ins().store(flags, back, reg_state, off);
+    let one = bcx.ins().iconst(types::I64, 1);
+    let passed_off = 8 * luna_core::__private::trace_passed_slot(cx.window) as i32;
+    bcx.ins()
         .store(MemFlagsData::trusted(), one, reg_state, passed_off);
 }

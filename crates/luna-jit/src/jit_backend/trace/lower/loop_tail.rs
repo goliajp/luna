@@ -266,18 +266,18 @@ pub(super) fn emit_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, tail: &[
     lw.back_edge_kinds = Some(tail.to_vec());
     note_write_only_kinds(lw, pl, tail);
     commit_back_edge(lw);
-    let Some(t) = &lw.tier_count else {
+    let tier = lw.tier_count.as_deref();
+    let cx = ctx_of(&lw.entry, lw.flush_ctx.as_ref(), tier, pl);
+    let Some(t) = cx.tier else {
         lw.bcx.ins().jump(body_loop, &[]);
         return;
     };
-    let (count, at) = (super::handoff::count_at(lw, pl, t), t.at());
-    lw.counts_per_call |= matches!(count, crate::jit_backend::trace::lir::Count::Frame(..));
+    lw.counts_per_call |= t.per_call();
     lw.loops = true;
     let hot = lw.bcx.create_block();
-    lw.bcx.tier_count(count, at, hot, body_loop);
-    lw.bcx.switch_to_block(hot);
-    lw.bcx.seal_block(hot);
-    emit_hot_back_edge(lw, pl);
+    lw.bcx.tier_count(t.count, t.at, hot, body_loop);
+    switch_sealed(&mut lw.bcx, hot);
+    emit_hot_back_edge(&mut lw.bcx, &cx, &lw.stored);
 }
 
 /// Notes the kinds `tail` leaves the written-only registers in (see
