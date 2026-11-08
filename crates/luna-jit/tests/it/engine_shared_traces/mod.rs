@@ -443,6 +443,7 @@ end
     assert_adopted_only("same code, other lines", &r, &want);
 }
 
+mod ahead;
 mod failures;
 mod functions;
 mod threads;
