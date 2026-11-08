@@ -179,12 +179,11 @@ pub(super) fn lower_trace_lir(
         _ => 0,
     };
     let lower = |split| lower_trace_lir_split(record, opts, float_only, at_exits, count_at, split);
-    let (lir, parts) = match lower(count_at > 0)? {
+    let l = match lower(count_at > 0)? {
         Ok(l) => l,
         Err(()) => lower(false)?.ok()?,
     };
-    let parts = side_tier::at_payback(record, lir.insts.len(), parts, opts.tier_up_at);
-    Some((lir, parts))
+    Some(side_tier::at_payback(record, l, opts.tier_up_at))
 }
 
 /// [`lower_trace_lir`] with the iteration count kept at `count_at` (none at
