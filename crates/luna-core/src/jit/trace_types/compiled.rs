@@ -222,6 +222,11 @@ pub struct CompiledTraceParts {
     /// the trace makes them when a side trace is first wired to one of
     /// those exits.
     pub side_cells: Option<super::side_cell::SideCells>,
+    /// What the backend compiles the trace's baseline code again from once
+    /// a side trace is first wired to one of `side_cell_exits`, for a trace
+    /// with no `tier_up` (whose source serves otherwise; see
+    /// `TraceCompiler::compile_calls`).
+    pub calls_source: Option<Box<dyn std::any::Any + Send + Sync>>,
     /// The head of the trace a side trace ends at, returning it with
     /// [`crate::__private::EXIT_RELINK`] (see `TraceRecord::link_pc`).
     pub link_pc: Option<u32>,

@@ -34,6 +34,7 @@ impl Lir {
                 l.unsupported = None;
                 l.loop_entry = None;
                 l.relink = None;
+                l.relinks = None;
                 l.inherited.clear();
                 l.pending_inherit = None;
                 l
@@ -55,6 +56,7 @@ impl Lir {
             + self.blocks.len() * std::mem::size_of::<BlockData>()
             + self.value_ty.len()
             + 4 * (self.args.len() + self.bparams.len())
+            + self.relinks.as_ref().map_or(0, |x| x.size())
     }
 
     /// The parts of `self` code generation reads, in buffers of their own
@@ -88,6 +90,7 @@ impl Lir {
             arg0: self.arg0,
             loop_entry: self.loop_entry.clone(),
             relink: self.relink,
+            relinks: self.relinks.clone(),
             ..Lir::new()
         }
     }

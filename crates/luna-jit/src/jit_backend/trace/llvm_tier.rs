@@ -8,7 +8,7 @@
 //! code up the next time the trace is entered (see
 //! `TraceCompiler::tier_up`).
 
-use super::tier_source::{TierSource, calls_of, kept};
+use super::tier_source::{TierSource, calls_of, expanded, kept, of};
 use super::*;
 use luna_core::__private::TierKept;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,8 +66,7 @@ fn compile(
 /// the first pass, else the whole trace.
 type Tiered = (Option<Compiled>, Compiled);
 
-fn compile_tier(src: &TierSource, calls: &lir::Calls) -> Tiered {
-    let (lir, relocs) = (&*src.lir, &src.relocs[..]);
+fn compile_tier((lir, relocs): (&lir::Lir, &[(RelocKind, i64)]), calls: &lir::Calls) -> Tiered {
     match lir.loop_entry.is_some() {
         true => (
             Some(compile(lir, relocs, lir::Start::Loop, calls)),
@@ -108,7 +107,15 @@ pub(super) fn compile_trace_llvm(
         lir.give();
         return Some(compiled);
     }
-    let c = compile(&lir, &lir.relocs, lir::Start::Whole, &lir::Calls::All);
+    // every calling exit calls: the cells are made now
+    let ex = lir.relinks.is_some().then(|| {
+        let cells = luna_core::__private::side_cells(compiled.side_cell_exits.len());
+        let l = lir::expand(&lir, &lir.relocs, cells.as_ptr() as i64);
+        compiled.side_cells = Some(cells);
+        l
+    });
+    let l = ex.as_ref().unwrap_or(&lir);
+    let c = compile(l, &l.relocs, lir::Start::Whole, &lir::Calls::All);
     lir.give();
     compiled.entry = install(storage, c)?;
     Some(compiled)
@@ -159,7 +166,8 @@ pub(crate) fn tier_up_llvm(
     };
     let calls = calls_of(ct);
     let Some(delay) = delay else {
-        let entry = install_tier(storage, ct, compile_tier(&source, &calls));
+        let ex = expanded(&source, ct, &calls);
+        let entry = install_tier(storage, ct, compile_tier(of(&source, &ex), &calls));
         if let Some(e) = entry {
             super::code_dump::dump("tier-up-llvm", ct.head_pc(), e as *const u8);
         }
@@ -175,7 +183,7 @@ pub(crate) fn tier_up_llvm(
     };
     let now = std::time::Instant::now();
     if delay.is_zero() {
-        hand_over(storage, &mut p, source, calls_of(ct), now);
+        hand_over(storage, &mut p, source, ct, now);
     } else {
         p.source = Some(source);
         let due = p.due.clone();
@@ -220,7 +228,7 @@ fn pending(
         && let Some(src) = p.source.take()
     {
         let now = std::time::Instant::now();
-        hand_over(storage, &mut p, src, calls_of(ct), now);
+        hand_over(storage, &mut p, src, ct, now);
     }
     // SAFETY: the pending compile of the source just taken from `ct`
     unsafe { luna_core::__private::put_tier_source(ct, p) };
@@ -228,25 +236,25 @@ fn pending(
 }
 
 /// Has the compile thread compile `src` for `p`, its calling exits calling
-/// as `calls` says.
+/// as those of `ct` do now.
 fn hand_over(
     storage: &mut dyn luna_core::__private::JitStorage,
     p: &mut Pending,
     src: Box<TierSource>,
-    calls: lir::Calls,
+    ct: &CompiledTrace,
     now: std::time::Instant,
 ) {
     let (ready, done) = (p.ready.clone(), p.done.clone());
-    let job = TierSource {
-        lir: src.lir.clone(),
-        relocs: src.relocs.clone(),
-        image: None,
-        record: None,
+    let calls = calls_of(ct);
+    let job = match expanded(&src, ct, &calls) {
+        Some(l) => (Arc::new(l), None),
+        None => (src.lir.clone(), Some(src.relocs.clone())),
     };
     let c = calls.clone();
     let ticket = crate::jit_backend::llvm_thread::submit(
         Box::new(move || {
-            *done.lock().expect(POISON) = Some(compile_tier(&job, &c));
+            let relocs = job.1.as_deref().unwrap_or(&job.0.relocs);
+            *done.lock().expect(POISON) = Some(compile_tier((&job.0, relocs), &c));
             ready.store(true, Ordering::Release);
         }),
         now,

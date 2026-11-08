@@ -65,6 +65,7 @@ fn parts(entry: crate::jit::trace::TraceFn, pass: PassCount, tiered: bool) -> Co
         tier_up: tiered.then(|| Box::new(TierUp::new(Box::new(TCellU32::new(0)), u32::MAX, 0))),
         side_cell_exits: std::sync::Arc::new([]),
         side_cells: None,
+        calls_source: None,
         link_pc: None,
         loop_tags: None,
     }

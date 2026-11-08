@@ -63,10 +63,12 @@ mod llvm_tier;
 pub use llvm_tier::llvm_codegen_count;
 #[cfg(feature = "llvm-jit")]
 pub(crate) use llvm_tier::tier_up_llvm;
+mod calls;
 pub(crate) mod reloc;
 mod share;
 pub(crate) mod share_failures;
 mod tier_source;
+pub(crate) use calls::compile_calls;
 pub(crate) use emit::{ClifEmit, Emit, Ins, len_state_flags_in};
 pub(crate) use lir::CodeArena;
 pub(crate) use reloc::{RelocKind, reloc_symbol};

@@ -8,13 +8,45 @@ use super::*;
 use luna_core::__private::{EXIT_LOOP_AGAIN, trace_ran_side_slot};
 
 /// The way back into a trace that relinks, once everything else is lowered
-/// (see [`emit_relinks`]).
-pub(super) fn emit_relink_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
-    let Some(mut o) = lw.relink.take() else {
-        return;
-    };
+/// (see [`emit_relinks`]). When it is left to the expansion, the gate goes
+/// on to the loop, and what the expansion takes is returned, for a trace
+/// with calling exits.
+pub(super) fn emit_relink_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Option<Relinks> {
+    let mut o = lw.relink.take()?;
     let x = relinks_of(lw, pl, &o);
-    emit_relinks(&mut lw.bcx, &x, &mut o.way);
+    if !o.defer {
+        emit_relinks(&mut lw.bcx, &x, &mut o.way);
+        return None;
+    }
+    if let Some(g) = x.gate {
+        switch_sealed(&mut lw.bcx, g.block);
+        lw.bcx.ins().jump(g.start, &[]);
+    }
+    lw.bcx.seal_block(x.reentry);
+    (!x.exits.is_empty()).then_some(x)
+}
+
+/// The calls of the trace `x` describes, made in `l`, the trace's
+/// instructions as lowered with them left to the expansion and made ready
+/// to take more (see `super::super::lir::expand`): the two variables the
+/// relink block sets cleared on entry, each calling exit on to the call
+/// block, then the call block, the relink block and the gate.
+pub(in crate::jit_backend::trace) fn expand_calls(l: &mut lir::Lir, x: &Relinks) {
+    let jump = l.reopen(x.entry);
+    let z = l.ins().iconst(types::I64, 0);
+    l.def_var(x.loop_ok, z);
+    l.def_var(x.hot, z);
+    l.close(jump);
+    let mut way = Way::default();
+    for (n, (&b, &tags_idx)) in x.exits.iter().zip(x.cells.iter()).enumerate() {
+        let ret = l.reopen(b);
+        let ret = l.returned(b, ret);
+        super::side_call::emit_exit_call(l, &mut way, n as u32, ret, tags_idx);
+    }
+    if let Some(g) = x.gate {
+        l.reopen(g.block);
+    }
+    emit_relinks(l, x, &mut way);
 }
 
 /// The call block, the relink block and the gate of the trace `x`

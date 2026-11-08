@@ -82,6 +82,10 @@ unsafe impl TraceCompiler for LlvmBackend {
         super::trace::tier_up_llvm(storage, ct, self.llvm_after).0
     }
 
+    fn compile_calls(&self, storage: &mut dyn JitStorage, ct: &CompiledTrace) -> Option<TraceFn> {
+        super::trace::compile_calls(storage, ct)
+    }
+
     fn tier_up_keeping(
         &self,
         storage: &mut dyn JitStorage,

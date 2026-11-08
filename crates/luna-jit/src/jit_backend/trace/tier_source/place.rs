@@ -3,24 +3,24 @@
 
 use super::*;
 
-/// The optimizing tier's code `o` a shared image keeps for the trace `src`
-/// holds, placed in this Vm's code memory: the entry, and the loop into
-/// `ct`'s loop cell for a trace with one.
+/// The optimizing tier's code `o` a shared image keeps for the trace `ct`,
+/// placed in this Vm's code memory with relocation `k` holding `at(k)`: the
+/// entry, and the loop into `ct`'s loop cell for a trace with one
+/// (`at_loop`).
 pub(super) fn from_image(
     cs: &mut CraneliftJitStorage,
-    src: &TierSource,
+    at: impl Fn(usize) -> i64 + Copy,
+    at_loop: bool,
     o: &Optimized,
     ct: &CompiledTrace,
 ) -> Option<TraceFn> {
     let head_pc = ct.head_pc();
     let place = |cs: &mut CraneliftJitStorage, code: &reloc::Code| {
-        cs.baseline_code
-            .place_with(code.bytes.len(), |out| {
-                code.write_to(out, |k| src.relocs[k].1)
-            })
+        (cs.baseline_code)
+            .place_with(code.bytes.len(), |out| code.write_to(out, at))
             .ok()
     };
-    if src.lir.loop_entry.is_some() {
+    if at_loop {
         let p = place(cs, o.looped.as_ref()?)?;
         // SAFETY: the image's optimizing tier's loop of this trace, with
         // this Vm's addresses written in

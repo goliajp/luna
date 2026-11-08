@@ -52,6 +52,38 @@ impl Vm {
         }
     }
 
+    /// Has the backend compile `ct`'s baseline code again so that its
+    /// calling exits run the side traces their cells hold, once one is
+    /// filled while the trace runs that code (see
+    /// `TraceCompiler::compile_calls`): asked once, and counted as a move
+    /// again of a trace that moves to the optimizing tier.
+    #[cold]
+    pub(in crate::vm::exec) fn trace_compile_calls(
+        &mut self,
+        ct: &crate::jit::trace::CompiledTrace,
+    ) {
+        if ct.calls_compiled.get() {
+            return;
+        }
+        if let Some(t) = &ct.tier_up
+            && (!t.optimized.get().is_null()
+                || t.retiers.get() >= crate::jit::trace_types::tier_up::RETIER_CAP)
+        {
+            return;
+        }
+        ct.calls_compiled.set(true);
+        let entry = {
+            let jit = &mut self.jit;
+            jit.trace_compiler.compile_calls(jit.storage.as_mut(), ct)
+        };
+        let Some(e) = entry else { return };
+        ct.entry.set(e as *const u8);
+        if let Some(t) = &ct.tier_up {
+            t.retiers.set(t.retiers.get() + 1);
+        }
+        self.jit.counters.calls_compiled += 1;
+    }
+
     /// Hands a hot trace to the optimizing tier, or one there again (see
     /// `TierUp::retier`), and points everything that enters it at the new
     /// code.

@@ -62,6 +62,11 @@ pub(crate) fn publish(
     {
         src.image = Some(img.clone());
     }
+    if let Some(src) = ct.calls_source.as_mut()
+        && let Some(src) = src.downcast_mut::<TierSource>()
+    {
+        src.image = Some(img.clone());
+    }
     let key = HeadKey {
         settings,
         content: img.protos[0].hash,
