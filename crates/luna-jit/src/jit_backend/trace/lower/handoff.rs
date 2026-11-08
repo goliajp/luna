@@ -15,6 +15,7 @@
 
 use super::*;
 use crate::jit_backend::trace::lir::Count;
+use luna_core::__private::EXIT_LOOP_AGAIN;
 
 /// Creates `loop_entry` for a trace whose back edge moves on to the
 /// optimizing tier, once everything else is lowered: emitted before, its
@@ -74,8 +75,17 @@ pub(super) fn emit_hot_back_edge<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
                     .store(MemFlagsData::new(), val, reg_state, (idx as i32) * 8);
             }
         }
+        // called again for as long as it asks (see `reentry::loop_fn_gate`)
+        let (call_blk, done) = (lw.bcx.create_block(), lw.bcx.create_block());
+        lw.bcx.ins().jump(call_blk, &[]);
+        lw.bcx.switch_to_block(call_blk);
         let call = lw.bcx.ins().call_indirect(sig, f, &[reg_state]);
         let r = lw.bcx.inst_results(call)[0];
+        let again = (lw.bcx.ins()).icmp_imm_s(IntCC::Equal, r, EXIT_LOOP_AGAIN as i64);
+        lw.bcx.ins().brif(again, call_blk, &[], done, &[]);
+        lw.bcx.seal_block(call_blk);
+        lw.bcx.switch_to_block(done);
+        lw.bcx.seal_block(done);
         lw.bcx.ins().return_(&[r]);
         lw.bcx.switch_to_block(out);
         lw.bcx.seal_block(out);

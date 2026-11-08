@@ -9,8 +9,8 @@
 //! | 53     | [`EXIT_RELINK`]                                              |
 //! | 54     | [`EXIT_TAGS_INDEX_BIT`]                                      |
 //! | 55     | [`EXIT_KEEP_TFOR_VARS`]                                      |
-//! | 56–62  | with bit 63 set: [`SIDE_SENT_DOWNREC_CODE`]; 0 otherwise     |
-//! | 63     | a down-recursion stitch return                               |
+//! | 56–62  | with bit 63 set: [`SIDE_SENT_DOWNREC_CODE`] or [`EXIT_LOOP_AGAIN`]'s code; 0 otherwise |
+//! | 63     | a down-recursion stitch return, or [`EXIT_LOOP_AGAIN`]       |
 //!
 //! Bits 32–52 hold at most [`EXIT_SITE_LIMIT`] − 1: a trace with more
 //! inline sites or tagged exits than that is not compiled.
@@ -41,8 +41,15 @@ pub const EXIT_KEEP_TFOR_VARS: u64 = 1 << 55;
 /// `target_proto`'s expected return pc), so the dispatcher walks the
 /// trace's RetfRecord chain to materialise the inlined frames and goes on
 /// in the stitched trace rather than in the interpreter at `head_pc`. No
-/// other return sets bit 63.
+/// other return sets bit 63 but [`EXIT_LOOP_AGAIN`].
 pub const SIDE_SENT_DOWNREC_CODE: u32 = 0x10;
+
+/// What the optimizing tier's loop function returns when a side trace it
+/// ran ended at the trace's head with registers of the kinds the loop is
+/// compiled for, stored in `reg_state`: the code that called the loop
+/// function calls it again, and it reads them from there. No trace's entry
+/// returns it, so the dispatcher never sees it.
+pub const EXIT_LOOP_AGAIN: u64 = 1 << 63 | 0x11 << 56;
 
 /// Whether `sentinel_code`, bits 56–62 of a return value with bit 63 set,
 /// marks a down-recursion stitch return.
@@ -73,5 +80,9 @@ mod tests {
         }
         assert_eq!(seen, u64::MAX);
         assert_eq!(u64::from(SIDE_SENT_DOWNREC_CODE) & !0x7F, 0);
+        assert_ne!(
+            EXIT_LOOP_AGAIN >> 56 & 0x7F,
+            u64::from(SIDE_SENT_DOWNREC_CODE)
+        );
     }
 }
