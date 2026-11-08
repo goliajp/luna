@@ -4,6 +4,7 @@
 use super::*;
 
 pub(in crate::vm::exec) mod adopt;
+mod ahead;
 pub(in crate::vm::exec) mod cache;
 pub(in crate::vm::exec) mod close;
 mod counting;

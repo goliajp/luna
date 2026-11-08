@@ -201,17 +201,23 @@ impl JitState {
 /// Slots in [`JitState::loop_hot`].
 pub(crate) const LOOP_HOT_SLOTS: usize = 256;
 
+/// The slot of [`JitState::loop_hot`] that counts the back-edges to the
+/// loop head at pc `head` of `proto`.
+pub(crate) fn loop_hot_slot(proto: &crate::runtime::Proto, head: u32) -> usize {
+    let key = proto
+        .line_defined
+        .wrapping_mul(0x9e37_79b1)
+        .wrapping_add(head);
+    key as usize & (LOOP_HOT_SLOTS - 1)
+}
+
 impl JitState {
     /// Count a back-edge to the loop head at pc `head` of `proto`; `true`
     /// once that head has been crossed more than
     /// [`Self::trace_hot_threshold`] times, which starts its count over.
     #[inline]
     pub(crate) fn loop_hot_tick(&mut self, proto: &crate::runtime::Proto, head: u32) -> bool {
-        let key = proto
-            .line_defined
-            .wrapping_mul(0x9e37_79b1)
-            .wrapping_add(head);
-        let slot = &mut self.loop_hot[key as usize & (LOOP_HOT_SLOTS - 1)];
+        let slot = &mut self.loop_hot[loop_hot_slot(proto, head)];
         if *slot >= self.trace_hot_threshold {
             *slot = 0;
             true

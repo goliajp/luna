@@ -71,6 +71,7 @@ pub(super) fn install(
             (Some((pc, exit, _)), _) => Some((req.proto, pc, exit)),
         },
         inlined: protos[1..].to_vec(),
+        ahead: false,
     })
 }
 

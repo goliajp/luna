@@ -47,6 +47,7 @@ pub(super) fn proto(
         inlined_protos: std::cell::RefCell::new(Vec::new()),
         puc_names: std::cell::RefCell::new(Vec::new()),
         traces: crate::jit::send_compat::TRefLock::new(Vec::new()),
+        trace_ahead: crate::jit::send_compat::TRefLock::new(Default::default()),
         has_dispatchable_trace: std::cell::Cell::new(false),
         trace_heads: std::cell::Cell::new([TRACE_HEADS_NONE; TRACE_HEADS_CAP]),
         trace_call_head_settled: std::cell::Cell::new(false),
