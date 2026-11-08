@@ -30,6 +30,10 @@ pub struct AdoptRequest<'a> {
     pub roots: &'a [Gc<Proto>],
     /// The metamethod names, by `TM` index.
     pub mm_names: &'a [Gc<crate::runtime::LuaStr>],
+    /// Also install, as [`AdoptedTrace::ahead`], a trace for each other
+    /// loop head of the function that has none yet, so that the code of all
+    /// of them turns executable at once.
+    pub ahead: bool,
 }
 
 /// A trace the backend installed for an [`AdoptRequest`].
@@ -40,6 +44,10 @@ pub struct AdoptedTrace {
     pub side_parent: Option<(Gc<Proto>, u32, usize)>,
     /// The functions other than the head's that the trace inlined.
     pub inlined: Vec<Gc<Proto>>,
+    /// The trace starts at a head other than [`AdoptRequest::head_pc`]
+    /// (asked for by [`AdoptRequest::ahead`]), or is a side trace of one
+    /// that does: it comes after its parent.
+    pub ahead: bool,
 }
 
 /// Whether a trace compiled for `compiled` entry tags admits registers whose
@@ -59,4 +67,16 @@ pub(crate) fn entry_tags_admit(compiled: &[u8], now: &[u8]) -> bool {
             want == raw::FALSE && tag == raw::TRUE
         }
     })
+}
+
+/// The traces a `Vm` took up for loop heads of one function before those
+/// heads were reached: each with the side traces that came with it, its
+/// parent first.
+#[derive(Default)]
+pub(crate) struct TraceAhead {
+    /// The function's traces were asked for with [`AdoptRequest::ahead`]
+    /// already, and it got some: it is not asked again.
+    pub(crate) asked: bool,
+    /// The traces of each head, the one starting there first.
+    pub(crate) heads: Vec<Vec<AdoptedTrace>>,
 }

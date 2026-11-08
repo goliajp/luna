@@ -28,6 +28,12 @@ pub struct JitCounters {
     pub compiled: u64,
     /// Traces installed from code another Vm compiled, without compiling.
     pub adopted: u64,
+    /// Loop heads given a trace another Vm compiled before they were
+    /// reached, held until their first back-edge.
+    pub ahead_held: u64,
+    /// Of those, the ones dropped at that back-edge: the trace's entry tags
+    /// did not admit the registers then.
+    pub ahead_dropped: u64,
     /// Count of closed traces the lowerer rejected.
     pub compile_failed: u64,
     /// Traces compiled or adopted but not installed: the Vm had no memory

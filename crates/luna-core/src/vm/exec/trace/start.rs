@@ -32,10 +32,15 @@ impl Vm {
         tfor: Option<(u32, u32)>,
     ) -> bool {
         let proto = cl.proto;
+        if self.jit.active_trace.is_some() || proto.trace_gave_up.get() {
+            return false;
+        }
+        // a trace held for this head is installed, or dropped, here
+        if let Some(entered) = self.trace_take_ahead(proto, target, base as usize) {
+            return entered;
+        }
         // the cheap tests first, then the borrow and scan of the traces
-        if self.jit.active_trace.is_some()
-            || proto.trace_gave_up.get()
-            || proto.traces.borrow().iter().any(|t| t.head_pc == target)
+        if proto.traces.borrow().iter().any(|t| t.head_pc == target)
             || trace_head_abandoned(proto, target)
             || trace_head_stuck(
                 proto,

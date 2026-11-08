@@ -149,6 +149,9 @@ pub struct Proto {
     pub(crate) traces: crate::jit::send_compat::TRefLock<
         Vec<crate::jit::send_compat::TArc<crate::jit::trace::CompiledTrace>>,
     >,
+    /// Traces taken up from another Vm for loop heads of this prototype
+    /// before they were reached (see `vm::exec::trace::ahead`).
+    pub(crate) trace_ahead: crate::jit::send_compat::TRefLock<crate::jit::trace::TraceAhead>,
     /// Whether `traces` holds one the dispatcher may enter at its head
     /// (dispatchable, or carrying a down-recursion link). The
     /// interpreter checks this before scanning `traces` on every

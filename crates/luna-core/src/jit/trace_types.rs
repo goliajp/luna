@@ -28,7 +28,7 @@ pub(crate) mod self_link;
 pub(crate) mod side_cell;
 pub(crate) mod side_exit;
 pub(crate) mod tier_up;
-pub(crate) use adopt::{AdoptRequest, AdoptedTrace};
+pub(crate) use adopt::{AdoptRequest, AdoptedTrace, TraceAhead};
 pub(crate) use compiled::CompiledTraceParts;
 pub use compiled::TraceFn;
 pub use exit::*;

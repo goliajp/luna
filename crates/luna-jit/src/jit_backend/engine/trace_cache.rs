@@ -2,7 +2,7 @@
 //! oldest of them beyond its capacity.
 
 use crate::jit_backend::chunk_share::{ChunkImage, ChunkKey};
-use crate::jit_backend::trace::image::{Settings, TraceImage};
+use crate::jit_backend::trace::image::{Content, Settings, TraceImage};
 use crate::jit_backend::trace::share_failures::Failure;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -21,6 +21,10 @@ pub(crate) struct TraceCache {
     pub(crate) children: HashMap<u64, Vec<Arc<TraceImage>>>,
     /// The method JIT's functions.
     pub(crate) chunks: HashMap<ChunkKey, Vec<Arc<ChunkImage>>>,
+    /// The heads of code of one content (by its settings and content hash)
+    /// that have a trace starting there that is no side trace, in the order
+    /// the first of them came.
+    roots: HashMap<(Settings, u64), Vec<u32>>,
     /// Recordings that failed to compile, by their head.
     pub(crate) failures: HashMap<HeadKey, Vec<Failure>>,
     /// Images in the order they came, for dropping the oldest.
@@ -45,6 +49,7 @@ impl TraceCache {
             by_head: HashMap::new(),
             children: HashMap::new(),
             chunks: HashMap::new(),
+            roots: HashMap::new(),
             failures: HashMap::new(),
             order: VecDeque::new(),
             bytes: 0,
@@ -54,8 +59,14 @@ impl TraceCache {
 
     pub(crate) fn insert(&mut self, key: HeadKey, img: Arc<TraceImage>) {
         self.bytes += img.size;
-        if let Some((_, _, parent)) = img.side_parent {
-            self.children.entry(parent).or_default().push(img.clone());
+        match img.side_parent {
+            Some((_, _, parent)) => self.children.entry(parent).or_default().push(img.clone()),
+            None => {
+                let heads = self.roots.entry((key.settings, key.content)).or_default();
+                if !heads.contains(&key.head_pc) {
+                    heads.push(key.head_pc);
+                }
+            }
         }
         self.order.push_back(Held::Trace(key, img.id));
         self.by_head.entry(key).or_default().push(img);
@@ -118,8 +129,18 @@ impl TraceCache {
                 continue;
             };
             let img = list.remove(i);
+            let root_left = list.iter().any(|x| x.side_parent.is_none());
             if list.is_empty() {
                 self.by_head.remove(&key);
+            }
+            if img.side_parent.is_none()
+                && !root_left
+                && let Some(heads) = self.roots.get_mut(&(key.settings, key.content))
+            {
+                heads.retain(|&h| h != key.head_pc);
+                if heads.is_empty() {
+                    self.roots.remove(&(key.settings, key.content));
+                }
             }
             self.children.remove(&id);
             if let Some((_, _, parent)) = img.side_parent
@@ -129,6 +150,39 @@ impl TraceCache {
             }
             self.bytes -= img.size;
         }
+    }
+
+    /// For each head of code of `head`'s content other than `asked` and
+    /// those `skip` names, the trace starting there that came first, of
+    /// those that are no side trace: as a trace may be taken up before its
+    /// head is reached, there are no registers yet to choose one of
+    /// several by their tags.
+    pub(crate) fn roots_of(
+        &self,
+        settings: Settings,
+        head: &Content,
+        asked: u32,
+        skip: impl Fn(u32) -> bool,
+    ) -> Vec<Arc<TraceImage>> {
+        let Some(heads) = self.roots.get(&(settings, head.hash)) else {
+            return Vec::new();
+        };
+        heads
+            .iter()
+            .filter(|&&h| h != asked && !skip(h))
+            .filter_map(|&head_pc| {
+                let key = HeadKey {
+                    settings,
+                    content: head.hash,
+                    head_pc,
+                };
+                self.by_head
+                    .get(&key)?
+                    .iter()
+                    .find(|img| img.side_parent.is_none() && img.protos[0] == *head)
+            })
+            .cloned()
+            .collect()
     }
 
     /// Counts what the optimizing tier added to an image already here.

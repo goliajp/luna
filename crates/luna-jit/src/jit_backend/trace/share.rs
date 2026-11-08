@@ -107,8 +107,10 @@ pub(crate) fn adopt(
         content: head.hash,
         head_pc: req.head_pc,
     };
-    // the image, then its side traces, each after its parent
-    let todo: Vec<Arc<TraceImage>> = {
+    // the image, then its side traces, each after its parent; then, as
+    // asked, those of the function's other heads, each followed by its side
+    // traces
+    let (todo, ahead_from) = {
         let cache = engine.cache();
         let Some(img) = cache.by_head.get(&key).and_then(|list| {
             list.iter().find(|img| {
@@ -121,47 +123,73 @@ pub(crate) fn adopt(
             return Vec::new();
         };
         let mut todo = vec![img.clone()];
-        let mut i = 0;
-        while i < todo.len() {
-            if let Some(kids) = cache.children.get(&todo[i].id) {
-                // a side trace of an exit inside a function the parent
-                // inlined starts in that function: it is taken over when
-                // that exit becomes hot here
-                todo.extend(kids.iter().filter(|k| k.protos[0] == *head).cloned());
+        with_side_traces(&cache, &mut todo, 0, &head);
+        let ahead_from = todo.len();
+        if req.ahead {
+            let traces = req.proto.traces();
+            for root in cache.roots_of(settings, &head, req.head_pc, |pc| {
+                traces.iter().any(|t| t.head_pc() == pc)
+            }) {
+                let from = todo.len();
+                todo.push(root);
+                with_side_traces(&cache, &mut todo, from, &head);
             }
-            i += 1;
         }
-        todo
+        (todo, ahead_from)
     };
     // one batch: the code of all the traces turns executable at once
     cs.baseline_code.open();
-    let out = install_all(cs, req, &todo);
+    let out = install_all(cs, req, &todo, ahead_from);
     if cs.baseline_code.seal().is_err() {
         return Vec::new();
     }
     out
 }
 
+/// Adds to `todo` the side traces of `todo[from..]`, each after its parent,
+/// that start in the function of content `head`.
+fn with_side_traces(
+    cache: &crate::jit_backend::engine::TraceCache,
+    todo: &mut Vec<Arc<TraceImage>>,
+    from: usize,
+    head: &Content,
+) {
+    let mut i = from;
+    while i < todo.len() {
+        if let Some(kids) = cache.children.get(&todo[i].id) {
+            // a side trace of an exit inside a function the parent
+            // inlined starts in that function: it is taken over when
+            // that exit becomes hot here
+            todo.extend(kids.iter().filter(|k| k.protos[0] == *head).cloned());
+        }
+        i += 1;
+    }
+}
+
 /// Installs the images `todo`, the one asked for first: none when that one
-/// cannot be.
+/// cannot be. Those from `ahead_from` on start at other heads.
 fn install_all(
     cs: &mut CraneliftJitStorage,
     req: &AdoptRequest<'_>,
     todo: &[Arc<TraceImage>],
+    ahead_from: usize,
 ) -> Vec<AdoptedTrace> {
     let mut out = Vec::with_capacity(todo.len());
     let mut installed: Vec<u64> = Vec::with_capacity(todo.len());
     for (i, img) in todo.iter().enumerate() {
-        // the first is what was asked for; a side trace of it goes in only
-        // after its parent did
-        if i > 0
+        let ahead = i >= ahead_from;
+        // the first is what was asked for, and each of another head's goes
+        // in as that was; a side trace goes in only after its parent did
+        let root = i == 0 || (ahead && img.side_parent.is_none());
+        if !root
             && !img
                 .side_parent
                 .is_some_and(|(_, _, p)| installed.contains(&p))
         {
             continue;
         }
-        if let Some(a) = install(cs, req, img, todo, i == 0) {
+        if let Some(mut a) = install(cs, req, img, todo, i == 0) {
+            a.ahead = ahead;
             installed.push(img.id);
             out.push(a);
         } else if i == 0 {
