@@ -69,14 +69,47 @@ fn root(f: Gc<LuaClosure>) -> (u64, bool) {
     (root.side_relinks(), root.side_cell_states()[0].0)
 }
 
+/// The loop's trace (which has side cells): its baseline code's entry and
+/// its first cell's address, once made.
+fn code_and_cells(f: Gc<LuaClosure>) -> (usize, Option<usize>) {
+    let traces = f.proto.traces();
+    let t = traces.iter().find(|t| !t.side_cell_states().is_empty());
+    let t = t.expect("a trace with side cells");
+    (t.entry() as usize, t.side_cells_at().map(|c| c as usize))
+}
+
+/// A trace no side trace is wired to has no side cells made, and its code
+/// is the one it was compiled with: its calling exits return as any exit.
+#[test]
+fn a_trace_without_side_traces_makes_no_cells_and_keeps_its_code() {
+    for v in VERSIONS {
+        let (mut it, g) = setup(luna_jit::new_with_jit(v), false);
+        let (mut vm, f) = setup(luna_jit::new_with_jit(v), true);
+        for _ in 0..20 {
+            same((&mut vm, f), (&mut it, g), 500, 1 << 40);
+        }
+        assert!(code_and_cells(f).1.is_none(), "{v:?}: cells made");
+        assert_eq!(root(f), (0, false), "{v:?}");
+        let n = vm.jit().counters.calls_compiled;
+        assert_eq!(n, 0, "{v:?}: code compiled again");
+    }
+}
+
 /// Once the side trace fills the cell, the baseline code runs it and goes
-/// on in its loop: the dispatcher sees the loop only a few times.
+/// on in its loop: the dispatcher sees the loop only a few times. Its code
+/// is compiled again to call it, once.
 #[test]
 fn the_baseline_code_runs_a_filled_cells_side_trace_and_goes_on() {
     for v in VERSIONS {
         let (mut it, g) = setup(luna_jit::new_with_jit(v), false);
         let (mut vm, f) = setup(luna_jit::new_with_jit(v), true);
+        same((&mut vm, f), (&mut it, g), 500, 1 << 40);
+        let (first, _) = code_and_cells(f);
         same((&mut vm, f), (&mut it, g), 20_000, 5_000);
+        assert_eq!(vm.jit().counters.calls_compiled, 1, "{v:?}");
+        let (now, cells) = code_and_cells(f);
+        assert_ne!(now, first, "{v:?}: the code was not replaced");
+        assert!(cells.is_some(), "{v:?}: no cells made");
         assert_eq!(vm.trace_tiered_up_count(), 0, "{v:?}: a trace moved");
         let n = vm.trace_dispatched_count();
         assert!(n < 1_000, "{v:?}: {n} dispatches past the side trace");
@@ -122,6 +155,13 @@ fn vms_sharing_baseline_code_each_go_by_their_own_cells() {
         (0, false),
         "the second Vm filled the first's cell"
     );
+    assert!(code_and_cells(fa).1.is_none(), "the first Vm made cells");
+    assert_eq!(
+        a.jit().counters.calls_compiled,
+        0,
+        "the first Vm compiled its calls"
+    );
+    assert_eq!(b.jit().counters.calls_compiled, 1, "the second Vm's calls");
     same((&mut a, fa), (&mut it, g), 500, never);
     assert_eq!(
         root(fa),
@@ -131,6 +171,12 @@ fn vms_sharing_baseline_code_each_go_by_their_own_cells() {
     same((&mut a, fa), (&mut it, g), 5_000, 100);
     let (relinked, filled) = root(fa);
     assert!(filled, "the first Vm's cell holds no side trace");
+    assert_eq!(a.jit().counters.calls_compiled, 1, "the first Vm's calls");
+    assert_ne!(
+        code_and_cells(fa).1,
+        code_and_cells(fb).1,
+        "the Vms share cells"
+    );
     assert!(
         relinked > 4_000,
         "the first Vm's code went on {relinked} times"
