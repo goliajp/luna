@@ -65,23 +65,23 @@ pub(crate) const LINK_TAG_KEPT: u8 = 0xFE;
 /// Where the code finds each field of a [`SideCell`], in bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct SideCellOffsets {
-    /// [`SideCell::entry`]'s.
+    /// `SideCell::entry`'s.
     pub entry: i32,
-    /// [`SideCell::back`]'s.
+    /// `SideCell::back`'s.
     pub back: i32,
-    /// [`SideCell::check`]'s.
+    /// `SideCell::check`'s.
     pub check: i32,
-    /// [`SideCell::count`]'s.
+    /// `SideCell::count`'s.
     pub count: i32,
-    /// [`SideCell::at`]'s.
+    /// `SideCell::at`'s.
     pub at: i32,
-    /// [`SideCell::loop_ok`]'s.
+    /// `SideCell::loop_ok`'s.
     pub loop_ok: i32,
-    /// [`SideCell::relinks`]'s.
+    /// `SideCell::relinks`'s.
     pub relinks: i32,
-    /// [`SideCell::link_pc`]'s.
+    /// `SideCell::link_pc`'s.
     pub link_pc: i32,
-    /// [`SideCell::link`]'s.
+    /// `SideCell::link`'s.
     pub link: i32,
 }
 
