@@ -107,8 +107,10 @@ impl Vm {
                 reg_state[trace_ran_side_slot(window_size_us)] = 0;
             }
             let running = self.trace_step_enter(&*ct);
-            let links_from = std::mem::replace(&mut self.jit.link_base, self.jit.link_trail.len());
-            let start = self.jit.link_base;
+            let words = &self.jit.words;
+            let links_from = words.link_base();
+            words.set_link_base(words.trail_len());
+            let start = words.link_base();
             let continuation_pc = {
                 let vm_ptr: *mut Vm = self;
                 let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
@@ -122,6 +124,10 @@ impl Vm {
                     }
                 }
             };
+            debug_assert!(
+                self.running_is_last_linked(cl.proto, &ct, start),
+                "the running trace is not the last one linked to"
+            );
             self.trace_step_leave(running);
             debug_assert!(self.jit.blocked_agrees(self.unmade.any()));
             // the trace whose code returned: the last one linked to, if any

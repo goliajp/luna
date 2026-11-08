@@ -34,6 +34,22 @@ pub struct LinkPlan {
     pub checks: Box<[(u32, u8)]>,
     /// As [`CellPlan::stores`].
     pub stores: Box<[(u32, u8)]>,
+    /// The link as the trail notes it: the typed exit, the running trace
+    /// and the linked trace (the traces by their index in the frame's
+    /// prototype's list).
+    pub trail: [u32; 3],
+    /// The running trace's window, the linked trace's, and the frame's
+    /// registers.
+    pub windows: [u32; 3],
+    /// The running trace counts its move to the optimizing tier in this
+    /// call's word, as does the linked trace.
+    pub counts: [bool; 2],
+    /// The linked trace has side cells.
+    pub target_cells: bool,
+    /// The linked trace has a move to the optimizing tier.
+    pub target_tiers: bool,
+    /// The depth of the calls the linked trace inlines.
+    pub target_inline_depth: u8,
 }
 
 /// The pairs of a cell's list (`relink::list::list_of`'s layout).

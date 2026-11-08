@@ -26,8 +26,6 @@ pub(super) enum SideList {
     /// Enters the trace a side trace links to: three words, the typed exit,
     /// the running trace and the linked trace (see `Vm::link_enter`).
     Link = 2,
-    /// As `Link`, the code having made the link's checks and stores.
-    LinkBare = 3,
 }
 
 impl Vm {
@@ -38,14 +36,8 @@ impl Vm {
     /// trace (`exit_runs_no_side`, `child_reads_stack_held_ok`).
     pub(crate) fn side_cell_list(&mut self, list: &[u32], reg_state: &mut [i64]) -> i64 {
         debug_assert!(self.run_words_agree(), "the run words went stale");
-        match list.first() {
-            Some(&k) if k == SideList::Link as u32 => {
-                return self.link_enter(&list[3..6], reg_state, false);
-            }
-            Some(&k) if k == SideList::LinkBare as u32 => {
-                return self.link_enter(&list[3..6], reg_state, true);
-            }
-            _ => {}
+        if list.first() == Some(&(SideList::Link as u32)) {
+            return self.link_enter(&list[3..6], reg_state);
         }
         let store = list.first() == Some(&(SideList::Store as u32));
         if !store

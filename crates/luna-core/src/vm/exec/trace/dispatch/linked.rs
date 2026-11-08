@@ -27,7 +27,8 @@ impl Vm {
         if raw & EXIT_RELINK == 0 {
             return None;
         }
-        let last = self.jit.link_trail[start..].last().map(|l| l[2] as usize);
+        let w = &self.jit.words;
+        let last = (w.trail_len() > start).then(|| w.trail_get(w.trail_len() - 1)[2] as usize);
         let held = last.map(|i| TArc::clone(&proto.traces.borrow()[i]));
         let ran = held.as_deref().unwrap_or(ct);
         if !ran.has_side_cells() {
@@ -41,8 +42,8 @@ impl Vm {
             return None;
         }
         let call: [u32; 3] = cell.link_lists.borrow().0.get(3..6)?.try_into().ok()?;
-        self.jit.link_base = self.jit.link_trail.len();
-        let target = self.link_take(&call, regs, false)?;
+        self.jit.words.set_link_base(self.jit.words.trail_len());
+        let target = self.link_take(&call, regs)?;
         self.jit.counters.links_redispatched += 1;
         Some(self.trace_entry_counted(&target, proto.call_hot_count.get()))
     }
@@ -59,13 +60,14 @@ impl Vm {
         from: usize,
         entry_tags: &mut [u8],
     ) -> Option<TArc<CompiledTrace>> {
-        self.jit.link_base = outer;
-        if self.jit.link_trail.len() == from {
+        self.jit.words.set_link_base(outer);
+        if self.jit.words.trail_len() == from {
             return None;
         }
         let traces = proto.traces.borrow();
         let mut last = None;
-        for &[typed, parent, to] in &self.jit.link_trail[from..] {
+        for i in from..self.jit.words.trail_len() {
+            let [typed, parent, to] = self.jit.words.trail_get(i);
             let parent = &traces[parent as usize];
             let cell = (parent.side_cell(typed)).expect("a link taken from a cell its trace holds");
             for (t, &k) in entry_tags.iter_mut().zip(cell.link_lists.borrow().3.iter()) {
@@ -75,8 +77,8 @@ impl Vm {
             }
             last = Some(to);
         }
-        self.jit.counters.links += (self.jit.link_trail.len() - from) as u64;
-        self.jit.link_trail.truncate(from);
+        self.jit.counters.links += (self.jit.words.trail_len() - from) as u64;
+        self.jit.words.trail_truncate(from);
         last.map(|to| TArc::clone(&traces[to as usize]))
     }
 
@@ -97,5 +99,23 @@ impl Vm {
                 self.jit.counters.downrec_deopt += 1;
             }
         }
+    }
+
+    /// Whether the trace noted as running is the one the dispatch entered
+    /// at `ct`, or the last one linked to since `from`, whichever took the
+    /// link (the Vm or the code).
+    pub(super) fn running_is_last_linked(
+        &self,
+        proto: Gc<crate::runtime::Proto>,
+        ct: &TArc<CompiledTrace>,
+        from: usize,
+    ) -> bool {
+        let w = &self.jit.words;
+        let last = (w.trail_len() > from).then(|| w.trail_get(w.trail_len() - 1)[2] as usize);
+        let at = match last {
+            Some(i) => TArc::as_ptr(&proto.traces.borrow()[i]) as usize,
+            None => TArc::as_ptr(ct) as usize,
+        };
+        self.trace_step_running() == at
     }
 }

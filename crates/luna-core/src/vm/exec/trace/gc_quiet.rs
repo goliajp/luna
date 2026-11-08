@@ -55,6 +55,7 @@ impl Vm {
             loop_end: None,
             held: 0,
         };
+        self.jit.words.quiet.set(1);
         let step = &mut self.jit.step;
         if step.quiet.replace(q).is_none() {
             let stand_in = step
@@ -68,6 +69,7 @@ impl Vm {
     /// Ends the pause: the loop counts are back.
     #[cold]
     pub(in crate::vm::exec) fn gc_quiet_end(&mut self) {
+        self.jit.words.quiet.set(0);
         let step = &mut self.jit.step;
         step.quiet = None;
         let counts = step.parked_hot.take().expect("parked during a pause");

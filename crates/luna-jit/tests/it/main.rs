@@ -148,6 +148,7 @@ mod trace_jit_semantics;
 mod trace_link;
 mod trace_link_checks;
 mod trace_link_enter;
+mod trace_link_fast;
 mod trace_loadnil_whitelist;
 mod trace_loop_carried_kinds;
 mod trace_loop_carried_sunk;

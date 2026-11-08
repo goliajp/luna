@@ -15,10 +15,21 @@ impl Vm {
     /// by their index in the frame's prototype's list) and `regs` the
     /// buffer both run on. The entry of the linked trace, or 0 when the code
     /// leaves the link to the dispatcher: `LINK_DEPTH` links taken in a row,
-    /// a check before the entry failing, or no room to note it. `bare`:
-    /// the code made the link's checks and stores already.
-    pub(super) fn link_enter(&mut self, link: &[u32], regs: &mut [i64], bare: bool) -> i64 {
-        match self.link_take(link, regs, bare) {
+    /// a check before the entry failing, or no room to note it.
+    pub(super) fn link_enter(&mut self, link: &[u32], regs: &mut [i64]) -> i64 {
+        let left = self.jit.words.link_left.get() != 0;
+        self.jit.words.link_left.set(0);
+        let why = if left {
+            self.link_left_why(link[2] as usize)
+        } else {
+            0
+        };
+        debug_assert!(
+            !left || why != 0,
+            "the code left the Vm a link it could take"
+        );
+        self.jit.counters.links_by_vm[why] += 1;
+        match self.link_take(link, regs) {
             Some(t) => {
                 let calls = match self.frames.last() {
                     Some(CallFrame::Lua(f)) => f.closure.proto.call_hot_count.get(),
@@ -30,17 +41,41 @@ impl Vm {
         }
     }
 
+    /// Why the optimizing tier's code left the link into trace `to` of the
+    /// frame on top to the Vm, by the index of `JitCounters::links_by_vm`.
+    fn link_left_why(&self, to: usize) -> usize {
+        let w = &self.jit.words;
+        let Some(CallFrame::Lua(f)) = self.frames.last() else {
+            return 0;
+        };
+        let target = TArc::clone(&f.closure.proto.traces.borrow()[to]);
+        if w.blocked.iter().any(|b| b.get()) || w.quiet.get() != 0 {
+            1
+        } else if w.trail_len() - w.link_base() >= LINK_DEPTH
+            || w.trail_len() >= w.trail_cap.get() as usize
+        {
+            2
+        } else if target.inline_depth > 0 {
+            4
+        } else if (target.tier_up.as_ref())
+            .is_some_and(|t| !t.tried.get() || t.optimized.get().is_null())
+        {
+            3
+        } else {
+            0
+        }
+    }
+
     /// [`Self::link_enter`] but for the entry: the linked trace, readied to
     /// be called.
     pub(in crate::vm::exec) fn link_take(
         &mut self,
         link: &[u32],
         regs: &mut [i64],
-        bare: bool,
     ) -> Option<TArc<CompiledTrace>> {
         let (typed, from, to) = (link[0], link[1] as usize, link[2] as usize);
         let jit = &self.jit;
-        if jit.link_trail.len() - jit.link_base >= LINK_DEPTH
+        if jit.words.trail_len() - jit.words.link_base() >= LINK_DEPTH
             || jit.gc_exit().is_some()
             || jit.pending_err().is_some()
             || self.unmade.any()
@@ -62,19 +97,15 @@ impl Vm {
         );
         let cell = prev.side_cell(typed)?;
         let lists = cell.link_lists.borrow();
-        if !bare && self.side_cell_list(&lists.1, regs) == 0
+        if self.side_cell_list(&lists.1, regs) == 0
             || !self.inlined_calls_fit(target.inline_depth, base, target.window_size)
-            || self
-                .jit
-                .link_trail
-                .push([typed, from as u32, to as u32])
+            || (self.jit.words)
+                .trail_push([typed, from as u32, to as u32])
                 .is_err()
         {
             return None;
         }
-        if !bare {
-            self.side_cell_list(&lists.2, regs);
-        }
+        self.side_cell_list(&lists.2, regs);
         drop(lists);
         let (max_stack, window) = (proto.max_stack as usize, target.window_size as usize);
         words::count_out(&prev, regs, prev.window_size as usize);
