@@ -103,7 +103,7 @@ pub(super) struct Lower<E: Emit> {
     /// cell `n`'s (see `side_call::place_cells`).
     pub(super) side_cells: Vec<u32>,
     /// The way back in of a trace whose exits run side traces from its code.
-    pub(super) relink: Option<super::side_call::Relink>,
+    pub(super) relink: Option<super::relinks::Open>,
 }
 
 impl<E: Emit> Lower<E> {

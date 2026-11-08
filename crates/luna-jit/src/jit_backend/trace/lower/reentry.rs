@@ -2,27 +2,37 @@
 //! at its head, on to the reentry block (see `side_call`), and the gate
 //! after the checks before the loop.
 
-use super::side_call::{Relink, cold_block, switch_sealed};
+use super::relinks::{Ctx, Gate, Relinks, Way, relinks_of};
+use super::side_call::{cold_block, emit_call_block, switch_sealed};
 use super::*;
-use luna_core::__private::EXIT_LOOP_AGAIN;
+use luna_core::__private::{EXIT_LOOP_AGAIN, trace_ran_side_slot};
 
-/// The relink block, once everything else is lowered: the loop's iteration
-/// counted, on at the reentry block, which redoes what follows the entry
-/// block (the registers read from `reg_state`, the collection words, the
-/// accumulator, the checks before the loop) and is then sealed.
+/// The way back into a trace that relinks, once everything else is lowered
+/// (see [`emit_relinks`]).
 pub(super) fn emit_relink_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
-    super::side_call::emit_call_block(lw, pl);
-    let Some(rl) = lw.relink.take() else {
+    let Some(mut o) = lw.relink.take() else {
         return;
     };
-    if let Some(block) = rl.block {
-        switch_sealed(lw, block);
-        let ran = 8 * luna_core::__private::trace_ran_side_slot(pl.window_size_us) as i32;
-        lw.bcx.mark_relink(block, pl.record.head_pc, ran);
-        count_relink(lw, pl, &rl, ran);
+    let x = relinks_of(lw, pl, &o);
+    emit_relinks(&mut lw.bcx, &x, &mut o.way);
+}
+
+/// The call block, the relink block and the gate of the trace `x`
+/// describes, its exits emitted: the relink block counts the loop's
+/// iteration and goes on at the reentry block, which redoes what follows
+/// the entry block (the registers read from `reg_state`, the collection
+/// words, the accumulator, the checks before the loop) and is then sealed.
+pub(crate) fn emit_relinks<E: Emit>(bcx: &mut E, x: &Relinks, way: &mut Way) {
+    emit_call_block(bcx, x, way);
+    if let Some(block) = way.relink {
+        switch_sealed(bcx, block);
+        let ran = 8 * trace_ran_side_slot(x.window as usize) as i32;
+        bcx.mark_relink(block, x.head_pc, ran);
+        let cx = x.ctx(bcx);
+        count_relink(bcx, x, &cx, ran);
     }
-    lw.bcx.seal_block(rl.reentry);
-    fill_gate(lw, pl, &rl);
+    bcx.seal_block(x.reentry);
+    fill_gate(bcx, x);
 }
 
 /// Whether the side trace may go on in the optimizing tier's loop taken
@@ -31,24 +41,23 @@ pub(super) fn emit_relink_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) {
 /// counted as at the back edge: reached, `hot` is 1, else 0. On at the
 /// reentry block. Only `reg_state` is live here: the baseline tier's code
 /// enters the block as a function of its own (see `super::super::lir::Relink`).
-fn count_relink<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink, ran: i32) {
-    let (reg_state, flags) = (lw.entry.reg_state, MemFlagsData::trusted());
-    let ok = lw.bcx.ins().load(types::I64, flags, reg_state, ran);
-    lw.bcx.def_var(rl.loop_ok, ok);
-    let z = lw.bcx.ins().iconst(types::I64, 0);
-    lw.bcx.ins().store(flags, z, reg_state, ran);
-    lw.bcx.def_var(rl.hot, z);
-    let Some(t) = lw.tier_count.as_ref().filter(|_| lw.loops) else {
-        lw.bcx.ins().jump(rl.reentry, &[]);
+fn count_relink<E: Emit>(bcx: &mut E, x: &Relinks, cx: &Ctx<'_>, ran: i32) {
+    let (reg_state, flags) = (x.reg_state, MemFlagsData::trusted());
+    let ok = bcx.ins().load(types::I64, flags, reg_state, ran);
+    bcx.def_var(x.loop_ok, ok);
+    let z = bcx.ins().iconst(types::I64, 0);
+    bcx.ins().store(flags, z, reg_state, ran);
+    bcx.def_var(x.hot, z);
+    let Some(t) = cx.tier else {
+        bcx.ins().jump(x.reentry, &[]);
         return;
     };
-    let (count, at) = (count_at(lw, pl, t), t.at());
-    let hot = cold_block(lw);
-    lw.bcx.tier_count(count, at, hot, rl.reentry);
-    switch_sealed(lw, hot);
-    let one = lw.bcx.ins().iconst(types::I64, 1);
-    lw.bcx.def_var(rl.hot, one);
-    lw.bcx.ins().jump(rl.reentry, &[]);
+    let hot = cold_block(bcx);
+    bcx.tier_count(t.count, t.at, hot, x.reentry);
+    switch_sealed(bcx, hot);
+    let one = bcx.ins().iconst(types::I64, 1);
+    bcx.def_var(x.hot, one);
+    bcx.ins().jump(x.reentry, &[]);
 }
 
 /// The gate between the checks before the loop and the loop: once the
@@ -71,35 +80,35 @@ fn count_relink<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink, ran: i32
 /// trace moved under), the gate goes on with the count set back by one: the
 /// next back edge, past a pass that leaves the registers of the loop's
 /// kinds, goes on in the optimizing tier's loop.
-fn fill_gate<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
-    let Some(gate) = lw.blocks.gate else {
+///
+/// What `reg_state` holds is not known in the gate: every register is
+/// stored.
+fn fill_gate<E: Emit>(bcx: &mut E, x: &Relinks) {
+    let Some(g) = x.gate else {
         return;
     };
-    let start = lw.blocks.peel.unwrap_or(lw.blocks.body_loop);
-    switch_sealed(lw, gate);
-    if !lw.loops {
-        lw.bcx.ins().jump(start, &[]);
+    switch_sealed(bcx, g.block);
+    if !x.loops {
+        bcx.ins().jump(g.start, &[]);
         return;
     }
-    let (in_loop_fn, other) = (lw.bcx.create_block(), lw.bcx.create_block());
-    lw.bcx.pick(in_loop_fn, other);
-    switch_sealed(lw, in_loop_fn);
-    loop_fn_gate(lw, pl, rl);
-    switch_sealed(lw, other);
-    let hot = lw.bcx.use_var(rl.hot);
-    let go = lw.bcx.create_block();
-    lw.bcx.ins().brif(hot, go, &[], start, &[]);
-    switch_sealed(lw, go);
-    // what reg_state holds is not known here: every register is stored
-    let stored = std::mem::take(&mut lw.stored);
-    let ok = lw.bcx.use_var(rl.loop_ok);
-    let (into_loop, other) = (lw.bcx.create_block(), lw.bcx.create_block());
-    lw.bcx.ins().brif(ok, into_loop, &[], other, &[]);
-    switch_sealed(lw, other);
-    emit_other_kinds(lw, pl, start);
-    switch_sealed(lw, into_loop);
-    emit_hot_back_edge(lw, pl);
-    lw.stored = stored;
+    let cx = x.ctx(bcx);
+    let (in_loop_fn, other) = (bcx.create_block(), bcx.create_block());
+    bcx.pick(in_loop_fn, other);
+    switch_sealed(bcx, in_loop_fn);
+    loop_fn_gate(bcx, x, &cx, &g);
+    switch_sealed(bcx, other);
+    let hot = bcx.use_var(x.hot);
+    let go = bcx.create_block();
+    bcx.ins().brif(hot, go, &[], g.start, &[]);
+    switch_sealed(bcx, go);
+    let ok = bcx.use_var(x.loop_ok);
+    let (into_loop, other) = (bcx.create_block(), bcx.create_block());
+    bcx.ins().brif(ok, into_loop, &[], other, &[]);
+    switch_sealed(bcx, other);
+    emit_other_kinds(bcx, &cx, g.start);
+    switch_sealed(bcx, into_loop);
+    emit_hot_back_edge(bcx, &cx, &[]);
 }
 
 /// The gate in the optimizing tier's loop function: the registers stored,
@@ -110,50 +119,37 @@ fn fill_gate<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
 /// trace again. Going on at the loop head here instead would make every
 /// register the loop only reads a value the head takes from its branches,
 /// which the loop then carries round.
-fn loop_fn_gate<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
-    let again = lw.bcx.ins().iconst(types::I64, EXIT_LOOP_AGAIN as i64);
-    let ret = match lw.blocks.peel {
-        Some(_) => {
-            let ok = lw.bcx.use_var(rl.loop_ok);
-            let head = lw
-                .bcx
-                .ins()
-                .iconst(types::I64, i64::from(pl.record.head_pc));
-            lw.bcx.ins().select(ok, again, head)
+fn loop_fn_gate<E: Emit>(bcx: &mut E, x: &Relinks, cx: &Ctx<'_>, g: &Gate) {
+    let again = bcx.ins().iconst(types::I64, EXIT_LOOP_AGAIN as i64);
+    let ret = match g.peeled {
+        true => {
+            let ok = bcx.use_var(x.loop_ok);
+            let head = bcx.ins().iconst(types::I64, i64::from(cx.head_pc));
+            bcx.ins().select(ok, again, head)
         }
-        None => again,
+        false => again,
     };
-    // what reg_state holds is not known here: every register is stored
-    let stored = std::mem::take(&mut lw.stored);
-    emit_store_back(
-        &mut lw.bcx,
-        &lw.entry.regs_full[..pl.max_stack],
-        &lw.stored,
-        lw.entry.reg_state,
-        lw.flush_ctx.as_ref(),
-    );
-    lw.bcx.ins().return_(&[ret]);
-    lw.stored = stored;
+    emit_store_back(bcx, &cx.regs[..cx.max_stack], &[], cx.reg_state, cx.flush);
+    bcx.ins().return_(&[ret]);
 }
 
 /// The gate's way once the count is reached with registers of other kinds
 /// than the optimizing tier's loop takes (see [`fill_gate`]).
-fn emit_other_kinds<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, start: Block) {
-    let t = lw.tier_count.as_ref().expect("a hot loop counts");
-    let (count, at) = (count_at(lw, pl, t), t.at());
-    let looped = load_loop_cell(&mut lw.bcx, t);
-    let (keep, leave) = (lw.bcx.create_block(), lw.bcx.create_block());
-    lw.bcx.ins().brif(looped, keep, &[], leave, &[]);
-    switch_sealed(lw, leave);
+fn emit_other_kinds<E: Emit>(bcx: &mut E, cx: &Ctx<'_>, start: Block) {
+    let t = cx.tier.expect("a hot loop counts");
+    let looped = load_loop_cell(bcx, &t);
+    let (keep, leave) = (bcx.create_block(), bcx.create_block());
+    bcx.ins().brif(looped, keep, &[], leave, &[]);
+    switch_sealed(bcx, leave);
     emit_store_back_and_return_pc(
-        &mut lw.bcx,
-        &lw.entry.regs_full[..pl.max_stack],
-        &lw.stored,
-        lw.entry.reg_state,
-        pl.record.head_pc,
-        lw.flush_ctx.as_ref(),
+        bcx,
+        &cx.regs[..cx.max_stack],
+        &[],
+        cx.reg_state,
+        cx.head_pc,
+        cx.flush,
     );
-    switch_sealed(lw, keep);
-    mark_pass_into_loop(lw, pl, count, at);
-    lw.bcx.ins().jump(start, &[]);
+    switch_sealed(bcx, keep);
+    mark_pass_into_loop(bcx, cx, &t);
+    bcx.ins().jump(start, &[]);
 }
