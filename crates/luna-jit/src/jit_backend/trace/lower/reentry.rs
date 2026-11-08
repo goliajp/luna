@@ -4,6 +4,7 @@
 
 use super::side_call::{Relink, cold_block, switch_sealed};
 use super::*;
+use luna_core::__private::EXIT_LOOP_AGAIN;
 
 /// The relink block, once everything else is lowered: the loop's iteration
 /// counted, on at the reentry block, which redoes what follows the entry
@@ -55,10 +56,10 @@ fn count_relink<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink, ran: i32
 /// loop when the side trace left the registers of the kinds that loop is
 /// compiled for; otherwise on.
 ///
-/// In the optimizing tier's loop function, which counts nothing, a trace
-/// with a peeled first pass skips it: the gate goes on at the loop head
-/// when the side trace left the registers of the loop's kinds, and leaves
-/// at the loop head for the dispatcher otherwise (see [`loop_fn_gate`]).
+/// In the optimizing tier's loop function, which counts nothing, the gate
+/// has the function called again when the side trace left the registers
+/// of the loop's kinds, and leaves at the loop head for the dispatcher
+/// otherwise (see [`loop_fn_gate`]).
 ///
 /// With registers of other kinds, before the optimizing tier's code exists
 /// (the baseline code reaches the count first: the dispatcher moves the
@@ -80,13 +81,11 @@ fn fill_gate<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
         lw.bcx.ins().jump(start, &[]);
         return;
     }
-    if lw.blocks.peel.is_some() {
-        let (in_loop_fn, other) = (lw.bcx.create_block(), lw.bcx.create_block());
-        lw.bcx.pick(in_loop_fn, other);
-        switch_sealed(lw, in_loop_fn);
-        loop_fn_gate(lw, pl, rl);
-        switch_sealed(lw, other);
-    }
+    let (in_loop_fn, other) = (lw.bcx.create_block(), lw.bcx.create_block());
+    lw.bcx.pick(in_loop_fn, other);
+    switch_sealed(lw, in_loop_fn);
+    loop_fn_gate(lw, pl, rl);
+    switch_sealed(lw, other);
     let hot = lw.bcx.use_var(rl.hot);
     let go = lw.bcx.create_block();
     lw.bcx.ins().brif(hot, go, &[], start, &[]);
@@ -103,26 +102,37 @@ fn fill_gate<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
     lw.stored = stored;
 }
 
-/// The gate in the optimizing tier's loop function: on at the loop head
-/// past the peeled pass, whose end and this way in would otherwise both
-/// join the loop's body, when the side trace left the registers of the
-/// loop's kinds; else out at the loop head, where the dispatcher enters
-/// the trace again.
+/// The gate in the optimizing tier's loop function: the registers stored,
+/// [`EXIT_LOOP_AGAIN`] returned, for the back edge that called the function
+/// to call it again, when the side trace left the registers of the loop's
+/// kinds (as it always does without a peeled pass, the loop's kinds being
+/// the entry's); else out at the loop head, where the dispatcher enters the
+/// trace again. Going on at the loop head here instead would make every
+/// register the loop only reads a value the head takes from its branches,
+/// which the loop then carries round.
 fn loop_fn_gate<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, rl: &Relink) {
-    let ok = lw.bcx.use_var(rl.loop_ok);
-    let leave = lw.bcx.create_block();
-    lw.bcx.ins().brif(ok, lw.blocks.body_loop, &[], leave, &[]);
-    switch_sealed(lw, leave);
+    let again = lw.bcx.ins().iconst(types::I64, EXIT_LOOP_AGAIN as i64);
+    let ret = match lw.blocks.peel {
+        Some(_) => {
+            let ok = lw.bcx.use_var(rl.loop_ok);
+            let head = lw
+                .bcx
+                .ins()
+                .iconst(types::I64, i64::from(pl.record.head_pc));
+            lw.bcx.ins().select(ok, again, head)
+        }
+        None => again,
+    };
     // what reg_state holds is not known here: every register is stored
     let stored = std::mem::take(&mut lw.stored);
-    emit_store_back_and_return_pc(
+    emit_store_back(
         &mut lw.bcx,
         &lw.entry.regs_full[..pl.max_stack],
         &lw.stored,
         lw.entry.reg_state,
-        pl.record.head_pc,
         lw.flush_ctx.as_ref(),
     );
+    lw.bcx.ins().return_(&[ret]);
     lw.stored = stored;
 }
 
