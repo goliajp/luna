@@ -78,3 +78,44 @@ fn relocated_code_holds_the_new_addresses() {
         .expect("place");
     assert_eq!(run(placed), want(B), "Cranelift code");
 }
+
+#[test]
+fn code_placed_in_a_batch_shares_pages_and_runs_once_sealed() {
+    let mut l = Lir::new();
+    build(&mut l);
+    let mut arena = CodeArena::default();
+    let (_, code) = lir::assemble(&l, &mut arena, true).expect("baseline");
+    let code: Code = code.expect("captured");
+    let page = region::page::size();
+    // more than a chunk's worth, so the batch goes on in a new chunk
+    let n = 256 * 1024 / code.bytes.len().next_multiple_of(64) + 8;
+    arena.open();
+    let placed: Vec<*const u8> = (0..n)
+        .map(|i| {
+            let v = if i % 2 == 0 { A } else { B };
+            arena
+                .place_with(code.bytes.len(), |out| code.write_to(out, |k| v[k]))
+                .expect("place")
+        })
+        .collect();
+    arena.seal().expect("seal");
+    assert_eq!(
+        placed[1] as usize - placed[0] as usize,
+        code.bytes.len().next_multiple_of(64)
+    );
+    assert_eq!(
+        placed[0] as usize / page,
+        placed[1] as usize / page,
+        "one page"
+    );
+    for (i, &p) in placed.iter().enumerate() {
+        assert_eq!(p as usize % 64, 0);
+        assert_eq!(run(p), want(if i % 2 == 0 { A } else { B }), "piece {i}");
+    }
+    // code placed after the batch goes on a page of its own
+    let after = arena
+        .place_with(code.bytes.len(), |out| code.write_to(out, |k| A[k]))
+        .expect("place");
+    assert_eq!(after as usize % page, 0);
+    assert_eq!(run(after), want(A));
+}

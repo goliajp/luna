@@ -2,17 +2,23 @@
 
 use super::*;
 
-/// The baseline tier's code of one `Vm`: chunks of pages, each trace on
-/// pages of its own that turn read-execute once written, so no page that
-/// may run is ever written again. Freed only by [`CodeArena::free`];
-/// dropping the arena alone leaves the code mapped, as with the Cranelift
-/// tier's modules, because some `Vm` may still point into it.
+/// The baseline tier's code of one `Vm`: chunks of pages that turn
+/// read-execute once written, so no page that may run is ever written
+/// again. Each piece of code placed outside a batch gets pages of its own;
+/// the pieces placed in a batch ([`CodeArena::open`]) share them and turn
+/// executable together when it is sealed. Freed only by
+/// [`CodeArena::free`]; dropping the arena alone leaves the code mapped, as
+/// with the Cranelift tier's modules, because some `Vm` may still point
+/// into it.
 #[derive(Default)]
 pub(crate) struct CodeArena {
     chunks: std::mem::ManuallyDrop<Vec<region::Allocation>>,
     /// Writable bytes left at the end of the last chunk, from `next`.
     next: usize,
     left: usize,
+    /// Where the open batch's code starts, at a page boundary: none of it
+    /// is executable yet.
+    open: Option<usize>,
 }
 
 // SAFETY: the arena owns its mappings; the code in them is only run by the
@@ -20,6 +26,10 @@ pub(crate) struct CodeArena {
 unsafe impl Send for CodeArena {}
 
 const CHUNK: usize = 256 * 1024;
+
+/// The byte each piece of code in a batch starts at a multiple of: above
+/// what Cranelift aligns a function or its constants to.
+const PIECE_ALIGN: usize = 64;
 
 /// Chunks of Vms that released their code, writable again: the next Vm
 /// takes one instead of mapping and faulting in fresh pages.
@@ -38,6 +48,30 @@ impl CodeArena {
         self.place_with(code.len(), |out| out.copy_from_slice(code))
     }
 
+    /// Starts a batch: the code placed until [`CodeArena::seal`] goes on
+    /// shared pages and is not executable before then, so none of it may
+    /// run until the batch is sealed.
+    pub(crate) fn open(&mut self) {
+        debug_assert!(self.open.is_none(), "a batch is open already");
+        self.open = Some(self.next);
+    }
+
+    /// Makes the code placed since [`CodeArena::open`] executable, and
+    /// ends the batch.
+    pub(crate) fn seal(&mut self) -> Result<(), &'static str> {
+        let Some(start) = self.open.take() else {
+            return Ok(());
+        };
+        let used = self.next - start;
+        if used == 0 {
+            return Ok(());
+        }
+        let len = used.next_multiple_of(region::page::size());
+        self.next = start + len;
+        self.left -= len - used;
+        self.write_sealing(start as *mut u8, 0, |_| {}, Some((start, len, used)))
+    }
+
     /// [`CodeArena::place`] for `n` bytes of code that `write` writes into
     /// the pages (all `n` of them) before they turn executable.
     pub(crate) fn place_with(
@@ -46,38 +80,78 @@ impl CodeArena {
         write: impl FnOnce(&mut [u8]),
     ) -> Result<*const u8, &'static str> {
         let page = region::page::size();
-        let len = n.next_multiple_of(page);
-        if len > self.left {
-            let spare = if len <= CHUNK {
-                SPARE_CHUNKS
-                    .lock()
-                    .ok()
-                    .and_then(|mut v| v.pop())
-                    .map(|c| c.0)
-            } else {
-                None
-            };
-            let a = match spare {
-                Some(a) => a,
-                None => region::alloc(len.max(CHUNK), region::Protection::READ_WRITE)
-                    .map_err(|_| "allocating code memory")?,
-            };
-            self.next = a.as_ptr::<u8>() as usize;
-            self.left = a.len();
-            self.chunks.push(a);
+        let pad = match self.open {
+            Some(_) => self.next.next_multiple_of(PIECE_ALIGN) - self.next,
+            None => 0,
+        };
+        let len = match self.open {
+            Some(_) => n,
+            None => n.next_multiple_of(page),
+        };
+        if pad + len > self.left {
+            // what the batch wrote so far turns executable on its own pages
+            let batch = self.open.is_some();
+            self.seal()?;
+            self.grow(len.next_multiple_of(page))?;
+            if batch {
+                self.open = Some(self.next);
+            }
+            return self.place_with(n, write);
         }
-        let p = self.next as *mut u8;
-        // SAFETY: `p..p + len` is writable memory of the last chunk that
-        // nothing has been placed in yet, and `n <= len`
+        let p = self.next + pad;
+        self.next = p + len;
+        self.left -= pad + len;
+        let protect = self.open.is_none().then_some((p, len, n));
+        self.write_sealing(p as *mut u8, n, write, protect)?;
+        Ok(p as *const u8)
+    }
+
+    /// Maps a chunk of at least `len` bytes to place code in next.
+    fn grow(&mut self, len: usize) -> Result<(), &'static str> {
+        let spare = if len <= CHUNK {
+            SPARE_CHUNKS
+                .lock()
+                .ok()
+                .and_then(|mut v| v.pop())
+                .map(|c| c.0)
+        } else {
+            None
+        };
+        let a = match spare {
+            Some(a) => a,
+            None => region::alloc(len.max(CHUNK), region::Protection::READ_WRITE)
+                .map_err(|_| "allocating code memory")?,
+        };
+        self.next = a.as_ptr::<u8>() as usize;
+        self.left = a.len();
+        self.chunks.push(a);
+        Ok(())
+    }
+
+    /// Has `write` write the `n` bytes at `p`, then, with `protect` =
+    /// `(start, len, code)`, makes the `len` bytes from `start` executable,
+    /// `code` of them code.
+    fn write_sealing(
+        &mut self,
+        p: *mut u8,
+        n: usize,
+        write: impl FnOnce(&mut [u8]),
+        protect: Option<(usize, usize, usize)>,
+    ) -> Result<(), &'static str> {
+        // SAFETY: `p..p + n` is writable memory of the last chunk that no
+        // code was placed in yet (`place_with` moved `next` past it); a
+        // range `protect` names is whole pages of a chunk that only the
+        // code just written (and the padding between its pieces) is on,
+        // none of which ran yet
         unsafe {
             write(std::slice::from_raw_parts_mut(p, n));
-            region::protect(p, len, region::Protection::READ_EXECUTE)
-                .map_err(|_| "protecting code memory")?;
-            crate::jit_backend::code_memory::sync_icache(p as usize, n);
+            if let Some((start, len, code)) = protect {
+                region::protect(start as *const u8, len, region::Protection::READ_EXECUTE)
+                    .map_err(|_| "protecting code memory")?;
+                crate::jit_backend::code_memory::sync_icache(start, code);
+            }
         }
-        self.next += len;
-        self.left -= len;
-        Ok(p)
+        Ok(())
     }
 
     /// # Safety
@@ -86,6 +160,7 @@ impl CodeArena {
     pub(crate) unsafe fn free(&mut self) {
         let chunks = std::mem::take(&mut *self.chunks);
         self.left = 0;
+        self.open = None;
         let mut spare = SPARE_CHUNKS.lock().ok();
         for a in chunks {
             // SAFETY: no code in the chunk runs any more (the caller's

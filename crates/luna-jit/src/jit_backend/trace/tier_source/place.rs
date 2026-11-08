@@ -20,13 +20,20 @@ pub(super) fn from_image(
             .place_with(code.bytes.len(), |out| code.write_to(out, at))
             .ok()
     };
-    if at_loop {
-        let p = place(cs, o.looped.as_ref()?)?;
+    // the loop and the entry turn executable at once
+    cs.baseline_code.open();
+    let looped = match at_loop {
+        true => o.looped.as_ref().and_then(|c| place(cs, c)).map(Some),
+        false => Some(None),
+    };
+    let entry = place(cs, &o.entry);
+    cs.baseline_code.seal().ok()?;
+    let (looped, entry) = (looped?, entry?);
+    if let Some(p) = looped {
         // SAFETY: the image's optimizing tier's loop of this trace, with
         // this Vm's addresses written in
         unsafe { set_loop(ct, p) };
     }
-    let entry = place(cs, &o.entry)?;
     super::code_dump::dump_len("tier-up-image", head_pc, entry, o.entry.bytes.len());
     // SAFETY: as in `install`: the optimizing tier's code for this
     // trace, with this Vm's addresses written in

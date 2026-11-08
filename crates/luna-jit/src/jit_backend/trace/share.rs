@@ -133,6 +133,22 @@ pub(crate) fn adopt(
         }
         todo
     };
+    // one batch: the code of all the traces turns executable at once
+    cs.baseline_code.open();
+    let out = install_all(cs, req, &todo);
+    if cs.baseline_code.seal().is_err() {
+        return Vec::new();
+    }
+    out
+}
+
+/// Installs the images `todo`, the one asked for first: none when that one
+/// cannot be.
+fn install_all(
+    cs: &mut CraneliftJitStorage,
+    req: &AdoptRequest<'_>,
+    todo: &[Arc<TraceImage>],
+) -> Vec<AdoptedTrace> {
     let mut out = Vec::with_capacity(todo.len());
     let mut installed: Vec<u64> = Vec::with_capacity(todo.len());
     for (i, img) in todo.iter().enumerate() {
