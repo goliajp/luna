@@ -137,3 +137,44 @@ fn a_link_reached_while_hot_counting_pauses_is_left_to_the_vm() {
         assert!(quiet[1] > 0, "{v:?}: no link left while the pause was held");
     }
 }
+
+/// The sliding window ring with a call inlined in each loop: the copy
+/// loop's trace inlines `f`, and the scan loop's inlines `pad`, whose
+/// locals make its window wider than the copy loop's so that the link
+/// into the copy loop is filled. The code leaves a link into a trace that
+/// inlines calls to the Vm, which knows whether the thread has room for
+/// the frames those calls need.
+#[test]
+fn a_link_into_a_trace_that_inlines_calls_is_left_to_the_vm() {
+    let src = "
+        local function pad(x)
+          local x1, x2, x3, x4, x5, x6, x7, x8, x9, x10 = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+          local y1, y2, y3, y4, y5, y6, y7, y8, y9, y10 = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+          return 1
+        end
+        local function f(x) return x end
+        local total = 0
+        for rep = 1, 40 do
+          local window, now, horizon = {}, 500, 100
+          for i = 1, now do window[i] = i end
+          for step = 1, 100 do
+            now = now + 1
+            window[#window + 1] = now
+            local i = 1
+            while i <= #window and window[i] < now - horizon do i = i + pad(i) end
+            if i > 1 then
+              local new = {}
+              for j = i, #window do new[#new + 1] = f(window[j]) end
+              window = new
+            end
+            total = total + #window
+          end
+        end
+        return total";
+    each(src, |v, _, by_vm| {
+        assert!(
+            by_vm[4] > 0,
+            "{v:?}: no link into an inlining trace left to the Vm: {by_vm:?}"
+        );
+    });
+}
