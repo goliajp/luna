@@ -25,6 +25,7 @@ pub(super) fn fill_link(
     cell: &SideCell,
     proto: &crate::runtime::Proto,
     pc: u32,
+    words: &crate::vm::jit_state::RunWords,
 ) -> Fill {
     let traces = proto.traces.borrow();
     let at = traces.iter().position(|t| std::ptr::eq(&**t, parent));
@@ -53,9 +54,9 @@ pub(super) fn fill_link(
         super::fill_cell(
             cell,
             child,
-            &[],
-            &super::reads_unchecked(parent, exit, child),
+            (&[], &super::reads_unchecked(parent, exit, child)),
             false,
+            words,
         );
     }
     f
@@ -71,6 +72,7 @@ pub(in crate::vm::exec) fn link_late(
     proto: &crate::runtime::Proto,
     counts: &mut [u64; 8],
     filled: &mut Vec<TArc<CompiledTrace>>,
+    words: &crate::vm::jit_state::RunWords,
 ) {
     if !target.dispatchable || target.downrec_link.is_some() {
         return;
@@ -93,7 +95,7 @@ pub(in crate::vm::exec) fn link_late(
         let empty = super::cell_of(&parent, exit)
             .is_none_or(|c| c.entry.get().is_null() && c.link_pc.get() == u32::MAX);
         if empty {
-            let f = super::relink_fill(&parent, exit, &child, proto);
+            let f = super::relink_fill(&parent, exit, &child, proto, words);
             if f != Fill::NotHead {
                 counts[Fill::NotHead as usize] -= 1;
                 counts[f as usize] += 1;

@@ -18,10 +18,11 @@
 //! with `reg_state` alone.
 //!
 //! The stub holds no address of a Vm or a trace: the helper it calls is the
-//! same in every Vm, and everything else comes from the exit.
+//! same in every Vm, and everything else comes from the exit (the Vm's run
+//! words through the cell).
 
 use super::cg::{Alu, Bufs, Cond, Masm, Width};
-use luna_core::__private::{EXIT_RELINK, SideCell};
+use luna_core::__private::{EXIT_RELINK, RunWords, SideCell};
 
 /// The stub's address, placed on first use. A process has one target, so
 /// one [`Masm`]: the stub is shared by every trace's code and every Vm's,
@@ -89,10 +90,19 @@ fn emit_call<M: Masm>(m: &mut M, k: &[u8], out: super::cg::Label) {
     m.load(Width::B4, t, k[1], at.at);
     m.cmp(false, u, t);
     m.jcc(Cond::Uge, out);
+    // with no slot to check, the helper would only read the run words
+    let (listed, checked) = (m.new_label(), m.new_label());
     m.load(Width::B8, a[0], k[1], at.check);
+    m.branch_reg(a[0], true, listed);
+    m.load(Width::B8, t, k[1], at.words);
+    m.load(Width::B4, t, t, RunWords::offsets().blocked);
+    m.branch_reg(t, true, out);
+    m.jmp(checked);
+    m.bind(listed);
     m.mov(a[1], k[0]);
     m.call_abs(side_cell_list());
     m.branch_reg(M::RET, false, out);
+    m.bind(checked);
     m.load(Width::B8, M::CALL_TARGET, k[1], at.entry);
     m.mov(a[0], k[0]);
     m.call_reg(M::CALL_TARGET);

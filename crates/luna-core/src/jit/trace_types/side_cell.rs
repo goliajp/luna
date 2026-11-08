@@ -60,6 +60,9 @@ pub struct SideCell {
     /// What the lists say, for the optimizing tier to compile in; set when
     /// the cell is filled, never after.
     pub(crate) plan: PlanOnce,
+    /// The run words of the cell's Vm (`crate::__private::RunWords`), for
+    /// code shared by every Vm; set when the cell is filled.
+    pub(crate) words: TCellPtr,
 }
 
 /// A cell's plan once set.
@@ -100,6 +103,8 @@ pub struct SideCellOffsets {
     pub link: i32,
     /// `SideCell::link_bare`'s.
     pub link_bare: i32,
+    /// `SideCell::words`'s.
+    pub words: i32,
 }
 
 /// See [`SideCell::link_lists`].
@@ -123,6 +128,7 @@ impl SideCell {
             link_lists: TRefLock::new(Default::default()),
             link_bare: TCellPtr::null(),
             plan: PlanOnce::new(),
+            words: TCellPtr::null(),
         }
     }
 
@@ -139,6 +145,7 @@ impl SideCell {
             link_pc: std::mem::offset_of!(SideCell, link_pc) as i32,
             link: std::mem::offset_of!(SideCell, link) as i32,
             link_bare: std::mem::offset_of!(SideCell, link_bare) as i32,
+            words: std::mem::offset_of!(SideCell, words) as i32,
         }
     }
 
