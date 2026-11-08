@@ -99,6 +99,7 @@ pub(in crate::vm::exec) fn hold_side_trace(
     child: TArc<CompiledTrace>,
     counts: &mut [u64; 8],
     proto: &crate::runtime::Proto,
+    words: &crate::vm::jit_state::RunWords,
 ) -> Vec<TArc<CompiledTrace>> {
     let mut filled = Vec::new();
     if let Some((parent, exit)) = wired {
@@ -109,13 +110,13 @@ pub(in crate::vm::exec) fn hold_side_trace(
         debug_assert!(held[exit].is_none(), "exit {exit} wired twice");
         held[exit] = Some(TArc::clone(&child));
         drop(held);
-        let f = super::relink::relink_fill(&parent, exit, &child, proto);
+        let f = super::relink::relink_fill(&parent, exit, &child, proto, words);
         counts[f as usize] += 1;
         if f.calls() {
             filled.push(parent);
         }
     } else {
-        super::relink::link_late(&child, proto, counts, &mut filled);
+        super::relink::link_late(&child, proto, counts, &mut filled, words);
     }
     filled
 }

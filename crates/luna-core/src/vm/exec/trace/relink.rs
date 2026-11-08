@@ -180,6 +180,7 @@ pub(in crate::vm::exec) fn relink_fill(
     exit: usize,
     child: &CompiledTrace,
     proto: &crate::runtime::Proto,
+    words: &crate::vm::jit_state::RunWords,
 ) -> Fill {
     let Some(cell) = typed_of(parent, exit).and_then(|t| parent.side_cell_made(t)) else {
         return Fill::NoCell;
@@ -197,8 +198,8 @@ pub(in crate::vm::exec) fn relink_fill(
         return Fill::Frame;
     }
     let f = match child.link_pc {
-        Some(pc) if pc == parent.head_pc => fill_relink(parent, exit, child, cell),
-        Some(pc) => onward::fill_link(parent, exit, child, cell, proto, pc),
+        Some(pc) if pc == parent.head_pc => fill_relink(parent, exit, child, cell, words),
+        Some(pc) => onward::fill_link(parent, exit, child, cell, proto, pc, words),
         None => Fill::NoLinkPc,
     };
     // the optimizing tier's code may leave this exit to the dispatcher
@@ -216,6 +217,7 @@ fn fill_relink(
     exit: usize,
     child: &CompiledTrace,
     cell: &SideCell,
+    words: &crate::vm::jit_state::RunWords,
 ) -> Fill {
     let tags = tags_at_relink(parent, exit, child);
     if !enterable(parent, &tags) {
@@ -224,22 +226,25 @@ fn fill_relink(
     fill_cell(
         cell,
         child,
-        &stores_at_relink(parent, &tags),
-        &reads_unchecked(parent, exit, child),
+        (
+            &stores_at_relink(parent, &tags),
+            &reads_unchecked(parent, exit, child),
+        ),
         goes_on_in_loop(parent, &tags),
+        words,
     );
     Fill::Filled
 }
 
 /// Hands `child` to `cell` with its stores at going on in the parent's
-/// loop, its checks before it runs and whether its registers may go on in
-/// the optimizing tier's loop.
+/// loop and its checks before it runs, whether its registers may go on in
+/// the optimizing tier's loop, and the run words of the Vm it is in.
 fn fill_cell(
     cell: &SideCell,
     child: &CompiledTrace,
-    stores: &[(usize, u8)],
-    checks: &[(usize, u8)],
+    (stores, checks): (&[(usize, u8)], &[(usize, u8)]),
     loop_ok: bool,
+    words: &crate::vm::jit_state::RunWords,
 ) {
     let mut lists = cell.lists.borrow_mut();
     *lists = (
@@ -257,6 +262,8 @@ fn fill_cell(
     cell.check.set(at(&lists.1));
     drop(lists);
     cell.loop_ok.set(u32::from(loop_ok));
+    cell.words
+        .set((words as *const crate::vm::jit_state::RunWords).cast());
     let fresh = cell
         .plan
         .set(plan_of(cell, stores, checks, loop_ok))
