@@ -31,6 +31,7 @@ mod relinks;
 mod side_call;
 mod side_link;
 mod side_plan;
+mod side_tier;
 mod state;
 mod step_guard;
 mod sunk_sites;
@@ -178,10 +179,12 @@ pub(super) fn lower_trace_lir(
         _ => 0,
     };
     let lower = |split| lower_trace_lir_split(record, opts, float_only, at_exits, count_at, split);
-    match lower(count_at > 0)? {
-        Ok(l) => Some(l),
-        Err(()) => lower(false)?.ok(),
-    }
+    let (lir, parts) = match lower(count_at > 0)? {
+        Ok(l) => l,
+        Err(()) => lower(false)?.ok()?,
+    };
+    let parts = side_tier::at_payback(record, lir.insts.len(), parts, opts.tier_up_at);
+    Some((lir, parts))
 }
 
 /// [`lower_trace_lir`] with the iteration count kept at `count_at` (none at

@@ -34,9 +34,13 @@ pub struct TierUp {
     pub(crate) at: u32,
     /// The head function's `call_hot_count` when the trace was compiled.
     /// Once that function has been called again, the code is being reused
-    /// rather than run once, and the trace moves after
-    /// `at / TIER_UP_REUSED_DIVISOR` iterations and entries.
+    /// rather than run once, and the trace moves after `reused_at`
+    /// iterations and entries.
     pub(crate) calls_at: u32,
+    /// `at / TIER_UP_REUSED_DIVISOR`, or `at` for a trace whose `at` is
+    /// where the move pays for itself however the code is reused (see
+    /// [`TierUp::set_payback_at`]).
+    pub(crate) reused_at: u32,
     /// The optimizing tier's entry once compiled (null before).
     pub(crate) optimized: TCellPtr,
     /// The optimizing tier's loop once compiled (null before), for a trace
@@ -65,6 +69,7 @@ impl TierUp {
             count,
             at,
             calls_at,
+            reused_at: at / TIER_UP_REUSED_DIVISOR,
             optimized: TCellPtr::null(),
             looped: TCellPtr::null(),
             tried: TCellBool::new(false),
@@ -115,9 +120,24 @@ impl TierUp {
         &self.count
     }
 
-    /// [`CompileOptions::tier_up_at`] the trace was compiled with.
+    /// [`CompileOptions::tier_up_at`] the trace was compiled with, or the
+    /// count [`TierUp::set_payback_at`] set.
     #[inline]
     pub fn at(&self) -> u32 {
         self.at
+    }
+
+    /// [`TierUp::reused_at`]: where the trace moves once its head function
+    /// has been called again.
+    #[inline]
+    pub fn reused_at(&self) -> u32 {
+        self.reused_at
+    }
+
+    /// Has the trace move after `at` iterations and entries whether or not
+    /// its head function is called again: `at` being where the cost of the
+    /// move is earned back, reuse is already weighed in it.
+    pub fn set_payback_at(&mut self, at: u32) {
+        (self.at, self.reused_at) = (at, at);
     }
 }
