@@ -3,6 +3,7 @@
 use super::tier_up::TierUp;
 use super::*;
 
+mod cells;
 pub(crate) mod entry_plan;
 pub(crate) mod exit_plan;
 pub(crate) mod plans;
@@ -121,8 +122,10 @@ pub struct CompiledTrace {
     pub(crate) downrec_link: Option<(u32, u32)>,
     pub(crate) downrec_multi_way_count: u8,
     pub(crate) tier_up: Option<Box<TierUp>>,
-    /// See [`CompiledTraceParts::side_cells`].
-    pub(crate) side_cells: super::side_cell::SideCells,
+    /// See [`CompiledTraceParts::side_cell_exits`].
+    pub(crate) side_cell_exits: std::sync::Arc<[u32]>,
+    /// See [`CompiledTraceParts::side_cells`]: made once, then never moved.
+    pub(crate) side_cells: super::side_cell::CellsOnce,
     /// See [`CompiledTraceParts::link_pc`].
     pub(crate) link_pc: Option<u32>,
     /// See [`CompiledTraceParts::loop_tags`].
@@ -137,8 +140,13 @@ pub struct CompiledTrace {
 /// [`CompiledTrace`], with no room for side traces yet.
 macro_rules! moved {
     ($parts:ident => $($f:ident),* $(,)?) => {{
-        let CompiledTraceParts { $($f,)* plans } = $parts;
+        let CompiledTraceParts { $($f,)* plans, side_cells } = $parts;
+        let cells = super::side_cell::CellsOnce::new();
+        if let Some(c) = side_cells {
+            let _ = cells.set(c);
+        }
         Self {
+            side_cells: cells,
             call_count: false,
             side_children: TRefLock::new(Box::default()),
             entry_plan: plans.0.entry_plan.clone(),
@@ -175,7 +183,9 @@ impl CompiledTrace {
     ///   the loop returns.
     /// - The cells whose addresses that code holds are the ones `parts`
     ///   owns: the `chain` of each of `per_exit_inline`, the count and the
-    ///   loop cell of `tier_up`, and `side_cells`.
+    ///   loop cell of `tier_up`, and `side_cells` (code holding none of
+    ///   their addresses when `side_cells` is `None`: the trace makes them
+    ///   once a side trace is wired, one per `side_cell_exits`).
     /// - Code that reads a side cell calls the entry it holds, when that is
     ///   not null, at the typed exit the cell belongs to, with the exit's
     ///   registers in `reg_state`; it goes on at its loop's start when that
@@ -209,39 +219,13 @@ impl CompiledTrace {
             is_inline_abort_close, dispatch_off_reason, sinkable_sites_seen,
             accum_bufferable_seen, sunk_alloc_seen, materialize_emit_count, closure_seen,
             inline_kinds, inline_depth, body_writes, downrec_link, downrec_multi_way_count,
-            tier_up, side_cells, link_pc, loop_tags);
+            tier_up, side_cell_exits, link_pc, loop_tags);
         let side_children = TRefLock::new(vec![None; ct.exit_hit_counts.len()].into_boxed_slice());
         Self {
             call_count,
             side_children,
             ..ct
         }
-    }
-
-    /// The times side traces its code ran went on in its loop, over its
-    /// side cells (each count wrapping at `u32::MAX`).
-    pub fn side_relinks(&self) -> u64 {
-        self.side_cells
-            .iter()
-            .map(|(_, c)| u64::from(c.relinks()))
-            .sum()
-    }
-
-    /// Per side cell: whether it holds a side trace's entry, and whether
-    /// that is the side trace's optimizing tier's.
-    pub fn side_cell_states(&self) -> Vec<(bool, bool)> {
-        let held = self.side_children.borrow();
-        (self.side_cells.iter())
-            .map(|(e, c)| {
-                let child = held.get(self.per_exit_inline.len() + *e as usize);
-                let optimized = child.cloned().flatten().and_then(|ch| {
-                    let o = ch.tier_up.as_ref()?.optimized.get();
-                    (!o.is_null()).then_some(o)
-                });
-                let entry = c.entry.get();
-                (!entry.is_null(), optimized.is_some_and(|o| o == entry))
-            })
-            .collect()
     }
 
     /// The entry to call: the optimizing tier's once it exists.

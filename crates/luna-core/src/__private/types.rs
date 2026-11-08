@@ -14,7 +14,7 @@ pub use crate::jit::trace_types::installed::plans::{PassCount, TracePlans, kept_
 pub use crate::jit::trace_types::options::CompileOptions;
 pub use crate::jit::trace_types::record::{FieldIcSnapshot, RecordedOp, TraceRecord};
 pub use crate::jit::trace_types::self_link::{DownRecClose, RetfRecord};
-pub use crate::jit::trace_types::side_cell::{SideCell, SideCellOffsets, SideCells};
+pub use crate::jit::trace_types::side_cell::{SideCell, SideCellOffsets, SideCells, side_cells};
 pub use crate::jit::trace_types::side_exit::{FrameMaterializeInfo, HotExitInfo, InlineSideExit};
 pub use crate::jit::trace_types::tier_up::{TierKept, TierUp};
 pub use crate::runtime::builtin::Builtin;

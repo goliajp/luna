@@ -214,9 +214,14 @@ pub struct CompiledTraceParts {
     /// Set when a quicker code generator compiled this trace and a better
     /// one can take over once it is hot.
     pub tier_up: Option<Box<TierUp>>,
-    /// The cells the code reads at the exits that may run a side trace
-    /// themselves (see [`super::side_cell`]), whose addresses it holds.
-    pub side_cells: super::side_cell::SideCells,
+    /// The typed exit (index into `per_exit_tags`) of each exit that may
+    /// run a side trace from the code, in the order of their cells (see
+    /// [`super::side_cell`]).
+    pub side_cell_exits: std::sync::Arc<[u32]>,
+    /// Those cells, when the code holds their address already; otherwise
+    /// the trace makes them when a side trace is first wired to one of
+    /// those exits.
+    pub side_cells: Option<super::side_cell::SideCells>,
     /// The head of the trace a side trace ends at, returning it with
     /// [`crate::__private::EXIT_RELINK`] (see `TraceRecord::link_pc`).
     pub link_pc: Option<u32>,

@@ -135,6 +135,19 @@ impl Default for SideCell {
 }
 
 /// A trace's cells, in one allocation that does not move while the trace
-/// lives (its code holds their addresses): per cell, the index of the typed
-/// exit it belongs to (into `per_exit_tags`), and the cell.
-pub type SideCells = Box<[(u32, SideCell)]>;
+/// lives (its code holds their addresses, cell `n` at `n` times
+/// `size_of::<SideCell>()` past the first's), in the order of the typed
+/// exits they belong to (see `CompiledTraceParts::side_cell_exits`).
+pub type SideCells = Box<[SideCell]>;
+
+/// `n` empty cells.
+pub fn side_cells(n: usize) -> SideCells {
+    (0..n).map(|_| SideCell::new()).collect()
+}
+
+/// A trace's cells once made: set at most once, and never moved after.
+#[cfg(not(feature = "send"))]
+pub(crate) type CellsOnce = std::cell::OnceCell<SideCells>;
+/// A trace's cells once made (send build).
+#[cfg(feature = "send")]
+pub(crate) type CellsOnce = std::sync::OnceLock<SideCells>;

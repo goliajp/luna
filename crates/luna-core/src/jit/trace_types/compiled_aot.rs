@@ -74,7 +74,8 @@ impl CompiledTrace {
             // install), so the candidate count is always `0`.
             downrec_multi_way_count: 0,
             tier_up: None,
-            side_cells: Box::new([]),
+            side_cell_exits: std::sync::Arc::new([]),
+            side_cells: None,
             link_pc: None,
             loop_tags: None,
         };
