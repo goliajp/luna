@@ -58,7 +58,7 @@ impl Vm {
             self.trace_step_running(),
             "a link taken by a trace that is not running"
         );
-        let (_, cell) = prev.side_cells.iter().find(|(e, _)| *e == typed)?;
+        let cell = prev.side_cell(typed)?;
         let lists = cell.link_lists.borrow();
         if self.side_cell_list(&lists.1, regs) == 0
             || !self.inlined_calls_fit(target.inline_depth, base, target.window_size)
@@ -79,7 +79,7 @@ impl Vm {
             regs[max_stack..window].fill(0);
         }
         words::count_in(&target, regs, window);
-        if !target.side_cells.is_empty() {
+        if target.has_side_cells() {
             regs[trace_ran_side_slot(window)] = 0;
         }
         // the dispatcher puts back the window it opened when the call returns

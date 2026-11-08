@@ -103,7 +103,7 @@ impl Vm {
             }
             self.jit_ghosts_enter();
             words::count_in(&ct, &mut reg_state, window_size_us);
-            if !ct.side_cells.is_empty() {
+            if ct.has_side_cells() {
                 reg_state[trace_ran_side_slot(window_size_us)] = 0;
             }
             let running = self.trace_step_enter(&*ct);

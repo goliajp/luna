@@ -114,3 +114,36 @@ pub(super) fn apply_tail_kinds_and_gates(
 
     (current_kinds, dispatchable, dispatch_off_reason)
 }
+
+/// The kinds of inlined code the trace holds (`INLINE_*`).
+pub(super) fn inline_kinds(pl: &Plan<'_>) -> u8 {
+    let mut k = 0;
+    for (i, rop) in pl.record.ops[..pl.effective_end].iter().enumerate() {
+        if let Some(c) = pl.inline_calls.get(i).copied().flatten() {
+            let callee = pl.record.ops[i + 1].proto;
+            if callee.is_vararg {
+                k |= INLINE_VARARG_CALLEE;
+            }
+            if !(0..=1).contains(&c.nresults) {
+                k |= INLINE_MULTI_RESULTS;
+            }
+            if rop.inst.b() == 0 {
+                k |= INLINE_VAR_ARGS;
+            }
+        }
+        if rop.inline_depth > 0 && rop.inst.op() == Op::Closure {
+            k |= INLINE_CLOSURE;
+        }
+    }
+    k
+}
+
+/// The table of the exits `exits`, each its resume pc and kinds.
+pub(super) fn exit_tag_table<'k>(
+    exits: impl Iterator<Item = (u32, &'k [RegKind])>,
+) -> ExitTagTable {
+    let tag_vecs: Vec<(u32, Vec<ExitTag>)> = exits
+        .map(|(pc, kinds)| (pc, kinds_to_exit_tags(kinds)))
+        .collect();
+    ExitTagTable::from_exits(tag_vecs.iter().map(|(pc, t)| (*pc, &t[..])))
+}

@@ -1,8 +1,9 @@
 use super::*;
 use luna_core::__private::{PassCount, TracePlans};
+use std::sync::Arc;
 
 mod gates;
-use gates::apply_tail_kinds_and_gates;
+use gates::{apply_tail_kinds_and_gates, exit_tag_table, inline_kinds};
 
 /// What the emit pass leaves for `CompiledTrace`.
 pub(super) struct Emitted {
@@ -23,7 +24,7 @@ pub(super) struct Emitted {
     /// See `Lower::counts_per_call`.
     pub(super) counts_per_call: bool,
     /// See `side_call::place_cells`.
-    pub(super) side_cells: luna_core::__private::SideCells,
+    pub(super) side_cells: (Arc<[u32]>, Option<luna_core::__private::SideCells>),
     /// The head frame's kinds at the back edge into the optimizing tier's
     /// loop, for a trace with one.
     pub(super) loop_kinds: Option<Vec<RegKind>>,
@@ -236,7 +237,8 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         // lifted `dispatchable = true` path.
         downrec_multi_way_count: downrec_multi_way_count_for_compiled,
         tier_up: tier_count,
-        side_cells,
+        side_cell_exits: side_cells.0,
+        side_cells: side_cells.1,
         link_pc: record.link_pc,
         loop_tags: loop_kinds.map(|k| kinds_to_exit_tags(&k[..max_stack]).into()),
     }
@@ -252,37 +254,6 @@ fn body_writes(pl: &Plan<'_>) -> Vec<u32> {
     w.sort_unstable();
     w.dedup();
     w
-}
-
-/// The kinds of inlined code the trace holds (`INLINE_*`).
-fn inline_kinds(pl: &Plan<'_>) -> u8 {
-    let mut k = 0;
-    for (i, rop) in pl.record.ops[..pl.effective_end].iter().enumerate() {
-        if let Some(c) = pl.inline_calls.get(i).copied().flatten() {
-            let callee = pl.record.ops[i + 1].proto;
-            if callee.is_vararg {
-                k |= INLINE_VARARG_CALLEE;
-            }
-            if !(0..=1).contains(&c.nresults) {
-                k |= INLINE_MULTI_RESULTS;
-            }
-            if rop.inst.b() == 0 {
-                k |= INLINE_VAR_ARGS;
-            }
-        }
-        if rop.inline_depth > 0 && rop.inst.op() == Op::Closure {
-            k |= INLINE_CLOSURE;
-        }
-    }
-    k
-}
-
-/// The table of the exits `exits`, each its resume pc and kinds.
-fn exit_tag_table<'k>(exits: impl Iterator<Item = (u32, &'k [RegKind])>) -> ExitTagTable {
-    let tag_vecs: Vec<(u32, Vec<ExitTag>)> = exits
-        .map(|(pc, kinds)| (pc, kinds_to_exit_tags(kinds)))
-        .collect();
-    ExitTagTable::from_exits(tag_vecs.iter().map(|(pc, t)| (*pc, &t[..])))
 }
 
 /// Where the code counts its passes: in this call's words when a back edge

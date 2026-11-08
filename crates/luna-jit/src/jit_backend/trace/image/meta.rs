@@ -1,6 +1,7 @@
 //! The dispatcher's data of a shared trace, made into another Vm's trace.
 
 use super::*;
+use luna_core::__private::side_cells;
 
 /// The data of a [`CompiledTrace`] beside its code, without the cells a
 /// running trace updates.
@@ -27,7 +28,7 @@ pub(crate) struct Meta {
     downrec_multi_way_count: u8,
     pub(crate) tier_at: Option<u32>,
     /// The typed exit of each side cell.
-    side_cell_exits: Box<[u32]>,
+    side_cell_exits: std::sync::Arc<[u32]>,
     link_pc: Option<u32>,
     loop_tags: Option<Box<[ExitTag]>>,
 }
@@ -64,7 +65,7 @@ impl Meta {
             downrec_link: ct.downrec_link,
             downrec_multi_way_count: ct.downrec_multi_way_count,
             tier_at: ct.tier_up.as_ref().map(|t| t.at()),
-            side_cell_exits: ct.side_cells.iter().map(|(e, _)| *e).collect(),
+            side_cell_exits: ct.side_cell_exits.clone(),
             link_pc: ct.link_pc,
             loop_tags: ct.loop_tags.clone(),
         }
@@ -116,9 +117,9 @@ impl Meta {
             downrec_link: self.downrec_link,
             downrec_multi_way_count: self.downrec_multi_way_count,
             tier_up,
-            side_cells: (self.side_cell_exits.iter())
-                .map(|&e| (e, SideCell::new()))
-                .collect(),
+            side_cell_exits: self.side_cell_exits.clone(),
+            side_cells: (!self.side_cell_exits.is_empty())
+                .then(|| side_cells(self.side_cell_exits.len())),
             link_pc: self.link_pc,
             loop_tags: self.loop_tags.clone(),
         }

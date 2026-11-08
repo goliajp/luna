@@ -33,7 +33,8 @@
 
 use super::*;
 use cranelift_codegen::ir::BlockArg;
-use luna_core::__private::{SideCell, SideCells, trace_ran_side_slot};
+use luna_core::__private::{SideCell, SideCells, side_cells, trace_ran_side_slot};
+use std::sync::Arc;
 
 /// What the trace's way back in needs, for a trace whose exits may run a
 /// side trace from its code.
@@ -106,8 +107,7 @@ pub(super) fn emit_calling_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u
         lw.flush_ctx.as_ref(),
     );
     let n = lw.side_cells.len() as u32;
-    // the address is written in by `place_cells` once every cell is known
-    let c = lw.bcx.reloc(RelocKind::SideCell(n), 0);
+    let c = cell_at(&mut lw.bcx, n);
     lw.side_cells.push(tags_idx);
     let ret =
         luna_core::__private::EXIT_TAGS_INDEX_BIT | (u64::from(tags_idx) << 32) | u64::from(pc);
@@ -130,16 +130,34 @@ pub(super) fn emit_calling_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u
     lw.bcx.calling_exit(n, call, &args);
 }
 
+/// The address of side cell `n`: the trace's first cell's, written in by
+/// `place_cells` once every cell is known, and `n` cells past it.
+pub(super) fn cell_at<E: Emit>(bcx: &mut E, n: u32) -> Value {
+    let first = bcx.reloc(RelocKind::SideCells, 0);
+    match n {
+        0 => first,
+        n => bcx
+            .ins()
+            .iadd_imm_s(first, i64::from(n) * size_of::<SideCell>() as i64),
+    }
+}
+
 /// The cells of the exits `exits` (typed exit per cell), allocated at once,
-/// with `bcx`'s relocations of them set to their addresses.
-pub(super) fn place_cells<E: Emit>(bcx: &mut E, exits: Vec<u32>) -> SideCells {
-    let cells: SideCells = exits.into_iter().map(|e| (e, SideCell::new())).collect();
+/// with `bcx`'s relocation of the first set to its address.
+pub(super) fn place_cells<E: Emit>(
+    bcx: &mut E,
+    exits: Vec<u32>,
+) -> (Arc<[u32]>, Option<SideCells>) {
+    if exits.is_empty() {
+        return (Arc::new([]), None);
+    }
+    let cells = side_cells(exits.len());
     for (kind, live) in bcx.relocs_mut() {
-        if let RelocKind::SideCell(n) = *kind {
-            *live = &cells[n as usize].1 as *const SideCell as i64;
+        if *kind == RelocKind::SideCells {
+            *live = cells.as_ptr() as i64;
         }
     }
-    cells
+    (exits.into(), Some(cells))
 }
 
 /// The call block, once every exit is lowered: the side trace of the cell

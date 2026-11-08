@@ -195,7 +195,7 @@ pub(in crate::vm::exec) struct ExitSource {
 /// it noted one (see `frame::trace_ran_side_slot`): its return, `raw_ret`,
 /// is decoded with its exits. It runs at the exit's frame, the head's.
 fn ran_from_code(ct: &CompiledTrace, raw_ret: u64, reg_state: &[i64]) -> Option<ExitSource> {
-    if ct.side_cells.is_empty() {
+    if !ct.has_side_cells() {
         return None;
     }
     let noted = reg_state[trace_ran_side_slot(ct.window_size as usize)];

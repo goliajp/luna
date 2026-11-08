@@ -50,7 +50,10 @@ fn an_aot_trace_has_no_side_cells() {
                 version,
             )
             .expect("AOT lowering");
-            assert!(parts.side_cells.is_empty(), "{version:?}: an AOT side cell");
+            assert!(
+                parts.side_cell_exits.is_empty(),
+                "{version:?}: an AOT side cell"
+            );
         }
     }
 }

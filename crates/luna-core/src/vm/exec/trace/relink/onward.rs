@@ -74,11 +74,11 @@ pub(in crate::vm::exec) fn link_late(
         return;
     }
     let waiting: Vec<_> = (proto.traces.borrow().iter())
-        .filter(|p| !p.side_cells.is_empty())
+        .filter(|p| p.has_side_cells())
         .flat_map(|p| {
             let held = p.side_children.borrow();
-            (p.side_cells.iter())
-                .map(|(e, _)| p.per_exit_inline.len() + *e as usize)
+            (p.side_cell_exits().iter())
+                .map(|e| p.per_exit_inline.len() + *e as usize)
                 .filter_map(|exit| Some((exit, held.get(exit)?.clone()?)))
                 .filter(|(_, c)| c.link_pc == Some(target.head_pc) && target.head_pc != p.head_pc)
                 .map(|(exit, c)| (TArc::clone(p), exit, c))
@@ -86,8 +86,9 @@ pub(in crate::vm::exec) fn link_late(
         })
         .collect();
     for (parent, exit, child) in waiting {
+        // cells not made yet are all empty
         let empty = super::cell_of(&parent, exit)
-            .is_some_and(|c| c.entry.get().is_null() && c.link_pc.get() == u32::MAX);
+            .is_none_or(|c| c.entry.get().is_null() && c.link_pc.get() == u32::MAX);
         if empty {
             let f = super::relink_fill(&parent, exit, &child, proto);
             if f != Fill::NotHead {

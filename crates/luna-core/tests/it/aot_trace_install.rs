@@ -58,7 +58,8 @@ fn dummy_parts(head_pc: u32, max_stack: u32) -> CompiledTraceParts {
         downrec_link: None,
         downrec_multi_way_count: 0,
         tier_up: None,
-        side_cells: Box::new([]),
+        side_cell_exits: std::sync::Arc::new([]),
+        side_cells: None,
         link_pc: None,
         loop_tags: None,
     }

@@ -26,11 +26,15 @@ pub(in crate::vm::exec) use onward::link_late;
 
 use list::{SideList, list_of};
 
-/// The cell of `parent`'s exit `exit` (as `exit_hit_counts` numbers them).
+/// The typed exit of `parent`'s exit `exit` (as `exit_hit_counts` numbers
+/// them).
+fn typed_of(parent: &CompiledTrace, exit: usize) -> Option<u32> {
+    Some(exit.checked_sub(parent.per_exit_inline.len())? as u32)
+}
+
+/// The cell of `parent`'s exit `exit`, once the parent made its cells.
 fn cell_of(parent: &CompiledTrace, exit: usize) -> Option<&SideCell> {
-    let typed = exit.checked_sub(parent.per_exit_inline.len())? as u32;
-    let (_, c) = parent.side_cells.iter().find(|(e, _)| *e == typed)?;
-    Some(c)
+    parent.side_cell(typed_of(parent, exit)?)
 }
 
 /// The tag each slot of the head frame holds when `child`, run from
@@ -169,7 +173,7 @@ pub(in crate::vm::exec) fn relink_fill(
     child: &CompiledTrace,
     proto: &crate::runtime::Proto,
 ) -> Fill {
-    let Some(cell) = cell_of(parent, exit) else {
+    let Some(cell) = typed_of(parent, exit).and_then(|t| parent.side_cell_made(t)) else {
         return Fill::NoCell;
     };
     // a child no wider than the parent runs on the parent's buffer, every

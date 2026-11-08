@@ -30,13 +30,13 @@ impl Vm {
         let last = self.jit.link_trail[start..].last().map(|l| l[2] as usize);
         let held = last.map(|i| TArc::clone(&proto.traces.borrow()[i]));
         let ran = held.as_deref().unwrap_or(ct);
-        if ran.side_cells.is_empty() {
+        if !ran.has_side_cells() {
             return None;
         }
         let typed = u32::try_from(regs[trace_ran_side_slot(ran.window_size as usize)])
             .ok()?
             .checked_sub(1)?;
-        let (_, cell) = ran.side_cells.iter().find(|(e, _)| *e == typed)?;
+        let cell = ran.side_cell(typed)?;
         if cell.link_pc.get() != raw as u32 {
             return None;
         }
@@ -67,9 +67,7 @@ impl Vm {
         let mut last = None;
         for &[typed, parent, to] in &self.jit.link_trail[from..] {
             let parent = &traces[parent as usize];
-            let (_, cell) = (parent.side_cells.iter())
-                .find(|(e, _)| *e == typed)
-                .expect("a link taken from a cell its trace holds");
+            let cell = (parent.side_cell(typed)).expect("a link taken from a cell its trace holds");
             for (t, &k) in entry_tags.iter_mut().zip(cell.link_lists.borrow().3.iter()) {
                 if k != LINK_TAG_KEPT {
                     *t = k;
