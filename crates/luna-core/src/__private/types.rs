@@ -7,6 +7,10 @@ pub use crate::jit::abi::TraceCompiler;
 pub use crate::jit::rebind::JitVmRebindRestore;
 pub use crate::jit::storage::JitStorage;
 pub use crate::jit::trace_types::adopt::{AdoptRequest, AdoptedTrace};
+pub use crate::jit::trace_types::cell_plan::{
+    CellPlan, LinkPlan, SlotStore, VALUE_PAYLOAD, VALUE_SIZE, slot_check, slot_store,
+    slot_store_reference,
+};
 pub use crate::jit::trace_types::compiled::CompiledTraceParts;
 pub use crate::jit::trace_types::content::{ProtoContent, hash64};
 pub use crate::jit::trace_types::installed::CompiledTrace;
@@ -15,6 +19,12 @@ pub use crate::jit::trace_types::options::CompileOptions;
 pub use crate::jit::trace_types::record::{FieldIcSnapshot, RecordedOp, TraceRecord};
 pub use crate::jit::trace_types::self_link::{DownRecClose, RetfRecord};
 pub use crate::jit::trace_types::side_cell::{SideCell, SideCellOffsets, SideCells, side_cells};
+pub use crate::vm::jit_state::{RunWords, RunWordsOffsets};
+
+/// Where a Vm's stack (see [`RunWords`]) holds the address of its first
+/// value, in bytes.
+pub const STACK_PTR_OFFSET: i32 =
+    crate::runtime::mem::LVec::<crate::runtime::Value>::PTR_OFFSET as i32;
 pub use crate::jit::trace_types::side_exit::{FrameMaterializeInfo, HotExitInfo, InlineSideExit};
 pub use crate::jit::trace_types::tier_up::{TierKept, TierUp};
 pub use crate::runtime::builtin::Builtin;

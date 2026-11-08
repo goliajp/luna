@@ -17,7 +17,7 @@ use luna_core::__private::{GcInternals, VmHostInternals};
 pub unsafe extern "C" fn luna_jit_no_deopt_parked() -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    i64::from(vm.jit().pending_err.is_none() && vm.jit().pending_raise.is_none())
+    i64::from(vm.jit().pending_err().is_none() && vm.jit().pending_raise.is_none())
 }
 
 /// A trace side exit that resumes at the trace's own head: the op there

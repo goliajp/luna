@@ -56,7 +56,7 @@ fn side_run(v: LuaVersion, src: &str, k: usize, once: bool) -> (String, u64, boo
     (
         r,
         vm.trace_side_trace_run_count() + relinked,
-        vm.jit().pending_err.is_none(),
+        vm.jit().pending_err().is_none(),
         compiled,
         seen.load(Relaxed),
     )

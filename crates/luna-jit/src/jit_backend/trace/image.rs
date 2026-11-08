@@ -29,6 +29,8 @@ pub(crate) enum Source {
     TierLoop,
     /// The trace's first side cell.
     SideCells,
+    /// The Vm's run words.
+    RunWords,
 }
 
 /// The settings a trace was recorded and compiled under: a trace is shared
@@ -180,6 +182,7 @@ pub(crate) fn build(
             RelocKind::TierCell => Source::TierCell,
             RelocKind::TierLoop => Source::TierLoop,
             RelocKind::SideCells => Source::SideCells,
+            RelocKind::RunWords => Source::RunWords,
         });
     }
     let meta = Meta::of(ct);

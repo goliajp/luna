@@ -27,7 +27,7 @@ pub unsafe extern "C" fn luna_jit_upval_get(idx: i64) -> i64 {
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     payload_bits(vm.upval_get(cl, idx as u32))
@@ -68,7 +68,7 @@ pub unsafe extern "C" fn luna_jit_upval_get_float(idx: i64) -> i64 {
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     match vm.upval_get(cl, idx as u32) {

@@ -89,7 +89,7 @@ impl Vm {
         if dispatch_ok {
             debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
             self.trace_drop_at_compiled();
-            self.jit.pending_err = None;
+            self.jit.set_pending_err(None);
             // an inline side exit pushes the inlined frames, which a deopt
             // pops
             let pre_frames = self.frames.len();
@@ -123,6 +123,7 @@ impl Vm {
                 }
             };
             self.trace_step_leave(running);
+            debug_assert!(self.jit.blocked_agrees(self.unmade.any()));
             // the trace whose code returned: the last one linked to, if any
             let ct =
                 (self.trace_links_taken(cl.proto, links_from, start, &mut entry_tags[..max_stack]))
@@ -132,7 +133,7 @@ impl Vm {
             self.trace_count_dispatch(&ct, is_downrec_entry);
             if is_downrec_entry && downrec_close_exit(continuation_pc) {
                 // a due step leaves through an exit, never the close
-                debug_assert!(self.jit.gc_exit.is_none());
+                debug_assert!(self.jit.gc_exit().is_none());
                 self.trace_downrec_classify(pre_frames);
                 ran = true;
             } else {
@@ -147,8 +148,8 @@ impl Vm {
                 );
                 ran = true;
             }
-            self.jit.pending_err = None;
-            debug_assert!(!self.unmade.any, "an exit left something unmade");
+            self.jit.set_pending_err(None);
+            debug_assert!(!self.unmade.any(), "an exit left something unmade");
         }
         // the buffers back for the next dispatch, before a collection check
         // runs code that may dispatch
@@ -156,7 +157,7 @@ impl Vm {
         self.jit.entry_tags_buf = entry_tags;
         // an error raised at the exit comes first: the op raising it
         // checks for no collection
-        if let Some(op_pc) = self.jit.gc_exit.take()
+        if let Some(op_pc) = self.jit.take_gc_exit()
             && self.jit.pending_raise.is_none()
         {
             self.trace_gc_exit_check(op_pc);

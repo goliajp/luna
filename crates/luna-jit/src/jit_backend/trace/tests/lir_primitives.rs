@@ -130,6 +130,51 @@ fn check(case: &Case, inputs: &[[i64; 4]]) {
     unsafe { arena.free() };
 }
 
+/// The stores a side cell's plan compiles in leave in a stack slot the tag
+/// byte and the payload the exit's write-back leaves (`Value::pack_into`),
+/// for each exit tag, in the baseline code, its Cranelift replay and
+/// Cranelift; nothing for a tag the write-back leaves alone.
+#[test]
+fn slot_stores_write_what_the_exit_write_back_writes() {
+    use luna_core::runtime::value::tag;
+    let payloads = [
+        0,
+        1,
+        2,
+        -1,
+        i64::MIN,
+        0x1234_5678_9abc_def0,
+        1.5f64.to_bits() as i64,
+    ];
+    let mut arena = CodeArena::default();
+    for d in 0..9u8 {
+        let case = Case::SlotStore(d);
+        let (code, replay_module, replay) = baseline(&case, &mut arena);
+        let (direct_module, direct) = cranelift(&case);
+        for r in payloads {
+            let want = luna_core::__private::slot_store_reference(d, r);
+            for f in [code, replay, direct] {
+                let (buf, _) = run(f, [r, 0, 0, 0]);
+                let Some((t, payload)) = want else {
+                    assert_eq!(
+                        (buf[8], buf[9]),
+                        (FILL, FILL),
+                        "exit tag {d} leaves the slot"
+                    );
+                    continue;
+                };
+                assert_eq!(buf[8] as u8, t, "tag byte of exit tag {d}, payload {r:#x}");
+                match payload {
+                    Some(b) if t == tag::BOOL => assert_eq!(buf[9] as u8 as u64, b, "bool {r:#x}"),
+                    Some(w) => assert_eq!(buf[9] as u64, w, "payload of exit tag {d}"),
+                    None => {}
+                }
+            }
+        }
+        drop((replay_module, direct_module));
+    }
+}
+
 #[test]
 fn integer_arithmetic_wraps_like_cranelift() {
     use cases::IntOp::*;

@@ -61,7 +61,7 @@ impl Vm {
     ) {
         let base = base.unwrap_or(self.jit.levels_slot);
         // the interpreter runs the op a helper parked a deopt for
-        self.jit.pending_err = None;
+        self.jit.set_pending_err(None);
         let m = &mut self.jit.handoff;
         let n = frames::write_level(&mut self.stack, m, base, vals);
         if base == self.jit.levels_slot {

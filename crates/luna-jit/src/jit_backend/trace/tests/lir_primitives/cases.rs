@@ -80,6 +80,9 @@ pub(super) enum Case {
     Calls,
     ManyArgs,
     LateParam,
+    /// A register of word 0 stored to the stack value at word 8 for the
+    /// exit tag given (see `lower::emit_stores`).
+    SlotStore(u8),
 }
 
 const NO: &[BlockArg] = &[];
@@ -114,6 +117,10 @@ fn branch_on<E: Sigs>(e: &mut E, cond: Value) -> Value {
 pub(super) fn emit<E: Sigs>(e: &mut E, case: &Case, p: Value) {
     let ld = |e: &mut E, ty: Type, i: i32| e.load(ty, mem(), p, at(i));
     match *case {
+        Case::SlotStore(d) => {
+            let frame = e.iadd_imm_s(p, i64::from(at(8)));
+            crate::jit_backend::trace::lower::emit_stores(e, p, frame, &[(0, d)]);
+        }
         Case::Int(op, ty) => {
             let (x, y) = (ld(e, ty, 0), ld(e, ty, 1));
             let r = match op {

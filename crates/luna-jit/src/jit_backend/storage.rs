@@ -47,6 +47,8 @@ pub(crate) struct CraneliftJitStorage {
     /// This Vm among the engine's (0 without one): the failures it shares
     /// are not counted again when it reaches their head.
     pub(crate) engine_vm: u64,
+    /// The address of the Vm's run words (`luna_core::__private::RunWords`).
+    pub(crate) run_words: i64,
     /// With the LLVM backend: its method JIT's cache and the code of the
     /// traces its optimizing tier compiled.
     #[cfg(feature = "llvm-jit")]
@@ -95,6 +97,10 @@ unsafe impl JitStorage for CraneliftJitStorage {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn set_run_words(&mut self, at: usize) {
+        self.run_words = at as i64;
     }
 
     fn clear_cache(&mut self) {

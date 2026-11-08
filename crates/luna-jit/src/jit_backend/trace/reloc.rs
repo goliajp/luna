@@ -232,6 +232,8 @@ pub(crate) enum RelocKind {
     TierLoop,
     /// The trace's first side cell (see `luna_core::__private::SideCells`).
     SideCells,
+    /// The Vm's run words (see `luna_core::__private::RunWords`).
+    RunWords,
 }
 
 /// The name of the data symbol Cranelift code reads relocation `n` from.

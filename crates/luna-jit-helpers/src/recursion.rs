@@ -134,7 +134,7 @@ pub unsafe extern "C" fn luna_jit_self_level(
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
     // a call below already failed: the callers are only unwinding
-    let r = if vm.jit().pending_raise.is_some() || vm.jit().pending_err.is_some() {
+    let r = if vm.jit().pending_raise.is_some() || vm.jit().pending_err().is_some() {
         Err(SELF_FAILED)
     } else {
         let tail = desc & SELF_LEVEL_TAIL != 0;

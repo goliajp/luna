@@ -77,7 +77,7 @@ fn run(v: LuaVersion, kind: BlockKind, from: usize, src: &str) -> (String, usize
     vm.set_jit_enabled(false);
     let r = report(&mut vm, src);
     assert!(
-        vm.jit().pending_err.is_none(),
+        vm.jit().pending_err().is_none(),
         "{v:?} #{from}: a deopt left parked"
     );
     let c = vm.jit_unmade_counts();

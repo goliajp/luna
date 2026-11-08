@@ -171,7 +171,7 @@ impl Vm {
         // op, which clears it: running the call afresh would do its writes
         // twice
         debug_assert!(
-            self.jit.pending_err.is_none(),
+            self.jit.pending_err().is_none(),
             "compiled code returned with a deopt parked and no hand-over"
         );
         if self.jit.handoff.levels > 0 {

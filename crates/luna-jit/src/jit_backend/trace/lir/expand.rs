@@ -8,17 +8,31 @@ use super::record::val;
 use super::*;
 use crate::jit_backend::trace::RelocKind;
 use cranelift_codegen::ir::{Block, Value};
+use luna_core::__private::CellPlan;
+use std::sync::Arc;
 
 /// `body`, the instructions of a trace with calling exits as lowered, with
 /// their calls made, its relocations' values `relocs` and its first side
-/// cell at `cells`: what every backend compiles once a cell is filled.
-pub(crate) fn expand(body: &Lir, relocs: &[(RelocKind, i64)], cells: i64) -> Lir {
+/// cell at `cells`: what every backend compiles once a cell is filled. A
+/// cell with its plan in `plans` has it compiled in, reading the run words
+/// at `run_words`.
+pub(crate) fn expand(
+    body: &Lir,
+    relocs: &[(RelocKind, i64)],
+    cells: i64,
+    plans: &[Option<Arc<CellPlan>>],
+    run_words: i64,
+) -> Lir {
     let x = body.relinks.clone().expect("a trace with calling exits");
     let mut l = body.detach();
     l.relinks = None;
     l.relocs.clear();
     l.relocs.extend_from_slice(relocs);
     l.relocs.push((RelocKind::SideCells, cells));
+    // past the cells, as code taken from an image has it written in
+    if plans.iter().any(Option::is_some) {
+        l.relocs.push((RelocKind::RunWords, run_words));
+    }
     l.konst = vec![None; l.value_ty.len()];
     l.var_cur = vec![NONE; l.var_ty.len()];
     l.bparam_vals = l.bparams.iter().map(|&p| val(p)).collect();
@@ -27,7 +41,7 @@ pub(crate) fn expand(body: &Lir, relocs: &[(RelocKind, i64)], cells: i64) -> Lir
     for b in &mut l.blocks {
         (b.entered, b.sealed, b.inherit) = (true, true, (NONE, 0));
     }
-    super::super::lower::expand_calls(&mut l, &x);
+    super::super::lower::expand_calls(&mut l, &x, plans);
     l.cur = NONE;
     l
 }

@@ -98,22 +98,32 @@ pub(crate) enum Start {
 /// The calling exits ([`Op::CallingExit`]) of a function made of a trace's
 /// instructions that go on to the call block, by side cell: all of them, or
 /// those whose cell held a side trace when the optimizing tier compiled the
-/// function, the others returning to the dispatcher; or none, in the
+/// function (with the cell's plan, compiled in), the others returning to
+/// the dispatcher; or none, in the
 /// baseline tier's code, whose exits go on to the shared call stub and
 /// whose relink block is a second entry (see [`super::super::Relink`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Calls {
     #[default]
     All,
-    Held(Box<[bool]>),
+    Held(Box<[Option<std::sync::Arc<luna_core::__private::CellPlan>>]>),
     Stub,
 }
 
 impl Calls {
+    /// Each cell's plan, where the calls compile it in (none for `All` and
+    /// `Stub`).
+    pub(crate) fn plans(&self) -> &[Option<std::sync::Arc<luna_core::__private::CellPlan>>] {
+        match self {
+            Calls::Held(h) => h,
+            _ => &[],
+        }
+    }
+
     pub(crate) fn has(&self, n: u32) -> bool {
         match self {
             Calls::All => true,
-            Calls::Held(h) => h.get(n as usize).copied().unwrap_or(false),
+            Calls::Held(h) => h.get(n as usize).is_some_and(Option::is_some),
             Calls::Stub => false,
         }
     }

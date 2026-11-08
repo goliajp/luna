@@ -16,7 +16,10 @@ use crate::runtime::mem::{LBox, LVec, MemRef};
 use crate::vm::error::LuaError;
 
 mod counters;
+mod run_words;
 pub use counters::JitCounters;
+pub(crate) use run_words::BLOCKED_UNMADE;
+pub use run_words::{RunWords, RunWordsOffsets};
 
 /// JIT-specific Vm state. See module docs.
 pub struct JitState {
@@ -89,8 +92,9 @@ pub struct JitState {
 
     /// Set by a helper of compiled code that cannot go on (a metatable on
     /// the table, no memory): the dispatcher runs the call in the
-    /// interpreter instead. `None` outside compiled code.
-    pub pending_err: Option<LuaError>,
+    /// interpreter instead. `None` outside compiled code. Written through
+    /// [`JitState::set_pending_err`], which keeps [`JitState::words`].
+    pending_err: Option<LuaError>,
 
     /// The trace dispatcher's `reg_state`, kept between entries.
     pub reg_state_buf: LVec<i64>,
@@ -161,8 +165,11 @@ pub struct JitState {
     pub pending_raise: Option<LuaError>,
     /// compiled code left after an allocation with a collection step due:
     /// the interpreter checks for it as after the op that allocated, at
-    /// this pc (`u32::MAX`: the one before the pc it resumes at)
-    pub gc_exit: Option<u32>,
+    /// this pc (`u32::MAX`: the one before the pc it resumes at). Written
+    /// through [`JitState::set_gc_exit`], which keeps [`JitState::words`].
+    gc_exit: Option<u32>,
+    /// What compiled code reads of this Vm (see [`RunWords`]).
+    pub(crate) words: Box<RunWords>,
     /// `g.frames_native` outside the compiled call running now: its levels
     /// are counted above it (`Vm::jit_self_level`)
     pub levels_base: u32,
@@ -250,6 +257,7 @@ impl JitState {
             pending_err: None,
             pending_raise: None,
             gc_exit: None,
+            words: Box::new(RunWords::new()),
             levels_base: 0,
             levels_slot: 0,
             handoff: Default::default(),

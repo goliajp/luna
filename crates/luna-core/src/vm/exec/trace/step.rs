@@ -27,8 +27,9 @@ pub(crate) struct TraceStep {
     pub(crate) parked_hot: Option<super::gc_quiet::HotTable>,
 }
 
-/// What [`Vm::trace_step_enter`] replaced.
-pub(in crate::vm::exec) type RunningTrace = (usize, u32);
+/// What [`Vm::trace_step_enter`] replaced: the trace, its frames and its
+/// frame's base in the run words.
+pub(in crate::vm::exec) type RunningTrace = (usize, u32, u32);
 
 impl Vm {
     /// A root trace `ct` is about to run in the frame on top: what was
@@ -42,8 +43,14 @@ impl Vm {
         if self.jit.step.quiet.is_some() {
             self.gc_quiet_end();
         }
+        let words = &self.jit.words;
+        let prev = (self.jit.step.ct, self.jit.step.frames, words.base.get());
+        if let Some(CallFrame::Lua(f)) = self.frames.last() {
+            words.base.set(f.base * size_of::<Value>() as u32);
+        }
+        // the stack's buffer moves as it grows; the Vm only between calls
+        words.stack.set(std::ptr::addr_of!(self.stack).cast());
         let st = &mut self.jit.step;
-        let prev = (st.ct, st.frames);
         st.ct = ct as usize;
         st.frames = self.frames.len() as u32;
         prev
@@ -55,7 +62,22 @@ impl Vm {
     }
 
     pub(in crate::vm::exec) fn trace_step_leave(&mut self, prev: RunningTrace) {
-        (self.jit.step.ct, self.jit.step.frames) = prev;
+        (self.jit.step.ct, self.jit.step.frames) = (prev.0, prev.1);
+        self.jit.words.base.set(prev.2);
+    }
+
+    /// Whether the run words say what the Vm does: the flags they stand
+    /// for, and the running trace's frame (see `trace_step_enter`). For
+    /// debug checks where compiled code reads them.
+    pub(in crate::vm::exec) fn run_words_agree(&self) -> bool {
+        let w = &self.jit.words;
+        let base = match self.frames.last() {
+            Some(CallFrame::Lua(f)) => f.base * size_of::<Value>() as u32,
+            _ => w.base.get(),
+        };
+        self.jit.blocked_agrees(self.unmade.any())
+            && w.base.get() == base
+            && w.stack.get() == std::ptr::addr_of!(self.stack).cast()
     }
 
     /// The running trace's frame, when a step may run in place there.
@@ -90,7 +112,7 @@ impl Vm {
         let Some((cl, base)) = self.step_frame().filter(|_| exit_ret != 0) else {
             return i64::from(self.jit_gc_due(op_pc));
         };
-        if !self.step_due() || self.jit.pending_err.is_some() {
+        if !self.step_due() || self.jit.pending_err().is_some() {
             return 0;
         }
         let Some(ct) = self.stepping_trace(&cl.proto) else {

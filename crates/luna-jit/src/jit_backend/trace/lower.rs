@@ -29,6 +29,7 @@ mod reentry;
 mod relinks;
 mod side_call;
 mod side_link;
+mod side_plan;
 mod state;
 mod step_guard;
 mod sunk_sites;
@@ -64,6 +65,8 @@ pub(in crate::jit_backend::trace) use reentry::expand_calls;
 pub(in crate::jit_backend::trace) use relinks::Relinks;
 use relinks::ctx_of;
 use side_call::*;
+#[cfg(test)]
+pub(in crate::jit_backend::trace) use side_plan::emit_stores;
 use state::{Known, Lower, UpvalReads, entry_values};
 use step_guard::*;
 use sunk_sites::*;

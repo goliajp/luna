@@ -221,6 +221,17 @@ const RAW_OF: [u8; 9] = {
     m
 };
 
+/// The raw tag exit tag `d` (a discriminant) writes: `None` when the exit
+/// leaves the slot, `Some(None)` for a boolean, whose raw tag is `FALSE`
+/// plus its payload.
+pub(crate) fn exit_raw(d: u8) -> Option<Option<u8>> {
+    match RAW_OF[d as usize] {
+        UNTOUCHED => None,
+        BOOL => Some(None),
+        t => Some(Some(t)),
+    }
+}
+
 /// The value an exit writes back for a register of tag `t` holding
 /// payload `r`; `None` for one it leaves untouched.
 pub(in crate::vm::exec) fn exit_value(t: ExitTag, r: i64) -> Option<Value> {
@@ -228,7 +239,7 @@ pub(in crate::vm::exec) fn exit_value(t: ExitTag, r: i64) -> Option<Value> {
 }
 
 /// [`exit_value`] for the exit tag whose discriminant is `d`.
-pub(in crate::vm::exec) fn exit_value_of(d: u8, r: i64) -> Option<Value> {
+pub(crate) fn exit_value_of(d: u8, r: i64) -> Option<Value> {
     let mut tag = RAW_OF[d as usize];
     if tag == UNTOUCHED {
         return None;

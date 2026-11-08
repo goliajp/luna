@@ -262,9 +262,9 @@ impl Vm {
     /// (`op_pc`, as [`Vm::checkpoint_after_jit`] takes it) for the exit it
     /// then takes to have the interpreter check.
     pub(crate) fn jit_gc_due(&mut self, op_pc: u32) -> bool {
-        let due = self.step_due() && self.jit.pending_err.is_none();
+        let due = self.step_due() && self.jit.pending_err().is_none();
         if due {
-            self.jit.gc_exit = Some(op_pc);
+            self.jit.set_gc_exit(Some(op_pc));
         }
         due
     }

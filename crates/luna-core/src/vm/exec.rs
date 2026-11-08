@@ -69,6 +69,7 @@ mod state_guards;
 mod strings;
 mod tostring;
 pub(crate) use frame_ops::JIT_GC_OWN;
+pub(crate) use trace::restore::{exit_raw, exit_value_of as exit_value_reference};
 pub(crate) use trace::step::TraceStep;
 pub(crate) mod host;
 pub(crate) mod jit;

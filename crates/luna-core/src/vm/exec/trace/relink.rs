@@ -24,6 +24,7 @@ mod onward;
 
 pub(in crate::vm::exec) use onward::link_late;
 
+use crate::jit::trace_types::cell_plan::{CellPlan, LinkPlan, pairs_of};
 use list::{SideList, list_of};
 
 /// The typed exit of `parent`'s exit `exit` (as `exit_hit_counts` numbers
@@ -256,8 +257,38 @@ fn fill_cell(
     cell.check.set(at(&lists.1));
     drop(lists);
     cell.loop_ok.set(u32::from(loop_ok));
+    let fresh = cell
+        .plan
+        .set(plan_of(cell, stores, checks, loop_ok))
+        .is_ok();
+    debug_assert!(fresh, "a side cell filled twice");
     count_for(cell, child);
     cell.entry.set(child.current_entry() as *const u8);
+}
+
+/// The plan of `cell` as `fill_cell` fills it, its link filled already.
+fn plan_of(
+    cell: &SideCell,
+    stores: &[(usize, u8)],
+    checks: &[(usize, u8)],
+    loop_ok: bool,
+) -> std::sync::Arc<CellPlan> {
+    let pairs = |l: &[(usize, u8)]| l.iter().map(|&(i, t)| (i as u32, t)).collect();
+    let pc = cell.link_pc.get();
+    let link = (pc != u32::MAX).then(|| {
+        let l = cell.link_lists.borrow();
+        LinkPlan {
+            pc,
+            checks: pairs_of(&l.1),
+            stores: pairs_of(&l.2),
+        }
+    });
+    std::sync::Arc::new(CellPlan {
+        checks: pairs(checks),
+        stores: pairs(stores),
+        loop_ok,
+        link,
+    })
 }
 
 /// Points `cell`'s count at `child`'s move to the optimizing tier: the code
