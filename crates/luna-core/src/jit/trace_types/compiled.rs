@@ -215,8 +215,8 @@ pub struct CompiledTraceParts {
     /// one can take over once it is hot.
     pub tier_up: Option<Box<TierUp>>,
     /// The typed exit (index into `per_exit_tags`) of each exit that may
-    /// run a side trace from the code, in the order of their cells (see
-    /// [`super::side_cell`]).
+    /// run a side trace from the code, in the order of their cells (see the
+    /// `side_cell` module).
     pub side_cell_exits: std::sync::Arc<[u32]>,
     /// Those cells, when the code holds their address already; otherwise
     /// the trace makes them when a side trace is first wired to one of
