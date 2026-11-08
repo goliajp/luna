@@ -33,9 +33,6 @@ impl Vm {
         proto: Gc<Proto>,
         later: Vec<AdoptedTrace>,
     ) {
-        if later.is_empty() {
-            return;
-        }
         let mut heads: Vec<Vec<AdoptedTrace>> = Vec::new();
         for a in later {
             // the functions they inlined live as long as `proto` from now

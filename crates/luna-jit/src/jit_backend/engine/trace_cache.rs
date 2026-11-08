@@ -5,6 +5,7 @@ use crate::jit_backend::chunk_share::{ChunkImage, ChunkKey};
 use crate::jit_backend::trace::image::{Content, Settings, TraceImage};
 use crate::jit_backend::trace::share_failures::Failure;
 use std::collections::{HashMap, VecDeque};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
 /// Where a trace starts, among code of every content.
@@ -21,10 +22,10 @@ pub(crate) struct TraceCache {
     pub(crate) children: HashMap<u64, Vec<Arc<TraceImage>>>,
     /// The method JIT's functions.
     pub(crate) chunks: HashMap<ChunkKey, Vec<Arc<ChunkImage>>>,
-    /// The heads of code of one content (by its settings and content hash)
-    /// that have a trace starting there that is no side trace, in the order
-    /// the first of them came.
-    roots: HashMap<(Settings, u64), Vec<u32>>,
+    /// The heads of code of one content (by its content hash), with the
+    /// settings, that have a trace starting there that is no side trace, in
+    /// the order the first of them came.
+    roots: HashMap<u64, Vec<(Settings, u32)>, BuildHasherDefault<HashHasher>>,
     /// Recordings that failed to compile, by their head.
     pub(crate) failures: HashMap<HeadKey, Vec<Failure>>,
     /// Images in the order they came, for dropping the oldest.
@@ -49,7 +50,7 @@ impl TraceCache {
             by_head: HashMap::new(),
             children: HashMap::new(),
             chunks: HashMap::new(),
-            roots: HashMap::new(),
+            roots: HashMap::default(),
             failures: HashMap::new(),
             order: VecDeque::new(),
             bytes: 0,
@@ -62,9 +63,9 @@ impl TraceCache {
         match img.side_parent {
             Some((_, _, parent)) => self.children.entry(parent).or_default().push(img.clone()),
             None => {
-                let heads = self.roots.entry((key.settings, key.content)).or_default();
-                if !heads.contains(&key.head_pc) {
-                    heads.push(key.head_pc);
+                let heads = self.roots.entry(key.content).or_default();
+                if !heads.contains(&(key.settings, key.head_pc)) {
+                    heads.push((key.settings, key.head_pc));
                 }
             }
         }
@@ -135,11 +136,11 @@ impl TraceCache {
             }
             if img.side_parent.is_none()
                 && !root_left
-                && let Some(heads) = self.roots.get_mut(&(key.settings, key.content))
+                && let Some(heads) = self.roots.get_mut(&key.content)
             {
-                heads.retain(|&h| h != key.head_pc);
+                heads.retain(|&h| h != (key.settings, key.head_pc));
                 if heads.is_empty() {
-                    self.roots.remove(&(key.settings, key.content));
+                    self.roots.remove(&key.content);
                 }
             }
             self.children.remove(&id);
@@ -164,13 +165,13 @@ impl TraceCache {
         asked: u32,
         skip: impl Fn(u32) -> bool,
     ) -> Vec<Arc<TraceImage>> {
-        let Some(heads) = self.roots.get(&(settings, head.hash)) else {
+        let Some(heads) = self.roots.get(&head.hash) else {
             return Vec::new();
         };
         heads
             .iter()
-            .filter(|&&h| h != asked && !skip(h))
-            .filter_map(|&head_pc| {
+            .filter(|&&(s, h)| s == settings && h != asked && !skip(h))
+            .filter_map(|&(_, head_pc)| {
                 let key = HeadKey {
                     settings,
                     content: head.hash,
@@ -189,5 +190,26 @@ impl TraceCache {
     pub(crate) fn grew(&mut self, by: usize) {
         self.bytes += by;
         self.evict();
+    }
+}
+
+/// Hashes a content hash, already well mixed, to itself: the lookup made at
+/// every trace taken up costs no more than the comparison of the key.
+#[derive(Default)]
+struct HashHasher(u64);
+
+impl Hasher for HashHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 << 8) | u64::from(b);
+        }
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n;
     }
 }
