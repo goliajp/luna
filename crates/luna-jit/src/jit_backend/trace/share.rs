@@ -157,10 +157,24 @@ fn with_side_traces(
     let mut i = from;
     while i < todo.len() {
         if let Some(kids) = cache.children.get(&todo[i].id) {
-            // a side trace of an exit inside a function the parent
-            // inlined starts in that function: it is taken over when
-            // that exit becomes hot here
-            todo.extend(kids.iter().filter(|k| k.protos[0] == *head).cloned());
+            let mut exits: Vec<usize> = Vec::new();
+            for k in kids {
+                // a side trace of an exit inside a function the parent
+                // inlined starts in that function: it is taken over when
+                // that exit becomes hot here
+                if k.protos[0] != *head {
+                    continue;
+                }
+                // Vms that took up the parent before any had a side trace
+                // for an exit each compiled their own: the exit runs one,
+                // the first cached
+                if let Some((_, exit, _)) = k.side_parent
+                    && !exits.contains(&exit)
+                {
+                    exits.push(exit);
+                    todo.push(k.clone());
+                }
+            }
         }
         i += 1;
     }
