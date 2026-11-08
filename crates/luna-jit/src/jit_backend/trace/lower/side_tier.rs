@@ -10,6 +10,8 @@
 use luna_core::__private::{CompiledTraceParts, TraceRecord};
 use luna_core::jit::trace::TIER_UP_THRESHOLD;
 
+use super::super::lir::Lir;
+
 /// `a / s`: the cycles the optimizing tier takes to compile one LIR
 /// instruction (about 5.4k) over the cycles it saves on one instruction in
 /// one pass (about 0.12).
@@ -19,22 +21,20 @@ const PER_INSTRUCTION: u64 = 45_400;
 /// saving.
 const FIXED: u64 = 1_090_000;
 
-/// `parts`, lowered from `record` to `len` LIR instructions: for a side
-/// trace, moving once the move has paid for itself, scaled by `tier_up_at`
-/// against its default as a root trace's move is, so that a lower one
-/// moves it sooner.
+/// `lowered` from `record`: for a side trace, moving once the move has
+/// paid for itself, scaled by `tier_up_at` against its default as a root
+/// trace's move is, so that a lower one moves it sooner.
 pub(super) fn at_payback(
     record: &TraceRecord,
-    len: usize,
-    mut parts: CompiledTraceParts,
+    (lir, mut parts): (Lir, CompiledTraceParts),
     tier_up_at: u32,
-) -> CompiledTraceParts {
+) -> (Lir, CompiledTraceParts) {
     if record.side_trace_parent.is_some()
         && let Some(t) = parts.tier_up.as_mut()
     {
-        let passes = PER_INSTRUCTION + FIXED / len as u64;
+        let passes = PER_INSTRUCTION + FIXED / lir.insts.len() as u64;
         let at = passes * u64::from(tier_up_at) / u64::from(TIER_UP_THRESHOLD);
         t.set_payback_at(at.clamp(1, u64::from(u32::MAX)) as u32);
     }
-    parts
+    (lir, parts)
 }
