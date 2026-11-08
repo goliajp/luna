@@ -8,24 +8,27 @@ use luna_core::__private::side_cells;
 /// `img` as a trace of this Vm: its code copied into this Vm's code memory
 /// with this Vm's addresses written in. `None` when a function it inlined
 /// is not loaded here. `img_is_asked`: `img` is the trace `req` asks for,
-/// not a side trace that comes with it.
+/// not a side trace that comes with it; `todo`: the images taken up with
+/// it.
 pub(super) fn install(
     cs: &mut CraneliftJitStorage,
     req: &AdoptRequest<'_>,
     img: &Arc<TraceImage>,
+    todo: &[Arc<TraceImage>],
     img_is_asked: bool,
 ) -> Option<AdoptedTrace> {
     let mut protos = vec![req.proto];
     for c in &img.protos[1..] {
         protos.push(find_proto(req.roots, c)?);
     }
-    let pick = pick_code(img);
+    let pick = pick_code(img, todo);
     let mut ct = img
         .meta
         .instantiate(pick.tiered && !pick.retiers, req.proto.call_hot_count());
     // code that holds the cells' address (the optimizing tier's, compiled
-    // with every calling exit calling): they are made now
-    if img.sources.contains(&Source::SideCells) {
+    // with every calling exit calling, or the baseline code with its
+    // calls): they are made now
+    if img.sources.contains(&Source::SideCells) || pick.with_calls.is_some() {
         ct.side_cells = Some(side_cells(ct.side_cell_exits.len()));
     }
     let relocs: Vec<(RelocKind, i64)> = img
@@ -38,8 +41,11 @@ pub(super) fn install(
         None => (pick.code, None),
     };
     if let Some(code) = entry {
-        let entry = place(cs, code, &relocs)?;
-        super::code_dump::dump_len("image", ct.head_pc, entry, code.bytes.len());
+        let (entry, kind, len) = match pick.with_calls {
+            Some(c) => (place_with_calls(cs, c, &relocs, &ct)?, "image-calls", c),
+            None => (place(cs, code, &relocs)?, "image", code),
+        };
+        super::code_dump::dump_len(kind, ct.head_pc, entry, len.bytes.len());
         // SAFETY: the code is a copy of a trace compiled for code of this
         // content, with the `TraceFn` ABI, and this Vm's addresses written
         // where it held the compiling Vm's; it stays mapped until this Vm
@@ -110,12 +116,17 @@ struct Pick<'a> {
     /// The trace has side cells and the image the instructions to compile
     /// it again for them at the optimizing tier.
     retiers: bool,
+    /// The baseline code with its calling exits' calls, run in place of
+    /// `code`: side traces of the trace come with it, whose wiring would
+    /// have the code made with its calls straight away.
+    with_calls: Option<&'a Code>,
 }
 
 /// A trace whose back edge calls the optimizing tier's loop keeps a tier
 /// move (its code reads the move's loop cell); its optimizing tier's code
-/// is the first pass, the loop beside it.
-fn pick_code(img: &TraceImage) -> Pick<'_> {
+/// is the first pass, the loop beside it. Its baseline code is the one
+/// with its calls when some of `todo` is a side trace of it.
+fn pick_code<'a>(img: &'a TraceImage, todo: &[Arc<TraceImage>]) -> Pick<'a> {
     let at_loop = img.sources.contains(&Source::TierLoop);
     let cells = img.meta.side_cells();
     let fresh = img
@@ -123,9 +134,18 @@ fn pick_code(img: &TraceImage) -> Pick<'_> {
         .filter(|o| !at_loop || o.looped.is_some());
     let direct = matches!(img.code, Some((Tier::Optimizing, _)));
     let tiered = !at_loop && (fresh.is_some() || direct);
+    let has_side = || {
+        todo.iter()
+            .any(|k| k.side_parent.is_some_and(|p| p.2 == img.id))
+    };
+    let with_calls = match (&fresh, &img.code) {
+        (None, Some((Tier::Baseline, _))) if cells > 0 && has_side() => img.with_calls(),
+        _ => None,
+    };
     Pick {
         keep_source: fresh.is_none() && !tiered,
         retiers: cells > 0 && img.lir.is_some(),
+        with_calls,
         fresh,
         code: img.code.as_ref().map(|(_, c)| c),
         tiered,
@@ -207,6 +227,22 @@ fn place(
 ) -> Option<*const u8> {
     cs.baseline_code
         .place_with(code.bytes.len(), |out| code.write_to(out, |k| relocs[k].1))
+        .ok()
+}
+
+/// The baseline code with its calls `code` copied into this Vm's code
+/// memory with the addresses `relocs` written in, and `ct`'s first side
+/// cell past them.
+fn place_with_calls(
+    cs: &mut CraneliftJitStorage,
+    code: &Code,
+    relocs: &[(RelocKind, i64)],
+    ct: &CompiledTraceParts,
+) -> Option<*const u8> {
+    let cells = ct.side_cells.as_ref()?.as_ptr() as i64;
+    let at = |k: usize| relocs.get(k).map_or(cells, |r| r.1);
+    cs.baseline_code
+        .place_with(code.bytes.len(), |out| code.write_to(out, at))
         .ok()
 }
 

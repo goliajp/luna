@@ -161,7 +161,7 @@ fn install_all(
         {
             continue;
         }
-        if let Some(a) = install(cs, req, img, i == 0) {
+        if let Some(a) = install(cs, req, img, todo, i == 0) {
             installed.push(img.id);
             out.push(a);
         } else if i == 0 {
