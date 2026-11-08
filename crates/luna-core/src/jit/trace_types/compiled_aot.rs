@@ -76,6 +76,7 @@ impl CompiledTrace {
             tier_up: None,
             side_cell_exits: std::sync::Arc::new([]),
             side_cells: None,
+            calls_source: None,
             link_pc: None,
             loop_tags: None,
         };

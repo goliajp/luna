@@ -7,6 +7,7 @@
 use super::*;
 use crate::jit_backend::trace::lir::Count;
 use cranelift_codegen::ir::{FuncRef, SigRef};
+use std::sync::Arc;
 
 /// What the hand-over to the optimizing tier's loop and the way back into
 /// the trace read of the trace (see `handoff`).
@@ -109,9 +110,21 @@ pub(crate) struct Relinks {
     /// Set by the relink block: the loop's count is reached, and the gate
     /// moves on to the optimizing tier.
     pub(crate) hot: Variable,
+    /// The entry block, which ends in its jump to `reentry`.
+    pub(crate) entry: Block,
+    /// Per cell, the block of its exit, which ends in its return: an exit
+    /// whose call is left to the expansion.
+    pub(crate) exits: Box<[Block]>,
+    /// Per cell, the typed exit it belongs to.
+    pub(crate) cells: Arc<[u32]>,
 }
 
 impl Relinks {
+    /// Bytes `self` takes, roughly (the cells' list is shared).
+    pub(crate) fn size(&self) -> usize {
+        size_of::<Relinks>() + 4 * (self.regs.len() + self.exits.len())
+    }
+
     /// [`Ctx`] of the trace, its addresses those of `bcx`'s relocations.
     pub(super) fn ctx<E: Emit>(&self, bcx: &mut E) -> Ctx<'_> {
         let find = |bcx: &mut E, k: RelocKind| {
@@ -150,10 +163,16 @@ pub(crate) struct Way {
 /// The way back into a trace whose exits may run side traces, while it is
 /// lowered.
 pub(super) struct Open {
+    /// The calls are left to the instructions' expansion (see the module
+    /// comment): the exits return, the gate goes on, nothing else is made.
+    pub(super) defer: bool,
+    pub(super) entry: Block,
     pub(super) reentry: Block,
     pub(super) loop_ok: Variable,
     pub(super) hot: Variable,
     pub(super) way: Way,
+    /// The exits whose calls are left to the expansion.
+    pub(super) exits: Vec<Block>,
 }
 
 /// The [`Relinks`] of the trace `lw` lowered.
@@ -185,5 +204,8 @@ pub(super) fn relinks_of<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, o: &Open) ->
         gate,
         loop_ok: o.loop_ok,
         hot: o.hot,
+        entry: o.entry,
+        exits: o.exits.as_slice().into(),
+        cells: lw.side_cells.as_slice().into(),
     }
 }

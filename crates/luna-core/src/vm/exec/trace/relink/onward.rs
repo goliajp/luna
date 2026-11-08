@@ -64,11 +64,13 @@ pub(super) fn fill_link(
 /// Links, now that `target` is cached in `proto`, the side traces of the
 /// prototype's traces that end at its head and whose cells were left empty
 /// because no trace was there when they were wired: each such cell moves
-/// from [`Fill::NotHead`] in `counts` to what became of it now.
+/// from [`Fill::NotHead`] in `counts` to what became of it now. The traces
+/// whose code now runs such a side trace go into `filled`.
 pub(in crate::vm::exec) fn link_late(
     target: &CompiledTrace,
     proto: &crate::runtime::Proto,
     counts: &mut [u64; 8],
+    filled: &mut Vec<TArc<CompiledTrace>>,
 ) {
     if !target.dispatchable || target.downrec_link.is_some() {
         return;
@@ -94,6 +96,9 @@ pub(in crate::vm::exec) fn link_late(
             if f != Fill::NotHead {
                 counts[Fill::NotHead as usize] -= 1;
                 counts[f as usize] += 1;
+            }
+            if f.calls() {
+                filled.push(parent);
             }
         }
     }

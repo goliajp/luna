@@ -28,12 +28,19 @@ pub(super) struct Emitted {
     /// The head frame's kinds at the back edge into the optimizing tier's
     /// loop, for a trace with one.
     pub(super) loop_kinds: Option<Vec<RegKind>>,
+    /// What the expansion of the instructions takes (see `relinks`).
+    pub(super) relinks: Option<super::Relinks>,
 }
 
 impl<E: Emit> Lower<E> {
     /// The builder and what the emit pass decided, once the trace is
-    /// lowered; `downrec`: what `emit_tail` returned.
-    pub(super) fn into_emitted(self, downrec: (Option<(u32, u32)>, u8)) -> (E, Emitted) {
+    /// lowered; `downrec`: what `emit_tail` returned, `relinks` what the
+    /// expansion takes, which makes the cells.
+    pub(super) fn into_emitted(
+        self,
+        downrec: (Option<(u32, u32)>, u8),
+        relinks: Option<super::Relinks>,
+    ) -> (E, Emitted) {
         let Lower {
             entry,
             mut bcx,
@@ -55,7 +62,10 @@ impl<E: Emit> Lower<E> {
             loops,
             ..
         } = self;
-        let side_cells = super::side_call::place_cells(&mut bcx, side_cells);
+        let side_cells = match &relinks {
+            Some(x) => (x.cells.clone(), None),
+            None => super::side_call::place_cells(&mut bcx, side_cells),
+        };
         if let Some(at) = loop_entry {
             bcx.set_loop_entry(at, &entry.regs_full);
         }
@@ -78,6 +88,7 @@ impl<E: Emit> Lower<E> {
                 counts_per_call,
                 side_cells,
                 loop_kinds: back_edge_kinds.filter(|_| loops),
+                relinks,
             },
         )
     }
@@ -102,6 +113,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         counts_per_call,
         side_cells,
         loop_kinds,
+        relinks: _,
     } = em;
     let (current_kinds, dispatchable, dispatch_off_reason) = apply_tail_kinds_and_gates(
         pl,
@@ -239,6 +251,7 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         tier_up: tier_count,
         side_cell_exits: side_cells.0,
         side_cells: side_cells.1,
+        calls_source: None,
         link_pc: record.link_pc,
         loop_tags: loop_kinds.map(|k| kinds_to_exit_tags(&k[..max_stack]).into()),
     }

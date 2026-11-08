@@ -30,6 +30,11 @@
 //! themselves and go on to a call stub shared by every trace, which does
 //! what the call block does and enters the relink block as a function of
 //! its own (see `super::super::lir::stub`).
+//!
+//! Lowered into the instructions the baseline tier compiles, none of this
+//! is made until a side trace is first wired to one of the exits: until
+//! then each such exit returns as any exit does, and the trace has no
+//! cells (see `relinks`).
 
 use super::relinks::{Open, Relinks, Way};
 use super::*;
@@ -46,20 +51,27 @@ pub(super) fn relinks(pl: &Plan<'_>) -> bool {
 
 /// In the entry block, right after its parameter: the reentry block the
 /// entry and the relink blocks go on at, made current (unsealed).
-pub(super) fn open_reentry<E: Emit>(bcx: &mut E, pl: &Plan<'_>) -> Option<Open> {
+/// `defer`: see [`Open::defer`] (the expansion sets the two variables).
+pub(super) fn open_reentry<E: Emit>(bcx: &mut E, pl: &Plan<'_>, defer: bool) -> Option<Open> {
     if !relinks(pl) {
         return None;
     }
+    let entry = bcx.current_block().expect("the entry block is current");
     let loop_ok = bcx.declare_var(types::I64);
     let hot = bcx.declare_var(types::I64);
-    let z = bcx.ins().iconst(types::I64, 0);
-    bcx.def_var(loop_ok, z);
-    bcx.def_var(hot, z);
+    if !defer {
+        let z = bcx.ins().iconst(types::I64, 0);
+        bcx.def_var(loop_ok, z);
+        bcx.def_var(hot, z);
+    }
     let reentry = bcx.create_block();
     bcx.mark_reentry(reentry);
     bcx.ins().jump(reentry, &[]);
     bcx.switch_to_block(reentry);
     Some(Open {
+        defer,
+        entry,
+        exits: Vec::new(),
         reentry,
         loop_ok,
         hot,
@@ -92,6 +104,11 @@ pub(super) fn emit_calling_exit<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>, pc: u
         luna_core::__private::EXIT_TAGS_INDEX_BIT | (u64::from(tags_idx) << 32) | u64::from(pc);
     let ret = lw.bcx.ins().iconst(types::I64, ret as i64);
     let rl = lw.relink.as_mut().expect("a calling exit has a way back");
+    if rl.defer {
+        rl.exits.extend(lw.bcx.current_block());
+        lw.bcx.ins().return_(&[ret]);
+        return;
+    }
     emit_exit_call(&mut lw.bcx, &mut rl.way, n, ret, tags_idx);
 }
 
@@ -120,10 +137,13 @@ pub(crate) fn emit_exit_call<E: Emit>(
     bcx.calling_exit(n, call, &args);
 }
 
-/// The address of side cell `n`: the trace's first cell's, written in once
-/// the cells are made, and `n` cells past it.
+/// The address of side cell `n`: the trace's first cell's, and `n` cells
+/// past it. The first's is known once the cells are made (when the calls
+/// are expanded), else written in by `place_cells`.
 pub(super) fn cell_at<E: Emit>(bcx: &mut E, n: u32) -> Value {
-    let first = bcx.reloc(RelocKind::SideCells, 0);
+    let known =
+        (bcx.relocs_mut().iter()).find_map(|r| (r.0 == RelocKind::SideCells).then_some(r.1));
+    let first = bcx.reloc(RelocKind::SideCells, known.unwrap_or(0));
     match n {
         0 => first,
         n => bcx

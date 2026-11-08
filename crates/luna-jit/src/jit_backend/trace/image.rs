@@ -86,8 +86,12 @@ pub(crate) struct TraceImage {
     /// The optimizing tier's code, each for the calling exits it was
     /// compiled for, once some Vm compiled it (see [`TraceImage::optimized`]).
     optimized: std::sync::Mutex<Vec<std::sync::Arc<Optimized>>>,
+    /// The baseline code made with its calling exits' calls, once some Vm
+    /// made it (see `super::calls`): its relocations are those of
+    /// `sources`, then the trace's first side cell.
+    with_calls: std::sync::OnceLock<Code>,
     /// The baseline code's instructions, for a Vm that moves the trace to
-    /// the optimizing tier before any other did.
+    /// the optimizing tier or makes its calls before any other did.
     pub(crate) lir: Option<std::sync::Arc<lir::Lir>>,
     /// Bytes this image takes, roughly.
     pub(crate) size: usize,
@@ -124,6 +128,19 @@ impl TraceImage {
         }
         kept.push(std::sync::Arc::new(o));
         true
+    }
+}
+
+impl TraceImage {
+    /// The baseline code with its calls, once some Vm made it.
+    pub(crate) fn with_calls(&self) -> Option<&Code> {
+        self.with_calls.get()
+    }
+
+    /// Keeps `c`, the baseline code with its calls, for other Vms to take
+    /// up, unless some Vm kept it already: whether it kept it.
+    pub(crate) fn keep_with_calls(&self, c: Code) -> bool {
+        self.with_calls.set(c).is_ok()
     }
 }
 
@@ -181,6 +198,7 @@ pub(crate) fn build(
         side_parent,
         code: cap.code,
         optimized: std::sync::Mutex::default(),
+        with_calls: std::sync::OnceLock::new(),
         lir: cap.lir,
         size,
     })

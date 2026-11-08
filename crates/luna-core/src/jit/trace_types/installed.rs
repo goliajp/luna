@@ -73,7 +73,10 @@ mod read;
 /// ```
 pub struct CompiledTrace {
     pub(crate) head_pc: u32,
-    pub(crate) entry: TraceFn,
+    /// The baseline code's entry: `CompiledTraceParts::entry` until code
+    /// that runs side traces from the side cells replaces it (see
+    /// `TraceCompiler::compile_calls`).
+    pub(crate) entry: TCellPtr,
     pub(crate) n_ops: u32,
     pub(crate) dispatchable: bool,
     pub(crate) window_size: u32,
@@ -126,6 +129,10 @@ pub struct CompiledTrace {
     pub(crate) side_cell_exits: std::sync::Arc<[u32]>,
     /// See [`CompiledTraceParts::side_cells`]: made once, then never moved.
     pub(crate) side_cells: super::side_cell::CellsOnce,
+    /// See [`CompiledTraceParts::calls_source`].
+    pub(crate) calls_source: TRefLock<Option<super::tier_up::Source>>,
+    /// The code runs side traces from the side cells, or was asked to.
+    pub(crate) calls_compiled: TCellBool,
     /// See [`CompiledTraceParts::link_pc`].
     pub(crate) link_pc: Option<u32>,
     /// See [`CompiledTraceParts::loop_tags`].
@@ -140,13 +147,17 @@ pub struct CompiledTrace {
 /// [`CompiledTrace`], with no room for side traces yet.
 macro_rules! moved {
     ($parts:ident => $($f:ident),* $(,)?) => {{
-        let CompiledTraceParts { $($f,)* plans, side_cells } = $parts;
+        let CompiledTraceParts { $($f,)* plans, side_cells, entry, calls_source } = $parts;
         let cells = super::side_cell::CellsOnce::new();
+        let calls_compiled = TCellBool::new(side_cells.is_some());
         if let Some(c) = side_cells {
             let _ = cells.set(c);
         }
         Self {
+            entry: TCellPtr::new(entry as *const u8),
             side_cells: cells,
+            calls_source: TRefLock::new(calls_source),
+            calls_compiled,
             call_count: false,
             side_children: TRefLock::new(Box::default()),
             entry_plan: plans.0.entry_plan.clone(),
@@ -192,9 +203,9 @@ impl CompiledTrace {
     ///   returns with [`crate::__private::EXIT_RELINK`], and otherwise
     ///   returns what it returned, noting the exit in the word past the
     ///   window (see `frame::trace_ran_side_slot`).
-    /// - The `tier_up` source, if any, was made for this trace by the
-    ///   backend that compiled it, in the JIT storage of the Vm it is
-    ///   installed on.
+    /// - The `tier_up` source and the `calls_source`, if any, were made for
+    ///   this trace by the backend that compiled it, in the JIT storage of
+    ///   the Vm it is installed on.
     pub unsafe fn from_parts(parts: CompiledTraceParts) -> Self {
         let p = &parts.plans.0;
         debug_assert!(
@@ -214,7 +225,7 @@ impl CompiledTrace {
             "code counting per call has no tier-up count"
         );
         let call_count = per_call && parts.tier_up.is_some();
-        let ct = moved!(parts => head_pc, entry, n_ops, dispatchable, window_size,
+        let ct = moved!(parts => head_pc, n_ops, dispatchable, window_size,
             per_exit_inline, exit_hit_counts,
             is_inline_abort_close, dispatch_off_reason, sinkable_sites_seen,
             accum_bufferable_seen, sunk_alloc_seen, materialize_emit_count, closure_seen,
@@ -230,15 +241,20 @@ impl CompiledTrace {
 
     /// The entry to call: the optimizing tier's once it exists.
     pub fn current_entry(&self) -> TraceFn {
-        match &self.tier_up {
-            Some(t) if !t.optimized.get().is_null() => {
-                // SAFETY: `optimized` only ever holds an entry the backend
-                // returned from `TraceCompiler::tier_up`, which has the
-                // `TraceFn` ABI
-                unsafe { std::mem::transmute::<*const u8, TraceFn>(t.optimized.get()) }
-            }
-            _ => self.entry,
-        }
+        let at = match &self.tier_up {
+            Some(t) if !t.optimized.get().is_null() => t.optimized.get(),
+            _ => self.entry.get(),
+        };
+        // SAFETY: `optimized` only ever holds an entry the backend returned
+        // from `TraceCompiler::tier_up`, and `entry` the parts' or one
+        // returned from `TraceCompiler::compile_calls`: each has the
+        // `TraceFn` ABI
+        unsafe { std::mem::transmute::<*const u8, TraceFn>(at) }
+    }
+
+    /// The baseline code's entry now.
+    pub fn entry(&self) -> *const u8 {
+        self.entry.get()
     }
 }
 

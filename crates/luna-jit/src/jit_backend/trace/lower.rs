@@ -60,6 +60,8 @@ use plan::*;
 use prologue::*;
 use readonly::*;
 use reentry::emit_relink_block;
+pub(in crate::jit_backend::trace) use reentry::expand_calls;
+pub(in crate::jit_backend::trace) use relinks::Relinks;
 use relinks::ctx_of;
 use side_call::*;
 use state::{Known, Lower, UpvalReads, entry_values};
@@ -198,11 +200,12 @@ fn lower_trace_lir_split(
                 h
             }
         };
-        let (e, emitted) = emit_trace(e, pl, h, escape, count_at, at_exits)?;
+        let (mut e, mut emitted) = emit_trace(e, pl, h, escape, count_at, at_exits, true)?;
         if emitted.write_only_kinds.is_err() {
             e.give();
             return Some(Err(()));
         }
+        e.relinks = emitted.relinks.take().map(std::sync::Arc::new);
         Some(Ok((e, build_compiled(pl, emitted))))
     })?
 }
@@ -210,7 +213,8 @@ fn lower_trace_lir_split(
 /// Emits the whole trace through `bcx`: the entry block, the body and the
 /// tail. Returns the builder with what the emit pass decided.
 /// `count_at > 0` keeps an iteration count at the back edge (see
-/// [`Emit::tier_count`]).
+/// [`Emit::tier_count`]). `defer`: the calls of the calling exits are left
+/// to the instructions' expansion (see `relinks`).
 fn emit_trace<E: Emit>(
     mut bcx: E,
     pl: &Plan<'_>,
@@ -218,11 +222,12 @@ fn emit_trace<E: Emit>(
     escape: EscapeAnalysis,
     count_at: u32,
     at_exits: bool,
+    defer: bool,
 ) -> Option<(E, Emitted)> {
     let (reg_state, sig) = open_entry(&mut bcx);
     // a trace that relinks enters again here, past the entry block, and
     // redoes all that follows: what reg_state holds is all that is carried
-    let relink = open_reentry(&mut bcx, pl);
+    let relink = open_reentry(&mut bcx, pl, defer);
     let head = emit_entry(&mut bcx, pl, reg_state, sig);
     // a variable: `loop_entry` reads the address again (see `handoff`)
     let due_words = emit_due_words(&mut bcx, pl)?.map(|w| {
@@ -257,14 +262,14 @@ fn emit_trace<E: Emit>(
     if let Some(lc) = loop_copy {
         emit_loop_copy(lw, pl, lc)?;
     }
-    emit_relink_block(lw, pl);
+    let kept = emit_relink_block(lw, pl);
     // last, so that it takes nothing from the blocks lowered before it
     emit_loop_entry(lw)?;
     if !exits_fit(lower.per_exit_inline_vec.len(), lower.per_exit_kinds.len()) {
         checkpoint("exits:too-many");
         return None;
     }
-    Some(lower.into_emitted(downrec))
+    Some(lower.into_emitted(downrec, kept))
 }
 
 /// Whether `inline` inline sites (returned as their number + 1) and

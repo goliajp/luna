@@ -23,7 +23,6 @@ macro_rules! readers {
 
 readers! {
     head_pc: u32 = copy;
-    entry: TraceFn = copy;
     n_ops: u32 = copy;
     dispatchable: bool = copy;
     window_size: u32 = copy;

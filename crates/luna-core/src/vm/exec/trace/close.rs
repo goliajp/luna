@@ -166,7 +166,11 @@ impl Vm {
                     // the prototypes it inlined are kept in a black head's
                     // list: traversed again, they are not swept
                     self.heap.barrier_back(head_proto);
-                    hold_side_trace(wired, ct, &mut self.jit.counters.relink, &head_proto);
+                    let filled =
+                        hold_side_trace(wired, ct, &mut self.jit.counters.relink, &head_proto);
+                    for p in filled {
+                        self.trace_compile_calls(&p);
+                    }
                     self.jit.counters.compiled += 1;
                 }
                 None => self.trace_closed_failed(&closed_record, opts, share.then_some(version)),

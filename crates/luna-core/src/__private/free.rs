@@ -142,6 +142,21 @@ pub unsafe fn put_tier_source(
     }
 }
 
+/// Runs `f` on the source the baseline code of `trace` is compiled again
+/// from once a side trace is first wired to one of its calling exits (see
+/// `TraceCompiler::compile_calls`): the tier source of a trace that moves to
+/// the optimizing tier, else the one kept for this; `None` when it has none.
+pub fn with_calls_source<R>(
+    trace: &crate::jit::CompiledTrace,
+    f: impl FnOnce(Option<&(dyn std::any::Any + Send + Sync)>) -> R,
+) -> R {
+    let held = match &trace.tier_up {
+        Some(t) => t.source.borrow(),
+        None => trace.calls_source.borrow(),
+    };
+    f(held.as_deref())
+}
+
 /// The cell holding the optimizing tier's loop of the trace `t` moves on
 /// (null until compiled), whose address the baseline code reads at its
 /// back edge.

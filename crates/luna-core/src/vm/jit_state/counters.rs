@@ -11,6 +11,9 @@ pub struct JitCounters {
     /// Traces at the optimizing tier compiled again: one of their side
     /// cells got a side trace their code did not call.
     pub retiered: u64,
+    /// Traces whose baseline code was compiled again to run side traces
+    /// from its exits: a side trace was first wired to one of them.
+    pub calls_compiled: u64,
     /// Functions the method JIT compiled.
     pub method_compiled: u64,
     /// Functions whose method JIT code a backend replaced in the background (`Proto::jit_next`).

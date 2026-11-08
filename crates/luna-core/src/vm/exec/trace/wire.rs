@@ -92,13 +92,15 @@ impl Vm {
 /// entry to its code; what became of the cell is counted in `counts`.
 /// A cached trace that is no side trace (`wired` is `None`) is linked to
 /// by the side traces of `proto` that end at its head (see
-/// `relink::link_late`).
+/// `relink::link_late`). Returns the traces whose cells now hand a side
+/// trace to their code.
 pub(in crate::vm::exec) fn hold_side_trace(
     wired: Option<Wired>,
     child: TArc<CompiledTrace>,
     counts: &mut [u64; 8],
     proto: &crate::runtime::Proto,
-) {
+) -> Vec<TArc<CompiledTrace>> {
+    let mut filled = Vec::new();
     if let Some((parent, exit)) = wired {
         let exit = exit as usize;
         let mut held = parent.side_children.borrow_mut();
@@ -107,10 +109,15 @@ pub(in crate::vm::exec) fn hold_side_trace(
         debug_assert!(held[exit].is_none(), "exit {exit} wired twice");
         held[exit] = Some(TArc::clone(&child));
         drop(held);
-        counts[super::relink::relink_fill(&parent, exit, &child, proto) as usize] += 1;
+        let f = super::relink::relink_fill(&parent, exit, &child, proto);
+        counts[f as usize] += 1;
+        if f.calls() {
+            filled.push(parent);
+        }
     } else {
-        super::relink::link_late(&child, proto, counts);
+        super::relink::link_late(&child, proto, counts, &mut filled);
     }
+    filled
 }
 
 /// The parent's entry tags from register `off` on, as the shape gate

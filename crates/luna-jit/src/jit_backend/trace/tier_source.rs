@@ -54,8 +54,11 @@ impl TierSource {
             // their values are the baseline trace's, which the trace keeps
             // alive (this lowering's own frame chains go with the trace it
             // made, dropped here)
+            // and the same calling exits, whose cells the trace has
+            let cells = |l: &lir::Lir| l.relinks.as_ref().map(|x| x.cells.clone());
             let same = lir.relocs.len() == self.relocs.len()
-                && lir.relocs.iter().zip(&self.relocs).all(|(a, b)| a.0 == b.0);
+                && lir.relocs.iter().zip(&self.relocs).all(|(a, b)| a.0 == b.0)
+                && cells(&lir) == cells(&self.lir);
             let owned = same.then(|| Arc::new(lir.detach()));
             lir.give();
             if let Some(owned) = owned {
@@ -63,6 +66,40 @@ impl TierSource {
             }
         }
         self
+    }
+}
+
+/// The instructions of `src` with their calls made (see `lir::expand`) when
+/// one of `ct`'s calling exits calls its side trace as `calls` says (`ct`'s
+/// cells made by then); `None` when none does.
+pub(crate) fn expanded(
+    src: &TierSource,
+    ct: &CompiledTrace,
+    calls: &lir::Calls,
+) -> Option<lir::Lir> {
+    let cells = cells_for(ct, calls)?;
+    Some(lir::expand(&src.lir, &src.relocs, cells))
+}
+
+/// The address of `ct`'s first cell when a calling exit calls as `calls`
+/// says.
+fn cells_for(ct: &CompiledTrace, calls: &lir::Calls) -> Option<i64> {
+    let any = match calls {
+        lir::Calls::Held(h) => h.contains(&true),
+        _ => false,
+    };
+    any.then(|| ct.side_cells_at().map(|c| c as i64)).flatten()
+}
+
+/// The instructions and the relocations' values to compile from: those of
+/// `ex` when made, else `src`'s.
+pub(crate) fn of<'a>(
+    src: &'a TierSource,
+    ex: &'a Option<lir::Lir>,
+) -> (&'a lir::Lir, &'a [(RelocKind, i64)]) {
+    match ex {
+        Some(l) => (l, &l.relocs),
+        None => (&src.lir, &src.relocs),
     }
 }
 
@@ -118,12 +155,16 @@ pub(crate) fn clif_tier_up(
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     let at_loop = src.lir.loop_entry.is_some();
     if let Some(o) = src.image.as_ref().and_then(|img| img.optimized(calls)) {
-        return place::from_image(cs, src, &o, ct);
+        // the relocations past the image's: the first side cell
+        let cells = cells_for(ct, calls).unwrap_or(0);
+        let at = |k: usize| src.relocs.get(k).map_or(cells, |r| r.1);
+        return place::from_image(cs, at, at_loop, &o, ct);
     }
-    let lir = &src.lir;
+    let ex = expanded(src, ct, calls);
+    let (lir, relocs) = of(src, &ex);
     // the loop first, each function in a module of its own
     let looped = match at_loop {
-        true => Some(compile_loop(cs, lir, &src.relocs, ct, calls)?),
+        true => Some(compile_loop(cs, lir, relocs, ct, calls)?),
         false => None,
     };
     let start = if at_loop {
@@ -131,7 +172,7 @@ pub(crate) fn clif_tier_up(
     } else {
         lir::Start::Whole
     };
-    let (ptr, sites) = compile_one(cs, lir, &src.relocs, (start, calls), head_pc)?;
+    let (ptr, sites) = compile_one(cs, lir, relocs, (start, calls), head_pc)?;
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
     if let (Some(img), Some((len, sites))) = (&src.image, sites) {
         // SAFETY: `ptr..ptr + len` is the function just finalized, which

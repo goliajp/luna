@@ -1,7 +1,6 @@
 //! The dispatcher's data of a shared trace, made into another Vm's trace.
 
 use super::*;
-use luna_core::__private::side_cells;
 
 /// The data of a [`CompiledTrace`] beside its code, without the cells a
 /// running trace updates.
@@ -72,7 +71,7 @@ impl Meta {
     }
 
     /// A fresh [`CompiledTrace`] (no code yet: `entry` is the placeholder),
-    /// with its own cells. `tiered`: the trace runs the optimizing tier's
+    /// its cells not made yet. `tiered`: the trace runs the optimizing tier's
     /// code and moves no further.
     // kept out of line: inlined into the adoption path, its collects were
     // not, which costs every adopted trace more than the call
@@ -118,8 +117,8 @@ impl Meta {
             downrec_multi_way_count: self.downrec_multi_way_count,
             tier_up,
             side_cell_exits: self.side_cell_exits.clone(),
-            side_cells: (!self.side_cell_exits.is_empty())
-                .then(|| side_cells(self.side_cell_exits.len())),
+            side_cells: None,
+            calls_source: None,
             link_pc: self.link_pc,
             loop_tags: self.loop_tags.clone(),
         }

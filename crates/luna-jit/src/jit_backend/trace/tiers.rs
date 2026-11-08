@@ -93,39 +93,55 @@ fn compile_trace_baseline(
         return Ok(None);
     };
     let placed = lir::assemble(&lir, &mut cs.baseline_code, capture);
-    let shared_lir = compiled
-        .tier_up
-        .as_ref()
-        .map(|_| std::sync::Arc::new(lir.detach()));
-    if let (Some(t), Some(l)) = (&mut compiled.tier_up, &shared_lir) {
-        *t.source_mut() = Some(Box::new(share::TierSource {
-            lir: l.clone(),
-            relocs: lir.relocs.clone(),
-            image: None,
+    // kept to compile again from: at the optimizing tier, or once a side
+    // cell is filled
+    let calls = lir.relinks.is_some();
+    let shared_lir =
+        (compiled.tier_up.is_some() || calls).then(|| std::sync::Arc::new(lir.detach()));
+    if let Some(l) = &shared_lir {
+        let src = |record| {
+            Box::new(share::TierSource {
+                lir: l.clone(),
+                relocs: lir.relocs.clone(),
+                image: None,
+                record,
+            })
+        };
+        match &mut compiled.tier_up {
             // kept only where lowering again can differ: a clone per
             // compiled trace is a cost every short-lived trace pays
-            record: lower::ops_all_pure(record).then(|| super::tier_source::TierRecord {
-                record: record.clone(),
-                opts,
-                float_only,
-            }),
-        }));
+            Some(t) => {
+                let r = lower::ops_all_pure(record).then(|| super::tier_source::TierRecord {
+                    record: record.clone(),
+                    opts,
+                    float_only,
+                });
+                *t.source_mut() = Some(src(r));
+            }
+            None => compiled.calls_source = Some(src(None)),
+        }
     }
     let relocs = lir.relocs.clone();
     lir.give();
     let (entry, code) = placed?;
     BASELINE_CODEGEN.with(|c| c.set(c.get() + 1));
     TRACE_CODEGEN.with(|c| c.set(c.get() + 1));
-    // SAFETY: the code implements the `TraceFn` ABI (`extern "C"`, one
-    // pointer argument, an i64 result); it stays mapped until the owning
-    // Vm releases its code
-    compiled.entry = unsafe { std::mem::transmute::<*const u8, TraceFn>(entry) };
+    compiled.entry = baseline_entry(entry);
     let cap = code.map(|c| image::Captured {
         code: Some((image::Tier::Baseline, c)),
         relocs,
         lir: shared_lir,
     });
     Ok(Some((compiled, cap)))
+}
+
+/// The entry of baseline code: `p` is code [`lir::assemble`] placed, or a
+/// copy of such code with this Vm's addresses written in.
+pub(super) fn baseline_entry(p: *const u8) -> TraceFn {
+    // SAFETY: by the caller, the code implements the `TraceFn` ABI
+    // (`extern "C"`, one pointer argument, an i64 result); it stays mapped
+    // until the owning Vm releases its code
+    unsafe { std::mem::transmute::<*const u8, TraceFn>(p) }
 }
 
 pub(super) fn compile_trace_cranelift(

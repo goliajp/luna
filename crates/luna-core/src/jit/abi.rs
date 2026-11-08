@@ -223,6 +223,21 @@ pub unsafe trait TraceCompiler {
         (self.tier_up(storage, ct), None)
     }
 
+    /// Compiles the baseline code of `ct` again, from the source
+    /// [`crate::__private::with_calls_source`] gives, so that its calling
+    /// exits run the side traces its side cells hold (made by then): the
+    /// Vm asks once, when a side trace is first wired to one of them while
+    /// the trace runs its baseline code. The new entry behaves like the old
+    /// one but for that. `None` when the backend has no such code.
+    fn compile_calls(
+        &self,
+        storage: &mut dyn crate::jit::JitStorage,
+        ct: &CompiledTrace,
+    ) -> Option<crate::jit::trace::TraceFn> {
+        let _ = (storage, ct);
+        None
+    }
+
     /// Installs, for the recording `req` describes, traces some `Vm`
     /// sharing compiled code with this one already compiled for code of
     /// the same content: the trace itself, then the side traces of it that

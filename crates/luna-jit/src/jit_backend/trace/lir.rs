@@ -12,6 +12,7 @@ mod cg_ops;
 mod clif;
 mod code;
 mod dump;
+mod expand;
 mod live;
 #[cfg(feature = "llvm-jit")]
 mod llvm;
@@ -29,6 +30,7 @@ mod x64;
 
 pub(crate) use clif::define as define_clif;
 pub(crate) use code::{CodeArena, assemble};
+pub(crate) use expand::expand;
 pub(crate) use live::{Calls, Start};
 #[cfg(feature = "llvm-jit")]
 pub(crate) use llvm::compile as compile_llvm;
@@ -275,6 +277,8 @@ pub(crate) struct Lir {
     /// many [`Lir::funcs`] / [`Lir::param_tys`] entries they take: they stay
     /// declared for the next trace.
     pub(in crate::jit_backend::trace) helpers: Option<(super::lower::Helpers, u32, u32)>,
+    /// What the calling exits' calls are made from, left to [`expand`].
+    pub(in crate::jit_backend::trace) relinks: Option<std::sync::Arc<super::lower::Relinks>>,
 }
 
 impl Lir {

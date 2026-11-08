@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::jit_backend::trace::image::Optimized;
-use luna_core::__private::TierUp;
+use luna_core::__private::side_cells;
 
 /// `img` as a trace of this Vm: its code copied into this Vm's code memory
 /// with this Vm's addresses written in. `None` when a function it inlined
@@ -23,6 +23,11 @@ pub(super) fn install(
     let mut ct = img
         .meta
         .instantiate(pick.tiered && !pick.retiers, req.proto.call_hot_count());
+    // code that holds the cells' address (the optimizing tier's, compiled
+    // with every calling exit calling): they are made now
+    if img.sources.contains(&Source::SideCells) {
+        ct.side_cells = Some(side_cells(ct.side_cell_exits.len()));
+    }
     let relocs: Vec<(RelocKind, i64)> = img
         .sources
         .iter()
@@ -44,9 +49,7 @@ pub(super) fn install(
         if let (Some(c), Some(t)) = (looped, &ct.tier_up) {
             place_loop(cs, c, &relocs, t, ct.head_pc)?;
         }
-        if let Some(t) = &mut ct.tier_up {
-            give_source(t, &pick, img, relocs);
-        }
+        give_source(&mut ct, &pick, img, relocs);
     }
     Some(AdoptedTrace {
         // SAFETY: the code is a copy of a trace compiled for code of this
@@ -65,12 +68,12 @@ pub(super) fn install(
     })
 }
 
-/// Gives the tier move `t` of a trace taken up from `img` the source to
-/// compile it from at the optimizing tier: to move, or, for code that is
-/// the optimizing tier's already and calls from no exit, to compile again
-/// once a side cell gets a side trace.
+/// Gives the trace `ct` taken up from `img` the source to compile it from:
+/// for its tier move, to move, or, for code that is the optimizing tier's
+/// already and calls from no exit, to compile again once a side cell gets a
+/// side trace; without one, to compile its baseline code again then.
 fn give_source(
-    t: &mut TierUp,
+    ct: &mut CompiledTraceParts,
     pick: &Pick<'_>,
     img: &Arc<TraceImage>,
     relocs: Vec<(RelocKind, i64)>,
@@ -84,10 +87,11 @@ fn give_source(
         image: Some(img.clone()),
         record: None,
     });
-    match (pick.keep_source, pick.retiers) {
-        (true, _) => *t.source_mut() = Some(src),
-        (false, true) => *t.kept_mut() = Some(src),
-        (false, false) => {}
+    match (&mut ct.tier_up, pick.keep_source, pick.retiers) {
+        (Some(t), true, _) => *t.source_mut() = Some(src),
+        (Some(t), false, true) => *t.kept_mut() = Some(src),
+        (None, ..) if lir.relinks.is_some() => ct.calls_source = Some(src),
+        _ => {}
     }
 }
 

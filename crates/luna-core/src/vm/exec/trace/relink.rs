@@ -163,6 +163,13 @@ pub(in crate::vm::exec) enum Fill {
     NoLinkPc,
 }
 
+impl Fill {
+    /// Whether the parent's code runs the side trace.
+    pub(in crate::vm::exec) fn calls(self) -> bool {
+        matches!(self, Fill::Filled | Fill::Linked)
+    }
+}
+
 /// Fills the cell of `parent`'s exit `exit` for `child`, just wired there,
 /// when the parent's code may run it (see the module comment); otherwise
 /// the exit leaves to the dispatcher, which runs the child. `proto` is the
@@ -194,7 +201,7 @@ pub(in crate::vm::exec) fn relink_fill(
         None => Fill::NoLinkPc,
     };
     // the optimizing tier's code may leave this exit to the dispatcher
-    if matches!(f, Fill::Filled | Fill::Linked)
+    if f.calls()
         && let Some(t) = &parent.tier_up
     {
         t.retier();
