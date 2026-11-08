@@ -76,7 +76,8 @@ pub(in crate::vm::exec) fn link_late(
         return;
     }
     let waiting: Vec<_> = (proto.traces.borrow().iter())
-        .filter(|p| p.has_side_cells())
+        // a trace holds side traces only once one was wired to it
+        .filter(|p| p.has_any_side_wired.get() && p.has_side_cells())
         .flat_map(|p| {
             let held = p.side_children.borrow();
             (p.side_cell_exits().iter())
