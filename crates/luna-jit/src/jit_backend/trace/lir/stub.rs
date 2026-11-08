@@ -125,8 +125,8 @@ fn emit_on_return<M: Masm>(m: &mut M, k: &[u8], other: super::cg::Label, back: s
 
 /// Back into the trace's loop: the cell's relink count bumped and its stores
 /// to the stack made, whether the side trace may go on in the optimizing
-/// tier's loop left in the noting word, and on at the relink block with
-/// `reg_state`, the stub's frame left.
+/// tier's loop left in the noting word's low half and the note in its high
+/// half, and on at the relink block with `reg_state`, the stub's frame left.
 fn emit_back<M: Masm>(m: &mut M, k: &[u8]) {
     let (a, at, t) = (M::INT_ARGS, SideCell::offsets(), M::SCRATCH[0]);
     m.load(Width::B4, t, k[1], at.relinks);
@@ -139,6 +139,9 @@ fn emit_back<M: Masm>(m: &mut M, k: &[u8]) {
     m.call_abs(side_cell_list());
     m.bind(stored);
     m.load(Width::B4, t, k[1], at.loop_ok);
+    let u = M::SCRATCH[1];
+    m.alu_imm(Alu::Shl, true, u, k[3], 32);
+    m.alu(Alu::Or, true, t, t, u);
     m.store(Width::B8, t, k[4], 0);
     m.mov(a[0], k[0]);
     m.mov(M::SCRATCH[1], k[5]);

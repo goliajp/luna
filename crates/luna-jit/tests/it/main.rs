@@ -168,6 +168,7 @@ mod trace_recorder_clean_close;
 mod trace_recording_smoke;
 mod trace_reentry_kinds;
 mod trace_relink;
+mod trace_relink_kinds;
 mod trace_relink_tier;
 mod trace_reload_reuse;
 mod trace_retier;

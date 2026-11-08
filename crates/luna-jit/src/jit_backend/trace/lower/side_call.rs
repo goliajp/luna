@@ -243,9 +243,11 @@ fn emit_call<E: Emit>(
         .ins()
         .load(types::I32, flags, c, SideCell::offsets().loop_ok);
     let ok = bcx.ins().uextend(types::I64, ok);
-    // the relink block takes it from the word, as it does from the
-    // baseline tier's call stub (see `reentry::count_relink`)
-    bcx.ins().store(flags, ok, reg_state, slot);
+    // the relink block takes it from the word with the note, as it does
+    // from the baseline tier's call stub (see `reentry::count_relink`)
+    let noted = bcx.ins().ishl_imm_u(noted, 32);
+    let word = bcx.ins().bor(ok, noted);
+    bcx.ins().store(flags, word, reg_state, slot);
     let block = match way.relink {
         Some(b) => b,
         None => *way.relink.insert(cold_block(bcx)),

@@ -67,16 +67,17 @@ pub(crate) fn emit_relinks<E: Emit>(bcx: &mut E, x: &Relinks, way: &mut Way) {
     fill_gate(bcx, x);
 }
 
-/// Whether the side trace may go on in the optimizing tier's loop taken
-/// from the word at `reg_state + ran`, where it was left for the relink
-/// block, and the word cleared for the dispatcher; then the loop's iteration
+/// The word at `reg_state + ran`, where the call left it for the relink
+/// block (whether the side trace may go on in the optimizing tier's loop,
+/// and its exit's note; see [`relinked_ok`]), taken into `loop_ok`, and the
+/// word cleared for the dispatcher; then the loop's iteration
 /// counted as at the back edge: reached, `hot` is 1, else 0. On at the
 /// reentry block. Only `reg_state` is live here: the baseline tier's code
 /// enters the block as a function of its own (see `super::super::lir::Relink`).
 fn count_relink<E: Emit>(bcx: &mut E, x: &Relinks, cx: &Ctx<'_>, ran: i32) {
     let (reg_state, flags) = (x.reg_state, MemFlagsData::trusted());
-    let ok = bcx.ins().load(types::I64, flags, reg_state, ran);
-    bcx.def_var(x.loop_ok, ok);
+    let word = bcx.ins().load(types::I64, flags, reg_state, ran);
+    bcx.def_var(x.loop_ok, word);
     let z = bcx.ins().iconst(types::I64, 0);
     bcx.ins().store(flags, z, reg_state, ran);
     bcx.def_var(x.hot, z);
@@ -134,11 +135,11 @@ fn fill_gate<E: Emit>(bcx: &mut E, x: &Relinks) {
     let go = bcx.create_block();
     bcx.ins().brif(hot, go, &[], g.start, &[]);
     switch_sealed(bcx, go);
-    let ok = bcx.use_var(x.loop_ok);
+    let ok = relinked_ok(bcx, x);
     let (into_loop, other) = (bcx.create_block(), bcx.create_block());
     bcx.ins().brif(ok, into_loop, &[], other, &[]);
     switch_sealed(bcx, other);
-    emit_other_kinds(bcx, &cx, g.start);
+    emit_other_kinds(bcx, x, &cx, g.start);
     switch_sealed(bcx, into_loop);
     emit_hot_back_edge(bcx, &cx, &[]);
 }
@@ -155,8 +156,12 @@ fn loop_fn_gate<E: Emit>(bcx: &mut E, x: &Relinks, cx: &Ctx<'_>, g: &Gate) {
     let again = bcx.ins().iconst(types::I64, EXIT_LOOP_AGAIN as i64);
     let ret = match g.peeled {
         true => {
-            let ok = bcx.use_var(x.loop_ok);
+            let ok = relinked_ok(bcx, x);
             let head = bcx.ins().iconst(types::I64, i64::from(cx.head_pc));
+            let z = bcx.ins().iconst(types::I64, 0);
+            let noted = relinked_note(bcx, x);
+            let noted = bcx.ins().select(ok, z, noted);
+            note_for_dispatcher(bcx, cx, noted);
             bcx.ins().select(ok, again, head)
         }
         false => again,
@@ -167,12 +172,14 @@ fn loop_fn_gate<E: Emit>(bcx: &mut E, x: &Relinks, cx: &Ctx<'_>, g: &Gate) {
 
 /// The gate's way once the count is reached with registers of other kinds
 /// than the optimizing tier's loop takes (see [`fill_gate`]).
-fn emit_other_kinds<E: Emit>(bcx: &mut E, cx: &Ctx<'_>, start: Block) {
+fn emit_other_kinds<E: Emit>(bcx: &mut E, x: &Relinks, cx: &Ctx<'_>, start: Block) {
     let t = cx.tier.expect("a hot loop counts");
     let looped = load_loop_cell(bcx, &t);
     let (keep, leave) = (bcx.create_block(), bcx.create_block());
     bcx.ins().brif(looped, keep, &[], leave, &[]);
     switch_sealed(bcx, leave);
+    let noted = relinked_note(bcx, x);
+    note_for_dispatcher(bcx, cx, noted);
     emit_store_back_and_return_pc(
         bcx,
         &cx.regs[..cx.max_stack],
@@ -184,4 +191,27 @@ fn emit_other_kinds<E: Emit>(bcx: &mut E, cx: &Ctx<'_>, start: Block) {
     switch_sealed(bcx, keep);
     mark_pass_into_loop(bcx, cx, &t);
     bcx.ins().jump(start, &[]);
+}
+
+/// Whether the side trace that relinked may go on in the optimizing tier's
+/// loop (see [`count_relink`]).
+fn relinked_ok<E: Emit>(bcx: &mut E, x: &Relinks) -> Value {
+    let word = bcx.use_var(x.loop_ok);
+    bcx.ins().band_imm_u(word, 1)
+}
+
+/// The note of the exit whose side trace relinked (see [`count_relink`]).
+fn relinked_note<E: Emit>(bcx: &mut E, x: &Relinks) -> Value {
+    let word = bcx.use_var(x.loop_ok);
+    bcx.ins().ushr_imm_u(word, 32)
+}
+
+/// `noted` left in the word the dispatcher reads a side trace's note from:
+/// a return at the loop head straight after a relink leaves the registers
+/// as the side trace left them, which only its exits' kinds describe, so
+/// the dispatcher decodes it as the side trace's own return to the head.
+fn note_for_dispatcher<E: Emit>(bcx: &mut E, cx: &Ctx<'_>, noted: Value) {
+    let ran = 8 * trace_ran_side_slot(cx.window) as i32;
+    bcx.ins()
+        .store(MemFlagsData::trusted(), noted, cx.reg_state, ran);
 }

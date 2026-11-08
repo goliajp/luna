@@ -104,8 +104,10 @@ pub(crate) struct Relinks {
     pub(crate) loops: bool,
     pub(crate) reentry: Block,
     pub(crate) gate: Option<Gate>,
-    /// Set by the exit that relinks: whether the side trace's registers
-    /// may go on in the optimizing tier's loop.
+    /// Set by the relink block to the word the exit that relinks left (see
+    /// `reentry::count_relink`): in bit 0 whether the side trace's
+    /// registers may go on in the optimizing tier's loop, from bit 32 on
+    /// the exit's note for the dispatcher.
     pub(crate) loop_ok: Variable,
     /// Set by the relink block: the loop's count is reached, and the gate
     /// moves on to the optimizing tier.
