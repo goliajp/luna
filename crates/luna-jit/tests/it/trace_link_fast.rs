@@ -103,3 +103,37 @@ fn a_link_into_a_trace_yet_to_move_is_left_to_the_vm() {
         );
     });
 }
+
+/// The sliding window ring as a function, run twice on one Vm: the second
+/// time with the run words holding that hot counting pauses, so that the
+/// code, its traces at the optimizing tier by then, leaves each link to
+/// the Vm. The results, and the links left for that reason in each run.
+fn ring_held_quiet(v: LuaVersion, jit: bool) -> ([String; 2], [u64; 2]) {
+    let mut vm = luna_jit::new_with_jit(v);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(jit);
+    let src = format!("return function() {RING} end");
+    let ring = vm.eval(&src).expect("ring")[0];
+    vm.pin_host(ring);
+    let mut out = [String::new(), String::new()];
+    let mut quiet = [0; 2];
+    for (k, hold) in [false, true].into_iter().enumerate() {
+        luna_core::__private::hold_run_words_quiet(&vm, hold);
+        let before = vm.jit_counters_mut().links_by_vm[1];
+        out[k] = format!("{:?}", vm.call_value(ring, &[]).expect("ring runs"));
+        quiet[k] = vm.jit_counters_mut().links_by_vm[1] - before;
+    }
+    luna_core::__private::hold_run_words_quiet(&vm, false);
+    (out, quiet)
+}
+
+#[test]
+fn a_link_reached_while_hot_counting_pauses_is_left_to_the_vm() {
+    for v in VERSIONS {
+        let (want, _) = ring_held_quiet(v, false);
+        let (got, quiet) = ring_held_quiet(v, true);
+        assert_eq!(got, want, "{v:?}");
+        assert_eq!(quiet[0], 0, "{v:?}: a link left for a pause none held");
+        assert!(quiet[1] > 0, "{v:?}: no link left while the pause was held");
+    }
+}

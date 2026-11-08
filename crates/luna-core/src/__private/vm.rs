@@ -4,3 +4,4 @@
 pub(super) mod alloc;
 pub(super) mod host;
 pub(super) mod jit;
+pub(super) mod words;
