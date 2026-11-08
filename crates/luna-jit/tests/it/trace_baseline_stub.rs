@@ -182,3 +182,35 @@ fn vms_sharing_baseline_code_each_go_by_their_own_cells() {
         "the first Vm's code went on {relinked} times"
     );
 }
+
+/// A Vm that takes up the loop's trace together with its side trace runs
+/// the code made with its calls from the start: nothing is compiled or
+/// placed again once the side trace is wired.
+#[test]
+fn a_vm_taking_up_a_trace_with_its_side_trace_runs_its_calls_at_once() {
+    let engine = Engine::new();
+    let (mut it, g) = setup(luna_jit::new_with_jit(LuaVersion::Lua54), false);
+    let (mut a, fa) = shared(&engine);
+    same((&mut a, fa), (&mut it, g), 5_000, 100);
+    assert_eq!(a.jit().counters.calls_compiled, 1, "the first Vm's calls");
+    let (mut b, fb) = shared(&engine);
+    same((&mut b, fb), (&mut it, g), 5_000, 100);
+    let n = b.trace_adopted_count();
+    assert!(n >= 2, "the second Vm took up {n} traces");
+    assert_eq!(
+        b.jit().counters.calls_compiled,
+        0,
+        "the second Vm compiled its calls again"
+    );
+    let (relinked, filled) = root(fb);
+    assert!(filled, "the second Vm's cell holds no side trace");
+    assert!(
+        relinked > 4_000,
+        "the second Vm's code went on {relinked} times"
+    );
+    assert_ne!(
+        code_and_cells(fa).1,
+        code_and_cells(fb).1,
+        "the Vms share cells"
+    );
+}
