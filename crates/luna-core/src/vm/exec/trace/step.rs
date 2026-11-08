@@ -10,9 +10,8 @@ use super::*;
 /// runs leaves for its exit.
 #[derive(Default)]
 pub(crate) struct TraceStep {
-    /// The running root trace by address (0: none) and the number of
-    /// frames, its own on top, it runs with.
-    ct: usize,
+    /// The number of frames, its own on top, the running root trace (in
+    /// the run words, where the code taking a link writes it) runs with.
     frames: u32,
     /// Set by whatever a step does that a trace cannot go on from: the
     /// stack above the top cleared, a finalizer run.
@@ -44,25 +43,29 @@ impl Vm {
             self.gc_quiet_end();
         }
         let words = &self.jit.words;
-        let prev = (self.jit.step.ct, self.jit.step.frames, words.base.get());
+        let prev = (
+            words.running.get() as usize,
+            self.jit.step.frames,
+            words.base.get(),
+        );
         if let Some(CallFrame::Lua(f)) = self.frames.last() {
             words.base.set(f.base * size_of::<Value>() as u32);
         }
         // the stack's buffer moves as it grows; the Vm only between calls
         words.stack.set(std::ptr::addr_of!(self.stack).cast());
-        let st = &mut self.jit.step;
-        st.ct = ct as usize;
-        st.frames = self.frames.len() as u32;
+        words.running.set(ct.cast());
+        self.jit.step.frames = self.frames.len() as u32;
         prev
     }
 
     /// The trace the step window is open for (its address; 0 none).
     pub(in crate::vm::exec) fn trace_step_running(&self) -> usize {
-        self.jit.step.ct
+        self.jit.words.running.get() as usize
     }
 
     pub(in crate::vm::exec) fn trace_step_leave(&mut self, prev: RunningTrace) {
-        (self.jit.step.ct, self.jit.step.frames) = (prev.0, prev.1);
+        self.jit.step.frames = prev.1;
+        self.jit.words.running.set(prev.0 as *const u8);
         self.jit.words.base.set(prev.2);
     }
 
@@ -82,8 +85,7 @@ impl Vm {
 
     /// The running trace's frame, when a step may run in place there.
     fn step_frame(&self) -> Option<(Gc<LuaClosure>, u32)> {
-        let st = &self.jit.step;
-        if st.ct == 0 || st.frames as usize != self.frames.len() {
+        if self.trace_step_running() == 0 || self.jit.step.frames as usize != self.frames.len() {
             return None;
         }
         match self.frames.last() {
@@ -181,7 +183,7 @@ impl Vm {
         &self,
         proto: &crate::runtime::function::Proto,
     ) -> Option<crate::jit::send_compat::TArc<crate::jit::CompiledTrace>> {
-        let ct_addr = self.jit.step.ct;
+        let ct_addr = self.trace_step_running();
         let traces = proto.traces.borrow();
         let t = traces
             .iter()

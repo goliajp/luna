@@ -23,6 +23,7 @@ mod mid_for_prep;
 mod ops;
 mod peel;
 mod plan;
+mod plan_link;
 mod prologue;
 mod readonly;
 mod reentry;

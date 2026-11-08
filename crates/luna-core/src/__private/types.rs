@@ -18,7 +18,9 @@ pub use crate::jit::trace_types::installed::plans::{PassCount, TracePlans, kept_
 pub use crate::jit::trace_types::options::CompileOptions;
 pub use crate::jit::trace_types::record::{FieldIcSnapshot, RecordedOp, TraceRecord};
 pub use crate::jit::trace_types::self_link::{DownRecClose, RetfRecord};
-pub use crate::jit::trace_types::side_cell::{SideCell, SideCellOffsets, SideCells, side_cells};
+pub use crate::jit::trace_types::side_cell::{
+    LINK_DEPTH, SideCell, SideCellOffsets, SideCells, side_cells,
+};
 pub use crate::vm::jit_state::{RunWords, RunWordsOffsets};
 
 /// Where a Vm's stack (see [`RunWords`]) holds the address of its first

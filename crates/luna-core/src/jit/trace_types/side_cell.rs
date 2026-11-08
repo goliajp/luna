@@ -51,18 +51,44 @@ pub struct SideCell {
     /// What entering the linked trace takes: the list `link` points at, the
     /// checks (as `check`'s), the stores (as `back`'s), and each slot's
     /// entry tag as the linked trace is entered ([`LINK_TAG_KEPT`] where it
-    /// is the one the side trace's parent was entered with), and the list
-    /// `link_bare` points at.
+    /// is the one the side trace's parent was entered with).
     pub(crate) link_lists: TRefLock<LinkLists>,
-    /// The list entering the linked trace once the code made the checks
-    /// and the stores of the link itself (in `link_lists`); null when none.
-    pub(crate) link_bare: TCellPtr,
     /// What the lists say, for the optimizing tier to compile in; set when
     /// the cell is filled, never after.
     pub(crate) plan: PlanOnce,
     /// The run words of the cell's Vm (`crate::__private::RunWords`), for
     /// code shared by every Vm; set when the cell is filled.
     pub(crate) words: TCellPtr,
+    /// What the code taking the link itself reads and writes of the traces
+    /// (see [`LinkCells`]); set with the link.
+    pub(crate) link_cells: LinkCells,
+}
+
+/// The addresses in the two traces of a link that the code taking it reads
+/// and writes, which hold while the frame's prototype keeps them.
+#[repr(C)]
+pub(crate) struct LinkCells {
+    /// The linked trace.
+    pub(crate) target: TCellPtr,
+    /// Its move's `tried` (null without a move).
+    pub(crate) tried: TCellPtr,
+    /// The cell holding its entry: its move's optimizing tier's, or its
+    /// own without a move.
+    pub(crate) entry: TCellPtr,
+    /// The running trace's count of its move and the linked trace's, for
+    /// one that counts in this call's word (else null).
+    pub(crate) counts: [TCellPtr; 2],
+}
+
+impl LinkCells {
+    const fn new() -> Self {
+        Self {
+            target: TCellPtr::null(),
+            tried: TCellPtr::null(),
+            entry: TCellPtr::null(),
+            counts: [TCellPtr::null(), TCellPtr::null()],
+        }
+    }
 }
 
 /// A cell's plan once set.
@@ -74,7 +100,7 @@ pub(crate) type PlanOnce = std::sync::OnceLock<std::sync::Arc<CellPlan>>;
 
 /// The links compiled code takes in a row before it leaves the next to the
 /// dispatcher: each takes a native frame of the linked trace's code.
-pub(crate) const LINK_DEPTH: usize = 8;
+pub const LINK_DEPTH: usize = 8;
 
 /// In a side cell's entry tags of the linked trace: the slot holds what the
 /// side trace's parent was entered with.
@@ -101,14 +127,20 @@ pub struct SideCellOffsets {
     pub link_pc: i32,
     /// `SideCell::link`'s.
     pub link: i32,
-    /// `SideCell::link_bare`'s.
-    pub link_bare: i32,
     /// `SideCell::words`'s.
     pub words: i32,
+    /// The linked trace's address.
+    pub link_target: i32,
+    /// The address of the linked trace's move's `tried` (a byte).
+    pub link_tried: i32,
+    /// The address of the cell holding the linked trace's entry.
+    pub link_entry: i32,
+    /// The addresses of the running and the linked trace's counts (32 bits).
+    pub link_counts: i32,
 }
 
 /// See [`SideCell::link_lists`].
-pub(crate) type LinkLists = (Box<[u32]>, Box<[u32]>, Box<[u32]>, Box<[u8]>, Box<[u32]>);
+pub(crate) type LinkLists = (Box<[u32]>, Box<[u32]>, Box<[u32]>, Box<[u8]>);
 
 impl SideCell {
     /// An empty cell: no side trace runs from it.
@@ -126,14 +158,15 @@ impl SideCell {
             link_pc: TCellU32::new(u32::MAX),
             link: TCellPtr::null(),
             link_lists: TRefLock::new(Default::default()),
-            link_bare: TCellPtr::null(),
             plan: PlanOnce::new(),
             words: TCellPtr::null(),
+            link_cells: LinkCells::new(),
         }
     }
 
     /// The fields' offsets.
     pub const fn offsets() -> SideCellOffsets {
+        let lc = std::mem::offset_of!(SideCell, link_cells);
         SideCellOffsets {
             entry: std::mem::offset_of!(SideCell, entry) as i32,
             back: std::mem::offset_of!(SideCell, back) as i32,
@@ -144,8 +177,11 @@ impl SideCell {
             relinks: std::mem::offset_of!(SideCell, relinks) as i32,
             link_pc: std::mem::offset_of!(SideCell, link_pc) as i32,
             link: std::mem::offset_of!(SideCell, link) as i32,
-            link_bare: std::mem::offset_of!(SideCell, link_bare) as i32,
             words: std::mem::offset_of!(SideCell, words) as i32,
+            link_target: (lc + std::mem::offset_of!(LinkCells, target)) as i32,
+            link_tried: (lc + std::mem::offset_of!(LinkCells, tried)) as i32,
+            link_entry: (lc + std::mem::offset_of!(LinkCells, entry)) as i32,
+            link_counts: (lc + std::mem::offset_of!(LinkCells, counts)) as i32,
         }
     }
 

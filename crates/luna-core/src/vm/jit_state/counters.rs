@@ -62,6 +62,14 @@ pub struct JitCounters {
     /// Of `links`, the ones the dispatcher took after the code left them,
     /// the links in a row at their limit.
     pub links_redispatched: u64,
+    /// The times compiled code handed the Vm a link to take (taken or not),
+    /// by what kept the optimizing tier's code from taking it itself (see
+    /// `relink::enter`): none of the following (1, 2, 3, 4), as for the
+    /// baseline tier's code (0); the exit left something to the
+    /// dispatcher or hot counting pauses (1); the links in a row are at
+    /// their limit or the trail is full (2); the linked trace has yet to
+    /// move to the optimizing tier (3); it inlines calls (4).
+    pub links_by_vm: Box<[u64; 5]>,
     /// Dispatches of traces holding each kind of inlined code, by the bit
     /// of [`crate::jit::trace::CompiledTraceParts::inline_kinds`].
     pub inline_kind_dispatched: [u64; 4],

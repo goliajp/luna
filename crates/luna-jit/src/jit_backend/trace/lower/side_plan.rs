@@ -19,7 +19,7 @@ use luna_core::__private::{
 
 /// The address of the Vm's run words, a relocation: the one the expansion
 /// set, which each Vm writes its own into.
-fn run_words<E: Emit>(bcx: &mut E) -> Value {
+pub(super) fn run_words<E: Emit>(bcx: &mut E) -> Value {
     let known = (bcx.relocs_mut().iter()).find_map(|r| (r.0 == RelocKind::RunWords).then_some(r.1));
     bcx.reloc(RelocKind::RunWords, known.unwrap_or(0))
 }
@@ -62,7 +62,7 @@ pub(crate) fn emit_planned_exit<E: Emit>(
 
 /// On to `blocked` when the exit left something for the dispatcher to do
 /// (a deopt, a collection check, something to make).
-fn emit_blocked<E: Emit>(bcx: &mut E, blocked: Block) {
+pub(super) fn emit_blocked<E: Emit>(bcx: &mut E, blocked: Block) {
     let rw = run_words(bcx);
     let at = RunWords::offsets().blocked;
     let b = bcx.ins().load(types::I32, MemFlagsData::trusted(), rw, at);
@@ -84,7 +84,7 @@ fn frame_values<E: Emit>(bcx: &mut E) -> Value {
 
 /// On to `fail` unless each slot of `checks` holds its raw tag on the
 /// stack.
-fn emit_checks<E: Emit>(bcx: &mut E, checks: &[(u32, u8)], fail: Block) {
+pub(super) fn emit_checks<E: Emit>(bcx: &mut E, checks: &[(u32, u8)], fail: Block) {
     if checks.is_empty() {
         return;
     }
@@ -136,7 +136,7 @@ pub(crate) fn emit_stores<E: Ins>(
 }
 
 /// [`emit_stores`] into the running trace's frame, read now.
-fn emit_frame_stores<E: Emit>(bcx: &mut E, x: &Relinks, stores: &[(u32, u8)]) {
+pub(super) fn emit_frame_stores<E: Emit>(bcx: &mut E, x: &Relinks, stores: &[(u32, u8)]) {
     if stores
         .iter()
         .all(|&(_, d)| slot_store(d) == SlotStore::Leave)
@@ -176,25 +176,7 @@ fn emit_branch_on_return<E: Emit>(
     let take = cold_block(bcx);
     bcx.ins().brif(linked, take, &[], other, &[]);
     switch_sealed(bcx, take);
-    emit_blocked(bcx, other);
-    emit_checks(bcx, &link.checks, other);
-    // what the Vm would store taking the link: should it not take it, the
-    // dispatcher writes the same values for the side trace's exit
-    emit_frame_stores(bcx, x, &link.stores);
-    let bare = (bcx.ins()).load(
-        types::I64,
-        MemFlagsData::trusted(),
-        c,
-        SideCell::offsets().link_bare,
-    );
-    let call = bcx.ins().call(x.list_fn, &[bare, x.reg_state]);
-    let entry = bcx.inst_results(call)[0];
-    let enter = cold_block(bcx);
-    bcx.ins().brif(entry, enter, &[], other, &[]);
-    switch_sealed(bcx, enter);
-    let call = bcx.ins().call_indirect(x.sig, entry, &[x.reg_state]);
-    let ret = bcx.inst_results(call)[0];
-    bcx.ins().return_(&[ret]);
+    super::plan_link::emit_link(bcx, x, c, link, other);
 }
 
 /// Back into this trace's loop: the cell's relink count bumped, its stores

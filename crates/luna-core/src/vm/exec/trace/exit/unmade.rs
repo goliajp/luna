@@ -90,9 +90,7 @@ impl Vm {
         debug_assert!(roots.is_empty());
         roots.reserve(SUNK_WORDS_MAX + 2 * window)?;
         let jit = &mut self.jit;
-        let have = jit.link_trail.capacity() - jit.link_trail.len();
-        jit.link_trail
-            .reserve(crate::jit::trace_types::side_cell::LINK_DEPTH.saturating_sub(have))?;
+        (jit.words).trail_reserve(crate::jit::trace_types::side_cell::LINK_DEPTH)?;
         super::super::dispatch::words::reserve(
             &mut jit.reg_state_buf,
             &mut jit.entry_tags_buf,

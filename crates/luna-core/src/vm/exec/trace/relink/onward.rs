@@ -13,6 +13,8 @@
 
 use super::*;
 use crate::jit::send_compat::TArc;
+use crate::jit::send_compat::{TCellBool, TCellPtr, TCellU32};
+use crate::jit::trace_types::cell_plan::{LinkPlan, pairs_of};
 use crate::jit::trace_types::frame::TRACE_FRAME_TAIL;
 use crate::jit::trace_types::side_cell::LINK_TAG_KEPT;
 
@@ -51,15 +53,55 @@ pub(super) fn fill_link(
     ];
     let f = link_fill(parent, exit, child, target, cell, call);
     if f == Fill::Linked {
+        let link = link_plan(parent, target, cell, proto.max_stack.into());
         super::fill_cell(
             cell,
             child,
             (&[], &super::reads_unchecked(parent, exit, child)),
             false,
             words,
+            Some(link),
         );
     }
     f
+}
+
+/// The plan of the link `cell` was just filled with, from `parent` to
+/// `target` in a frame of `max_stack` registers; with the addresses the
+/// code taking it reads set in the cell.
+fn link_plan(
+    parent: &CompiledTrace,
+    target: &CompiledTrace,
+    cell: &SideCell,
+    max_stack: u32,
+) -> LinkPlan {
+    let count = |t: &CompiledTrace| match &t.tier_up {
+        Some(m) if t.call_count => (&*m.count as *const TCellU32).cast(),
+        _ => std::ptr::null(),
+    };
+    let lc = &cell.link_cells;
+    lc.target.set((target as *const CompiledTrace).cast());
+    lc.counts[0].set(count(parent));
+    lc.counts[1].set(count(target));
+    match &target.tier_up {
+        Some(m) => {
+            lc.tried.set((&m.tried as *const TCellBool).cast());
+            lc.entry.set((&m.optimized as *const TCellPtr).cast());
+        }
+        None => lc.entry.set((&target.entry as *const TCellPtr).cast()),
+    }
+    let l = cell.link_lists.borrow();
+    LinkPlan {
+        pc: target.head_pc,
+        checks: pairs_of(&l.1),
+        stores: pairs_of(&l.2),
+        trail: [l.0[3], l.0[4], l.0[5]],
+        windows: [parent.window_size, target.window_size, max_stack],
+        counts: [count(parent), count(target)].map(|c| !c.is_null()),
+        target_cells: target.has_side_cells(),
+        target_tiers: target.tier_up.is_some(),
+        target_inline_depth: target.inline_depth,
+    }
 }
 
 /// Links, now that `target` is cached in `proto`, the side traces of the
@@ -129,18 +171,14 @@ fn link_fill(
     let kept = (tags.iter())
         .map(|t| t.and_then(exit_tag_raw).unwrap_or(LINK_TAG_KEPT))
         .collect();
-    let mut bare = call;
-    bare[0] = SideList::LinkBare as u32;
     let mut lists = cell.link_lists.borrow_mut();
     *lists = (
         Box::new(call),
         list_of(SideList::Check, &check),
         list_of(SideList::Store, &stores_at_relink(target, &tags)),
         kept,
-        Box::new(bare),
     );
     cell.link.set(lists.0.as_ptr().cast());
-    cell.link_bare.set(lists.4.as_ptr().cast());
     drop(lists);
     cell.link_pc.set(target.head_pc);
     Fill::Linked
