@@ -25,7 +25,9 @@ pub(crate) struct Meta {
     body_writes: Box<[u32]>,
     downrec_link: Option<(u32, u32)>,
     downrec_multi_way_count: u8,
-    pub(crate) tier_at: Option<u32>,
+    /// The trace's move: `at` and whether it is the count that pays for it
+    /// (see `TierUp::set_payback_at`).
+    tier_at: Option<(u32, bool)>,
     /// The typed exit of each side cell.
     side_cell_exits: std::sync::Arc<[u32]>,
     link_pc: Option<u32>,
@@ -63,7 +65,7 @@ impl Meta {
             body_writes: ct.body_writes.clone(),
             downrec_link: ct.downrec_link,
             downrec_multi_way_count: ct.downrec_multi_way_count,
-            tier_at: ct.tier_up.as_ref().map(|t| t.at()),
+            tier_at: (ct.tier_up.as_ref()).map(|t| (t.at(), t.reused_at() == t.at())),
             side_cell_exits: ct.side_cell_exits.clone(),
             link_pc: ct.link_pc,
             loop_tags: ct.loop_tags.clone(),
@@ -87,10 +89,13 @@ impl Meta {
             })
             .collect();
         let total = self.plans.exit_count();
-        let tier_up = self
-            .tier_at
-            .filter(|_| !tiered)
-            .map(|at| Box::new(TierUp::new(Box::new(TCellU32::new(0)), at, calls_at)));
+        let tier_up = self.tier_at.filter(|_| !tiered).map(|(at, payback)| {
+            let mut t = TierUp::new(Box::new(TCellU32::new(0)), at, calls_at);
+            if payback {
+                t.set_payback_at(at);
+            }
+            Box::new(t)
+        });
         CompiledTraceParts {
             head_pc: self.head_pc,
             entry: placeholder_trace_fn,

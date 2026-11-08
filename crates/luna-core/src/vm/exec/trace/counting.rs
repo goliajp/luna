@@ -44,8 +44,7 @@ impl Vm {
         {
             let n = t.count.get().wrapping_add(1);
             t.count.set(n);
-            let reused =
-                calls != t.calls_at && n >= t.at / crate::jit::trace::TIER_UP_REUSED_DIVISOR;
+            let reused = calls != t.calls_at && n >= t.reused_at;
             if n >= t.at || reused {
                 self.trace_tier_up(ct);
             }
