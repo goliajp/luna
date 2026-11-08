@@ -23,7 +23,7 @@ impl Vm {
                     Some(CallFrame::Lua(f)) => f.closure.proto.call_hot_count.get(),
                     _ => 0,
                 };
-                self.trace_entry_counted(&t, calls) as i64
+                self.trace_entry_counted(&t, calls) as usize as i64
             }
             None => 0,
         }
