@@ -45,7 +45,7 @@ fn sweep_method(src: &str) {
                 let mut vm = vm_with(v, Some(Refuse::new(None, k, once)), false);
                 assert_eq!(result(&mut vm, src), want, "{v:?} #{k} once {once}: {src}");
                 assert!(
-                    vm.jit().pending_err.is_none(),
+                    vm.jit().pending_err().is_none(),
                     "{v:?} #{k}: a deopt left parked"
                 );
             }

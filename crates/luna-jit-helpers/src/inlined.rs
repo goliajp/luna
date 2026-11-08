@@ -40,7 +40,7 @@ pub unsafe extern "C" fn luna_jit_op_closure_in(
 ) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // SAFETY: `cl_raw` is the payload of a live Lua closure (# Safety)

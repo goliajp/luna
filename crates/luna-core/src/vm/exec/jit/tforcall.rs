@@ -26,7 +26,7 @@ impl Vm {
         val_out: &mut i64,
     ) -> i64 {
         // a spill before it failed: the trace leaves at the op
-        if self.jit.pending_err.is_some() {
+        if self.jit.pending_err().is_some() {
             return -1;
         }
         let Some(f) = self.jit_last_lua_frame() else {

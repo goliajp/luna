@@ -44,7 +44,7 @@ impl Vm {
     /// ([`Self::trace_push_unmade_frames`]).
     pub(crate) fn jit_frames_unmade(&mut self, pushed: u32) {
         self.unmade.frames = Some(pushed);
-        self.unmade.any = true;
+        self.set_unmade_any(true);
     }
 
     /// Park a deopt for an allocation compiled code could not make: a
@@ -54,8 +54,8 @@ impl Vm {
     /// code may not: it can hold new objects only in machine registers).
     /// The parked value is never raised, so it allocates nothing.
     pub(crate) fn jit_park_oom(&mut self) {
-        if self.jit.pending_err.is_none() {
-            self.jit.pending_err = Some(LuaError(Value::Nil));
+        if self.jit.pending_err().is_none() {
+            self.jit.set_pending_err(Some(LuaError(Value::Nil)));
         }
     }
 
@@ -110,8 +110,8 @@ impl Vm {
     /// payload.
     pub(crate) fn jit_spill_stack(&mut self, slot_offset: u32, v: Value) {
         let Some(f) = self.jit_last_lua_frame() else {
-            self.jit.pending_err =
-                Some(self.rt_err("JIT spill: no Lua frame on jit_last_lua_frame()"));
+            let e = self.rt_err("JIT spill: no Lua frame on jit_last_lua_frame()");
+            self.jit.set_pending_err(Some(e));
             return;
         };
         let idx = (f.base as usize) + (slot_offset as usize);
@@ -135,7 +135,7 @@ impl Vm {
         ops: &mut [[i64; 2]],
         reload: u64,
     ) -> i64 {
-        if self.jit.pending_err.is_some() {
+        if self.jit.pending_err().is_some() {
             return 0;
         }
         let Some(CallFrame::Lua(f)) = self.frames.last() else {

@@ -117,7 +117,7 @@ impl Vm {
             self.jit_ghosts().accum = g.ok().map(AccumLast::Long);
         }
         if self.heap.gc_due() {
-            self.jit.gc_exit = Some(op_pc);
+            self.jit.set_gc_exit(Some(op_pc));
             return 1;
         }
         0
@@ -170,7 +170,7 @@ impl Vm {
             slot,
             last,
         });
-        self.unmade.any = true;
+        self.set_unmade_any(true);
         0
     }
 

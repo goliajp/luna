@@ -89,7 +89,7 @@ fn traced(v: LuaVersion, p: Option<Refuse>, src: &str) -> (String, u64, bool, [u
     (
         r,
         vm.trace_side_trace_run_count(),
-        vm.jit().pending_err.is_none(),
+        vm.jit().pending_err().is_none(),
         made,
     )
 }
@@ -200,7 +200,7 @@ fn tiered_run(v: LuaVersion, k: Option<usize>) -> (String, u64, usize) {
     vm.set_trace_tier_up_at(16);
     let r = result(&mut vm, ACCUM_TIERED);
     assert!(
-        vm.jit().pending_err.is_none(),
+        vm.jit().pending_err().is_none(),
         "{v:?} {k:?}: a deopt left parked"
     );
     (r, vm.trace_tiered_up_count(), seen.load(Relaxed))

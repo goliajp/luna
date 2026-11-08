@@ -15,9 +15,10 @@ impl Vm {
     /// by their index in the frame's prototype's list) and `regs` the
     /// buffer both run on. The entry of the linked trace, or 0 when the code
     /// leaves the link to the dispatcher: `LINK_DEPTH` links taken in a row,
-    /// a check before the entry failing, or no room to note it.
-    pub(super) fn link_enter(&mut self, link: &[u32], regs: &mut [i64]) -> i64 {
-        match self.link_take(link, regs) {
+    /// a check before the entry failing, or no room to note it. `bare`:
+    /// the code made the link's checks and stores already.
+    pub(super) fn link_enter(&mut self, link: &[u32], regs: &mut [i64], bare: bool) -> i64 {
+        match self.link_take(link, regs, bare) {
             Some(t) => {
                 let calls = match self.frames.last() {
                     Some(CallFrame::Lua(f)) => f.closure.proto.call_hot_count.get(),
@@ -35,13 +36,14 @@ impl Vm {
         &mut self,
         link: &[u32],
         regs: &mut [i64],
+        bare: bool,
     ) -> Option<TArc<CompiledTrace>> {
         let (typed, from, to) = (link[0], link[1] as usize, link[2] as usize);
         let jit = &self.jit;
         if jit.link_trail.len() - jit.link_base >= LINK_DEPTH
-            || jit.gc_exit.is_some()
-            || jit.pending_err.is_some()
-            || self.unmade.any
+            || jit.gc_exit().is_some()
+            || jit.pending_err().is_some()
+            || self.unmade.any()
         {
             return None;
         }
@@ -60,7 +62,7 @@ impl Vm {
         );
         let cell = prev.side_cell(typed)?;
         let lists = cell.link_lists.borrow();
-        if self.side_cell_list(&lists.1, regs) == 0
+        if !bare && self.side_cell_list(&lists.1, regs) == 0
             || !self.inlined_calls_fit(target.inline_depth, base, target.window_size)
             || self
                 .jit
@@ -70,7 +72,9 @@ impl Vm {
         {
             return None;
         }
-        self.side_cell_list(&lists.2, regs);
+        if !bare {
+            self.side_cell_list(&lists.2, regs);
+        }
         drop(lists);
         let (max_stack, window) = (proto.max_stack as usize, target.window_size as usize);
         words::count_out(&prev, regs, prev.window_size as usize);

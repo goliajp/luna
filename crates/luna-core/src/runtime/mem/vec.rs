@@ -24,6 +24,8 @@ pub struct LVec<T> {
 }
 
 impl<T> LVec<T> {
+    /// Where the vector holds the address of its first element, in bytes.
+    pub(crate) const PTR_OFFSET: usize = std::mem::offset_of!(Self, ptr);
     const ALIGN_OK: () = assert!(std::mem::align_of::<T>() <= 8);
     const ZST: bool = std::mem::size_of::<T>() == 0;
 

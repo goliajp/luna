@@ -34,7 +34,7 @@ pub(super) fn install(
     let relocs: Vec<(RelocKind, i64)> = img
         .sources
         .iter()
-        .map(|s| Some((kind_of(s), value_of(s, &protos, req, &ct)?)))
+        .map(|s| Some((kind_of(s), value_of(s, &protos, req, &ct, cs.run_words)?)))
         .collect::<Option<_>>()?;
     let (entry, looped) = match &pick.fresh {
         Some(o) => (Some(&o.entry), o.looped.as_ref()),
@@ -130,7 +130,7 @@ fn pick_code<'a>(img: &'a TraceImage, todo: &[Arc<TraceImage>]) -> Pick<'a> {
     let at_loop = img.sources.contains(&Source::TierLoop);
     let cells = img.meta.side_cells();
     let fresh = img
-        .optimized(&lir::Calls::Held(vec![false; cells].into()))
+        .optimized(&lir::Calls::Held(vec![None; cells].into()))
         .filter(|o| !at_loop || o.looped.is_some());
     let direct = matches!(img.code, Some((Tier::Optimizing, _)));
     let tiered = !at_loop && (fresh.is_some() || direct);
@@ -180,6 +180,7 @@ fn kind_of(s: &Source) -> RelocKind {
         Source::TierCell => RelocKind::TierCell,
         Source::TierLoop => RelocKind::TierLoop,
         Source::SideCells => RelocKind::SideCells,
+        Source::RunWords => RelocKind::RunWords,
     }
 }
 
@@ -189,6 +190,7 @@ fn value_of(
     protos: &[Gc<Proto>],
     req: &AdoptRequest<'_>,
     ct: &CompiledTraceParts,
+    run_words: i64,
 ) -> Option<i64> {
     Some(match s {
         Source::Const { p, k } => match protos[*p as usize].consts.get(*k as usize)? {
@@ -215,6 +217,7 @@ fn value_of(
         }
         // this Vm's cell: every Vm wires its own side traces
         Source::SideCells => ct.side_cells.as_ref()?.as_ptr() as i64,
+        Source::RunWords => run_words,
     })
 }
 

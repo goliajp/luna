@@ -75,6 +75,13 @@ pub unsafe trait JitStorage: std::any::Any {
         let _ = vm;
     }
 
+    /// Called with the address of the `Vm`'s run words (see
+    /// [`crate::__private::RunWords`]) when the storage is installed:
+    /// code compiled through it reads that `Vm`'s.
+    fn set_run_words(&mut self, at: usize) {
+        let _ = at;
+    }
+
     /// Frees the machine code this storage holds, provided every compile
     /// through it was claimed by `vm`; otherwise keeps it.
     ///

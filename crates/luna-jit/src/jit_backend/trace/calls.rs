@@ -37,7 +37,7 @@ fn place(
             p.ok()?
         }
         None => {
-            let l = lir::expand(&src.lir, &src.relocs, cells);
+            let l = lir::expand(&src.lir, &src.relocs, cells, &[], 0);
             let (entry, code) = lir::assemble(&l, &mut cs.baseline_code, img.is_some()).ok()?;
             if let (Some(img), Some(code)) = (img, code) {
                 let size = code.bytes.len();

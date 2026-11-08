@@ -20,7 +20,7 @@ pub use checked::*;
 pub unsafe extern "C" fn luna_jit_table_get_field(t: i64, key_ptr: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
@@ -56,7 +56,7 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     let env = vm.upval_get(cl, upval_idx as u32);
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn luna_jit_op_get_tab_up(upval_idx: i64, key_ptr: i64) ->
 pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
@@ -132,7 +132,7 @@ pub unsafe extern "C" fn luna_jit_table_get_int(t: i64, key: i64) -> i64 {
 pub unsafe extern "C" fn luna_jit_table_get_float(t: i64, key_bits: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
@@ -155,7 +155,7 @@ pub unsafe extern "C" fn luna_jit_table_get_float(t: i64, key_bits: i64) -> i64 
 pub unsafe extern "C" fn luna_jit_table_len(t: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)

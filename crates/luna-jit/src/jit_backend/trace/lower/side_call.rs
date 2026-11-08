@@ -37,9 +37,10 @@
 //! cells (see `relinks`).
 
 use super::relinks::{Open, Relinks, Way};
+use super::side_plan::{emit_entry_counted, emit_noted_return, emit_relink_word};
 use super::*;
 use cranelift_codegen::ir::BlockArg;
-use luna_core::__private::{SideCell, SideCells, side_cells, trace_ran_side_slot};
+use luna_core::__private::{SideCell, SideCells, side_cells};
 use std::sync::Arc;
 
 /// Whether the trace's exits may run side traces from its code: a root
@@ -140,7 +141,7 @@ pub(crate) fn emit_exit_call<E: Emit>(
 /// The address of side cell `n`: the trace's first cell's, and `n` cells
 /// past it. The first's is known once the cells are made (when the calls
 /// are expanded), else written in by `place_cells`.
-pub(super) fn cell_at<E: Emit>(bcx: &mut E, n: u32) -> Value {
+pub(crate) fn cell_at<E: Emit>(bcx: &mut E, n: u32) -> Value {
     let known =
         (bcx.relocs_mut().iter()).find_map(|r| (r.0 == RelocKind::SideCells).then_some(r.1));
     let first = bcx.reloc(RelocKind::SideCells, known.unwrap_or(0));
@@ -193,25 +194,17 @@ pub(super) fn emit_call_block<E: Emit>(bcx: &mut E, x: &Relinks, way: &mut Way) 
 /// here; the dispatcher makes it) or one of the dispatcher's checks before
 /// it runs a side trace fails.
 fn emit_may_call<E: Emit>(bcx: &mut E, x: &Relinks, c: Value, out: Block) -> Value {
-    let (at, flags) = (SideCell::offsets(), MemFlagsData::trusted());
-    let entry = bcx.ins().load(types::I64, flags, c, at.entry);
-    let count_blk = cold_block(bcx);
-    bcx.ins().brif(entry, count_blk, &[], out, &[]);
-    switch_sealed(bcx, count_blk);
-    let cp = bcx.ins().load(types::I64, flags, c, at.count);
-    let n0 = bcx.ins().load(types::I32, flags, cp, 0);
-    let n1 = bcx.ins().iadd_imm_s(n0, 1);
-    bcx.ins().store(flags, n1, cp, 0);
-    let limit = bcx.ins().load(types::I32, flags, c, at.at);
-    let reached = bcx.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, n1, limit);
-    let check_blk = cold_block(bcx);
-    bcx.ins().brif(reached, out, &[], check_blk, &[]);
-    switch_sealed(bcx, check_blk);
+    let entry = emit_entry_counted(bcx, c, out);
     // the exit left nothing for the dispatcher to do (a deopt, a collection
     // check, something to make), and the slots the side trace reads that
     // this trace does not check hold the tags it reads them as
     let call_blk = cold_block(bcx);
-    let check = bcx.ins().load(types::I64, flags, c, at.check);
+    let check = (bcx.ins()).load(
+        types::I64,
+        MemFlagsData::trusted(),
+        c,
+        SideCell::offsets().check,
+    );
     let ok = bcx.ins().call(x.list_fn, &[check, x.reg_state]);
     let ok = bcx.inst_results(ok)[0];
     bcx.ins().brif(ok, call_blk, &[], out, &[]);
@@ -228,31 +221,20 @@ fn emit_call<E: Emit>(
     way: &mut Way,
     (c, entry, noted): (Value, Value, Value),
 ) {
-    let (reg_state, flags) = (x.reg_state, MemFlagsData::trusted());
-    let call = bcx.ins().call_indirect(x.sig, entry, &[reg_state]);
+    let flags = MemFlagsData::trusted();
+    let call = bcx.ins().call_indirect(x.sig, entry, &[x.reg_state]);
     let r = bcx.inst_results(call)[0];
     let (back_blk, other) = (cold_block(bcx), cold_block(bcx));
     super::side_link::emit_branch_on_return(bcx, x, c, r, back_blk, other);
     switch_sealed(bcx, other);
-    let slot = 8 * trace_ran_side_slot(x.window as usize) as i32;
-    bcx.ins().store(flags, noted, reg_state, slot);
-    bcx.ins().return_(&[r]);
+    emit_noted_return(bcx, x, noted, r);
     switch_sealed(bcx, back_blk);
     emit_back_stores(bcx, x, c);
     let ok = bcx
         .ins()
         .load(types::I32, flags, c, SideCell::offsets().loop_ok);
     let ok = bcx.ins().uextend(types::I64, ok);
-    // the relink block takes it from the word with the note, as it does
-    // from the baseline tier's call stub (see `reentry::count_relink`)
-    let noted = bcx.ins().ishl_imm_u(noted, 32);
-    let word = bcx.ins().bor(ok, noted);
-    bcx.ins().store(flags, word, reg_state, slot);
-    let block = match way.relink {
-        Some(b) => b,
-        None => *way.relink.insert(cold_block(bcx)),
-    };
-    bcx.ins().jump(block, &[]);
+    emit_relink_word(bcx, x, way, ok, noted);
 }
 
 /// A new block on the way of a side trace run from the code, which the

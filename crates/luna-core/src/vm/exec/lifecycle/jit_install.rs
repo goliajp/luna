@@ -47,6 +47,8 @@ impl Vm {
     {
         let old = std::mem::replace(&mut self.jit.storage, Box::new(storage));
         self.retired_jit_storage.push(old);
+        let words: *const crate::vm::jit_state::RunWords = &*self.jit.words;
+        self.jit.storage.set_run_words(words as usize);
     }
 
     /// Install the no-op JIT backend and switch the JIT off

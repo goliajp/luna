@@ -20,7 +20,7 @@ use luna_core::__private::{HeapBarriers, TableStores, VmHeap};
 pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
@@ -67,7 +67,7 @@ pub unsafe extern "C" fn luna_jit_table_set_int(t: i64, key: i64, val: i64) -> i
 pub unsafe extern "C" fn luna_jit_table_set_raw(t: i64, key: i64, raw_bits: i64, tag: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)
@@ -119,7 +119,7 @@ pub unsafe extern "C" fn luna_jit_table_set_field(
 ) {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return;
     }
     // SAFETY: `t` is a live table (# Safety)
@@ -213,7 +213,7 @@ pub(crate) unsafe fn barrier_for(
 pub unsafe extern "C" fn luna_jit_table_set_nil(t: i64, key: i64) {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return;
     }
     // SAFETY: `t` is a live table (# Safety)
@@ -248,7 +248,7 @@ pub unsafe extern "C" fn luna_jit_table_set_float_float(
 ) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table (# Safety)

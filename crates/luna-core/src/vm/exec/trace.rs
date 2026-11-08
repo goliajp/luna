@@ -15,7 +15,7 @@ pub(in crate::vm::exec) mod gc_quiet;
 mod link;
 pub(in crate::vm::exec) mod record;
 pub(in crate::vm::exec) mod relink;
-pub(in crate::vm::exec) mod restore;
+pub(crate) mod restore;
 pub(in crate::vm::exec) mod start;
 pub(in crate::vm::exec) mod stats;
 pub(in crate::vm::exec) mod step;

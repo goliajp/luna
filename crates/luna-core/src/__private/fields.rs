@@ -92,7 +92,7 @@ impl VmJitState for Vm {
 
     fn park_jit_error(&mut self, msg: &str) {
         let e = self.runtime_error(msg);
-        self.jit.pending_err = Some(e);
+        self.jit.set_pending_err(Some(e));
     }
 
     fn set_trace_hot_threshold(&mut self, n: u32) {

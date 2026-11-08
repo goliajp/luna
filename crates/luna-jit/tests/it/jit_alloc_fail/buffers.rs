@@ -115,7 +115,10 @@ fn an_accumulator_buffer_the_policy_refuses_leaves_the_string_to_the_interpreter
         assert_eq!(r, want, "{v:?}");
         assert!(refused > 0, "{v:?}: the policy saw no buffer's box");
         assert!(dispatched > 0, "{v:?}: no trace ran");
-        assert!(vm.jit().pending_err.is_none(), "{v:?}: a deopt left parked");
+        assert!(
+            vm.jit().pending_err().is_none(),
+            "{v:?}: a deopt left parked"
+        );
     }
 }
 
@@ -152,7 +155,10 @@ fn handed_over_frames_take_no_memory() {
                 refused.load(Relaxed) > 0,
                 "{v:?} from #{k}: nothing refused"
             );
-            assert!(vm.jit().pending_err.is_none(), "{v:?}: a deopt left parked");
+            assert!(
+                vm.jit().pending_err().is_none(),
+                "{v:?}: a deopt left parked"
+            );
         }
     }
 }

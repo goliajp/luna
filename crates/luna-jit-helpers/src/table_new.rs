@@ -23,7 +23,7 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
     let vm = unsafe { current_jit_vm() };
     // A prior helper in this JIT entry parked a deopt and the trace is
     // leaving at that op: nothing more is made.
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     match vm.jit_new_table() {
@@ -52,7 +52,7 @@ pub unsafe extern "C" fn luna_jit_new_table() -> i64 {
 pub unsafe extern "C" fn luna_jit_new_table_sized(ops: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     let (b, c, k) = unpack_table_ops(ops);
@@ -86,7 +86,7 @@ pub unsafe extern "C" fn luna_jit_chunk_new_table(ops: i64, presized: i64) -> i6
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     let (b, c, k) = unpack_table_ops(ops);
-    if vm.jit().pending_err.is_some() || vm.jit_table_due(b, c, k) {
+    if vm.jit().pending_err().is_some() || vm.jit_table_due(b, c, k) {
         return 0;
     }
     let (b, c, k) = unpack_table_ops(presized);
@@ -121,7 +121,7 @@ pub(crate) fn unpack_table_ops(ops: i64) -> (u32, u32, bool) {
 pub unsafe extern "C" fn luna_jit_table_reserve_list(t: i64, last: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // SAFETY: `t` is a live table of the Vm lent to this call (# Safety), grown in

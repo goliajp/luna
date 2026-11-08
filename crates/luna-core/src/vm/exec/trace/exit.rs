@@ -29,7 +29,7 @@ impl Vm {
         entry_tags: &[u8],
     ) {
         let synced = self.jit.step.synced_exit;
-        if synced || self.jit.gc_exit.is_some() {
+        if synced || self.jit.gc_exit().is_some() {
             self.trace_gc_left(pre_frames, ct.head_pc);
         }
         self.trace_exit_regs(
@@ -89,7 +89,7 @@ impl Vm {
             let failed = self.trace_exit_restore_inner(
                 cl, base_us, ct, raw_ret, src, pre_frames, reg_state, entry_tags,
             );
-            let unmade = self.unmade.any;
+            let unmade = self.unmade.any();
             if let Some(pc) = unmade
                 .then(|| self.trace_exit_unmade_after(base_us, off, failed))
                 .flatten()
@@ -129,7 +129,7 @@ impl Vm {
         // an exit to check for a collection is no guard failing either: it
         // starts no side trace, which would run past the check
         let tier_exit =
-            !child_ran && is_tier_exit(ct, cont_pc) || self.jit.gc_exit.is_some() || synced;
+            !child_ran && is_tier_exit(ct, cont_pc) || self.jit.gc_exit().is_some() || synced;
         let side_trace_should_start =
             self.count_exit_hit(ct, decode_hit_counts, exit_hit_idx, tier_exit, child_ran);
         // after a step the trace made in place, the stack is the
@@ -158,7 +158,7 @@ impl Vm {
             self.trace_restore_back_edge_kinds(base_us, ct, exit_tags_for_pc, keep, reg_state);
         }
         // before anything reads the stack the exit restored
-        let unmade = self.unmade.any;
+        let unmade = self.unmade.any();
         let raise_at = unmade
             .then(|| self.trace_exit_unmade_after(base_us, 0, failed))
             .flatten();

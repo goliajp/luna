@@ -2,6 +2,7 @@
 //! when a side trace is first wired to one of its calling exits, unless the
 //! code was compiled holding their address.
 
+use super::super::cell_plan::CellPlan;
 use super::super::side_cell::{SideCell, side_cells};
 use super::*;
 
@@ -60,6 +61,20 @@ impl CompiledTrace {
                 });
                 let entry = c.entry.get();
                 (!entry.is_null(), optimized.is_some_and(|o| o == entry))
+            })
+            .collect()
+    }
+
+    /// Per side cell: its plan once it holds a side trace's entry.
+    pub fn side_cell_plans(&self) -> Vec<Option<std::sync::Arc<CellPlan>>> {
+        let Some(cells) = self.side_cells.get() else {
+            return vec![None; self.side_cell_exits.len()];
+        };
+        (cells.iter())
+            .map(|c| {
+                (!c.entry.get().is_null())
+                    .then(|| c.plan.get().cloned())
+                    .flatten()
             })
             .collect()
     }

@@ -18,7 +18,7 @@ pub unsafe extern "C" fn luna_jit_op_close(start_offset: i64) -> i64 {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
     // a spill before it failed: the trace leaves at the op with nothing closed
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 1;
     }
     vm.jit_op_close(start_offset as u32)
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn luna_jit_stack_tag(slot_offset: i64) -> i64 {
 pub unsafe extern "C" fn luna_jit_spill_to_stack(slot_offset: i64, tag: i64, raw_bits: i64) {
     // SAFETY: inside an enter_jit window (# Safety) JIT_VM is the Vm lent to this call
     let vm = unsafe { current_jit_vm() };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return;
     }
     let raw = luna_core::__private::RawVal {
@@ -148,7 +148,7 @@ pub unsafe extern "C" fn luna_jit_op_closure(proto_idx: i64) -> i64 {
     // SAFETY: inside an enter_jit window opened with the running closure (# Safety) JIT_VM is the
     // Vm lent to this call and JIT_CL that closure
     let (vm, cl) = unsafe { (current_jit_vm(), current_jit_closure()) };
-    if vm.jit().pending_err.is_some() {
+    if vm.jit().pending_err().is_some() {
         return 0;
     }
     // the trace head's frame is the topmost Lua frame while the trace runs

@@ -76,16 +76,31 @@ pub(crate) fn expanded(
     src: &TierSource,
     ct: &CompiledTrace,
     calls: &lir::Calls,
+    run_words: i64,
 ) -> Option<lir::Lir> {
     let cells = cells_for(ct, calls)?;
-    Some(lir::expand(&src.lir, &src.relocs, cells))
+    Some(lir::expand(
+        &src.lir,
+        &src.relocs,
+        cells,
+        calls.plans(),
+        run_words,
+    ))
+}
+
+/// The address of the run words of the Vm `storage` is.
+#[cfg(feature = "llvm-jit")]
+pub(crate) fn run_words_of(storage: &mut dyn luna_core::__private::JitStorage) -> i64 {
+    let cs = crate::jit_backend::storage::from_storage(storage);
+    cs.expect("the optimizing tier compiles through Cranelift's storage")
+        .run_words
 }
 
 /// The address of `ct`'s first cell when a calling exit calls as `calls`
 /// says.
 fn cells_for(ct: &CompiledTrace, calls: &lir::Calls) -> Option<i64> {
     let any = match calls {
-        lir::Calls::Held(h) => h.contains(&true),
+        lir::Calls::Held(h) => h.iter().any(Option::is_some),
         _ => false,
     };
     any.then(|| ct.side_cells_at().map(|c| c as i64)).flatten()
@@ -106,7 +121,7 @@ pub(crate) fn of<'a>(
 /// The calling exits of `ct`'s code that call its side traces from the
 /// optimizing tier's code: those whose side cell holds one now.
 pub(crate) fn calls_of(ct: &CompiledTrace) -> lir::Calls {
-    lir::Calls::Held(ct.side_cell_states().iter().map(|s| s.0).collect())
+    lir::Calls::Held(ct.side_cell_plans().into())
 }
 
 /// What the trace keeps of `src` to compile again once a side cell left
@@ -116,7 +131,8 @@ pub(crate) fn kept(src: Box<TierSource>, calls: &lir::Calls, stale: bool) -> Opt
     let lir::Calls::Held(held) = calls else {
         return None;
     };
-    held.contains(&false)
+    held.iter()
+        .any(Option::is_none)
         .then(|| TierKept { source: src, stale })
 }
 
@@ -155,12 +171,19 @@ pub(crate) fn clif_tier_up(
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     let at_loop = src.lir.loop_entry.is_some();
     if let Some(o) = src.image.as_ref().and_then(|img| img.optimized(calls)) {
-        // the relocations past the image's: the first side cell
+        // the relocations past the image's: the first side cell, then the
+        // run words
         let cells = cells_for(ct, calls).unwrap_or(0);
-        let at = |k: usize| src.relocs.get(k).map_or(cells, |r| r.1);
+        let rw = cs.run_words;
+        let n = src.relocs.len();
+        let at = |k: usize| {
+            src.relocs
+                .get(k)
+                .map_or(if k == n { cells } else { rw }, |r| r.1)
+        };
         return place::from_image(cs, at, at_loop, &o, ct);
     }
-    let ex = expanded(src, ct, calls);
+    let ex = expanded(src, ct, calls, cs.run_words);
     let (lir, relocs) = of(src, &ex);
     // the loop first, each function in a module of its own
     let looped = match at_loop {

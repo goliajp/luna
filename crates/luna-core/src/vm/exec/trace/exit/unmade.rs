@@ -32,8 +32,9 @@ pub struct UnmadeCounts {
 /// What the exit a trace took left unmade. The Vm keeps it last, away from
 /// the fields the interpreter reads on every op.
 pub(crate) struct ExitUnmade {
-    /// Anything is: the accumulated string, frames or sunk tables.
-    pub(crate) any: bool,
+    /// Anything is: the accumulated string, frames or sunk tables. Written
+    /// through [`Vm::set_unmade_any`], which keeps the Vm's run words.
+    any: bool,
     /// The accumulated string the exit could not make.
     pub(crate) accum: Option<crate::vm::exec::AccumUnmade>,
     /// What the dispatcher made so far.
@@ -49,6 +50,12 @@ pub(crate) struct ExitUnmade {
 }
 
 impl ExitUnmade {
+    /// See `any`.
+    #[inline(always)]
+    pub(crate) fn any(&self) -> bool {
+        self.any
+    }
+
     pub(crate) fn new(mem: MemRef) -> ExitUnmade {
         ExitUnmade {
             any: false,
@@ -66,6 +73,13 @@ pub(super) fn push_root(roots: &mut LVec<Value>, v: Value) {
 }
 
 impl Vm {
+    /// Sets whether the exit left something unmade.
+    #[inline(always)]
+    pub(crate) fn set_unmade_any(&mut self, on: bool) {
+        self.unmade.any = on;
+        (self.jit.words).block(crate::vm::jit_state::BLOCKED_UNMADE, on);
+    }
+
     /// Before a trace of `window` registers is installed: room for what its
     /// exits may leave unmade, and the dispatcher's buffers for a call of
     /// it. A side trace's registers start inside its parent's window, so
@@ -111,7 +125,7 @@ impl Vm {
             push_root(roots, k);
             push_root(roots, v);
         }
-        self.unmade.any = true;
+        self.set_unmade_any(true);
         ((at as i64) << 1) | 1
     }
 
@@ -128,7 +142,7 @@ impl Vm {
         off: usize,
         failed: Option<(LuaError, u32)>,
     ) -> Option<u32> {
-        self.unmade.any = false;
+        self.set_unmade_any(false);
         let drop = failed.is_some();
         // nothing collects until no register holds what the exit wrote for
         // what it could not make

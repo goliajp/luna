@@ -127,14 +127,18 @@ fn link_fill(
     let kept = (tags.iter())
         .map(|t| t.and_then(exit_tag_raw).unwrap_or(LINK_TAG_KEPT))
         .collect();
+    let mut bare = call;
+    bare[0] = SideList::LinkBare as u32;
     let mut lists = cell.link_lists.borrow_mut();
     *lists = (
         Box::new(call),
         list_of(SideList::Check, &check),
         list_of(SideList::Store, &stores_at_relink(target, &tags)),
         kept,
+        Box::new(bare),
     );
     cell.link.set(lists.0.as_ptr().cast());
+    cell.link_bare.set(lists.4.as_ptr().cast());
     drop(lists);
     cell.link_pc.set(target.head_pc);
     Fill::Linked

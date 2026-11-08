@@ -8,7 +8,7 @@
 //! code up the next time the trace is entered (see
 //! `TraceCompiler::tier_up`).
 
-use super::tier_source::{TierSource, calls_of, expanded, kept, of};
+use super::tier_source::{TierSource, calls_of, expanded, kept, of, run_words_of};
 use super::*;
 use luna_core::__private::TierKept;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -110,7 +110,7 @@ pub(super) fn compile_trace_llvm(
     // every calling exit calls: the cells are made now
     let ex = lir.relinks.is_some().then(|| {
         let cells = luna_core::__private::side_cells(compiled.side_cell_exits.len());
-        let l = lir::expand(&lir, &lir.relocs, cells.as_ptr() as i64);
+        let l = lir::expand(&lir, &lir.relocs, cells.as_ptr() as i64, &[], 0);
         compiled.side_cells = Some(cells);
         l
     });
@@ -166,7 +166,7 @@ pub(crate) fn tier_up_llvm(
     };
     let calls = calls_of(ct);
     let Some(delay) = delay else {
-        let ex = expanded(&source, ct, &calls);
+        let ex = expanded(&source, ct, &calls, run_words_of(storage));
         let entry = install_tier(storage, ct, compile_tier(of(&source, &ex), &calls));
         if let Some(e) = entry {
             super::code_dump::dump("tier-up-llvm", ct.head_pc(), e as *const u8);
@@ -246,7 +246,7 @@ fn hand_over(
 ) {
     let (ready, done) = (p.ready.clone(), p.done.clone());
     let calls = calls_of(ct);
-    let job = match expanded(&src, ct, &calls) {
+    let job = match expanded(&src, ct, &calls, run_words_of(storage)) {
         Some(l) => (Arc::new(l), None),
         None => (src.lir.clone(), Some(src.relocs.clone())),
     };

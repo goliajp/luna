@@ -42,7 +42,7 @@ impl Vm {
         }
         let call: [u32; 3] = cell.link_lists.borrow().0.get(3..6)?.try_into().ok()?;
         self.jit.link_base = self.jit.link_trail.len();
-        let target = self.link_take(&call, regs)?;
+        let target = self.link_take(&call, regs, false)?;
         self.jit.counters.links_redispatched += 1;
         Some(self.trace_entry_counted(&target, proto.call_hot_count.get()))
     }
@@ -91,7 +91,7 @@ impl Vm {
         // interpreter goes on, as for any guard, and it does the op itself.
         // The mark stays up while the exit is restored (no side trace runs
         // from it).
-        if self.jit.pending_err.is_some() {
+        if self.jit.pending_err().is_some() {
             self.jit.counters.deopt += 1;
             if downrec {
                 self.jit.counters.downrec_deopt += 1;

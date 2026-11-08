@@ -18,7 +18,7 @@ impl Vm {
         (off, base, max_stack): (usize, usize, usize),
         reg_state: &[i64],
     ) -> Option<(LuaError, u32)> {
-        if !self.unmade.any || self.unmade.frames.is_none() || site_id == 0 {
+        if !self.unmade.any() || self.unmade.frames.is_none() || site_id == 0 {
             return None;
         }
         let view = UnmadeFramesView::of(trace, site_id, tags, off, base, max_stack);

@@ -30,8 +30,13 @@ pub(super) fn emit_relink_block<E: Emit>(lw: &mut Lower<E>, pl: &Plan<'_>) -> Op
 /// instructions as lowered with them left to the expansion and made ready
 /// to take more (see `super::super::lir::expand`): the two variables the
 /// relink block sets cleared on entry, each calling exit on to the call
-/// block, then the call block, the relink block and the gate.
-pub(in crate::jit_backend::trace) fn expand_calls(l: &mut lir::Lir, x: &Relinks) {
+/// block (or its own, with its cell's plan in `plans`), then the call
+/// block, the relink block and the gate.
+pub(in crate::jit_backend::trace) fn expand_calls(
+    l: &mut lir::Lir,
+    x: &Relinks,
+    plans: &[Option<std::sync::Arc<luna_core::__private::CellPlan>>],
+) {
     let jump = l.reopen(x.entry);
     let z = l.ins().iconst(types::I64, 0);
     l.def_var(x.loop_ok, z);
@@ -41,7 +46,12 @@ pub(in crate::jit_backend::trace) fn expand_calls(l: &mut lir::Lir, x: &Relinks)
     for (n, (&b, &tags_idx)) in x.exits.iter().zip(x.cells.iter()).enumerate() {
         let ret = l.reopen(b);
         let ret = l.returned(b, ret);
-        super::side_call::emit_exit_call(l, &mut way, n as u32, ret, tags_idx);
+        match plans.get(n).and_then(Option::as_ref) {
+            Some(p) => {
+                super::side_plan::emit_planned_exit(l, x, &mut way, n as u32, (ret, tags_idx), p)
+            }
+            None => super::side_call::emit_exit_call(l, &mut way, n as u32, ret, tags_idx),
+        }
     }
     if let Some(g) = x.gate {
         l.reopen(g.block);

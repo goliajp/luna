@@ -12,6 +12,7 @@ use crate::runtime::function::Proto;
 use crate::vm::isa::Inst;
 
 pub(crate) mod adopt;
+pub(crate) mod cell_plan;
 pub(crate) mod compiled;
 mod compiled_aot;
 pub(crate) mod content;

@@ -71,7 +71,7 @@ fn new_table_writes_non_null_table_ptr_into_dst() {
         state[0] != 0,
         "NewTable must return a non-null Gc<Table> ptr"
     );
-    assert!(vm.jit().pending_err.is_none(), "no deopt expected");
+    assert!(vm.jit().pending_err().is_none(), "no deopt expected");
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn set_i_then_get_i_roundtrips_through_a_fresh_table() {
     // register (`NewTable`) before reading it
     let r = unsafe { run_trace(&mut vm, &ct, &mut state) };
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 0);
-    assert!(vm.jit().pending_err.is_none(), "no metatable → no deopt");
+    assert!(vm.jit().pending_err().is_none(), "no metatable → no deopt");
     assert_eq!(state[3], 42, "Get must see the value Set wrote");
 }
 
@@ -176,7 +176,7 @@ fn metatable_on_set_i_exits_at_the_store() {
     let r = unsafe { run_trace(&mut vm, &ct, &mut state) };
 
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
-    assert!(vm.jit().pending_err.is_none());
+    assert!(vm.jit().pending_err().is_none());
     assert!(matches!(
         plain.get_int(1),
         luna_core::runtime::Value::Int(7)
@@ -207,7 +207,7 @@ fn metatable_on_get_i_parks_pending_err() {
     // collector but alive because nothing collects during the test
     unsafe { run_trace(&mut vm, &ct, &mut state) };
 
-    assert!(vm.jit().pending_err.is_some(), "GetI deopt on metatable");
+    assert!(vm.jit().pending_err().is_some(), "GetI deopt on metatable");
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn metatable_on_len_exits_at_the_len() {
     let r = unsafe { run_trace(&mut vm, &ct, &mut state) };
 
     assert_eq!(crate::jit_backend::trace::exit_pc(r), 1);
-    assert!(vm.jit().pending_err.is_none());
+    assert!(vm.jit().pending_err().is_none());
     assert!(matches!(
         plain.get_int(1),
         luna_core::runtime::Value::Int(7)

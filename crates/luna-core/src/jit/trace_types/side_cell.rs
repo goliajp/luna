@@ -9,6 +9,7 @@
 //! on one thread at a time, and moving it to another thread orders those
 //! writes before the code's reads there, as for the tier-up loop cell.
 
+use super::cell_plan::CellPlan;
 use super::*;
 
 /// One exit's cell (see the module comment). The code reads the fields at
@@ -50,9 +51,23 @@ pub struct SideCell {
     /// What entering the linked trace takes: the list `link` points at, the
     /// checks (as `check`'s), the stores (as `back`'s), and each slot's
     /// entry tag as the linked trace is entered ([`LINK_TAG_KEPT`] where it
-    /// is the one the side trace's parent was entered with).
+    /// is the one the side trace's parent was entered with), and the list
+    /// `link_bare` points at.
     pub(crate) link_lists: TRefLock<LinkLists>,
+    /// The list entering the linked trace once the code made the checks
+    /// and the stores of the link itself (in `link_lists`); null when none.
+    pub(crate) link_bare: TCellPtr,
+    /// What the lists say, for the optimizing tier to compile in; set when
+    /// the cell is filled, never after.
+    pub(crate) plan: PlanOnce,
 }
+
+/// A cell's plan once set.
+#[cfg(not(feature = "send"))]
+pub(crate) type PlanOnce = std::cell::OnceCell<std::sync::Arc<CellPlan>>;
+/// A cell's plan once set (send build).
+#[cfg(feature = "send")]
+pub(crate) type PlanOnce = std::sync::OnceLock<std::sync::Arc<CellPlan>>;
 
 /// The links compiled code takes in a row before it leaves the next to the
 /// dispatcher: each takes a native frame of the linked trace's code.
@@ -83,10 +98,12 @@ pub struct SideCellOffsets {
     pub link_pc: i32,
     /// `SideCell::link`'s.
     pub link: i32,
+    /// `SideCell::link_bare`'s.
+    pub link_bare: i32,
 }
 
 /// See [`SideCell::link_lists`].
-pub(crate) type LinkLists = (Box<[u32]>, Box<[u32]>, Box<[u32]>, Box<[u8]>);
+pub(crate) type LinkLists = (Box<[u32]>, Box<[u32]>, Box<[u32]>, Box<[u8]>, Box<[u32]>);
 
 impl SideCell {
     /// An empty cell: no side trace runs from it.
@@ -104,6 +121,8 @@ impl SideCell {
             link_pc: TCellU32::new(u32::MAX),
             link: TCellPtr::null(),
             link_lists: TRefLock::new(Default::default()),
+            link_bare: TCellPtr::null(),
+            plan: PlanOnce::new(),
         }
     }
 
@@ -119,7 +138,13 @@ impl SideCell {
             relinks: std::mem::offset_of!(SideCell, relinks) as i32,
             link_pc: std::mem::offset_of!(SideCell, link_pc) as i32,
             link: std::mem::offset_of!(SideCell, link) as i32,
+            link_bare: std::mem::offset_of!(SideCell, link_bare) as i32,
         }
+    }
+
+    /// The cell's plan, once it is filled.
+    pub fn plan(&self) -> Option<&std::sync::Arc<CellPlan>> {
+        self.plan.get()
     }
 
     /// The times the side trace went on in the parent's loop from here.
