@@ -40,7 +40,7 @@ impl Vm {
         let settings = self.jit.recording_settings();
         // a loop head's trace brings those of the function's other loops
         let ahead = side_parent.is_none() && !call_triggered && !proto.trace_ahead.borrow().asked;
-        let adopted = {
+        let mut adopted = {
             let jit = &mut self.jit;
             jit.storage.claim(self.jit_owner_id);
             let req = crate::jit::trace::AdoptRequest {
@@ -61,9 +61,12 @@ impl Vm {
         if ahead && !adopted.is_empty() {
             proto.trace_ahead.borrow_mut().asked = true;
         }
-        let (later, now): (Vec<_>, Vec<_>) = adopted.into_iter().partition(|a| a.ahead);
-        self.trace_hold_ahead(proto, later);
-        self.trace_install_adopted(proto, now)
+        // the backend gives those of other heads last
+        if let Some(i) = adopted.iter().position(|a| a.ahead) {
+            let later = adopted.split_off(i);
+            self.trace_hold_ahead(proto, later);
+        }
+        self.trace_install_adopted(proto, adopted)
     }
 
     /// Installs the traces `adopted`, taken up for code of `proto`, each
