@@ -105,12 +105,17 @@ fn boxed_t_cell_ptr_matches_boxed_cell_ptr() {
 /// count of trace heads given up (8 bytes, making it exactly 8192), and by
 /// three more when the Vm took, at its end, what a trace's exit leaves for
 /// the dispatcher to make outside compiled code (the accumulated string,
-/// the frames and sunk tables, the room their values are kept in).
+/// the frames and sunk tables, the room their values are kept in). Raised
+/// by two more when side traces came to run from their parent's code and
+/// link to the trace they end at: the JIT took the trail of links compiled
+/// code made and where the innermost dispatch's start (40 bytes), and its
+/// counters the side cells' outcomes, the links, and the traces compiled
+/// again for side cells (96 bytes), making it 8552 on 64-bit targets.
 #[test]
 fn vm_size_default_features_stays_modest() {
     let sz = std::mem::size_of::<luna_core::vm::Vm>();
     assert!(
-        sz < 8448,
+        sz < 8576,
         "Vm size grew unexpectedly under default features: {sz} bytes"
     );
 }
