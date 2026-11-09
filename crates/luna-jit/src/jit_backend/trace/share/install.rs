@@ -62,7 +62,7 @@ pub(super) fn install(
         // content against the tags and window the image's metadata gives
         // `ct`, placed above with this Vm's addresses and `ct`'s cells; the
         // tier source is made above for it; no side-trace cell is set yet
-        trace: unsafe { CompiledTrace::from_parts(ct) },
+        trace: TArc::new(unsafe { CompiledTrace::from_parts(ct) }),
         side_parent: match (img.side_parent, req.side_parent) {
             (None, _) => None,
             // the side trace asked for: its parent is the one asked about

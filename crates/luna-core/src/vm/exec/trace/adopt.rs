@@ -86,8 +86,9 @@ impl Vm {
             }
             any = true;
             self.tally_compiled_trace(&ct);
-            let wired = self.wire_side_trace(&mut ct, a.side_parent);
-            let ct = cache_trace(proto, ct);
+            let only = crate::jit::send_compat::TArc::get_mut(&mut ct);
+            let wired = self.wire_side_trace(only.expect("held by no other yet"), a.side_parent);
+            let ct = super::cache::cache_shared(proto, ct);
             self.trace_hold(wired, ct, proto);
             keep_inlined(proto, a.inlined);
             self.heap.barrier_back(proto);
