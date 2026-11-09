@@ -233,5 +233,5 @@ pub struct CompiledTraceParts {
     /// The tags the head frame's registers have at the back edge into the
     /// loop the optimizing tier compiles, for a trace with such a loop: a
     /// side trace leaving them so may go on in that loop.
-    pub loop_tags: Option<Box<[ExitTag]>>,
+    pub loop_tags: Option<std::sync::Arc<[ExitTag]>>,
 }

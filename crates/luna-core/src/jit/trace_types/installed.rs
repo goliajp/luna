@@ -136,7 +136,7 @@ pub struct CompiledTrace {
     /// See [`CompiledTraceParts::link_pc`].
     pub(crate) link_pc: Option<u32>,
     /// See [`CompiledTraceParts::loop_tags`].
-    pub(crate) loop_tags: Option<Box<[ExitTag]>>,
+    pub(crate) loop_tags: Option<std::sync::Arc<[ExitTag]>>,
     /// The code counts in this call's word of `reg_state`, not in
     /// `tier_up`'s cell: it has a `tier_up` and its plans count
     /// [`plans::PassCount::PerCall`] (see `frame::trace_count_slot`).

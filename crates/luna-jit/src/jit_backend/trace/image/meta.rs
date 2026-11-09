@@ -31,7 +31,7 @@ pub(crate) struct Meta {
     /// The typed exit of each side cell.
     side_cell_exits: std::sync::Arc<[u32]>,
     link_pc: Option<u32>,
-    loop_tags: Option<Box<[ExitTag]>>,
+    loop_tags: Option<std::sync::Arc<[ExitTag]>>,
 }
 
 impl Meta {
