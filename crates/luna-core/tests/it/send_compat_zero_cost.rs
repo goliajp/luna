@@ -111,11 +111,16 @@ fn boxed_t_cell_ptr_matches_boxed_cell_ptr() {
 /// code made and where the innermost dispatch's start (40 bytes), and its
 /// counters the side cells' outcomes, the links, and the traces compiled
 /// again for side cells (96 bytes), making it 8552 on 64-bit targets.
+/// Raised by one more when the baseline tier's call stub came to take
+/// links itself: the counters took the links it took and why it handed
+/// the rest to the Vm, the traces held until the outermost run ended and
+/// the loop heads given a trace before they were reached, while the trail
+/// of links moved behind a box, making it 8632.
 #[test]
 fn vm_size_default_features_stays_modest() {
     let sz = std::mem::size_of::<luna_core::vm::Vm>();
     assert!(
-        sz < 8576,
+        sz < 8640,
         "Vm size grew unexpectedly under default features: {sz} bytes"
     );
 }
