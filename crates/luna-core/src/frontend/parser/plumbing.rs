@@ -186,6 +186,7 @@ impl<'s> Parser<'s> {
         }
     }
 
+    #[inline]
     pub(super) fn enter(&mut self) -> Result<(), SyntaxError> {
         self.depth += 1;
         // 5.1-5.3 `enterlevel` fails past the limit; 5.4+ `luaE_incCstack`
