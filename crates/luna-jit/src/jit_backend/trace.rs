@@ -77,6 +77,7 @@ mod block_params;
 mod code_dump;
 mod compile;
 mod jit_module;
+mod place_offset;
 mod tiers;
 pub(crate) use share::adopt as adopt_traces;
 pub(crate) use tiers::tier_up_trace;

@@ -148,7 +148,8 @@ pub(crate) fn define_aligned<M: Module>(
         .iter()
         .filter(|e| e.1 <= e.0)
         .max_by_key(|e| e.0);
-    let lead = head.map_or(0, |&(_, to)| (LOOP_ALIGN - to % LOOP_ALIGN) % LOOP_ALIGN);
+    let lead = head.map_or(0, |&(_, to)| (LOOP_ALIGN - to % LOOP_ALIGN) % LOOP_ALIGN)
+        + super::place_offset::place_offset() as u32;
     let mut bytes = Vec::with_capacity(lead as usize + cc.code_buffer().len());
     nops(&mut bytes, lead as usize);
     bytes.extend_from_slice(cc.code_buffer());
