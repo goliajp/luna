@@ -89,7 +89,7 @@ impl Vm {
 /// entry to its code; what became of the cell is counted in `counts`.
 /// A cached trace that is no side trace (`wired` is `None`) is linked to
 /// by the side traces of `proto` that end at its head (see
-/// `relink::link_late`). Returns the traces whose cells now hand a side
+/// `relink::link_late`; the caller checks `relink::may_link_late`). Returns the traces whose cells now hand a side
 /// trace to their code.
 pub(in crate::vm::exec) fn hold_side_trace(
     wired: Option<Wired>,

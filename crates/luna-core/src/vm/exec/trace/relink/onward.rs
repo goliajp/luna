@@ -111,11 +111,30 @@ fn link_plan(
     }
 }
 
-/// Links, now that `target` is cached in `proto`, the side traces of the
-/// prototype's traces that end at its head and whose cells were left empty
-/// because no trace was there when they were wired: each such cell moves
-/// from [`Fill::NotHead`] in `counts` to what became of it now. The traces
-/// whose code now runs such a side trace go into `filled`.
+/// A trace of a prototype that holds side traces: only once one was wired
+/// to it.
+fn holds_side_traces(p: &TArc<CompiledTrace>) -> bool {
+    p.has_any_side_wired.get() && p.has_side_cells()
+}
+
+/// Whether [`link_late`] may find a cell to link to `target`, cached now in
+/// `proto`: a side trace links only to a trace the dispatcher enters, and
+/// only a trace holding side traces has a cell to fill.
+pub(in crate::vm::exec) fn may_link_late(
+    target: &CompiledTrace,
+    proto: &crate::runtime::Proto,
+) -> bool {
+    target.dispatchable
+        && target.downrec_link.is_none()
+        && proto.traces.borrow().iter().any(holds_side_traces)
+}
+
+/// Links, now that `target` is cached in `proto` (where [`may_link_late`]),
+/// the side traces of the prototype's traces that end at its head and
+/// whose cells were left empty because no trace was there when they were
+/// wired: each such cell moves from [`Fill::NotHead`] in `counts` to what
+/// became of it now. The traces whose code now runs such a side trace go
+/// into `filled`.
 pub(in crate::vm::exec) fn link_late(
     target: &CompiledTrace,
     proto: &crate::runtime::Proto,
@@ -123,16 +142,8 @@ pub(in crate::vm::exec) fn link_late(
     filled: &mut Vec<TArc<CompiledTrace>>,
     words: &crate::vm::jit_state::RunWords,
 ) {
-    // a trace holds side traces only once one was wired to it
-    let wired = |p: &TArc<CompiledTrace>| p.has_any_side_wired.get() && p.has_side_cells();
-    if !target.dispatchable
-        || target.downrec_link.is_some()
-        || !proto.traces.borrow().iter().any(wired)
-    {
-        return;
-    }
     let waiting: Vec<_> = (proto.traces.borrow().iter())
-        .filter(|p| wired(p))
+        .filter(|p| holds_side_traces(p))
         .flat_map(|p| {
             let held = p.side_children.borrow();
             (p.side_cell_exits().iter())

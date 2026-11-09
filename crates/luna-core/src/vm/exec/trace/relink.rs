@@ -22,7 +22,7 @@ mod enter;
 mod list;
 mod onward;
 
-pub(in crate::vm::exec) use onward::link_late;
+pub(in crate::vm::exec) use onward::{link_late, may_link_late};
 
 use crate::jit::trace_types::cell_plan::{CellPlan, LinkPlan};
 use list::{SideList, list_of};

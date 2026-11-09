@@ -41,6 +41,10 @@ impl Vm {
             self.jit.counters.held_later += 1;
             return;
         }
+        // a trace cached with no parent only fills cells waiting for it
+        if wired.is_none() && !super::relink::may_link_late(&trace, &proto) {
+            return;
+        }
         let words = &self.jit.words;
         for p in hold_side_trace(wired, trace, &mut self.jit.counters.relink, &proto, words) {
             self.trace_compile_calls(&p);
