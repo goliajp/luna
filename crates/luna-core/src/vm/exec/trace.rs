@@ -13,6 +13,7 @@ mod downrec;
 pub(in crate::vm::exec) mod exit;
 pub(in crate::vm::exec) mod fail_memory;
 pub(in crate::vm::exec) mod gc_quiet;
+mod hold_later;
 mod link;
 pub(in crate::vm::exec) mod record;
 pub(in crate::vm::exec) mod relink;

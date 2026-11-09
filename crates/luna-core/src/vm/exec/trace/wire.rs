@@ -80,9 +80,6 @@ impl Vm {
             return None;
         }
         self.jit.counters.side_trace_compiled += 1;
-        // the dispatcher decodes the parent's exits for a side trace to run
-        // from now on
-        parent_ct.has_any_side_wired.set(true);
         Some((parent_ct.clone(), parent_exit_idx as u32))
     }
 }
@@ -104,6 +101,9 @@ pub(in crate::vm::exec) fn hold_side_trace(
     let mut filled = Vec::new();
     if let Some((parent, exit)) = wired {
         let exit = exit as usize;
+        // the dispatcher decodes the parent's exits for a side trace to run
+        // from now on
+        parent.has_any_side_wired.set(true);
         let mut held = parent.side_children.borrow_mut();
         // an exit is wired once (`has_side_trace`): its cell never hands
         // over another child's code

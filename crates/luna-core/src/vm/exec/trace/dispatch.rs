@@ -145,6 +145,9 @@ impl Vm {
         {
             self.trace_gc_exit_check(op_pc);
         }
+        if !self.jit.step.held_later.is_empty() {
+            self.trace_hold_later();
+        }
         ran
     }
 }
