@@ -24,7 +24,7 @@ struct Bails {
 /// `slow` (the Vm's way) when the cell has no words for it or a check fails.
 /// `k` as in the stub; the argument registers and scratch are free.
 pub(super) fn emit<M: Masm>(m: &mut M, k: &[u8], slow: Label) {
-    let (a, at) = (M::INT_ARGS, SideCell::offsets());
+    let (a, at, lf) = (M::INT_ARGS, SideCell::offsets(), link_fast_offsets());
     let b = Bails {
         blocked: m.new_label(),
         quiet: m.new_label(),
@@ -36,23 +36,19 @@ pub(super) fn emit<M: Masm>(m: &mut M, k: &[u8], slow: Label) {
     m.load(Width::B8, a[0], k[1], at.link_fast);
     m.branch_reg(a[0], false, slow);
     emit_run_checks(m, k, &b);
-    emit_slot_checks(m, b.check);
+    emit_slot_checks(m, b.check, (lf.checks, lf.items));
     emit_move_due(m, k, b.due);
     emit_trail(m, k);
     emit_stores(m, k);
     emit_counts(m, k);
     emit_enter(m, k);
     let why = [b.blocked, b.quiet, b.deep, b.full, b.check, b.due];
+    let (t, left) = (M::SCRATCH[0], RunWords::offsets().stub_left);
     for (n, l) in (1..).zip(why) {
         m.bind(l);
         m.load(Width::B8, a[1], k[1], at.words);
-        m.mov_imm(M::SCRATCH[0], n);
-        m.store(
-            Width::B4,
-            M::SCRATCH[0],
-            a[1],
-            RunWords::offsets().stub_left,
-        );
+        m.mov_imm(t, n);
+        m.store(Width::B4, t, a[1], left);
         m.jmp(slow);
     }
 }
@@ -86,21 +82,22 @@ fn emit_run_checks<M: Masm>(m: &mut M, k: &[u8], b: &Bails) {
     m.jcc(Cond::Uge, b.full);
 }
 
-/// The stack's slots the linked trace checks on entry, each holding the
-/// byte it checks: else on to `fail`. The words in the first argument
-/// register, the run words in the second.
-fn emit_slot_checks<M: Masm>(m: &mut M, fail: Label) {
-    let (a, lf) = (M::INT_ARGS, link_fast_offsets());
+/// The stack's slots a trace checks on entry, each holding the byte it
+/// checks: else on to `fail`. The words in the first argument register,
+/// with the number of pairs at byte `count` and the pairs from byte
+/// `items`; the run words in the second.
+pub(super) fn emit_slot_checks<M: Masm>(m: &mut M, fail: Label, (count, items): (i32, i32)) {
+    let a = M::INT_ARGS;
     let (t, u, p, w, f, e) = (M::SCRATCH[0], M::SCRATCH[1], a[0], a[1], a[2], a[3]);
     let (top, done) = (m.new_label(), m.new_label());
-    m.load(Width::B4, e, p, lf.checks);
+    m.load(Width::B4, e, p, count);
     m.branch_reg(e, false, done);
     frame(m, w, f, t);
     m.bind(top);
-    m.load(Width::B4, t, p, lf.items);
+    m.load(Width::B4, t, p, items);
     m.alu(Alu::Add, true, t, t, f);
     m.load(Width::B1, t, t, 0);
-    m.load(Width::B4, u, p, lf.items + 4);
+    m.load(Width::B4, u, p, items + 4);
     m.cmp(false, t, u);
     m.jcc(Cond::Ne, fail);
     m.alu_imm(Alu::Add, true, p, p, 8);
@@ -168,7 +165,7 @@ fn emit_trail<M: Masm>(m: &mut M, k: &[u8]) {
 
 /// The registers stored to the frame's slots on the stack, as the exit's
 /// write-back writes them.
-fn emit_stores<M: Masm>(m: &mut M, k: &[u8]) {
+pub(super) fn emit_stores<M: Masm>(m: &mut M, k: &[u8]) {
     let (a, at, lf) = (M::INT_ARGS, SideCell::offsets(), link_fast_offsets());
     let (t, u, p, w, f, e) = (M::SCRATCH[0], M::SCRATCH[1], a[0], a[1], a[2], a[3]);
     let (top, next, word, done) = (m.new_label(), m.new_label(), m.new_label(), m.new_label());
@@ -274,27 +271,4 @@ fn emit_enter<M: Masm>(m: &mut M, k: &[u8]) {
     m.mov(a[0], k[0]);
     m.call_reg(M::CALL_TARGET);
     m.epilogue_ret();
-}
-
-/// The stub's stores alone, as a function of the `TraceFn` ABI whose
-/// `reg_state` is the buffer it is handed and whose cell is at `cell`; it
-/// returns 0. For tests of the stores against the exit's write-back.
-#[cfg(all(
-    test,
-    any(target_arch = "x86_64", all(target_arch = "aarch64", not(windows)))
-))]
-pub(in crate::jit_backend::trace) fn stores_alone(cell: usize) -> Vec<u8> {
-    #[cfg(target_arch = "x86_64")]
-    type Host = super::super::x64::X64;
-    #[cfg(target_arch = "aarch64")]
-    type Host = super::super::a64::A64;
-    let mut m = Host::new(super::super::cg::Bufs::default());
-    let k = &<Host as Masm>::INT.callee[..6];
-    m.prologue(k, &[], 16);
-    m.mov(k[0], <Host as Masm>::INT_ARGS[0]);
-    m.mov_imm(k[1], cell as i64);
-    emit_stores(&mut m, k);
-    m.mov_imm(<Host as Masm>::RET, 0);
-    m.epilogue_ret();
-    m.finish().bytes
 }

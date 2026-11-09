@@ -16,7 +16,8 @@ pub use crate::jit::trace_types::content::{ProtoContent, hash64};
 pub use crate::jit::trace_types::installed::CompiledTrace;
 pub use crate::jit::trace_types::installed::plans::{PassCount, TracePlans, kept_past_back_edge};
 pub use crate::jit::trace_types::link_fast::{
-    LinkFastOffsets, STORE_BOOL, STORE_TAG, STORE_WORD, offsets as link_fast_offsets, store_items,
+    CHECK_COUNT, CHECK_ITEMS, LinkFastOffsets, STORE_BOOL, STORE_TAG, STORE_WORD,
+    offsets as link_fast_offsets, store_items,
 };
 pub use crate::jit::trace_types::options::CompileOptions;
 pub use crate::jit::trace_types::record::{FieldIcSnapshot, RecordedOp, TraceRecord};

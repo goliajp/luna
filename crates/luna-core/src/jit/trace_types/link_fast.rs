@@ -17,6 +17,29 @@ pub const STORE_BOOL: u32 = 1;
 /// A store of the tag byte and the register as the payload.
 pub const STORE_WORD: u32 = 2;
 
+/// The check pairs of `checks` (`(slot, entry tag)`, as a cell plan's):
+/// one for a slot's tag byte, and one more for a boolean's payload byte.
+pub fn check_items(checks: &[(u32, u8)]) -> Vec<u32> {
+    use super::cell_plan::{VALUE_PAYLOAD, VALUE_SIZE, slot_check};
+    let mut out = Vec::new();
+    for &(slot, raw) in checks {
+        let at = slot * VALUE_SIZE as u32;
+        let (tag, truth) = slot_check(raw);
+        out.extend([at, u32::from(tag)]);
+        if let Some(t) = truth {
+            out.extend([at + VALUE_PAYLOAD as u32, u32::from(t)]);
+        }
+    }
+    out
+}
+
+/// Where the number of pairs is in the words a cell's `check_fast` points
+/// at, in bytes: past a list for `luna_jit_side_cell_list` (of the kind
+/// that panics, for a debug build's stub to report a disagreement).
+pub const CHECK_COUNT: i32 = 12;
+/// Where the pairs start in those words, in bytes.
+pub const CHECK_ITEMS: i32 = 16;
+
 /// The store triples of `stores` (`(slot, exit tag)`, as a cell plan's),
 /// the slots the exit leaves left out.
 pub fn store_items(stores: &[(u32, u8)]) -> Vec<u32> {
