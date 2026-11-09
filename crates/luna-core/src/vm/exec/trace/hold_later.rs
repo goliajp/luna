@@ -1,8 +1,13 @@
 //! Side traces made while a trace runs, held by their parents only once
 //! none does. A trace no side trace is wired to runs without what links
-//! and side cells need (see `dispatch::run`), so none may be wired to it,
-//! nor a cell of its filled, while it runs, as a run of the interpreter
-//! its code calls into could do.
+//! and side cells need (see `dispatch::run`): its dispatch neither clears
+//! the word its code notes a side trace run in nor writes the frame's run
+//! words, so none may be wired to it, nor a cell of its filled, while it
+//! runs. A trace's code gets back into the interpreter through a
+//! collection step that runs finalizers; the trace leaves right after such
+//! a step, so its code does not reach a cell filled meanwhile, but its
+//! dispatch would decode its return as the code of a trace with a side
+//! trace wired, reading that word.
 
 use super::wire::{Wired, hold_side_trace};
 use super::*;
