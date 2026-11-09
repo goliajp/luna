@@ -18,7 +18,7 @@ use crate::vm::error::LuaError;
 mod counters;
 mod run_words;
 pub use counters::JitCounters;
-pub(crate) use run_words::BLOCKED_UNMADE;
+pub(crate) use run_words::{BLOCKED_HELD, BLOCKED_UNMADE};
 pub use run_words::{RunWords, RunWordsOffsets};
 
 /// JIT-specific Vm state. See module docs.

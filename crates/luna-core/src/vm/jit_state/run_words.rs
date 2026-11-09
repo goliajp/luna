@@ -55,6 +55,9 @@ pub struct RunWords {
     /// Set when the cells filled from now on leave each link to the Vm,
     /// not to the stub (a test's switch; the code does not read it).
     pub(crate) stub_links_off: TCellBool,
+    /// Set while a test holds `quiet` up: a pause ending leaves it up
+    /// (the code does not read it).
+    pub(crate) quiet_held: TCellBool,
     /// What `trail_at` points at: as long as the room, its length unused.
     trail: LVec<[u32; 3]>,
 }
@@ -63,6 +66,9 @@ pub struct RunWords {
 pub(crate) const BLOCKED_GC_EXIT: usize = 0;
 /// In [`RunWords::blocked`]: an error is parked for the dispatcher.
 pub(crate) const BLOCKED_PENDING_ERR: usize = 1;
+/// In [`RunWords::blocked`]: a test holds the byte up, with nothing for
+/// the dispatcher to do (see `__private::hold_run_words_blocked`).
+pub(crate) const BLOCKED_HELD: usize = 3;
 /// In [`RunWords::blocked`]: the exit left something unmade.
 pub(crate) const BLOCKED_UNMADE: usize = 2;
 
@@ -111,6 +117,7 @@ impl RunWords {
             links_stub: TCellU32::new(0),
             stub_left: TCellU32::new(0),
             stub_links_off: TCellBool::new(false),
+            quiet_held: TCellBool::new(false),
             trail: LVec::new(mem),
         }
     }
@@ -191,6 +198,5 @@ impl super::JitState {
         b[BLOCKED_GC_EXIT].get() == self.gc_exit.is_some()
             && b[BLOCKED_PENDING_ERR].get() == self.pending_err.is_some()
             && b[BLOCKED_UNMADE].get() == unmade
-            && !b[3].get()
     }
 }

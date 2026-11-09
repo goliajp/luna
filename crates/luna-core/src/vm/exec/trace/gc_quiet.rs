@@ -69,7 +69,8 @@ impl Vm {
     /// Ends the pause: the loop counts are back.
     #[cold]
     pub(in crate::vm::exec) fn gc_quiet_end(&mut self) {
-        self.jit.words.quiet.set(0);
+        let held = self.jit.words.quiet_held.get();
+        self.jit.words.quiet.set(u32::from(held));
         let step = &mut self.jit.step;
         step.quiet = None;
         let counts = step.parked_hot.take().expect("parked during a pause");
