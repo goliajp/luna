@@ -1,48 +1,35 @@
-//! The register tags of a trace's side exits, held in one block.
+//! The register tags of a trace's side exits.
 
 use super::ExitTag;
 
 /// The register tags each typed (or each inline) side exit of a trace
-/// restores, all in one block: exit `i` resumes at [`cont_pc(i)`](Self::cont_pc) and restores
+/// restores: exit `i` resumes at [`cont_pc(i)`](Self::cont_pc) and restores
 /// through [`tags(i)`](Self::tags).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExitTagTable {
-    /// `(cont_pc, start, end)` per exit: its tags are `tags[start..end]`
-    /// (both bounds kept, so the dispatcher reads them in one go).
-    index: Box<[(u32, u32, u32)]>,
-    tags: Box<[ExitTag]>,
+    /// `(cont_pc, tags)` per exit, each exit's tags a slice of their own:
+    /// the dispatcher finds them with one bounds check, at every exit.
+    exits: Box<[(u32, Box<[ExitTag]>)]>,
 }
 
 impl ExitTagTable {
     /// The table of `exits`, each `(cont_pc, tags)`, in order.
-    ///
-    /// # Panics
-    /// If the tags of all exits together number more than `u32::MAX`.
     pub fn from_exits<'a>(exits: impl IntoIterator<Item = (u32, &'a [ExitTag])>) -> Self {
-        let mut index = Vec::new();
-        let mut tags = Vec::new();
-        for (pc, t) in exits {
-            let start = tags.len() as u32;
-            tags.extend_from_slice(t);
-            let end = u32::try_from(tags.len()).expect("exit tags past u32::MAX");
-            index.push((pc, start, end));
-        }
         ExitTagTable {
-            index: index.into(),
-            tags: tags.into(),
+            exits: exits.into_iter().map(|(pc, t)| (pc, t.into())).collect(),
         }
     }
 
     /// How many exits the table holds.
     #[inline]
     pub fn len(&self) -> usize {
-        self.index.len()
+        self.exits.len()
     }
 
     /// Whether the table holds no exit.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.index.is_empty()
+        self.exits.is_empty()
     }
 
     /// The pc exit `i` resumes at.
@@ -51,7 +38,7 @@ impl ExitTagTable {
     /// If `i >= self.len()`.
     #[inline]
     pub fn cont_pc(&self, i: usize) -> u32 {
-        self.index[i].0
+        self.exits[i].0
     }
 
     /// The tags exit `i` restores through.
@@ -60,14 +47,13 @@ impl ExitTagTable {
     /// If `i >= self.len()`.
     #[inline]
     pub fn tags(&self, i: usize) -> &[ExitTag] {
-        let (_, start, end) = self.index[i];
-        &self.tags[start as usize..end as usize]
+        &self.exits[i].1
     }
 
     /// Exit `i`'s `(cont_pc, tags)`, or `None` past the end.
     #[inline]
     pub fn get(&self, i: usize) -> Option<(u32, &[ExitTag])> {
-        (i < self.len()).then(|| (self.cont_pc(i), self.tags(i)))
+        self.exits.get(i).map(|(pc, t)| (*pc, &t[..]))
     }
 
     /// Each exit's `(cont_pc, tags)`, in order.
