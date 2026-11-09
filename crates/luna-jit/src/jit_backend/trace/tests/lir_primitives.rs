@@ -13,6 +13,8 @@ use cranelift_codegen::ir::{MemFlagsData, SigRef, Signature};
 
 mod cases;
 mod inputs;
+#[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", not(windows))))]
+mod stub_stores;
 use cases::{Case, emit};
 use inputs::*;
 
