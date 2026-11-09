@@ -97,7 +97,6 @@ use trace::cache::*;
 use trace::exit::decode::ExitSource;
 pub(crate) use trace::fail_memory::FailMemory;
 use trace::fail_memory::trace_head_forgone;
-use trace::wire::hold_side_trace;
 use unwind::*;
 
 /// PUC MAXTAGLOOP (5.3+): bound on `__index`/`__newindex` chains.

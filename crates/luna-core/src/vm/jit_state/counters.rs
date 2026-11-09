@@ -14,6 +14,9 @@ pub struct JitCounters {
     /// Traces whose baseline code was compiled again to run side traces
     /// from its exits: a side trace was first wired to one of them.
     pub calls_compiled: u64,
+    /// Traces made while a trace ran, held by their parents (their cells
+    /// filled) once the outermost run ended.
+    pub held_later: u64,
     /// Functions the method JIT compiled.
     pub method_compiled: u64,
     /// Functions whose method JIT code a backend replaced in the background (`Proto::jit_next`).

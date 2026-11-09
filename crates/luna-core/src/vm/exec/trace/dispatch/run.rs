@@ -1,7 +1,8 @@
-//! Running an entered trace's code: straight through for a trace without
-//! side cells, whose code takes no link and reads none of the frame's run
-//! words; else with the links its code may take kept (see
-//! `crate::vm::exec::trace::relink`).
+//! Running an entered trace's code: straight through for a trace whose
+//! code calls no side trace, as one without side cells or with none wired
+//! yet (none is wired while a trace runs: see `trace::hold_later`), which
+//! takes no link and reads none of the frame's run words; else with the
+//! links its code may take kept (see `crate::vm::exec::trace::relink`).
 
 use super::*;
 use crate::jit::send_compat::TArc;
@@ -22,7 +23,7 @@ impl Vm {
         regs: &mut LVec<i64>,
         entry_tags: &mut [u8],
     ) -> (i64, TArc<CompiledTrace>) {
-        if !ct.has_side_cells() {
+        if !(ct.has_any_side_wired.get() && ct.has_side_cells()) {
             let running = self.trace_step_enter(&*ct, false);
             let r = self.trace_call(cl, entry, regs, None);
             debug_assert_eq!(self.trace_step_running(), TArc::as_ptr(&ct) as usize);
@@ -31,17 +32,30 @@ impl Vm {
         }
         regs[trace_ran_side_slot(ct.window_size as usize)] = 0;
         let running = self.trace_step_enter(&*ct, true);
-        let words = &self.jit.words;
-        let links_from = words.link_base();
-        words.set_link_base(words.trail_len());
-        let start = words.link_base();
+        // the links taken in this dispatch start at the end of the trail,
+        // where an outer dispatch's start, if any, is not (an empty trail
+        // is where every dispatch starts)
+        let w = &self.jit.words;
+        let (outer, start) = (w.link_base(), w.trail_len());
+        debug_assert!(outer <= start, "links start past the trail");
+        if outer != start {
+            w.set_link_base(start);
+        }
         let r = self.trace_call(cl, entry, regs, Some((&ct, start)));
         debug_assert!(
             self.running_is_last_linked(cl.proto, &ct, start),
             "the running trace is not the last one linked to"
         );
         self.trace_step_leave(running);
-        let last = self.trace_links_taken(cl.proto, links_from, start, entry_tags);
+        let w = &self.jit.words;
+        if w.trail_len() == start {
+            // no link taken: one may have been tried
+            if w.link_base() != outer {
+                w.set_link_base(outer);
+            }
+            return (r, ct);
+        }
+        let last = self.trace_links_taken(cl.proto, outer, start, entry_tags);
         (r, last.unwrap_or(ct))
     }
 

@@ -24,6 +24,8 @@ pub(crate) struct TraceStep {
     /// The loop counts [`crate::vm::JitState::loop_hot`] does not hold:
     /// the real ones during a pause, else the stand-in it uses then.
     pub(crate) parked_hot: Option<super::gc_quiet::HotTable>,
+    /// What [`Vm::trace_hold`] left for the end of the outermost trace run.
+    pub(crate) held_later: Vec<super::hold_later::HeldLater>,
 }
 
 /// What [`Vm::trace_step_enter`] replaced: the trace, its frames and its
@@ -53,7 +55,9 @@ impl Vm {
             words.base.get(),
         );
         if cells {
-            if let Some(CallFrame::Lua(f)) = self.frames.last() {
+            if let Some(CallFrame::Lua(f)) = self.frames.last()
+                && f.base * size_of::<Value>() as u32 != prev.2
+            {
                 words.base.set(f.base * size_of::<Value>() as u32);
             }
             // the stack's buffer moves as it grows; the Vm only between calls

@@ -133,6 +133,8 @@ impl Vm {
         // a load's parser objects, above its C function's slots on PUC's
         // stack
         self.heap.mark_load_slots(m);
+        // side traces made while a trace ran, held once none runs
+        self.mark_held_later(m);
         // what a trace's exit left for the dispatcher to make
         for &v in &self.unmade.roots {
             m.value(v);
