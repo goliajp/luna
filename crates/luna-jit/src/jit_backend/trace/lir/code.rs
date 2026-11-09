@@ -80,19 +80,20 @@ impl CodeArena {
         write: impl FnOnce(&mut [u8]),
     ) -> Result<*const u8, &'static str> {
         let page = region::page::size();
+        let off = super::super::place_offset::place_offset();
         let pad = match self.open {
-            Some(_) => self.next.next_multiple_of(PIECE_ALIGN) - self.next,
-            None => 0,
+            Some(_) => self.next.next_multiple_of(PIECE_ALIGN) - self.next + off,
+            None => off,
         };
         let len = match self.open {
             Some(_) => n,
-            None => n.next_multiple_of(page),
+            None => (off + n).next_multiple_of(page) - off,
         };
         if pad + len > self.left {
             // what the batch wrote so far turns executable on its own pages
             let batch = self.open.is_some();
             self.seal()?;
-            self.grow(len.next_multiple_of(page))?;
+            self.grow((off + len).next_multiple_of(page))?;
             if batch {
                 self.open = Some(self.next);
             }
@@ -101,7 +102,7 @@ impl CodeArena {
         let p = self.next + pad;
         self.next = p + len;
         self.left -= pad + len;
-        let protect = self.open.is_none().then_some((p, len, n));
+        let protect = self.open.is_none().then_some((p - pad, pad + len, pad + n));
         self.write_sealing(p as *mut u8, n, write, protect)?;
         Ok(p as *const u8)
     }
