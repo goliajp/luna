@@ -47,13 +47,17 @@ impl Vm {
 /// The two traces' count words and the linked trace's move count as the
 /// Vm leaves them after taking the link, once counted.
 fn counts_agree(prev: &CompiledTrace, target: &CompiledTrace, regs: &[i64]) {
+    let window = target.window_size as usize;
+    let at = trace_count_slot(prev.window_size as usize);
+    // the linked trace's count word, written after the running trace's
+    // was read, takes its place when both windows put it in one slot
+    let replaced = at == trace_count_slot(window) && target.call_count && target.tier_up.is_some();
     if prev.call_count
+        && !replaced
         && let Some(t) = &prev.tier_up
     {
-        let word = regs[trace_count_slot(prev.window_size as usize)];
-        assert_eq!(t.count.get(), word as u32, "the running trace's count");
+        assert_eq!(t.count.get(), regs[at] as u32, "the running trace's count");
     }
-    let window = target.window_size as usize;
     if let Some(t) = &target.tier_up {
         let counted = u32::from(!t.tried.get());
         if target.call_count {
