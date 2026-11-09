@@ -80,6 +80,10 @@ pub(crate) struct TraceImage {
     pub(crate) protos: Box<[Content]>,
     /// One per relocation index of the code.
     pub(crate) sources: Box<[Source]>,
+    /// Some of `sources` is [`Source::TierLoop`].
+    pub(crate) at_loop: bool,
+    /// Some of `sources` is [`Source::SideCells`].
+    pub(crate) holds_cells: bool,
     pub(crate) meta: Meta,
     /// `(parent head pc, parent exit, parent image)` of a side trace.
     pub(crate) side_parent: Option<(u32, usize, u64)>,
@@ -207,6 +211,8 @@ pub(crate) fn build(
     Some(TraceImage {
         id,
         protos: contents.into(),
+        at_loop: sources.contains(&Source::TierLoop),
+        holds_cells: sources.contains(&Source::SideCells),
         sources: sources.into(),
         meta,
         side_parent,

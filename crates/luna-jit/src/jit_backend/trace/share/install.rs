@@ -28,7 +28,7 @@ pub(super) fn install(
     // code that holds the cells' address (the optimizing tier's, compiled
     // with every calling exit calling, or the baseline code with its
     // calls): they are made now
-    if img.sources.contains(&Source::SideCells) || pick.with_calls.is_some() {
+    if img.holds_cells || pick.with_calls.is_some() {
         ct.side_cells = Some(side_cells(ct.side_cell_exits.len()));
     }
     let relocs: Vec<(RelocKind, i64)> = img
@@ -128,7 +128,7 @@ struct Pick<'a> {
 /// is the first pass, the loop beside it. Its baseline code is the one
 /// with its calls when some of `todo` is a side trace of it.
 fn pick_code<'a>(img: &'a TraceImage, todo: &[Arc<TraceImage>]) -> Pick<'a> {
-    let at_loop = img.sources.contains(&Source::TierLoop);
+    let at_loop = img.at_loop;
     let cells = img.meta.side_cells();
     let fresh = (img.optimized_unfilled(cells)).filter(|o| !at_loop || o.looped.is_some());
     let direct = matches!(img.code, Some((Tier::Optimizing, _)));
