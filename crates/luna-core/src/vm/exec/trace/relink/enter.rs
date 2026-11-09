@@ -117,8 +117,10 @@ impl Vm {
         if target.has_side_cells() {
             regs[trace_ran_side_slot(window)] = 0;
         }
-        // the dispatcher puts back the window it opened when the call returns
-        let _ = self.trace_step_enter(TArc::as_ptr(&target));
+        // the dispatcher puts back the window it opened when the call
+        // returns; the frame's words are the ones written for `prev`, which
+        // has cells, in the same frame
+        let _ = self.trace_step_enter(TArc::as_ptr(&target), false);
         Some(target)
     }
 }

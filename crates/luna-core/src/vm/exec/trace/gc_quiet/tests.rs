@@ -171,7 +171,7 @@ fn the_pause_ends_when_a_trace_is_entered() {
     let f = vm.load(b"mark(-1) return quiet()", b"=t").unwrap();
     let r = vm.call_value(Value::Closure(f), &[]).unwrap();
     assert!(matches!(r[0], Value::Bool(true)));
-    let prev = vm.trace_step_enter(std::ptr::NonNull::dangling().as_ptr());
+    let prev = vm.trace_step_enter(std::ptr::NonNull::dangling().as_ptr(), false);
     assert!(vm.jit.step.quiet.is_none());
     vm.trace_step_leave(prev);
 }
@@ -190,7 +190,7 @@ fn the_loop_counts_are_parked_during_a_pause() {
     assert!(vm.jit.loop_hot.iter().all(|&c| c == u32::MAX));
     let parked = vm.jit.step.parked_hot.as_ref().expect("parked");
     assert!(parked.iter().all(|&c| c == 0));
-    let prev = vm.trace_step_enter(std::ptr::NonNull::dangling().as_ptr());
+    let prev = vm.trace_step_enter(std::ptr::NonNull::dangling().as_ptr(), false);
     vm.trace_step_leave(prev);
     assert!(vm.jit.loop_hot.iter().all(|&c| c == 0));
 }

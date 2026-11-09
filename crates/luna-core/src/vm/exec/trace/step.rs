@@ -34,9 +34,13 @@ impl Vm {
     /// A root trace `ct` is about to run in the frame on top: what was
     /// running before, to put back after it. Only `ct`'s address is kept,
     /// to tell the running trace's exits apart; it is not read through.
+    /// The frame's words are written only for a trace with side cells
+    /// (`cells`): only the code of their exits and the links they take
+    /// read them, and a trace without cells takes no link.
     pub(in crate::vm::exec) fn trace_step_enter(
         &mut self,
         ct: *const crate::jit::trace::CompiledTrace,
+        cells: bool,
     ) -> RunningTrace {
         // entering any trace ends a pause a collection exit started
         if self.jit.step.quiet.is_some() {
@@ -48,11 +52,13 @@ impl Vm {
             self.jit.step.frames,
             words.base.get(),
         );
-        if let Some(CallFrame::Lua(f)) = self.frames.last() {
-            words.base.set(f.base * size_of::<Value>() as u32);
+        if cells {
+            if let Some(CallFrame::Lua(f)) = self.frames.last() {
+                words.base.set(f.base * size_of::<Value>() as u32);
+            }
+            // the stack's buffer moves as it grows; the Vm only between calls
+            words.stack.set(std::ptr::addr_of!(self.stack).cast());
         }
-        // the stack's buffer moves as it grows; the Vm only between calls
-        words.stack.set(std::ptr::addr_of!(self.stack).cast());
         words.running.set(ct.cast());
         self.jit.step.frames = self.frames.len() as u32;
         prev
@@ -71,7 +77,7 @@ impl Vm {
 
     /// Whether the run words say what the Vm does: the flags they stand
     /// for, and the running trace's frame (see `trace_step_enter`). For
-    /// debug checks where compiled code reads them.
+    /// debug checks where the code of a trace with side cells reads them.
     pub(in crate::vm::exec) fn run_words_agree(&self) -> bool {
         let w = &self.jit.words;
         let base = match self.frames.last() {
