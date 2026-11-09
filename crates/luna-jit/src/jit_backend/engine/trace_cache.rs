@@ -165,7 +165,8 @@ impl TraceCache {
         asked: u32,
         skip: impl Fn(u32) -> bool,
     ) -> Vec<Arc<TraceImage>> {
-        let Some(heads) = self.roots.get(&head.hash) else {
+        // the head asked about is one of them: alone, there is no other
+        let Some(heads) = self.roots.get(&head.hash).filter(|h| h.len() > 1) else {
             return Vec::new();
         };
         heads

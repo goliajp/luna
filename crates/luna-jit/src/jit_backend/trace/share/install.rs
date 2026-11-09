@@ -130,9 +130,7 @@ struct Pick<'a> {
 fn pick_code<'a>(img: &'a TraceImage, todo: &[Arc<TraceImage>]) -> Pick<'a> {
     let at_loop = img.sources.contains(&Source::TierLoop);
     let cells = img.meta.side_cells();
-    let fresh = img
-        .optimized(&lir::Calls::Held(vec![None; cells].into()))
-        .filter(|o| !at_loop || o.looped.is_some());
+    let fresh = (img.optimized_unfilled(cells)).filter(|o| !at_loop || o.looped.is_some());
     let direct = matches!(img.code, Some((Tier::Optimizing, _)));
     let tiered = !at_loop && (fresh.is_some() || direct);
     let has_side = || {

@@ -116,12 +116,16 @@ pub(in crate::vm::exec) fn link_late(
     filled: &mut Vec<TArc<CompiledTrace>>,
     words: &crate::vm::jit_state::RunWords,
 ) {
-    if !target.dispatchable || target.downrec_link.is_some() {
+    // a trace holds side traces only once one was wired to it
+    let wired = |p: &TArc<CompiledTrace>| p.has_any_side_wired.get() && p.has_side_cells();
+    if !target.dispatchable
+        || target.downrec_link.is_some()
+        || !proto.traces.borrow().iter().any(wired)
+    {
         return;
     }
     let waiting: Vec<_> = (proto.traces.borrow().iter())
-        // a trace holds side traces only once one was wired to it
-        .filter(|p| p.has_any_side_wired.get() && p.has_side_cells())
+        .filter(|p| wired(p))
         .flat_map(|p| {
             let held = p.side_children.borrow();
             (p.side_cell_exits().iter())

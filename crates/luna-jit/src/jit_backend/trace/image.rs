@@ -120,6 +120,17 @@ impl TraceImage {
         kept.iter().find(|o| o.calls == *calls).cloned()
     }
 
+    /// [`TraceImage::optimized`] for `cells` calling exits none of which
+    /// calls: what a Vm taking the image up runs, its cells not filled yet.
+    pub(crate) fn optimized_unfilled(&self, cells: usize) -> Option<std::sync::Arc<Optimized>> {
+        let kept = self.optimized.lock().expect(POISON);
+        let unfilled = |c: &lir::Calls| match c {
+            lir::Calls::Held(h) => h.len() == cells && h.iter().all(Option::is_none),
+            _ => false,
+        };
+        kept.iter().find(|o| unfilled(&o.calls)).cloned()
+    }
+
     /// Keeps `o` for other Vms to take up, unless the image keeps code for
     /// its calling exits already or as many codes as it may: whether it
     /// kept it.
