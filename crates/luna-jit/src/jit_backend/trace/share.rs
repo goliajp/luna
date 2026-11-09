@@ -123,16 +123,16 @@ pub(crate) fn adopt(
             return Vec::new();
         };
         let mut todo = vec![img.clone()];
-        with_side_traces(&cache, &mut todo, 0, &head);
+        with_side_traces(&cache, &mut todo, 0, head);
         let ahead_from = todo.len();
         if req.ahead {
             let traces = req.proto.traces();
-            for root in cache.roots_of(settings, &head, req.head_pc, |pc| {
+            for root in cache.roots_of(settings, head, req.head_pc, |pc| {
                 traces.iter().any(|t| t.head_pc() == pc)
             }) {
                 let from = todo.len();
                 todo.push(root);
-                with_side_traces(&cache, &mut todo, from, &head);
+                with_side_traces(&cache, &mut todo, from, head);
             }
         }
         (todo, ahead_from)
