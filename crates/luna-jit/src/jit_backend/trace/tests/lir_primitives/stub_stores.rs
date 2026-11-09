@@ -2,7 +2,7 @@
 //! exit's write-back would (`Value::pack_into`), for each exit tag.
 
 use super::{FILL, run};
-use crate::jit_backend::trace::lir::{CodeArena, stub::link::stores_alone};
+use crate::jit_backend::trace::lir::{CodeArena, stub::alone::stores_alone};
 use luna_core::__private::{
     RunWords, STACK_PTR_OFFSET, SideCell, link_fast_offsets, slot_store_reference, store_items,
 };

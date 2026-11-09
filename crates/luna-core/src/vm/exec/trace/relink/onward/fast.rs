@@ -5,9 +5,9 @@
 
 use super::SideList;
 use crate::jit::trace::CompiledTrace;
-use crate::jit::trace_types::cell_plan::{LinkPlan, VALUE_PAYLOAD, VALUE_SIZE, slot_check};
+use crate::jit::trace_types::cell_plan::LinkPlan;
 use crate::jit::trace_types::frame::{TRACE_FRAME_TAIL, trace_count_slot, trace_ran_side_slot};
-use crate::jit::trace_types::link_fast::store_items;
+use crate::jit::trace_types::link_fast::{check_items, store_items};
 use crate::jit::trace_types::side_cell::SideCell;
 
 /// Sets `cell`'s words for the stub to take `link` (to `target`) itself,
@@ -26,15 +26,7 @@ pub(super) fn fill(
     let byte = |slot: usize| (8 * slot) as u32;
     let tier = (target.tier_up.as_ref())
         .map_or([u32::MAX, u32::MAX, 0], |t| [t.reused_at, t.at, t.calls_at]);
-    let mut checks = Vec::new();
-    for &(slot, raw) in &link.checks {
-        let at = slot * VALUE_SIZE as u32;
-        let (tag, truth) = slot_check(raw);
-        checks.extend([at, u32::from(tag)]);
-        if let Some(t) = truth {
-            checks.extend([at + VALUE_PAYLOAD as u32, u32::from(t)]);
-        }
-    }
+    let checks = check_items(&link.checks);
     let stores = store_items(&link.stores);
     let mut words = vec![SideList::Verify as u32, 3, (prev + TRACE_FRAME_TAIL) as u32];
     words.extend(link.trail);

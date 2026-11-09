@@ -4,6 +4,7 @@
 use super::*;
 use crate::jit::TCellU32;
 use crate::jit::trace_types::cell_plan::{CellPlan, LinkPlan};
+use crate::jit::trace_types::link_fast::check_items;
 use list::{SideList, list_of};
 
 /// Hands `child` to `cell` with its stores at going on in the parent's
@@ -21,6 +22,7 @@ pub(super) fn fill_cell(
     *lists = (
         list_of(SideList::Store, stores),
         list_of(SideList::Check, checks),
+        check_words(checks),
     );
     let at = |l: &[u32]| {
         if l.is_empty() {
@@ -31,6 +33,7 @@ pub(super) fn fill_cell(
     };
     cell.back.set(at(&lists.0));
     cell.check.set(at(&lists.1));
+    cell.check_fast.set(at(&lists.2));
     drop(lists);
     cell.loop_ok.set(u32::from(loop_ok));
     cell.words
@@ -42,6 +45,19 @@ pub(super) fn fill_cell(
     debug_assert!(fresh, "a side cell filled twice");
     count_for(cell, child);
     cell.entry.set(child.current_entry() as *const u8);
+}
+
+/// What a cell's `check_fast` points at for `checks` (see
+/// `link_fast::CHECK_COUNT`): empty when there are none.
+fn check_words(checks: &[(usize, u8)]) -> Box<[u32]> {
+    if checks.is_empty() {
+        return Box::new([]);
+    }
+    let pairs: Vec<_> = checks.iter().map(|&(i, t)| (i as u32, t)).collect();
+    let items = check_items(&pairs);
+    let mut out = vec![SideList::Disagree as u32, 0, 0, (items.len() / 2) as u32];
+    out.extend(items);
+    out.into()
 }
 
 /// The plan of a cell as `fill_cell` fills it, with its link's.

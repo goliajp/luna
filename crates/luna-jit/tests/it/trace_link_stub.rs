@@ -5,7 +5,10 @@
 //! optimizing tier the Vm's way gives.
 
 use luna_core::__private::VmJitState;
+use luna_jit::__private::ProtoTraceInternals;
 use luna_jit::runtime::Value;
+use luna_jit::runtime::function::Proto;
+use luna_jit::runtime::heap::Gc;
 use luna_jit::version::LuaVersion;
 
 use super::trace_link_fast::RING;
@@ -27,6 +30,8 @@ struct Ran {
     dispatched: u64,
     by_stub: u64,
     left: [u64; 7],
+    /// The times side traces went on in their parent's loop.
+    relinks: u64,
 }
 
 /// What a test holds up in the run words through the run.
@@ -85,7 +90,15 @@ fn run(v: LuaVersion, src: &str, jit: bool, how: How) -> Ran {
         dispatched: c.dispatched,
         by_stub: c.links_by_stub,
         left: c.links_left_by_stub,
+        relinks: relinks(cl.proto),
     }
+}
+
+/// The times side traces went on in their parent's loop, over the traces
+/// of `p` and the functions in it.
+fn relinks(p: Gc<Proto>) -> u64 {
+    let own: u64 = p.traces().iter().map(|t| t.side_relinks()).sum();
+    own + p.protos.iter().map(|q| relinks(*q)).sum::<u64>()
 }
 
 /// `src` run with the stub taking links and kept from it, `how` otherwise:
@@ -128,24 +141,51 @@ fn the_stub_leaves_links_at_the_limit_and_with_the_trail_full() {
     }
 }
 
-/// With the blocked word or the pause note held up the stub takes no link
-/// and hands each to the Vm for that reason; the Vm, which reads neither
-/// (nothing is parked, and a pause it ends leaves the held note up), takes
-/// it.
+/// With the pause note held up the stub takes no link and hands each to
+/// the Vm for that reason; the Vm, which does not read the note (a pause it
+/// ends leaves the held note up), takes it.
 #[test]
-fn the_stub_leaves_links_while_the_run_words_hold_it_back() {
-    for (hold, why) in [(Hold::Blocked, 1), (Hold::Quiet, 2)] {
-        let how = How { hold, ..PLAIN };
-        for v in VERSIONS {
-            let want = run(v, RING, false, PLAIN).result;
-            let on = run(v, RING, true, how);
-            assert_eq!(on.result, want, "{v:?}");
-            assert_eq!(on.by_stub, 0, "{v:?}: a link taken held back: {on:?}");
-            assert!(
-                on.left[why] > 0,
-                "{v:?}: none left for reason {why}: {on:?}"
-            );
-            assert!(on.links > 0, "{v:?}: the Vm took no link: {on:?}");
+fn the_stub_leaves_links_while_hot_counting_pauses() {
+    let how = How {
+        hold: Hold::Quiet,
+        ..PLAIN
+    };
+    for v in VERSIONS {
+        let want = run(v, RING, false, PLAIN).result;
+        let on = run(v, RING, true, how);
+        assert_eq!(on.result, want, "{v:?}");
+        assert_eq!(on.by_stub, 0, "{v:?}: a link taken held back: {on:?}");
+        assert!(on.left[2] > 0, "{v:?}: none left for the pause: {on:?}");
+        assert!(on.links > 0, "{v:?}: the Vm took no link: {on:?}");
+    }
+}
+
+/// With the blocked word up, as when an exit left the dispatcher
+/// something, the stub runs no side trace: none goes on in its parent's
+/// loop (the first source's side trace would) and no link is taken (the
+/// ring's would be), by the stub or the Vm. The stub leaving a link for
+/// the blocked word (a side trace that sets it on its way to the linked
+/// head) is tested on the stub's code itself.
+#[test]
+fn the_stub_runs_no_side_trace_while_the_run_words_are_blocked() {
+    let back = "local s, t = 0, 0
+        for i = 1, 30000 do
+          if i % 3 == 0 then s = s + i else t = t + 1 end
+        end
+        return s, t";
+    let how = How {
+        hold: Hold::Blocked,
+        ..PLAIN
+    };
+    for v in VERSIONS {
+        let ran: [(&str, fn(&Ran) -> u64); 2] = [(back, |r| r.relinks), (RING, |r| r.links)];
+        for (src, ran) in ran {
+            let free = run(v, src, true, PLAIN);
+            let held = run(v, src, true, how);
+            assert_eq!(held.result, free.result, "{v:?}");
+            assert!(ran(&free) > 0, "{v:?}: {free:?}");
+            assert_eq!((held.links, held.relinks), (0, 0), "{v:?}: {held:?}");
+            assert_eq!((held.by_stub, held.left), (0, [0; 7]), "{v:?}: {held:?}");
         }
     }
 }

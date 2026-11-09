@@ -25,6 +25,10 @@ pub struct SideCell {
     /// The stack slots whose tags the side trace reads unchecked by the
     /// parent, checked before it runs (a list as `back`'s); null when none.
     pub(crate) check: TCellPtr,
+    /// What the baseline tier's call stub checks in place of `check`'s
+    /// list: the number of pairs, then the pairs `link_fast::check_items`
+    /// gives; null when `check` is.
+    pub(crate) check_fast: TCellPtr,
     /// The count the side trace moves to the optimizing tier by: its
     /// tier-up count, or [`SideCell::own`] for one that never moves.
     pub(crate) count: TCellPtr,
@@ -40,8 +44,9 @@ pub struct SideCell {
     pub(crate) relinks: TCellU32,
     /// The count of a side trace without a tier-up count.
     pub(crate) own: TCellU32,
-    /// What [`SideCell::back`] and [`SideCell::check`] point at.
-    pub(crate) lists: TRefLock<(Box<[u32]>, Box<[u32]>)>,
+    /// What [`SideCell::back`], [`SideCell::check`] and
+    /// [`SideCell::check_fast`] point at.
+    pub(crate) lists: TRefLock<(Box<[u32]>, Box<[u32]>, Box<[u32]>)>,
     /// The head of the trace the side trace links to, another trace of the
     /// same frame whose entry it was checked against; `u32::MAX` when none.
     pub(crate) link_pc: TCellU32,
@@ -128,6 +133,8 @@ pub struct SideCellOffsets {
     pub back: i32,
     /// `SideCell::check`'s.
     pub check: i32,
+    /// `SideCell::check_fast`'s.
+    pub check_fast: i32,
     /// `SideCell::count`'s.
     pub count: i32,
     /// `SideCell::at`'s.
@@ -171,12 +178,13 @@ impl SideCell {
             entry: TCellPtr::null(),
             back: TCellPtr::null(),
             check: TCellPtr::null(),
+            check_fast: TCellPtr::null(),
             count: TCellPtr::null(),
             at: TCellU32::new(0),
             loop_ok: TCellU32::new(0),
             relinks: TCellU32::new(0),
             own: TCellU32::new(0),
-            lists: TRefLock::new((Box::new([]), Box::new([]))),
+            lists: TRefLock::new(Default::default()),
             link_pc: TCellU32::new(u32::MAX),
             link: TCellPtr::null(),
             link_lists: TRefLock::new(Default::default()),
@@ -194,6 +202,7 @@ impl SideCell {
             entry: std::mem::offset_of!(SideCell, entry) as i32,
             back: std::mem::offset_of!(SideCell, back) as i32,
             check: std::mem::offset_of!(SideCell, check) as i32,
+            check_fast: std::mem::offset_of!(SideCell, check_fast) as i32,
             count: std::mem::offset_of!(SideCell, count) as i32,
             at: std::mem::offset_of!(SideCell, at) as i32,
             loop_ok: std::mem::offset_of!(SideCell, loop_ok) as i32,

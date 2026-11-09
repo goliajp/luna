@@ -31,6 +31,10 @@ pub(super) enum SideList {
     /// Checks, in a debug build, what the baseline tier's call stub did
     /// taking a link itself: the three words as `Link`'s (see `verify`).
     Verify = 3,
+    /// Panics, in a debug build: the baseline tier's call stub found the
+    /// checks before a side trace runs (`SideCell::check_fast`) to say
+    /// otherwise than the cell's `Check` list.
+    Disagree = 4,
 }
 
 impl Vm {
@@ -47,6 +51,9 @@ impl Vm {
         if cfg!(debug_assertions) && list.first() == Some(&(SideList::Verify as u32)) {
             self.link_taken_agrees(&list[3..6], reg_state);
             return 1;
+        }
+        if cfg!(debug_assertions) && list.first() == Some(&(SideList::Disagree as u32)) {
+            panic!("the stub's checks before a side trace disagree with the Vm's");
         }
         let store = list.first() == Some(&(SideList::Store as u32));
         if !store

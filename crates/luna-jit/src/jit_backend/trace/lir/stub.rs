@@ -21,10 +21,15 @@
 //! same in every Vm, and everything else comes from the exit (the Vm's run
 //! words through the cell).
 
+#[cfg(all(
+    test,
+    any(target_arch = "x86_64", all(target_arch = "aarch64", not(windows)))
+))]
+pub(in crate::jit_backend::trace) mod alone;
 pub(in crate::jit_backend::trace) mod link;
 
-use super::cg::{Alu, Bufs, Cond, Masm, Width};
-use luna_core::__private::{EXIT_RELINK, RunWords, SideCell};
+use super::cg::{Alu, Bufs, Cond, Label, Masm, Width};
+use luna_core::__private::{CHECK_COUNT, CHECK_ITEMS, EXIT_RELINK, RunWords, SideCell};
 
 /// The stub's address, placed on first use. A process has one target, so
 /// one [`Masm`]: the stub is shared by every trace's code and every Vm's,
@@ -92,23 +97,49 @@ fn emit_call<M: Masm>(m: &mut M, k: &[u8], out: super::cg::Label) {
     m.load(Width::B4, t, k[1], at.at);
     m.cmp(false, u, t);
     m.jcc(Cond::Uge, out);
-    // with no slot to check, the helper would only read the run words
-    let (listed, checked) = (m.new_label(), m.new_label());
-    m.load(Width::B8, a[0], k[1], at.check);
-    m.branch_reg(a[0], true, listed);
-    m.load(Width::B8, t, k[1], at.words);
-    m.load(Width::B4, t, t, RunWords::offsets().blocked);
+    // the dispatcher's checks: the run words, then the slots on the stack
+    let checked = m.new_label();
+    m.load(Width::B8, a[1], k[1], at.words);
+    m.load(Width::B4, t, a[1], RunWords::offsets().blocked);
     m.branch_reg(t, true, out);
-    m.jmp(checked);
-    m.bind(listed);
-    m.mov(a[1], k[0]);
-    m.call_abs(side_cell_list());
-    m.branch_reg(M::RET, false, out);
+    m.load(Width::B8, a[0], k[1], at.check_fast);
+    m.branch_reg(a[0], false, checked);
+    if cfg!(debug_assertions) {
+        emit_checks_agreeing(m, k, checked, out);
+    } else {
+        link::emit_slot_checks(m, out, (CHECK_COUNT, CHECK_ITEMS));
+    }
     m.bind(checked);
     m.load(Width::B8, M::CALL_TARGET, k[1], at.entry);
     m.mov(a[0], k[0]);
     m.call_reg(M::CALL_TARGET);
     m.store(Width::B8, M::RET, M::SP, ret_at::<M>());
+}
+
+/// The slot checks of the words at `check_fast`, in a debug build: each
+/// way they go, the Vm's run of the cell's `check` list must go the same,
+/// else the words' list for `luna_jit_side_cell_list` panics. On to
+/// `checked` when they pass, to `out` when they fail.
+fn emit_checks_agreeing<M: Masm>(m: &mut M, k: &[u8], checked: Label, out: Label) {
+    let (a, at) = (M::INT_ARGS, SideCell::offsets());
+    let (failed, disagree) = (m.new_label(), m.new_label());
+    link::emit_slot_checks(m, failed, (CHECK_COUNT, CHECK_ITEMS));
+    let vm_checks = |m: &mut M| {
+        m.load(Width::B8, a[0], k[1], at.check);
+        m.mov(a[1], k[0]);
+        m.call_abs(side_cell_list());
+    };
+    vm_checks(m);
+    m.branch_reg(M::RET, true, checked);
+    m.jmp(disagree);
+    m.bind(failed);
+    vm_checks(m);
+    m.branch_reg(M::RET, false, out);
+    m.bind(disagree);
+    m.load(Width::B8, a[0], k[1], at.check_fast);
+    m.mov(a[1], k[0]);
+    m.call_abs(side_cell_list());
+    m.jmp(out);
 }
 
 /// On the side trace's return: to `back` when it ended at the trace's head;
