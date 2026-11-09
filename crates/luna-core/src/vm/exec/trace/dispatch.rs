@@ -2,12 +2,12 @@
 //! interpreter is about to run, and resuming the interpreter where it exits.
 
 use super::*;
-use crate::jit::trace_types::frame::trace_ran_side_slot;
 use crate::runtime::mem::LVec;
 use downrec::downrec_close_exit;
 
 mod entry;
 mod linked;
+mod run;
 pub(in crate::vm::exec) mod words;
 
 impl Vm {
@@ -89,7 +89,7 @@ impl Vm {
         if dispatch_ok {
             debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
             self.trace_drop_at_compiled();
-            self.jit.set_pending_err(None);
+            self.jit.clear_pending_err();
             // an inline side exit pushes the inlined frames, which a deopt
             // pops
             let pre_frames = self.frames.len();
@@ -103,37 +103,14 @@ impl Vm {
             }
             self.jit_ghosts_enter();
             words::count_in(&ct, &mut reg_state, window_size_us);
-            if ct.has_side_cells() {
-                reg_state[trace_ran_side_slot(window_size_us)] = 0;
-            }
-            let running = self.trace_step_enter(&*ct);
-            let words = &self.jit.words;
-            let links_from = words.link_base();
-            words.set_link_base(words.trail_len());
-            let start = words.link_base();
-            let continuation_pc = {
-                let vm_ptr: *mut Vm = self;
-                let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
-                let mut entry = entry_fn;
-                loop {
-                    // SAFETY: `entry` is the entry of `ct`, a compiled trace `cl.proto.traces` keeps alive, or of a trace of the same list `trace_link_again` entered after it, both checked to take this frame's registers as they are; `reg_state` was sized above to at least the trace's window and the three words past it (no narrower than the other's) and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
-                    let r = unsafe { entry(reg_state.as_mut_ptr()) };
-                    match self.trace_link_again(cl.proto, &ct, start, r, &mut reg_state) {
-                        Some(next) => entry = next,
-                        None => break r,
-                    }
-                }
-            };
-            debug_assert!(
-                self.running_is_last_linked(cl.proto, &ct, start),
-                "the running trace is not the last one linked to"
+            let (continuation_pc, ct) = self.trace_run(
+                cl,
+                ct,
+                entry_fn,
+                &mut reg_state,
+                &mut entry_tags[..max_stack],
             );
-            self.trace_step_leave(running);
             debug_assert!(self.jit.blocked_agrees(self.unmade.any()));
-            // the trace whose code returned: the last one linked to, if any
-            let ct =
-                (self.trace_links_taken(cl.proto, links_from, start, &mut entry_tags[..max_stack]))
-                    .unwrap_or(ct);
             words::count_out(&ct, &reg_state, ct.window_size as usize);
             self.jit.ghost_depth -= 1;
             self.trace_count_dispatch(&ct, is_downrec_entry);
@@ -154,7 +131,7 @@ impl Vm {
                 );
                 ran = true;
             }
-            self.jit.set_pending_err(None);
+            self.jit.clear_pending_err();
             debug_assert!(!self.unmade.any(), "an exit left something unmade");
         }
         // the buffers back for the next dispatch, before a collection check

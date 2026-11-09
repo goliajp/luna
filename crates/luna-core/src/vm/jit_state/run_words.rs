@@ -23,11 +23,12 @@ pub struct RunWords {
     /// ([`BLOCKED_UNMADE`]); one byte each.
     pub(crate) blocked: [TCellBool; 4],
     /// The running trace's frame's base, in bytes past the stack's first
-    /// value.
+    /// value, written when a trace with side cells is entered: only their
+    /// code reads it.
     pub(crate) base: TCellU32,
     /// The Vm's stack (its `LVec`, whose buffer pointer the code reads at
-    /// [`crate::runtime::mem::LVec::PTR_OFFSET`]), written each time a
-    /// trace is entered: the buffer moves when the stack grows.
+    /// [`crate::runtime::mem::LVec::PTR_OFFSET`]: the buffer moves when the
+    /// stack grows), written with `base`: the Vm may have moved since.
     pub(crate) stack: TCellPtr,
     /// The running root trace by address (0: none).
     pub(crate) running: TCellPtr,
@@ -138,7 +139,10 @@ impl super::JitState {
     #[inline(always)]
     pub(crate) fn take_gc_exit(&mut self) -> Option<u32> {
         let pc = self.gc_exit.take();
-        self.words.block(BLOCKED_GC_EXIT, false);
+        // the byte is down whenever no check is due
+        if pc.is_some() {
+            self.words.block(BLOCKED_GC_EXIT, false);
+        }
         pc
     }
 
@@ -152,6 +156,14 @@ impl super::JitState {
     pub(crate) fn set_pending_err(&mut self, e: Option<crate::vm::error::LuaError>) {
         self.words.block(BLOCKED_PENDING_ERR, e.is_some());
         self.pending_err = e;
+    }
+
+    /// Drops the parked error, if any: the byte is down whenever none is.
+    #[inline(always)]
+    pub(crate) fn clear_pending_err(&mut self) {
+        if self.pending_err.is_some() {
+            self.set_pending_err(None);
+        }
     }
 
     /// Whether [`RunWords::blocked`] says what the flags it stands for
