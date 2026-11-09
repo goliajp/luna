@@ -182,6 +182,14 @@ pub(in crate::vm::exec) fn cache_trace(
     proto: Gc<crate::runtime::function::Proto>,
     ct: crate::jit::trace::CompiledTrace,
 ) -> TArc<crate::jit::trace::CompiledTrace> {
+    cache_shared(proto, TArc::new(ct))
+}
+
+/// [`cache_trace`] for a trace shared already.
+pub(in crate::vm::exec) fn cache_shared(
+    proto: Gc<crate::runtime::function::Proto>,
+    ct: TArc<crate::jit::trace::CompiledTrace>,
+) -> TArc<crate::jit::trace::CompiledTrace> {
     if ct.dispatchable || ct.downrec_link.is_some() {
         proto.has_dispatchable_trace.set(true);
         use crate::runtime::function::{TRACE_HEADS_CAP, TRACE_HEADS_MANY, TRACE_HEADS_NONE};
@@ -197,7 +205,6 @@ pub(in crate::vm::exec) fn cache_trace(
     if ct.head_pc == 0 {
         proto.trace_call_head_settled.set(true);
     }
-    let ct = TArc::new(ct);
     // side cells link traces of one prototype by plain pointers, relying on
     // this list never losing a trace: removing one must clear those links
     // first

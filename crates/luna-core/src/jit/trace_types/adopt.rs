@@ -38,8 +38,9 @@ pub struct AdoptRequest<'a> {
 
 /// A trace the backend installed for an [`AdoptRequest`].
 pub struct AdoptedTrace {
-    /// As the backend would return it right after compiling it.
-    pub trace: CompiledTrace,
+    /// As the backend would return it right after compiling it, shared
+    /// already, as the Vm caches it (no other holds it yet).
+    pub trace: crate::jit::send_compat::TArc<CompiledTrace>,
     /// For a side trace: as [`AdoptRequest::side_parent`].
     pub side_parent: Option<(Gc<Proto>, u32, usize)>,
     /// The functions other than the head's that the trace inlined.
