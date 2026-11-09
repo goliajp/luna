@@ -21,6 +21,8 @@
 //! same in every Vm, and everything else comes from the exit (the Vm's run
 //! words through the cell).
 
+pub(in crate::jit_backend::trace) mod link;
+
 use super::cg::{Alu, Bufs, Cond, Masm, Width};
 use luna_core::__private::{EXIT_RELINK, RunWords, SideCell};
 
@@ -123,6 +125,9 @@ fn emit_on_return<M: Masm>(m: &mut M, k: &[u8], other: super::cg::Label, back: s
     m.load(Width::B4, t, k[1], at.link_pc);
     m.cmp(false, M::RET, t);
     m.jcc(Cond::Ne, other);
+    let slow = m.new_label();
+    link::emit(m, k, slow);
+    m.bind(slow);
     m.load(Width::B8, a[0], k[1], at.link);
     m.mov(a[1], k[0]);
     m.call_abs(side_cell_list());

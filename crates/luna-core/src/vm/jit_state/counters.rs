@@ -79,6 +79,15 @@ pub struct JitCounters {
     /// their limit or the trail is full (2); the linked trace has yet to
     /// move to the optimizing tier (3); it inlines calls (4).
     pub links_by_vm: Box<[u64; 5]>,
+    /// Of `links`, the ones the baseline tier's call stub took itself.
+    pub links_by_stub: u64,
+    /// Of `links_by_vm[0]`, the links the baseline tier's call stub handed
+    /// the Vm, by why (see `trace_types::link_fast`): the cell has no words
+    /// for it (0); the exit left something to the dispatcher (1); hot
+    /// counting pauses (2); the links in a row are at their limit (3); the
+    /// trail is full (4); a slot holds another tag than the linked trace
+    /// checks (5); the linked trace's move is due (6).
+    pub links_left_by_stub: [u64; 7],
     /// Dispatches of traces holding each kind of inlined code, by the bit
     /// of [`crate::jit::trace::CompiledTraceParts::inline_kinds`].
     pub inline_kind_dispatched: [u64; 4],

@@ -62,6 +62,10 @@ pub struct SideCell {
     /// What the code taking the link itself reads and writes of the traces
     /// (see [`LinkCells`]); set with the link.
     pub(crate) link_cells: LinkCells,
+    /// What the baseline tier's call stub reads to take the link itself
+    /// (see `link_fast`, in `link_lists`); null when it leaves the link to
+    /// the Vm.
+    pub(crate) link_fast: TCellPtr,
 }
 
 /// The addresses in the two traces of a link that the code taking it reads
@@ -78,6 +82,12 @@ pub(crate) struct LinkCells {
     /// The running trace's count of its move and the linked trace's, for
     /// one that counts in this call's word (else null).
     pub(crate) counts: [TCellPtr; 2],
+    /// Its own entry, the baseline code's.
+    pub(crate) base_entry: TCellPtr,
+    /// Its move's count (null without a move).
+    pub(crate) tier_count: TCellPtr,
+    /// The frame's prototype's `call_hot_count`.
+    pub(crate) calls: TCellPtr,
 }
 
 impl LinkCells {
@@ -87,6 +97,9 @@ impl LinkCells {
             tried: TCellPtr::null(),
             entry: TCellPtr::null(),
             counts: [TCellPtr::null(), TCellPtr::null()],
+            base_entry: TCellPtr::null(),
+            tier_count: TCellPtr::null(),
+            calls: TCellPtr::null(),
         }
     }
 }
@@ -137,10 +150,19 @@ pub struct SideCellOffsets {
     pub link_entry: i32,
     /// The addresses of the running and the linked trace's counts (32 bits).
     pub link_counts: i32,
+    /// The address of the linked trace's own entry cell.
+    pub link_base_entry: i32,
+    /// The address of the linked trace's move's count (32 bits).
+    pub link_tier_count: i32,
+    /// The address of the frame's prototype's call count (32 bits).
+    pub link_calls: i32,
+    /// `SideCell::link_fast`'s.
+    pub link_fast: i32,
 }
 
 /// See [`SideCell::link_lists`].
-pub(crate) type LinkLists = (Box<[u32]>, Box<[u32]>, Box<[u32]>, Box<[u8]>);
+/// The fifth is what `link_fast` points at.
+pub(crate) type LinkLists = (Box<[u32]>, Box<[u32]>, Box<[u32]>, Box<[u8]>, Box<[u32]>);
 
 impl SideCell {
     /// An empty cell: no side trace runs from it.
@@ -161,6 +183,7 @@ impl SideCell {
             plan: PlanOnce::new(),
             words: TCellPtr::null(),
             link_cells: LinkCells::new(),
+            link_fast: TCellPtr::null(),
         }
     }
 
@@ -182,6 +205,10 @@ impl SideCell {
             link_tried: (lc + std::mem::offset_of!(LinkCells, tried)) as i32,
             link_entry: (lc + std::mem::offset_of!(LinkCells, entry)) as i32,
             link_counts: (lc + std::mem::offset_of!(LinkCells, counts)) as i32,
+            link_base_entry: (lc + std::mem::offset_of!(LinkCells, base_entry)) as i32,
+            link_tier_count: (lc + std::mem::offset_of!(LinkCells, tier_count)) as i32,
+            link_calls: (lc + std::mem::offset_of!(LinkCells, calls)) as i32,
+            link_fast: std::mem::offset_of!(SideCell, link_fast) as i32,
         }
     }
 

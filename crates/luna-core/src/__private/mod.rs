@@ -45,7 +45,7 @@ pub use types::*;
 pub use vm::alloc::{JIT_GC_CALL, JIT_GC_LIMIT_OFFSET, JIT_GC_PREV, VmJitAlloc};
 pub use vm::host::{VmHeap, VmHostInternals};
 pub use vm::jit::VmJitFrames;
-pub use vm::words::hold_run_words_quiet;
+pub use vm::words::{hold_run_words_quiet, let_stub_take_links};
 
 /// Have every collection on this thread end by checking the trace
 /// being recorded, if any, holds only objects the collector keeps.

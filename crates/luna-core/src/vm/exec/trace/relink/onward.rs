@@ -12,6 +12,8 @@
 //! was entered with are stored to the stack when the link is taken.
 
 use super::*;
+
+mod fast;
 use crate::jit::send_compat::TArc;
 use crate::jit::send_compat::{TCellBool, TCellPtr, TCellU32};
 use crate::jit::trace_types::cell_plan::{LinkPlan, pairs_of};
@@ -53,7 +55,9 @@ pub(super) fn fill_link(
     ];
     let f = link_fill(parent, exit, child, target, cell, call);
     if f == Fill::Linked {
-        let link = link_plan(parent, target, cell, proto.max_stack.into());
+        let calls = &proto.call_hot_count as *const std::cell::Cell<u32>;
+        let link = link_plan(parent, target, cell, (proto.max_stack.into(), calls));
+        fast::fill(cell, target, &link, words);
         super::fill_cell(
             cell,
             child,
@@ -73,7 +77,7 @@ fn link_plan(
     parent: &CompiledTrace,
     target: &CompiledTrace,
     cell: &SideCell,
-    max_stack: u32,
+    (max_stack, calls): (u32, *const std::cell::Cell<u32>),
 ) -> LinkPlan {
     let count = |t: &CompiledTrace| match &t.tier_up {
         Some(m) if t.call_count => (&*m.count as *const TCellU32).cast(),
@@ -83,8 +87,11 @@ fn link_plan(
     lc.target.set((target as *const CompiledTrace).cast());
     lc.counts[0].set(count(parent));
     lc.counts[1].set(count(target));
+    lc.base_entry.set((&target.entry as *const TCellPtr).cast());
+    lc.calls.set(calls.cast());
     match &target.tier_up {
         Some(m) => {
+            lc.tier_count.set((&*m.count as *const TCellU32).cast());
             lc.tried.set((&m.tried as *const TCellBool).cast());
             lc.entry.set((&m.optimized as *const TCellPtr).cast());
         }
@@ -181,6 +188,7 @@ fn link_fill(
         list_of(SideList::Check, &check),
         list_of(SideList::Store, &stores_at_relink(target, &tags)),
         kept,
+        Box::new([]),
     );
     cell.link.set(lists.0.as_ptr().cast());
     drop(lists);

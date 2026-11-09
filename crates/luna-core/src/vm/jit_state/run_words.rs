@@ -46,6 +46,15 @@ pub struct RunWords {
     /// Set by the optimizing tier's code that leaves a link to the Vm, for
     /// the Vm to count why (see `JitCounters::links_by_vm`).
     pub(crate) link_left: TCellU32,
+    /// The links the baseline tier's call stub took itself since the
+    /// dispatcher last counted them (see `JitCounters::links_by_stub`).
+    pub(crate) links_stub: TCellU32,
+    /// Why the stub last handed the Vm a link, for the Vm to count (see
+    /// `JitCounters::links_left_by_stub`); 0 when it had no words for it.
+    pub(crate) stub_left: TCellU32,
+    /// Set when the cells filled from now on leave each link to the Vm,
+    /// not to the stub (a test's switch; the code does not read it).
+    pub(crate) stub_links_off: TCellBool,
     /// What `trail_at` points at: as long as the room, its length unused.
     trail: LVec<[u32; 3]>,
 }
@@ -80,6 +89,10 @@ pub struct RunWordsOffsets {
     pub quiet: i32,
     /// `RunWords::link_left`'s (32 bits).
     pub link_left: i32,
+    /// `RunWords::links_stub`'s (32 bits).
+    pub links_stub: i32,
+    /// `RunWords::stub_left`'s (32 bits).
+    pub stub_left: i32,
 }
 
 impl RunWords {
@@ -95,6 +108,9 @@ impl RunWords {
             link_base: TCellU32::new(0),
             quiet: TCellU32::new(0),
             link_left: TCellU32::new(0),
+            links_stub: TCellU32::new(0),
+            stub_left: TCellU32::new(0),
+            stub_links_off: TCellBool::new(false),
             trail: LVec::new(mem),
         }
     }
@@ -113,6 +129,8 @@ impl RunWords {
             link_base: offset_of!(RunWords, link_base) as i32,
             quiet: offset_of!(RunWords, quiet) as i32,
             link_left: offset_of!(RunWords, link_left) as i32,
+            links_stub: offset_of!(RunWords, links_stub) as i32,
+            stub_left: offset_of!(RunWords, stub_left) as i32,
         }
     }
 

@@ -78,6 +78,9 @@ impl Vm {
             last = Some(to);
         }
         self.jit.counters.links += (self.jit.words.trail_len() - from) as u64;
+        let w = &self.jit.words.links_stub;
+        self.jit.counters.links_by_stub += u64::from(w.get());
+        w.set(0);
         self.jit.words.trail_truncate(from);
         last.map(|to| TArc::clone(&traces[to as usize]))
     }

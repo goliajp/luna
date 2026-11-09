@@ -107,8 +107,13 @@ pub fn slot_check(r: u8) -> (u8, Option<u8>) {
 /// none for nil). `None` when the exit leaves the slot. For tests of the
 /// code [`slot_store`] has made.
 pub fn slot_store_reference(d: u8, r: i64) -> Option<(u8, Option<u64>)> {
+    Some(slot_bytes(crate::vm::exec::exit_value_reference(d, r)?))
+}
+
+/// What a slot holding `v`, one an exit tag gives, reads as: its tag byte,
+/// and its payload as [`SlotStore`] says it is written.
+pub(crate) fn slot_bytes(v: crate::runtime::Value) -> (u8, Option<u64>) {
     use crate::runtime::Value as V;
-    let v = crate::vm::exec::exit_value_reference(d, r)?;
     let payload = match v {
         V::Nil => None,
         V::Bool(b) => Some(u64::from(b)),
@@ -120,5 +125,5 @@ pub fn slot_store_reference(d: u8, r: i64) -> Option<(u8, Option<u64>)> {
         V::Native(n) => Some(n.as_ptr() as u64),
         _ => unreachable!("no exit tag gives {}", v.type_name()),
     };
-    Some((v.tag_byte(), payload))
+    (v.tag_byte(), payload)
 }

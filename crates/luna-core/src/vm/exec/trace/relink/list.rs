@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod verify;
+
 /// What a list of [`SideList`] kind `kind` over `slots` holds for the code
 /// (see `Vm::side_cell_list`): the kind, the number of slots, the registers
 /// they reach, then `(slot << 8) | tag` for each; empty when there are
@@ -26,6 +28,9 @@ pub(super) enum SideList {
     /// Enters the trace a side trace links to: three words, the typed exit,
     /// the running trace and the linked trace (see `Vm::link_enter`).
     Link = 2,
+    /// Checks, in a debug build, what the baseline tier's call stub did
+    /// taking a link itself: the three words as `Link`'s (see `verify`).
+    Verify = 3,
 }
 
 impl Vm {
@@ -38,6 +43,10 @@ impl Vm {
         debug_assert!(self.run_words_agree(), "the run words went stale");
         if list.first() == Some(&(SideList::Link as u32)) {
             return self.link_enter(&list[3..6], reg_state);
+        }
+        if cfg!(debug_assertions) && list.first() == Some(&(SideList::Verify as u32)) {
+            self.link_taken_agrees(&list[3..6], reg_state);
+            return 1;
         }
         let store = list.first() == Some(&(SideList::Store as u32));
         if !store

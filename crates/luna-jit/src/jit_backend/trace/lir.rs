@@ -20,7 +20,7 @@ mod masm;
 mod pmove;
 mod record;
 mod spare;
-mod stub;
+pub(super) mod stub;
 mod ty;
 
 #[cfg(all(target_arch = "aarch64", not(windows)))]

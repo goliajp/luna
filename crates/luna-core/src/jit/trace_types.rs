@@ -21,6 +21,7 @@ pub(crate) mod exit_code;
 mod exit_table;
 pub(crate) mod frame;
 pub(crate) mod installed;
+pub(crate) mod link_fast;
 pub(crate) mod options;
 mod outcome;
 pub(crate) mod record;

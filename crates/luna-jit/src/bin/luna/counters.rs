@@ -25,7 +25,7 @@ pub(crate) fn append(vm: &Vm) {
     #[cfg(not(feature = "llvm-jit"))]
     let llvm = 0;
     let mut line = format!(
-        "closed={} compiled={} failed={} dispatched={} side_compiled={} codegen={} baseline={} llvm={} tiered_up={} retiered={} calls_compiled={} method={} method_replaced={} links={} links_by_vm={} relink={}",
+        "closed={} compiled={} failed={} dispatched={} side_compiled={} codegen={} baseline={} llvm={} tiered_up={} retiered={} calls_compiled={} method={} method_replaced={} links={} links_by_vm={} links_by_stub={} links_left_by_stub={} relink={}",
         c.closed,
         c.compiled,
         c.compile_failed,
@@ -41,6 +41,8 @@ pub(crate) fn append(vm: &Vm) {
         c.method_replaced,
         c.links,
         c.links_by_vm.map(|n| n.to_string()).join("/"),
+        c.links_by_stub,
+        c.links_left_by_stub.map(|n| n.to_string()).join("/"),
         c.relink.map(|n| n.to_string()).join("/"),
     );
     for r in &c.compile_failed_reasons {

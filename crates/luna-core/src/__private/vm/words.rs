@@ -10,3 +10,10 @@ use crate::vm::Vm;
 pub fn hold_run_words_quiet(vm: &Vm, on: bool) {
     vm.jit.words.quiet.set(u32::from(on));
 }
+
+/// Lets (`on`, as by default) or keeps the baseline tier's call stub from
+/// taking links itself, for the cells filled from now on: with it kept, the
+/// stub leaves each link to the Vm, as it did before it could take one.
+pub fn let_stub_take_links(vm: &Vm, on: bool) {
+    vm.jit.words.stub_links_off.set(!on);
+}

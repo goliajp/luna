@@ -29,6 +29,11 @@ impl Vm {
             "the code left the Vm a link it could take"
         );
         self.jit.counters.links_by_vm[why] += 1;
+        if !left {
+            let stub = self.jit.words.stub_left.get() as usize;
+            self.jit.words.stub_left.set(0);
+            self.jit.counters.links_left_by_stub[stub] += 1;
+        }
         match self.link_take(link, regs) {
             Some(t) => {
                 let calls = match self.frames.last() {
