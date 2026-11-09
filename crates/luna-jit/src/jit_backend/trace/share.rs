@@ -139,7 +139,11 @@ pub(crate) fn adopt(
     };
     // one batch: the code of all the traces turns executable at once
     cs.baseline_code.open();
-    let out = install_all(cs, req, &todo, ahead_from);
+    let out = match &todo[..] {
+        // the trace asked for alone, as most are
+        [img] => install(cs, req, img, &todo, true).map_or_else(Vec::new, |a| vec![a]),
+        _ => install_all(cs, req, &todo, ahead_from),
+    };
     if cs.baseline_code.seal().is_err() {
         return Vec::new();
     }
