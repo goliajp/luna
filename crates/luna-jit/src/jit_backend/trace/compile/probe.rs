@@ -30,6 +30,7 @@ thread_local! {
     pub(crate) static BASE_VAR_SCAFFOLD_DECLARED: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
     pub(in crate::jit_backend::trace) static TRACE_CODEGEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static TRACE_CODE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 pub(in crate::jit_backend::trace) fn checkpoint(s: &'static str) {
@@ -87,6 +88,18 @@ pub fn base_var_scaffold_declared_count() -> u64 {
 #[doc(hidden)]
 pub fn trace_codegen_count() -> u64 {
     TRACE_CODEGEN.with(|c| c.get())
+}
+
+/// Bytes of machine code this thread placed for traces (either tier, and
+/// the copies of code made for another Vm). Diagnostic-only: what the
+/// code a run compiled takes.
+#[doc(hidden)]
+pub fn trace_code_bytes() -> u64 {
+    TRACE_CODE_BYTES.with(|c| c.get())
+}
+
+pub(in crate::jit_backend::trace) fn note_code_bytes(n: usize) {
+    TRACE_CODE_BYTES.with(|c| c.set(c.get() + n as u64));
 }
 
 /// reset the scaffold-declared counter so
