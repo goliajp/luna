@@ -168,10 +168,18 @@ impl Vm {
         // interpreter's already: a finalizer may have changed it since
         if !synced {
             let keep = keep_tfor_vars(&cl.proto, decode_body, cont_pc, 0);
-            let planned = (!child_ran && keep.is_empty())
-                .then(|| shape_plans.exit(exit_hit_idx))
-                .flatten()
-                .filter(|e| e.untouched_end <= max_stack && base_us + e.len <= self.stack.len());
+            let planned = if !child_ran && keep.is_empty() {
+                match shape_plans.exit(exit_hit_idx) {
+                    Some(e)
+                        if e.untouched_end <= max_stack && base_us + e.len <= self.stack.len() =>
+                    {
+                        Some(e)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
             if let Some(e) = planned {
                 self.trace_restore_planned(base_us, &e.written, reg_state);
             } else {
@@ -191,9 +199,11 @@ impl Vm {
         }
         // before anything reads the stack the exit restored
         let unmade = self.unmade.any();
-        let raise_at = unmade
-            .then(|| cold!(Vm::trace_exit_unmade_after, self, base_us, 0, failed))
-            .flatten();
+        let raise_at = if unmade {
+            cold!(Vm::trace_exit_unmade_after, self, base_us, 0, failed)
+        } else {
+            None
+        };
         let _ = &per_exit_inline; // hold the Rc alive across dispatch
         // an inline exit pushed frames above the head's, which resumes past
         // its call into them: at `head_pc` it would dispatch the trace again
