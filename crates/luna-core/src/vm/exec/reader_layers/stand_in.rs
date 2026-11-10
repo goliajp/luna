@@ -50,6 +50,7 @@ pub(super) fn proto(
         trace_ahead: crate::jit::send_compat::TRefLock::new(Default::default()),
         has_dispatchable_trace: std::cell::Cell::new(false),
         trace_heads: std::cell::Cell::new([TRACE_HEADS_NONE; TRACE_HEADS_CAP]),
+        trace_head_refused: crate::runtime::function::trace_heads_not_refused(),
         trace_call_head_settled: std::cell::Cell::new(false),
     };
     heap.try_adopt_proto(proto)

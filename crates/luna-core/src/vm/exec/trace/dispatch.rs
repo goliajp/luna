@@ -36,6 +36,27 @@ impl Vm {
         at
     }
 
+    /// Whether the trace [`Self::trace_dispatch`] would try at the loop
+    /// head in slot `at` of `proto.trace_heads` (frame `base`) is sure to
+    /// refuse the entry the way it refused one before
+    /// (`Proto::trace_head_refused`): the fast loop then runs on past the
+    /// head instead of handing it to the loop head, which would only find
+    /// the same. Only asked while no recording runs and no trap is set,
+    /// which the loop head would look at first.
+    #[inline(always)]
+    pub(in crate::vm::exec) fn trace_refuses_again(
+        &self,
+        proto: &crate::runtime::Proto,
+        at: usize,
+        base: u32,
+    ) -> bool {
+        let r = proto.trace_head_refused[at].get();
+        r != crate::runtime::function::TRACE_HEAD_NOT_REFUSED
+            && !self.jit.suppress_downrec_admit_once
+            && (self.stack.get(base as usize + (r >> 8) as usize))
+                .is_some_and(|v| v.unpack().0 == r as u8)
+    }
+
     /// Run the trace cached for `pc` of `cl` (frame `base`), if one admits this
     /// entry. `true` when the trace ran and the frame's pc now points past it.
     #[inline(never)]
@@ -77,12 +98,15 @@ impl Vm {
         let dispatch_ok = words::tags_in(&mut entry_tags, max_stack)
             && words::frame_in(&mut reg_state, window_size_us, max_stack)
             && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
-            && self.trace_marshal_in(
-                &ct,
-                base_us,
-                &mut entry_tags[..max_stack],
-                &mut reg_state[..max_stack],
-            );
+            && self
+                .trace_marshal_in(
+                    &ct,
+                    base_us,
+                    &mut entry_tags[..max_stack],
+                    &mut reg_state[..max_stack],
+                )
+                .map_err(|r| note_refusal(&cl.proto, pc, r))
+                .is_ok();
 
         let mut ran = false;
         if dispatch_ok {
@@ -152,5 +176,16 @@ impl Vm {
             self.trace_hold_later();
         }
         ran
+    }
+}
+
+/// Notes for the fast loop that the trace tried at head `pc` of `proto`
+/// refused an entry by `refusal` (see `Proto::trace_head_refused`). A head
+/// past those `trace_heads` lists is not watched for one by itself.
+#[cold]
+#[inline(never)]
+fn note_refusal(proto: &crate::runtime::Proto, pc: u32, refusal: u32) {
+    if let Some(at) = proto.trace_heads.get().iter().position(|&h| h == pc) {
+        proto.trace_head_refused[at].set(refusal);
     }
 }
