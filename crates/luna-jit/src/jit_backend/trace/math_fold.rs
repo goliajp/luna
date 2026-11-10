@@ -227,19 +227,14 @@ pub(super) fn try_match_trace_math_fold(
         }
         // Tail ops i+2, i+3 same head_proto + depth 0 constraint.
         for k in 2..=3 {
-            if !std::ptr::eq(record.ops[i + k].proto.as_ptr(), head_proto.as_ptr()) {
-                return None;
-            }
-            if record.ops[i + k].inline_depth != 0 {
+            let o = &record.ops[i + k];
+            if !std::ptr::eq(o.proto.as_ptr(), head_proto.as_ptr()) || o.inline_depth != 0 {
                 return None;
             }
         }
         let i2 = record.ops[i + 2].inst;
         let i3 = record.ops[i + 3].inst;
-        if !matches!(i2.op(), Op::Move) {
-            return None;
-        }
-        if !matches!(i3.op(), Op::Call) {
+        if !matches!(i2.op(), Op::Move) || !matches!(i3.op(), Op::Call) {
             return None;
         }
         // Move R[A+1] = R[arg_reg].
@@ -247,12 +242,8 @@ pub(super) fn try_match_trace_math_fold(
             return None;
         }
         let arg_reg = i2.b();
-        // Call R[A], B=2 (1 arg), C=2 (1 result), not into a Lua function
-        // the recording went into (as `split_window`)
-        if i3.a() != a || i3.b() != 2 || i3.c() != 2 {
-            return None;
-        }
-        if record.ops.get(i + 4).is_some_and(|o| o.inline_depth > 0) {
+        // Call R[A], B=2 (1 arg), C=2 (1 result), of a library function
+        if i3.a() != a || i3.b() != 2 || i3.c() != 2 || into_lua(record, i + 3) {
             return None;
         }
         return Some(TraceMathFold {
@@ -320,18 +311,18 @@ fn split_window(
             if inst_j.a() != a || !bs.contains(&inst_j.b()) || inst_j.c() != 2 {
                 return None;
             }
-            // the field held a Lua function when recorded, whose body the
-            // recording went into: no library function to fold
-            if record.ops.get(j + 1).is_some_and(|o| o.inline_depth > 0) {
-                return None;
-            }
-            return Some((j, inst_j.b() - 1));
+            return (!into_lua(record, j)).then_some((j, inst_j.b() - 1));
         }
         if inst_j.a() == a {
             return None;
         }
     }
     None
+}
+
+/// The call at `call` went into a Lua function the field held: none to fold.
+fn into_lua(record: &TraceRecord, call: usize) -> bool {
+    record.ops.get(call + 1).is_some_and(|o| o.inline_depth > 0)
 }
 
 /// `math.floor` / `math.ceil`: on 5.3+ they keep integers integral and
