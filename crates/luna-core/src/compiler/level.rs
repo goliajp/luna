@@ -191,6 +191,7 @@ impl<'a> Level<'a> {
                 [crate::runtime::function::TRACE_HEADS_NONE;
                     crate::runtime::function::TRACE_HEADS_CAP],
             ),
+            trace_head_refused: crate::runtime::function::trace_heads_not_refused(),
             trace_call_head_settled: std::cell::Cell::new(false),
         };
         self.clear_scopes();

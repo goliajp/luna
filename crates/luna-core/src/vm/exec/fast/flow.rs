@@ -30,9 +30,14 @@ macro_rules! fast_flow_macros {
         // one starts, for the dispatcher. Trace heads are loop heads, and a
         // loop entered by falling into it is caught at its first back-edge;
         // checking every instruction cost a call-heavy loop 5%.
+        // A head whose trace refuses this entry the way it refused one
+        // before is run past here: the loop head would refuse it again.
         macro_rules! next_jumped {
             () => {{
-                if WATCH && $heads.contains(&$npc) {
+                if WATCH
+                    && let Some(at) = $heads.iter().position(|&h| h == $npc)
+                    && !($stay && $trace_on && $vm.trace_refuses_again(&cl!().proto, at, base!()))
+                {
                     store_pc!();
                     return Ok(FastExit::Reload);
                 }

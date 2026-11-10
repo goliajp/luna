@@ -21,6 +21,14 @@ pub(crate) const TRACE_HEADS_MANY: u32 = u32::MAX - 1;
 /// Slots in [`Proto::trace_heads`].
 pub(crate) const TRACE_HEADS_CAP: usize = 4;
 
+/// A slot of [`Proto::trace_head_refused`] with no refusal noted.
+pub(crate) const TRACE_HEAD_NOT_REFUSED: u32 = u32::MAX;
+
+/// [`Proto::trace_head_refused`] of a prototype no trace has refused at.
+pub(crate) fn trace_heads_not_refused() -> [std::cell::Cell<u32>; TRACE_HEADS_CAP] {
+    std::array::from_fn(|_| std::cell::Cell::new(TRACE_HEAD_NOT_REFUSED))
+}
+
 /// A compiled function (PUC Proto). Immutable after compilation.
 #[repr(C)]
 pub struct Proto {
@@ -163,6 +171,13 @@ pub struct Proto {
     /// `TRACE_HEADS_CAP`, the rest `TRACE_HEADS_NONE`; `TRACE_HEADS_MANY`
     /// in all once there are more.
     pub(crate) trace_heads: std::cell::Cell<[u32; TRACE_HEADS_CAP]>,
+    /// Per slot of `trace_heads`: a register and the tag in it, as
+    /// `slot << 8 | tag`, that made the trace the dispatcher tries at that
+    /// head refuse an entry, or `TRACE_HEAD_NOT_REFUSED`. That trace is
+    /// the same from then on (traces are never removed and the first one
+    /// admitted at a head stays first), and its checks refuse every entry
+    /// with that tag in that register.
+    pub(crate) trace_head_refused: [std::cell::Cell<u32>; TRACE_HEADS_CAP],
     /// Whether the call trigger is done with this Proto's entry (`pc = 0`):
     /// a trace is cached there or recording it was abandoned. Set once,
     /// it spares every later call the scan of `traces`.

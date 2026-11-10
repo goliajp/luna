@@ -8,10 +8,11 @@ use crate::jit::trace_types::installed::entry_plan::EntrySlot;
 impl Vm {
     /// Copy the frame's registers, `entry_tags.len()` of them from `base_us`,
     /// into the trace's entry buffers `entry_tags` and `reg_state` (as
-    /// long). `false` when a register the trace checks has a tag other than
+    /// long). `Err` when a register the trace checks has a tag other than
     /// the one `ct` was compiled for, or one that cannot be passed as a raw
-    /// payload. A trace with no side trace wired copies only the registers
-    /// it checks. The others are held on the stack (see the lowering's
+    /// payload: that register and its tag, as `slot << 8 | tag`, which alone
+    /// refuse the entry. A trace with no side trace wired copies only the
+    /// registers it checks. The others are held on the stack (see the lowering's
     /// `StackHeld`), and only a side trace run from one of its exits reads
     /// them, or their entry tags, from the buffers. Out of line, so that the
     /// loop has the registers to itself.
@@ -22,15 +23,15 @@ impl Vm {
         base_us: usize,
         entry_tags: &mut [u8],
         reg_state: &mut [i64],
-    ) -> bool {
+    ) -> Result<(), u32> {
         let l = entry_tags.len();
         let frame = &self.stack[base_us..base_us + l];
         let (regs, tags) = (&mut reg_state[..l], &mut entry_tags[..l]);
         let plan = &ct.entry_plan;
         if let Err(k) = checked_slots(plan.checked(), frame, regs, tags)
-            && !odd_slots(&plan.checked()[k..], frame, regs, tags)
+            && let Err((slot, tag)) = odd_slots(&plan.checked()[k..], frame, regs, tags)
         {
-            return false;
+            return Err(refusal(slot, tag));
         }
         if ct.has_any_side_wired.get() {
             let want = &*ct.plans.entry_tags;
@@ -44,13 +45,20 @@ impl Vm {
                 }
             }
         }
-        plan.len() >= l
-            || past_slots(
-                &frame[plan.len()..],
-                &mut regs[plan.len()..],
-                &mut tags[plan.len()..],
-            )
+        let n = plan.len();
+        if n >= l {
+            return Ok(());
+        }
+        past_slots(&frame[n..], &mut regs[n..], &mut tags[n..])
+            .map_err(|(i, tag)| refusal((n + i) as u16, tag))
     }
+}
+
+/// A refusal at register `slot`, holding a value of tag `tag`, as
+/// [`Vm::trace_marshal_in`] returns it.
+#[inline]
+fn refusal(slot: u16, tag: u8) -> u32 {
+    u32::from(slot) << 8 | u32::from(tag)
 }
 
 /// The checked registers of an entry plan whose tag is the plain match of
@@ -86,11 +94,16 @@ fn checked_slots(
 }
 
 /// [`checked_slots`] from the register it stopped at on, each register
-/// that is not a plain match passed through [`bool_entry`]. `false` when
-/// one cannot enter.
+/// that is not a plain match passed through [`bool_entry`]. The slot and
+/// tag of the first that cannot enter.
 #[cold]
 #[inline(never)]
-fn odd_slots(plan: &[EntrySlot], frame: &[Value], regs: &mut [i64], tags: &mut [u8]) -> bool {
+fn odd_slots(
+    plan: &[EntrySlot],
+    frame: &[Value],
+    regs: &mut [i64],
+    tags: &mut [u8],
+) -> Result<(), (u16, u8)> {
     for &EntrySlot { slot, tag: want } in plan {
         let s = slot as usize;
         if s >= frame.len() {
@@ -101,31 +114,36 @@ fn odd_slots(plan: &[EntrySlot], frame: &[Value], regs: &mut [i64], tags: &mut [
         if tag != want || PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
             match bool_entry(want, tag) {
                 Some(p) => regs[s] = p,
-                None => return false,
+                None => return Err((slot, tag)),
             }
         }
         tags[s] = tag;
     }
-    true
+    Ok(())
 }
 
 /// The frame's registers past the trace's entry tags, each checked like one
-/// read: against its own tag.
+/// read: against its own tag. The index and tag of the first that cannot
+/// enter.
 #[cold]
 #[inline(never)]
-fn past_slots(frame: &[Value], regs: &mut [i64], tags: &mut [u8]) -> bool {
-    for (v, (r, t)) in frame.iter().zip(regs.iter_mut().zip(tags.iter_mut())) {
+fn past_slots(frame: &[Value], regs: &mut [i64], tags: &mut [u8]) -> Result<(), (usize, u8)> {
+    for (i, (v, (r, t))) in frame
+        .iter()
+        .zip(regs.iter_mut().zip(tags.iter_mut()))
+        .enumerate()
+    {
         let (tag, payload) = unpack_word(*v);
         *r = payload;
         if PLAIN_ENTRY_TAGS >> tag & 1 == 0 {
             match bool_entry(tag, tag) {
                 Some(p) => *r = p,
-                None => return false,
+                None => return Err((i, tag)),
             }
         }
         *t = tag;
     }
-    true
+    Ok(())
 }
 
 /// `v`'s tag and its payload word as a register holds it.
