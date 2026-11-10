@@ -27,7 +27,7 @@ pub(in crate::vm::exec) fn reserve(
 #[inline(always)]
 pub(super) fn frame_in(reg_state: &mut LVec<i64>, window: usize, max_stack: usize) -> bool {
     if reg_state.len() < window + TRACE_FRAME_TAIL
-        && grow(reg_state, window + TRACE_FRAME_TAIL).is_err()
+        && cold!(grow, reg_state, window + TRACE_FRAME_TAIL).is_err()
     {
         return false;
     }
@@ -44,7 +44,7 @@ pub(super) fn frame_in(reg_state: &mut LVec<i64>, window: usize, max_stack: usiz
 /// `false` when it cannot grow: the trace is not entered.
 #[inline(always)]
 pub(super) fn tags_in(entry_tags: &mut LVec<u8>, max_stack: usize) -> bool {
-    entry_tags.len() >= max_stack || grow(entry_tags, max_stack).is_ok()
+    entry_tags.len() >= max_stack || cold!(grow, entry_tags, max_stack).is_ok()
 }
 
 #[cold]

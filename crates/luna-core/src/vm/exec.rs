@@ -20,6 +20,18 @@ use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
 use native::call::NativeKind;
 
+/// Calls `f`, a function off the dispatch's hot path, through a pointer the
+/// optimizer cannot see through: nothing it could infer from `f`'s body
+/// (what it writes, whether it unwinds) reaches the caller's code, which so
+/// stays the same however `f` changes. `f` is `#[cold] #[inline(never)]`.
+macro_rules! cold {
+    ($f:path, $($a:expr),* $(,)?) => {{
+        let f: fn($(cold!(@any $a)),*) -> _ = $f;
+        std::hint::black_box(f)($($a),*)
+    }};
+    (@any $a:expr) => { _ };
+}
+
 mod arith;
 mod call;
 mod close;
@@ -193,6 +205,7 @@ impl From<LuaError> for Error {
 /// non-empty value. The result is cached in a `OnceLock` so the
 /// dispatcher's hot path pays a single atomic load per process. Off
 /// by default — production deploys don't bleed diagnostic prints.
+#[inline(always)]
 fn jit_probe_enabled() -> bool {
     static PROBE_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *PROBE_ON.get_or_init(|| {

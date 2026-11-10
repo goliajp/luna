@@ -15,6 +15,7 @@ impl Vm {
     /// left the link (`LINK_DEPTH` taken in a row), the link taken here, the
     /// count of links in a row started again: the entry to call next on the
     /// same buffer. `None` when the dispatch is done.
+    #[inline(always)]
     pub(super) fn trace_link_again(
         &mut self,
         proto: Gc<crate::runtime::Proto>,
@@ -23,10 +24,24 @@ impl Vm {
         r: i64,
         regs: &mut [i64],
     ) -> Option<crate::jit::trace::TraceFn> {
-        let raw = r as u64;
-        if raw & EXIT_RELINK == 0 {
+        if r as u64 & EXIT_RELINK == 0 {
             return None;
         }
+        cold!(Vm::trace_relink_again, self, proto, ct, start, r, regs)
+    }
+
+    /// [`Self::trace_link_again`] for a return that asks for the link.
+    #[cold]
+    #[inline(never)]
+    fn trace_relink_again(
+        &mut self,
+        proto: Gc<crate::runtime::Proto>,
+        ct: &CompiledTrace,
+        start: usize,
+        r: i64,
+        regs: &mut [i64],
+    ) -> Option<crate::jit::trace::TraceFn> {
+        let raw = r as u64;
         let w = &self.jit.words;
         let last = (w.trail_len() > start).then(|| w.trail_get(w.trail_len() - 1)[2] as usize);
         let held = last.map(|i| TArc::clone(&proto.traces.borrow()[i]));
@@ -53,6 +68,7 @@ impl Vm {
     /// last trace linked to, whose return the dispatch decodes as though it
     /// had entered it, with `entry_tags` made the tags it was entered with.
     /// `None` when no link was taken.
+    #[inline(never)]
     pub(super) fn trace_links_taken(
         &mut self,
         proto: Gc<crate::runtime::Proto>,
@@ -86,10 +102,11 @@ impl Vm {
     }
 
     /// The counts of a dispatch of `ct` (the trace whose code returned).
+    #[inline(always)]
     pub(super) fn trace_count_dispatch(&mut self, ct: &CompiledTrace, downrec: bool) {
         self.jit.counters.dispatched += 1;
         if ct.inline_kinds != 0 {
-            self.count_inline_kinds(ct.inline_kinds);
+            cold!(Vm::count_inline_kinds, self, ct.inline_kinds);
         }
         // A helper that could not do its op (a metatable, no memory) parked
         // a deopt and the trace left at that op: the exit is where the

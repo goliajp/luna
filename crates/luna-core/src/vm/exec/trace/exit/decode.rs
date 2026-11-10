@@ -10,6 +10,7 @@ impl Vm {
     /// Which trace's exit shapes decode `raw_ret`: a side trace's when one
     /// is wired to the exit taken (it runs here first), else the trace's
     /// own.
+    #[inline(always)]
     pub(in crate::vm::exec) fn trace_exit_source(
         &mut self,
         cl: Gc<LuaClosure>,
@@ -21,19 +22,37 @@ impl Vm {
     ) -> ExitSource {
         let src = match ran_from_code(ct, raw_ret, reg_state) {
             Some(src) => src,
-            None => self.exit_source_of(cl, ct, raw_ret, reg_state, base_us, entry_tags),
+            None if self.exit_runs_no_side(ct) => ExitSource::parent_only(raw_ret),
+            None => cold!(
+                Vm::exit_source_of,
+                self,
+                cl,
+                ct,
+                raw_ret,
+                reg_state,
+                base_us,
+                entry_tags
+            ),
         };
-        // a side trace runs one pass for each return through here, and the
-        // dispatcher never enters it: count the pass as its entry
-        if src.ran
-            && let Some(c) = &src.child
-        {
-            self.count_towards_tier_up(c, cl.proto.call_hot_count.get());
-            super::super::relink::relink_refresh(ct, src.exit, c);
+        if src.ran {
+            self.count_side_pass(cl, ct, &src);
         }
         src
     }
 
+    /// A side trace runs one pass for each return through
+    /// [`Self::trace_exit_source`], and the dispatcher never enters it: the
+    /// pass counted as its entry.
+    #[inline(always)]
+    fn count_side_pass(&mut self, cl: Gc<LuaClosure>, ct: &CompiledTrace, src: &ExitSource) {
+        if let Some(c) = &src.child {
+            self.count_towards_tier_up(c, cl.proto.call_hot_count.get());
+            super::super::relink::relink_refresh(ct, src.exit, c);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
     fn exit_source_of(
         &mut self,
         cl: Gc<LuaClosure>,
@@ -43,16 +62,7 @@ impl Vm {
         base_us: usize,
         entry_tags: &[u8],
     ) -> ExitSource {
-        let parent_only = ExitSource {
-            child: None,
-            body: raw_ret,
-            ran: false,
-            off: 0,
-            exit: 0,
-        };
-        if self.exit_runs_no_side(ct) {
-            return parent_only;
-        }
+        let parent_only = ExitSource::parent_only(raw_ret);
         // the side trace wired to the exit taken runs here, not from the
         // parent's code (a test at every exit cost more than it saved)
         let tentative = ct.plans.decode(raw_ret);
@@ -120,6 +130,7 @@ impl Vm {
     /// Whether the exit `ct` took runs no side trace: none is wired, or
     /// the exit is a collection check (the check is the op's), at an op a
     /// helper could not do, or one whose registers are not all made yet.
+    #[inline(always)]
     fn exit_runs_no_side(&self, ct: &CompiledTrace) -> bool {
         !ct.has_any_side_wired.get()
             || self.jit.gc_exit().is_some()
@@ -191,9 +202,25 @@ pub(in crate::vm::exec) struct ExitSource {
     pub(in crate::vm::exec) exit: usize,
 }
 
+impl ExitSource {
+    /// No side trace ran: the return `raw_ret` decodes with the trace's own
+    /// exits.
+    #[inline(always)]
+    fn parent_only(raw_ret: u64) -> Self {
+        ExitSource {
+            child: None,
+            body: raw_ret,
+            ran: false,
+            off: 0,
+            exit: 0,
+        }
+    }
+}
+
 /// The side trace `ct`'s code ran from a side cell and returned from, when
 /// it noted one (see `frame::trace_ran_side_slot`): its return, `raw_ret`,
 /// is decoded with its exits. It runs at the exit's frame, the head's.
+#[inline(always)]
 fn ran_from_code(ct: &CompiledTrace, raw_ret: u64, reg_state: &[i64]) -> Option<ExitSource> {
     // a trace with no side trace wired runs none (and its dispatch leaves
     // the noting word as it was): none is wired while a trace runs

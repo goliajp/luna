@@ -21,6 +21,26 @@ impl Vm {
         if !self.unmade.any() || self.unmade.frames.is_none() || site_id == 0 {
             return None;
         }
+        cold!(
+            Vm::trace_unmade_frames_of,
+            self,
+            (trace, site_id),
+            tags,
+            (off, base, max_stack),
+            reg_state
+        )
+    }
+
+    /// [`Self::unmade_frames_at`] for an exit with frames to push.
+    #[cold]
+    #[inline(never)]
+    fn trace_unmade_frames_of(
+        &mut self,
+        (trace, site_id): (&CompiledTrace, u32),
+        tags: (&[ExitTag], Option<&[u8]>),
+        (off, base, max_stack): (usize, usize, usize),
+        reg_state: &[i64],
+    ) -> Option<(LuaError, u32)> {
         let view = UnmadeFramesView::of(trace, site_id, tags, off, base, max_stack);
         self.trace_push_unmade_frames(&view, reg_state)
     }

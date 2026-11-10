@@ -68,6 +68,7 @@ impl Vm {
 
     /// Ends the pause: the loop counts are back.
     #[cold]
+    #[inline(never)]
     pub(in crate::vm::exec) fn gc_quiet_end(&mut self) {
         let held = self.jit.words.quiet_held.get();
         self.jit.words.quiet.set(u32::from(held));

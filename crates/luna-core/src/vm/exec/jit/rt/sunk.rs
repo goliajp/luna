@@ -24,15 +24,24 @@ pub(crate) struct TraceGhosts {
 impl Vm {
     /// A trace starts running: its records, apart from those of the
     /// traces it runs inside.
+    #[inline(always)]
     pub(crate) fn jit_ghosts_enter(&mut self) {
         let d = self.jit.ghost_depth;
         if self.jit.ghosts.len() <= d {
-            self.jit.ghosts.push(TraceGhosts::default());
+            cold!(Vm::jit_ghosts_grow, self);
         }
         self.jit.ghosts[d].sunk.fill(None);
         self.jit.ghosts[d].accum = None;
         self.jit.ghosts[d].accum_prefix = None;
         self.jit.ghost_depth = d + 1;
+    }
+
+    /// One more level of records, for a trace run inside the traces
+    /// running.
+    #[cold]
+    #[inline(never)]
+    fn jit_ghosts_grow(&mut self) {
+        self.jit.ghosts.push(TraceGhosts::default());
     }
 
     /// The running trace's records.

@@ -10,6 +10,8 @@ impl Vm {
     /// recording runs: a side trace in its own frame closes linked to it.
     /// Before the dispatcher reads the trace's registers in: wiring the
     /// side trace makes the trace read all of them.
+    #[cold]
+    #[inline(never)]
     pub(in crate::vm::exec) fn trace_link_at(&mut self, proto: Gc<Proto>, pc: u32) {
         let in_frame = self.frames.len() == self.jit.recording_frame_base + 1;
         let Some(rec) = self.jit.active_trace.as_mut() else {
@@ -42,7 +44,16 @@ impl Vm {
     /// with the trace's ops missing) and is dropped, counted as a failure
     /// of its head: the hot count would otherwise start the same
     /// recording again and again.
+    #[inline(always)]
     pub(in crate::vm::exec) fn trace_drop_at_compiled(&mut self) {
+        if self.jit.active_trace.is_some() {
+            cold!(Vm::trace_drop_recording, self);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn trace_drop_recording(&mut self) {
         if let Some(rec) = self.jit.active_trace.take() {
             self.jit.counters.aborted += 1;
             self.jit.counters.bump_close_cause("reached-compiled-trace");

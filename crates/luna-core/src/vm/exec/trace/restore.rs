@@ -6,6 +6,7 @@ use super::*;
 impl Vm {
     /// Write the trace's registers back to the frame with the tags its exit
     /// analysis gives them.
+    #[inline(never)]
     #[allow(clippy::too_many_arguments)]
     pub(in crate::vm::exec) fn trace_restore_slots(
         &mut self,
@@ -121,6 +122,7 @@ impl Vm {
     /// `for` variables to keep, whose untouched registers all lie in the
     /// frame (the stack holds them as they entered) and whose window the
     /// stack covers.
+    #[inline(always)]
     pub(in crate::vm::exec) fn trace_restore_planned(
         &mut self,
         base_us: usize,
@@ -157,10 +159,19 @@ impl Vm {
         reg_state: &[i64],
     ) {
         if ct.call_count {
-            self.put_back_edge_kinds(base_us, ct, tags, keep, reg_state);
+            cold!(
+                Vm::put_back_edge_kinds,
+                self,
+                base_us,
+                ct,
+                tags,
+                keep,
+                reg_state
+            );
         }
     }
 
+    #[cold]
     #[inline(never)]
     fn put_back_edge_kinds(
         &mut self,

@@ -6,6 +6,7 @@ use crate::jit::trace::CompiledTrace;
 impl Vm {
     /// Counts the hit of exit `exit_hit_idx` in `hit_counts` (none for a
     /// `tier_exit`); whether it is the one that starts a side trace.
+    #[inline(always)]
     pub(super) fn count_exit_hit(
         &self,
         ct: &CompiledTrace,
@@ -39,6 +40,8 @@ impl Vm {
 
     /// Start recording a side trace at `cont_pc`, the exit of the trace at
     /// `head_pc_val` that just became hot.
+    #[cold]
+    #[inline(never)]
     pub(super) fn trace_start_side(
         &mut self,
         cl: Gc<LuaClosure>,

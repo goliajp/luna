@@ -109,6 +109,7 @@ impl Vm {
 /// head frame (the exit's frame of `proto` starts at register `off`): its
 /// TForCall wrote the loop variables to the stack with tags the trace did
 /// not compile for.
+#[inline(always)]
 pub(in crate::vm::exec) fn keep_tfor_vars(
     proto: &crate::runtime::function::Proto,
     decode_body: u64,
@@ -118,6 +119,17 @@ pub(in crate::vm::exec) fn keep_tfor_vars(
     if decode_body & crate::jit::trace_types::exit_code::EXIT_KEEP_TFOR_VARS == 0 {
         return 0..0;
     }
+    cold!(tfor_vars, proto, cont_pc, off)
+}
+
+/// [`keep_tfor_vars`] for an exit that keeps them.
+#[cold]
+#[inline(never)]
+fn tfor_vars(
+    proto: &crate::runtime::function::Proto,
+    cont_pc: u32,
+    off: usize,
+) -> std::ops::Range<usize> {
     let call = proto.code[cont_pc as usize - 1];
     let lay = call.op().for_layout().expect("an exit after a TForCall");
     let first = off + (call.a() + lay.var()) as usize;

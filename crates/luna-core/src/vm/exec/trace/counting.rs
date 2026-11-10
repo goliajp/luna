@@ -5,6 +5,7 @@ use super::*;
 
 impl Vm {
     #[cold]
+    #[inline(never)]
     pub(super) fn count_inline_kinds(&mut self, kinds: u8) {
         for (b, n) in self
             .jit
@@ -22,6 +23,7 @@ impl Vm {
     /// The entry to call for `ct`, counting the entry towards its move to
     /// the optimizing tier and making that move when it is due. `calls`:
     /// the head function's `call_hot_count` now.
+    #[inline(always)]
     pub(super) fn trace_entry_counted(
         &mut self,
         ct: &crate::jit::trace::CompiledTrace,
@@ -34,6 +36,7 @@ impl Vm {
     /// Counts an entry of `ct` towards its move to the optimizing tier and
     /// makes the move when it is due. `calls`: the head function's
     /// `call_hot_count` now.
+    #[inline(always)]
     pub(in crate::vm::exec) fn count_towards_tier_up(
         &mut self,
         ct: &crate::jit::trace::CompiledTrace,
@@ -46,7 +49,7 @@ impl Vm {
             t.count.set(n);
             let reused = calls != t.calls_at && n >= t.reused_at;
             if n >= t.at || reused {
-                self.trace_tier_up(ct);
+                cold!(Vm::trace_tier_up, self, ct);
             }
         }
     }
@@ -57,6 +60,7 @@ impl Vm {
     /// `TraceCompiler::compile_calls`): asked once, and counted as a move
     /// again of a trace that moves to the optimizing tier.
     #[cold]
+    #[inline(never)]
     pub(in crate::vm::exec) fn trace_compile_calls(
         &mut self,
         ct: &crate::jit::trace::CompiledTrace,
@@ -87,6 +91,7 @@ impl Vm {
     /// `TierUp::retier`), and points everything that enters it at the new
     /// code.
     #[cold]
+    #[inline(never)]
     pub(super) fn trace_tier_up(&mut self, ct: &crate::jit::trace::CompiledTrace) {
         let Some(t) = &ct.tier_up else { return };
         t.tried.set(true);

@@ -77,7 +77,7 @@ impl Vm {
             return false;
         };
         if self.jit.active_trace.is_some() {
-            self.trace_link_at(cl.proto, pc);
+            cold!(Vm::trace_link_at, self, cl.proto, pc);
         }
         // `ct` is held across the dispatch, so its fields are borrowed
         // counted here, where it costs the least, and taken back if the
@@ -108,7 +108,7 @@ impl Vm {
                 &mut reg_state[..max_stack],
             ) {
                 entry::ENTERS => true,
-                r => note_refusal(&ct, &cl.proto, pc, r),
+                r => cold!(note_refusal, &ct, &cl.proto, pc, r),
             };
 
         let mut ran = false;
@@ -120,12 +120,12 @@ impl Vm {
             // pops
             let pre_frames = self.frames.len();
             if is_downrec_entry {
-                reg_state[window_size_us] = self.downrec_saved_pc(pre_frames);
+                reg_state[window_size_us] = cold!(Vm::downrec_saved_pc, self, pre_frames);
             }
             // `LUNA_AOT_PROBE`: one line at the first dispatch, for the AOT
             // smoke test to see compiled code ran
             if jit_probe_enabled() && self.jit.counters.dispatched == 0 {
-                eprintln!("luna-runtime-helpers: aot_trace_fired pc={head_pc_val}");
+                cold!(aot_probe_line, head_pc_val);
             }
             self.jit_ghosts_enter();
             words::count_in(&ct, &mut reg_state, window_size_us);
@@ -143,7 +143,7 @@ impl Vm {
             if is_downrec_entry && downrec_close_exit(continuation_pc) {
                 // a due step leaves through an exit, never the close
                 debug_assert!(self.jit.gc_exit().is_none());
-                self.trace_downrec_classify(pre_frames);
+                cold!(Vm::trace_downrec_classify, self, pre_frames);
             } else {
                 self.trace_exit_restore(
                     cl,
@@ -176,12 +176,19 @@ impl Vm {
         if let Some(op_pc) = self.jit.take_gc_exit()
             && self.jit.pending_raise.is_none()
         {
-            self.trace_gc_exit_check(op_pc);
+            cold!(Vm::trace_gc_exit_check, self, op_pc);
         }
         if !self.jit.step.held_later.is_empty() {
-            self.trace_hold_later();
+            cold!(Vm::trace_hold_later, self);
         }
     }
+}
+
+/// The `LUNA_AOT_PROBE` line of the first dispatch, at head `pc`.
+#[cold]
+#[inline(never)]
+fn aot_probe_line(pc: u32) {
+    eprintln!("luna-runtime-helpers: aot_trace_fired pc={pc}");
 }
 
 /// After `ct`, tried at head `pc` of `proto`, refused an entry by `refusal`:

@@ -17,6 +17,7 @@ impl Vm {
     /// One that left after an allocation with a step due checks for a
     /// collection once the dispatcher has its buffers back
     /// ([`Self::trace_gc_exit_check`]).
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub(in crate::vm::exec) fn trace_exit_restore(
         &mut self,
@@ -30,7 +31,7 @@ impl Vm {
     ) {
         let synced = self.jit.step.synced_exit;
         if synced || self.jit.gc_exit().is_some() {
-            self.trace_gc_left(pre_frames, ct.head_pc);
+            cold!(Vm::trace_gc_left, self, pre_frames, ct.head_pc);
         }
         self.trace_exit_regs(
             cl,
@@ -42,6 +43,35 @@ impl Vm {
             entry_tags,
             synced,
         );
+    }
+
+    /// The write-back of an exit after which a side trace ran from a frame
+    /// the trace inlined (`src`).
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn trace_exit_inner_side(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        base_us: usize,
+        ct: &CompiledTrace,
+        raw_ret: u64,
+        src: ExitSource,
+        pre_frames: usize,
+        reg_state: &mut crate::runtime::mem::LVec<i64>,
+        entry_tags: &[u8],
+    ) {
+        let off = src.off;
+        let failed = self.trace_exit_restore_inner(
+            cl, base_us, ct, raw_ret, src, pre_frames, reg_state, entry_tags,
+        );
+        let unmade = self.unmade.any();
+        if let Some(pc) = unmade
+            .then(|| self.trace_exit_unmade_after(base_us, off, failed))
+            .flatten()
+        {
+            set_top_pc(&mut self.frames, pc);
+        }
     }
 
     /// The trace left for a collection, or after a step it made in place:
@@ -64,6 +94,7 @@ impl Vm {
         }
     }
 
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn trace_exit_regs(
         &mut self,
@@ -85,17 +116,18 @@ impl Vm {
         let raw_ret = continuation_pc as u64;
         let src = self.trace_exit_source(cl, ct, raw_ret, reg_state, base_us, entry_tags);
         if src.ran && src.off > 0 {
-            let off = src.off;
-            let failed = self.trace_exit_restore_inner(
-                cl, base_us, ct, raw_ret, src, pre_frames, reg_state, entry_tags,
+            cold!(
+                Vm::trace_exit_inner_side,
+                self,
+                cl,
+                base_us,
+                ct,
+                raw_ret,
+                src,
+                pre_frames,
+                reg_state,
+                entry_tags
             );
-            let unmade = self.unmade.any();
-            if let Some(pc) = unmade
-                .then(|| self.trace_exit_unmade_after(base_us, off, failed))
-                .flatten()
-            {
-                set_top_pc(&mut self.frames, pc);
-            }
             return;
         }
         let ExitSource {
@@ -160,23 +192,23 @@ impl Vm {
         // before anything reads the stack the exit restored
         let unmade = self.unmade.any();
         let raise_at = unmade
-            .then(|| self.trace_exit_unmade_after(base_us, 0, failed))
+            .then(|| cold!(Vm::trace_exit_unmade_after, self, base_us, 0, failed))
             .flatten();
         let _ = &per_exit_inline; // hold the Rc alive across dispatch
         // an inline exit pushed frames above the head's, which resumes past
         // its call into them: at `head_pc` it would dispatch the trace again
         if site_id > 0 {
             let idx = (site_id - 1) as usize;
-            let head_resume_pc = decode_inline[idx].head_resume_pc;
-            if pre_frames > 0
-                && let CallFrame::Lua(f) = &mut self.frames[pre_frames - 1]
-            {
-                f.pc = head_resume_pc;
-            }
+            cold!(
+                set_head_resume,
+                &mut self.frames,
+                pre_frames,
+                decode_inline[idx].head_resume_pc
+            );
         }
         // a frame could not be made: the call into it raises the error
         if let Some(pc) = raise_at {
-            set_top_pc(&mut self.frames, pc);
+            cold!(set_top_pc, &mut self.frames, pc);
             return;
         }
         let frames_len_now = self.frames.len();
@@ -184,17 +216,15 @@ impl Vm {
         match unsafe { self.frames.last_mut().unwrap_unchecked() } {
             CallFrame::Lua(fmut) => {
                 if crate::jit::trace::v2c_probe_enabled() {
-                    eprintln!(
-                        "[v2c-set-pc] side_ran={} raw={:#018x} prev_pc={} new_cont_pc={} site_id={} frames.len={} pre_frames={} max_stack={}",
-                        child_ran,
+                    let at = (
                         raw_ret,
                         fmut.pc,
                         cont_pc,
                         site_id,
                         frames_len_now,
                         pre_frames,
-                        max_stack,
                     );
+                    cold!(v2c_set_pc_line, child_ran, at, max_stack);
                 }
                 fmut.pc = cont_pc;
             }
@@ -218,10 +248,37 @@ impl Vm {
     }
 }
 
+/// The `LUNA_V2C_PROBE` line of an exit setting the frame's pc: `at` is the
+/// return, the pc before, the pc after, the inline site, the frames now and
+/// before.
+#[cold]
+#[inline(never)]
+fn v2c_set_pc_line(child_ran: bool, at: (u64, u32, u32, u32, usize, usize), max_stack: usize) {
+    let (raw_ret, prev_pc, cont_pc, site_id, frames_len_now, pre_frames) = at;
+    eprintln!(
+        "[v2c-set-pc] side_ran={} raw={:#018x} prev_pc={} new_cont_pc={} site_id={} frames.len={} pre_frames={} max_stack={}",
+        child_ran, raw_ret, prev_pc, cont_pc, site_id, frames_len_now, pre_frames, max_stack,
+    );
+}
+
+/// An inline exit pushed frames above the head's, which resumes past its
+/// call into them at `head_resume_pc`: at the head it would dispatch the
+/// trace again.
+#[cold]
+#[inline(never)]
+fn set_head_resume(frames: &mut [CallFrame], pre_frames: usize, head_resume_pc: u32) {
+    if pre_frames > 0
+        && let CallFrame::Lua(f) = &mut frames[pre_frames - 1]
+    {
+        f.pc = head_resume_pc;
+    }
+}
+
 /// Whether `ct` left at `cont_pc` to move to the optimizing tier: that exit
 /// is no guard failing, so it neither counts nor starts a side trace. Its
 /// count equals `at` only between that exit and the next dispatch, which
 /// tiers up first.
+#[inline(always)]
 fn is_tier_exit(ct: &CompiledTrace, cont_pc: u32) -> bool {
     cont_pc == ct.head_pc
         && ct
@@ -231,6 +288,8 @@ fn is_tier_exit(ct: &CompiledTrace, cont_pc: u32) -> bool {
 }
 
 /// Moves the frame on top of `frames`, a Lua frame, to `pc`.
+#[cold]
+#[inline(never)]
 fn set_top_pc(frames: &mut [CallFrame], pc: u32) {
     if let Some(CallFrame::Lua(f)) = frames.last_mut() {
         f.pc = pc;
