@@ -8,10 +8,11 @@ use crate::jit::trace_types::installed::entry_plan::EntrySlot;
 impl Vm {
     /// Copy the frame's registers, `entry_tags.len()` of them from `base_us`,
     /// into the trace's entry buffers `entry_tags` and `reg_state` (as
-    /// long). `Err` when a register the trace checks has a tag other than
-    /// the one `ct` was compiled for, or one that cannot be passed as a raw
-    /// payload: that register and its tag, as `slot << 8 | tag`, which alone
-    /// refuse the entry. A trace with no side trace wired copies only the
+    /// long). [`ENTERS`], or, when a register the trace checks has a tag
+    /// other than the one `ct` was compiled for, or one that cannot be
+    /// passed as a raw payload, that register and its tag as `slot << 8 |
+    /// tag`, which alone refuse the entry (one word: the dispatcher tests it
+    /// as it would a `bool`). A trace with no side trace wired copies only the
     /// registers it checks. The others are held on the stack (see the lowering's
     /// `StackHeld`), and only a side trace run from one of its exits reads
     /// them, or their entry tags, from the buffers. Out of line, so that the
@@ -23,7 +24,7 @@ impl Vm {
         base_us: usize,
         entry_tags: &mut [u8],
         reg_state: &mut [i64],
-    ) -> Result<(), u32> {
+    ) -> u32 {
         let l = entry_tags.len();
         let frame = &self.stack[base_us..base_us + l];
         let (regs, tags) = (&mut reg_state[..l], &mut entry_tags[..l]);
@@ -31,7 +32,7 @@ impl Vm {
         if let Err(k) = checked_slots(plan.checked(), frame, regs, tags)
             && let Err((slot, tag)) = odd_slots(&plan.checked()[k..], frame, regs, tags)
         {
-            return Err(refusal(slot, tag));
+            return refusal(slot, tag);
         }
         if ct.has_any_side_wired.get() {
             let want = &*ct.plans.entry_tags;
@@ -47,12 +48,18 @@ impl Vm {
         }
         let n = plan.len();
         if n >= l {
-            return Ok(());
+            return ENTERS;
         }
-        past_slots(&frame[n..], &mut regs[n..], &mut tags[n..])
-            .map_err(|(i, tag)| refusal((n + i) as u16, tag))
+        match past_slots(&frame[n..], &mut regs[n..], &mut tags[n..]) {
+            Ok(()) => ENTERS,
+            Err((i, tag)) => refusal((n + i) as u16, tag),
+        }
     }
 }
+
+/// What [`Vm::trace_marshal_in`] returns for an entry its checks pass: no
+/// refusal is this word, as a register's slot fits 16 bits.
+pub(super) const ENTERS: u32 = u32::MAX;
 
 /// A refusal at register `slot`, holding a value of tag `tag`, as
 /// [`Vm::trace_marshal_in`] returns it.
