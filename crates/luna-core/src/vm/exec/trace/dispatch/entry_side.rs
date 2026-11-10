@@ -52,6 +52,39 @@ impl Vm {
         None
     }
 
+    /// Before `root`, at a head where it holds entry side traces, checks
+    /// the frame at `base`: the entry side trace that took the last entry
+    /// the root refused, as it is likely to take this one, counted, with its
+    /// entry, when its checks took the frame into the buffers `reg_state`
+    /// and `entry_tags`. Else the root is tried as usual, and this one is
+    /// not tried first again until it takes an entry.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn trace_side_first(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        root: &TArc<CompiledTrace>,
+        base: u32,
+        reg_state: &mut LVec<i64>,
+        entry_tags: &mut LVec<u8>,
+    ) -> Option<(TArc<CompiledTrace>, crate::jit::trace::TraceFn)> {
+        let sides = &root.entry_sides;
+        let es = sides
+            .list
+            .borrow()
+            .get(sides.last.get() as usize)
+            .cloned()?;
+        let max_stack = cl.proto.max_stack as usize;
+        if self.es_check(&es, base, max_stack, reg_state, entry_tags) != entry::ENTERS {
+            sides.last.set(NO_LAST);
+            sides.misses.set(sides.misses.get() + 1);
+            return None;
+        }
+        take_back_count(root);
+        let entry = self.trace_entry_counted(&es, cl.proto.call_hot_count.get());
+        Some((es, entry))
+    }
+
     /// Which of the entry side traces of `root` takes the entry it refused
     /// by `refusal`, the frame at `base` of `max_stack` registers, as
     /// [`first_taken`] tells it; the one that took the last entry refused

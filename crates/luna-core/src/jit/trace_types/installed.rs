@@ -144,6 +144,9 @@ pub struct CompiledTrace {
     pub(crate) call_count: bool,
     /// Entry side traces of this root, or the note that this is one.
     pub(crate) entry_sides: entry_side::EntrySides,
+    /// This root holds an entry side trace: one byte next to the others the
+    /// dispatcher reads, so that a root with none costs it nothing more.
+    pub(crate) has_entry_side: TCellBool,
 }
 
 /// Moves each named field of a [`CompiledTraceParts`] into a
@@ -168,6 +171,7 @@ macro_rules! moved {
             $($f,)*
             has_any_side_wired: TCellBool::new(false),
             entry_sides: entry_side::EntrySides::default(),
+            has_entry_side: TCellBool::new(false),
         }
     }};
 }
