@@ -41,6 +41,8 @@ impl Vm {
     /// Start recording a side trace at `cont_pc`, the exit of `parent` (a
     /// root of `cl`'s prototype or an entry side trace of one) that just
     /// became hot.
+    #[cold]
+    #[inline(never)]
     pub(super) fn trace_start_side(
         &mut self,
         cl: Gc<LuaClosure>,

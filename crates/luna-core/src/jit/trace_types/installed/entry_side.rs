@@ -24,7 +24,9 @@ pub(crate) struct EntrySides {
     /// This trace is an entry side trace, set before it is attached.
     pub(crate) is_one: TCellBool,
     /// The place in `list` of the one that took the last entry the root
-    /// refused, tried first at the next; [`NO_LAST`] once the root took one.
+    /// refused, tried first at the next the root refuses; [`NO_LAST`] when
+    /// none took it. The root's own entries leave it as it is: the dispatch
+    /// pays nothing for it before the root refuses.
     pub(crate) last: TCellU32,
     /// The times the one tried first did not take the entry: past
     /// [`MAX_MISSES`] none is tried first any more (the types change at

@@ -2,7 +2,6 @@
 //! interpreter is about to run, and resuming the interpreter where it exits.
 
 use super::*;
-use crate::jit::trace_types::installed::entry_side::NO_LAST;
 use crate::runtime::mem::LVec;
 use downrec::downrec_close_exit;
 
@@ -96,33 +95,33 @@ impl Vm {
         // the place of `ct`: one place runs the trace entered, so that its
         // code is not made twice over
         let ran = words::tags_in(&mut entry_tags, max_stack)
-            && (ct.entry_sides.last.get() != NO_LAST
-                && self.trace_side_first(
+            && words::frame_in(&mut reg_state, ct.window_size as usize, max_stack)
+            && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
+            && match self.trace_marshal_in(
+                &ct,
+                base as usize,
+                &mut entry_tags[..max_stack],
+                &mut reg_state[..max_stack],
+            ) {
+                entry::ENTERS => true,
+                r => match cold!(
+                    Vm::trace_refused,
+                    self,
                     cl,
-                    (&mut ct, &mut entry_fn),
+                    &ct,
+                    pc,
                     base,
+                    r,
                     &mut reg_state,
-                    &mut entry_tags,
-                )
-                || words::frame_in(&mut reg_state, ct.window_size as usize, max_stack)
-                    && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
-                    && match self.trace_marshal_in(
-                        &ct,
-                        base as usize,
-                        &mut entry_tags[..max_stack],
-                        &mut reg_state[..max_stack],
-                    ) {
-                        entry::ENTERS => true,
-                        r => self.trace_refused(
-                            cl,
-                            (&mut ct, &mut entry_fn),
-                            pc,
-                            base,
-                            r,
-                            &mut reg_state,
-                            &mut entry_tags,
-                        ),
-                    });
+                    &mut entry_tags
+                ) {
+                    Some((es, entry)) => {
+                        (ct, entry_fn) = (es, entry);
+                        true
+                    }
+                    None => false,
+                },
+            };
         if ran {
             self.trace_dispatch_run(cl, ct, entry_fn, pc, base, &mut reg_state, &mut entry_tags);
         }
@@ -163,7 +162,7 @@ impl Vm {
         if is_downrec_entry && downrec_close_exit(continuation_pc) {
             // a due step leaves through an exit, never the close
             debug_assert!(self.jit.gc_exit().is_none());
-            self.trace_downrec_classify(pre_frames);
+            cold!(Vm::trace_downrec_classify, self, pre_frames);
         } else {
             self.trace_exit_restore(
                 cl,
@@ -193,11 +192,11 @@ impl Vm {
         self.trace_drop_at_compiled();
         self.jit.clear_pending_err();
         if is_downrec_entry {
-            reg_state[window_size_us] = self.downrec_saved_pc(self.frames.len());
+            reg_state[window_size_us] = cold!(Vm::downrec_saved_pc, self, self.frames.len());
         }
         // `LUNA_AOT_PROBE`: a line at the first dispatch for the AOT smoke test
         if jit_probe_enabled() && self.jit.counters.dispatched == 0 {
-            eprintln!("luna-runtime-helpers: aot_trace_fired pc={pc}");
+            cold!(aot_probe_line, pc);
         }
         self.jit_ghosts_enter();
         words::count_in(ct, reg_state, window_size_us);
@@ -222,4 +221,11 @@ impl Vm {
             cold!(Vm::trace_hold_later, self);
         }
     }
+}
+
+/// The `LUNA_AOT_PROBE` line of the first dispatch, at head `pc`.
+#[cold]
+#[inline(never)]
+fn aot_probe_line(pc: u32) {
+    eprintln!("luna-runtime-helpers: aot_trace_fired pc={pc}");
 }
