@@ -30,7 +30,7 @@ pub(crate) struct TraceStep {
 
 /// What [`Vm::trace_step_enter`] replaced: the trace, its frames and its
 /// frame's base in the run words.
-pub(in crate::vm::exec) type RunningTrace = (usize, u32, u32);
+pub(in crate::vm::exec) type RunningTrace = (*const u8, u32, u32);
 
 impl Vm {
     /// A root trace `ct` is about to run in the frame on top: what was
@@ -49,11 +49,7 @@ impl Vm {
             self.gc_quiet_end();
         }
         let words = &self.jit.words;
-        let prev = (
-            words.running.get() as usize,
-            self.jit.step.frames,
-            words.base.get(),
-        );
+        let prev = (words.running.get(), self.jit.step.frames, words.base.get());
         if cells {
             if let Some(CallFrame::Lua(f)) = self.frames.last()
                 && f.base * size_of::<Value>() as u32 != prev.2
@@ -75,7 +71,7 @@ impl Vm {
 
     pub(in crate::vm::exec) fn trace_step_leave(&mut self, prev: RunningTrace) {
         self.jit.step.frames = prev.1;
-        self.jit.words.running.set(prev.0 as *const u8);
+        self.jit.words.running.set(prev.0);
         self.jit.words.base.set(prev.2);
     }
 
