@@ -95,23 +95,13 @@ impl Vm {
         // the place of `ct`: one place runs the trace entered, so that its
         // code is not made twice over
         let ran = words::tags_in(&mut entry_tags, max_stack)
-            && words::frame_in(&mut reg_state, ct.window_size as usize, max_stack)
-            && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
-            && match self.trace_marshal_in(
-                &ct,
-                base as usize,
-                &mut entry_tags[..max_stack],
-                &mut reg_state[..max_stack],
-            ) {
-                entry::ENTERS => true,
-                r => match cold!(
-                    Vm::trace_refused,
+            && (ct.has_entry_side.get()
+                && match cold!(
+                    Vm::trace_side_first,
                     self,
                     cl,
                     &ct,
-                    pc,
                     base,
-                    r,
                     &mut reg_state,
                     &mut entry_tags
                 ) {
@@ -120,8 +110,34 @@ impl Vm {
                         true
                     }
                     None => false,
-                },
-            };
+                }
+                || words::frame_in(&mut reg_state, ct.window_size as usize, max_stack)
+                    && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
+                    && match self.trace_marshal_in(
+                        &ct,
+                        base as usize,
+                        &mut entry_tags[..max_stack],
+                        &mut reg_state[..max_stack],
+                    ) {
+                        entry::ENTERS => true,
+                        r => match cold!(
+                            Vm::trace_refused,
+                            self,
+                            cl,
+                            &ct,
+                            pc,
+                            base,
+                            r,
+                            &mut reg_state,
+                            &mut entry_tags
+                        ) {
+                            Some((es, entry)) => {
+                                (ct, entry_fn) = (es, entry);
+                                true
+                            }
+                            None => false,
+                        },
+                    });
         if ran {
             self.trace_dispatch_run(cl, ct, entry_fn, pc, base, &mut reg_state, &mut entry_tags);
         }
