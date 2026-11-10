@@ -243,7 +243,15 @@ impl Vm {
         // `self.frames`: an exit inside an inlined function rebuilt
         // its frames), which need not run the parent's function.
         if side_trace_should_start {
-            self.trace_start_side(cl, base_us, cont_pc, ct.head_pc, exit_hit_idx);
+            cold!(
+                Vm::trace_start_side,
+                self,
+                cl,
+                base_us,
+                cont_pc,
+                ct.head_pc,
+                exit_hit_idx
+            );
         }
     }
 }
