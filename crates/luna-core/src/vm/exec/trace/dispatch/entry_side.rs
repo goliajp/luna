@@ -4,7 +4,7 @@
 use super::*;
 use crate::jit::send_compat::TArc;
 use crate::jit::trace::CompiledTrace;
-use crate::jit::trace_types::installed::entry_side::{MAX_MISSES, NO_LAST};
+use crate::jit::trace_types::installed::entry_side::{ENTRY_SIDE_HEAT, MAX_MISSES, NO_LAST};
 
 impl Vm {
     /// After `root`, tried at head `pc` of `cl` (frame `base`) and counted,
@@ -165,7 +165,7 @@ impl Vm {
         }
         let n = &root.entry_sides.call_refusals;
         n.set(n.get() + 1);
-        if n.get() >= self.jit.call_hot_threshold {
+        if n.get() >= self.jit.call_hot_threshold.max(ENTRY_SIDE_HEAT) {
             n.set(0);
             proto.trace_call_head_settled.set(false);
         }

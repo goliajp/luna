@@ -8,7 +8,7 @@ use super::*;
 use crate::jit::send_compat::TArc;
 use crate::jit::trace::{CompiledTrace, TraceRecord};
 use crate::jit::trace_types::adopt::{entry_tags_admit, entry_tags_admit_with};
-use crate::jit::trace_types::installed::entry_side::ENTRY_SIDE_CAP;
+use crate::jit::trace_types::installed::entry_side::{ENTRY_SIDE_CAP, ENTRY_SIDE_HEAT};
 use crate::vm::jit_state::JitCounters;
 
 /// What a compile failure, or an attach refused, takes from a root's budget
@@ -48,6 +48,30 @@ pub(in crate::vm::exec) fn may_have_more(root: &CompiledTrace) -> bool {
         && root.dispatchable
         && root.downrec_link.is_none()
         && !root.call_count
+}
+
+/// Counts the times round the loop at `head` of `proto` that `root` refused
+/// entries by the word the fast loop noted there (`Proto::trace_head_refused`),
+/// as the loop is hot again (`threshold` times round since it last was):
+/// whether that reached [`ENTRY_SIDE_HEAT`], the count then starting again.
+/// A head with no word noted counts as a new one each time.
+fn heated(root: &CompiledTrace, proto: &crate::runtime::Proto, head: u32, threshold: u32) -> bool {
+    let not = crate::runtime::function::TRACE_HEAD_NOT_REFUSED;
+    let word = (proto.trace_heads.get().iter().position(|&h| h == head))
+        .map_or(not, |at| proto.trace_head_refused[at].get());
+    let s = &root.entry_sides;
+    let round = threshold.saturating_add(1);
+    if word != not && word == s.heat_word.get() {
+        s.heat.set(s.heat.get().saturating_add(round));
+    } else {
+        s.heat_word.set(word);
+        s.heat.set(round);
+    }
+    if s.heat.get() < ENTRY_SIDE_HEAT {
+        return false;
+    }
+    s.heat.set(0);
+    true
 }
 
 /// Attaches `es` to `root`'s entry side traces: its place in the list, from
@@ -149,7 +173,9 @@ impl Vm {
         let Some(regs) = self.stack.get(base as usize..base as usize + max_stack) else {
             return false;
         };
-        if taken_by_regs(root, regs) {
+        if taken_by_regs(root, regs)
+            || !heated(root, &cl.proto, target, self.jit.trace_hot_threshold)
+        {
             return false;
         }
         // one another Vm compiled for these registers first
