@@ -145,7 +145,6 @@ impl Vm {
                 // a due step leaves through an exit, never the close
                 debug_assert!(self.jit.gc_exit().is_none());
                 self.trace_downrec_classify(pre_frames);
-                ran = true;
             } else {
                 self.trace_exit_restore(
                     cl,
@@ -156,13 +155,21 @@ impl Vm {
                     &mut reg_state,
                     &entry_tags[..max_stack],
                 );
-                ran = true;
             }
+            ran = true;
             self.jit.clear_pending_err();
             debug_assert!(!self.unmade.any(), "an exit left something unmade");
         }
-        // the buffers back for the next dispatch, before a collection check
-        // runs code that may dispatch
+        self.trace_dispatch_done(reg_state, entry_tags);
+        ran
+    }
+
+    /// The end of every dispatch: the buffers `reg_state` and `entry_tags`
+    /// back for the next one, then what the trace's exit left to do.
+    #[inline(always)]
+    fn trace_dispatch_done(&mut self, reg_state: LVec<i64>, entry_tags: LVec<u8>) {
+        // the buffers back before a collection check runs code that may
+        // dispatch
         self.jit.reg_state_buf = reg_state;
         self.jit.entry_tags_buf = entry_tags;
         // an error raised at the exit comes first: the op raising it
@@ -175,7 +182,6 @@ impl Vm {
         if !self.jit.step.held_later.is_empty() {
             self.trace_hold_later();
         }
-        ran
     }
 }
 
