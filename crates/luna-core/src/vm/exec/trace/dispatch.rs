@@ -81,7 +81,7 @@ impl Vm {
         }
         // `ct` is held across the dispatch, so its fields are borrowed
         // counted here, where it costs the least, and taken back if the
-        // checks refuse the entry (`note_refusal`)
+        // checks refuse the entry (`trace_refused`)
         let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
         let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
@@ -108,7 +108,21 @@ impl Vm {
                 &mut reg_state[..max_stack],
             ) {
                 entry::ENTERS => true,
-                r => cold!(note_refusal, &ct, &cl.proto, pc, r),
+                // the refused path finishes the dispatch itself: what it
+                // does is no part of this one's code
+                r => {
+                    return cold!(
+                        Vm::trace_refused,
+                        self,
+                        cl,
+                        ct,
+                        pc,
+                        base,
+                        r,
+                        reg_state,
+                        entry_tags
+                    );
+                }
             };
 
         let mut ran = false;
@@ -163,6 +177,30 @@ impl Vm {
         ran
     }
 
+    /// The rest of a dispatch whose trace `ct`, tried at head `pc` of `cl`
+    /// (frame `base`), refused the entry by `refusal` (see
+    /// [`Vm::trace_marshal_in`]), with the buffers `reg_state` and
+    /// `entry_tags` it took: `false`, the interpreter goes on.
+    #[cold]
+    #[inline(never)]
+    // the dispatch's state, as the dispatcher holds it
+    #[allow(clippy::too_many_arguments)]
+    fn trace_refused(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        ct: crate::jit::send_compat::TArc<crate::jit::trace::CompiledTrace>,
+        pc: u32,
+        _base: u32,
+        refusal: u32,
+        reg_state: LVec<i64>,
+        entry_tags: LVec<u8>,
+    ) -> bool {
+        note_refusal(&ct, &cl.proto, pc, refusal);
+        drop(ct);
+        self.trace_dispatch_done(reg_state, entry_tags);
+        false
+    }
+
     /// The end of every dispatch: the buffers `reg_state` and `entry_tags`
     /// back for the next one, then what the trace's exit left to do.
     #[inline(always)]
@@ -191,20 +229,18 @@ fn aot_probe_line(pc: u32) {
     eprintln!("luna-runtime-helpers: aot_trace_fired pc={pc}");
 }
 
-/// After `ct`, tried at head `pc` of `proto`, refused an entry by `refusal`:
+/// Notes for the fast loop that `ct`, tried at head `pc` of `proto`,
+/// refused an entry by `refusal` (see `Proto::trace_head_refused`), and
 /// takes back the count the entry made towards its move to the optimizing
 /// tier, so that entries that never run do not have it compile code for
-/// them, and notes the refusal for the fast loop (see
-/// `Proto::trace_head_refused`). `false`. A head past those `trace_heads`
-/// lists is not watched for one by itself.
-#[cold]
-#[inline(never)]
+/// them. A head past those `trace_heads` lists is not watched for one by
+/// itself.
 fn note_refusal(
     ct: &crate::jit::trace::CompiledTrace,
     proto: &crate::runtime::Proto,
     pc: u32,
     refusal: u32,
-) -> bool {
+) {
     if let Some(t) = &ct.tier_up
         && !t.tried.get()
     {
@@ -213,5 +249,4 @@ fn note_refusal(
     if let Some(at) = proto.trace_heads.get().iter().position(|&h| h == pc) {
         proto.trace_head_refused[at].set(refusal);
     }
-    false
 }
