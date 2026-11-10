@@ -32,7 +32,18 @@ pub(crate) struct EntrySides {
     /// [`MAX_MISSES`] none is tried first any more (the types change at
     /// most entries).
     pub(crate) misses: TCellU32,
+    /// The word the root refused entries by at the last time its loop head
+    /// was hot, and how many times round the loop it has refused entries by
+    /// that word since: an entry side trace is recorded only for one it
+    /// refuses for [`ENTRY_SIDE_HEAT`] times round.
+    pub(crate) heat_word: TCellU32,
+    pub(crate) heat: TCellU32,
 }
+
+/// The times round a loop its trace refuses entries of one kind before an
+/// entry side trace is recorded for them: as many as make a loop hot by
+/// default, however low the threshold is set.
+pub(crate) const ENTRY_SIDE_HEAT: u32 = crate::jit::trace::TRACE_HOT_THRESHOLD;
 
 /// [`EntrySides::misses`] past which no entry side trace is tried first.
 pub(crate) const MAX_MISSES: u32 = 16;
@@ -49,6 +60,8 @@ impl Default for EntrySides {
             is_one: TCellBool::new(false),
             last: TCellU32::new(NO_LAST),
             misses: TCellU32::new(0),
+            heat_word: TCellU32::new(crate::runtime::function::TRACE_HEAD_NOT_REFUSED),
+            heat: TCellU32::new(0),
         }
     }
 }
