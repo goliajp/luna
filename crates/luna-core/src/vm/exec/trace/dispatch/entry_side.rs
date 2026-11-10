@@ -7,17 +7,17 @@ use crate::jit::trace::CompiledTrace;
 use crate::jit::trace_types::installed::entry_side::{ENTRY_SIDE_HEAT, MAX_MISSES, NO_LAST};
 
 impl Vm {
-    /// After `root`, tried at head `pc` of `cl` (frame `base`) and counted,
-    /// refused the entry by `refusal` (see [`Vm::trace_marshal_in`]): takes
-    /// back the count the entry made towards the root's move to the
-    /// optimizing tier, so that entries that never run do not have it
-    /// compile code for them; then the first of its entry side traces whose
-    /// checks took the frame into the buffers `reg_state` and `entry_tags`,
-    /// counted, with its entry. When none did, and each refused the entry by
-    /// the same word, notes that for the fast loop
-    /// (`Proto::trace_head_refused`). Off the dispatch's hot path: called
-    /// only through `cold!`, and what it returns is all the dispatch takes
-    /// from it.
+    /// The rest of a dispatch whose root `root`, tried at head `pc` of `cl`
+    /// (frame `base`) and counted, refused the entry by `refusal` (see
+    /// [`Vm::trace_marshal_in`]), with the buffers `reg_state` and
+    /// `entry_tags` it took: takes back the count the entry made towards
+    /// the root's move to the optimizing tier, so that entries that never
+    /// run do not have it compile code for them, then runs the first of its
+    /// entry side traces whose checks took the frame (`true`). When none
+    /// did, and each refused the entry by the same word, notes that for the
+    /// fast loop (`Proto::trace_head_refused`). Off the dispatch's hot path:
+    /// called only through `cold!`, and the dispatch keeps nothing for
+    /// after it.
     #[cold]
     #[inline(never)]
     // the dispatch's state, as the dispatcher holds it
@@ -25,64 +25,46 @@ impl Vm {
     pub(super) fn trace_refused(
         &mut self,
         cl: Gc<LuaClosure>,
-        root: &TArc<CompiledTrace>,
+        root: TArc<CompiledTrace>,
         pc: u32,
         base: u32,
         refusal: u32,
-        reg_state: &mut LVec<i64>,
-        entry_tags: &mut LVec<u8>,
-    ) -> Option<(TArc<CompiledTrace>, crate::jit::trace::TraceFn)> {
-        take_back_count(root);
+        mut reg_state: LVec<i64>,
+        mut entry_tags: LVec<u8>,
+    ) -> bool {
+        take_back_count(&root);
         let max_stack = cl.proto.max_stack as usize;
-        match self.side_taking(root, refusal, base, max_stack, reg_state, entry_tags) {
+        let taken = self.side_taking(
+            &root,
+            refusal,
+            base,
+            max_stack,
+            &mut reg_state,
+            &mut entry_tags,
+        );
+        let ran = match taken {
             Ok((k, es)) => {
                 let sides = &root.entry_sides;
                 if sides.misses.get() < MAX_MISSES {
                     sides.last.set(k as u32);
                 }
                 let entry = self.trace_entry_counted(&es, cl.proto.call_hot_count.get());
-                return Some((es, entry));
+                drop(root);
+                self.trace_dispatch_run(cl, es, entry, pc, base, &mut reg_state, &mut entry_tags);
+                true
             }
-            Err(true) => note_refusal(&cl.proto, pc, refusal),
-            Err(false) => {}
-        }
-        if pc == 0 {
-            self.count_refused_call(&cl.proto, root);
-        }
-        None
-    }
-
-    /// Before `root`, at a head where it holds entry side traces, checks
-    /// the frame at `base`: the entry side trace that took the last entry
-    /// the root refused, as it is likely to take this one, counted, with its
-    /// entry, when its checks took the frame into the buffers `reg_state`
-    /// and `entry_tags`. Else the root is tried as usual, and this one is
-    /// not tried first again until it takes an entry.
-    #[cold]
-    #[inline(never)]
-    pub(super) fn trace_side_first(
-        &mut self,
-        cl: Gc<LuaClosure>,
-        root: &TArc<CompiledTrace>,
-        base: u32,
-        reg_state: &mut LVec<i64>,
-        entry_tags: &mut LVec<u8>,
-    ) -> Option<(TArc<CompiledTrace>, crate::jit::trace::TraceFn)> {
-        let sides = &root.entry_sides;
-        let es = sides
-            .list
-            .borrow()
-            .get(sides.last.get() as usize)
-            .cloned()?;
-        let max_stack = cl.proto.max_stack as usize;
-        if self.es_check(&es, base, max_stack, reg_state, entry_tags) != entry::ENTERS {
-            sides.last.set(NO_LAST);
-            sides.misses.set(sides.misses.get() + 1);
-            return None;
-        }
-        take_back_count(root);
-        let entry = self.trace_entry_counted(&es, cl.proto.call_hot_count.get());
-        Some((es, entry))
+            Err(same) => {
+                if same {
+                    note_refusal(&cl.proto, pc, refusal);
+                }
+                if pc == 0 {
+                    self.count_refused_call(&cl.proto, &root);
+                }
+                false
+            }
+        };
+        self.trace_dispatch_done(reg_state, entry_tags);
+        ran
     }
 
     /// Which of the entry side traces of `root` takes the entry it refused
