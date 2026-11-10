@@ -37,16 +37,18 @@ use luna_core::__private::{CHECK_COUNT, CHECK_ITEMS, EXIT_RELINK, RunWords, Side
 /// tries again.
 pub(crate) fn address<M: Masm>() -> Result<usize, &'static str> {
     static AT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    static PLACING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // the arena the stub is placed in, kept for the life of the process
+    static ARENA: std::sync::Mutex<Option<super::CodeArena>> = std::sync::Mutex::new(None);
     if let Some(&at) = AT.get() {
         return Ok(at);
     }
-    let _placing = PLACING.lock().map_err(|_| "placing the call stub")?;
+    let mut arena = ARENA.lock().map_err(|_| "placing the call stub")?;
     if let Some(&at) = AT.get() {
         return Ok(at);
     }
-    // an arena dropped leaves its code mapped
-    let at = super::CodeArena::default().place(&generate::<M>())? as usize;
+    let at = arena
+        .get_or_insert_with(super::CodeArena::default)
+        .place(&generate::<M>())? as usize;
     Ok(*AT.get_or_init(|| at))
 }
 
