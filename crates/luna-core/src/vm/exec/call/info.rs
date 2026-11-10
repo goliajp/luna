@@ -115,6 +115,7 @@ impl Vm {
     /// would make them `CallInfo`s and stack where it has not, counted
     /// and (5.3, 5.4) checked for a collection, so the interpreter runs
     /// the loop until it has.
+    #[inline(always)]
     pub(in crate::vm::exec) fn inlined_calls_fit(&self, depth: u8, base: u32, window: u32) -> bool {
         if depth == 0 {
             return true;

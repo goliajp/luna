@@ -39,6 +39,7 @@ impl Vm {
     /// The frame's words are written only for a trace with side cells
     /// (`cells`): only the code of their exits and the links they take
     /// read them, and a trace without cells takes no link.
+    #[inline(always)]
     pub(in crate::vm::exec) fn trace_step_enter(
         &mut self,
         ct: *const crate::jit::trace::CompiledTrace,
@@ -46,7 +47,7 @@ impl Vm {
     ) -> RunningTrace {
         // entering any trace ends a pause a collection exit started
         if self.jit.step.quiet.is_some() {
-            self.gc_quiet_end();
+            cold!(Vm::gc_quiet_end, self);
         }
         let words = &self.jit.words;
         let prev = (words.running.get(), self.jit.step.frames, words.base.get());
@@ -69,6 +70,7 @@ impl Vm {
         self.jit.words.running.get() as usize
     }
 
+    #[inline(always)]
     pub(in crate::vm::exec) fn trace_step_leave(&mut self, prev: RunningTrace) {
         self.jit.step.frames = prev.1;
         self.jit.words.running.set(prev.0);

@@ -30,6 +30,21 @@ impl Vm {
             self.trace_step_leave(running);
             return (r, ct);
         }
+        self.trace_run_linked(cl, ct, entry, regs, entry_tags)
+    }
+
+    /// [`Self::trace_run`] for a trace with side cells and a side trace
+    /// wired: its code may take links. As hot as the plain run for a loop
+    /// whose exits run side traces.
+    #[inline(always)]
+    fn trace_run_linked(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        ct: TArc<CompiledTrace>,
+        entry: TraceFn,
+        regs: &mut LVec<i64>,
+        entry_tags: &mut [u8],
+    ) -> (i64, TArc<CompiledTrace>) {
         regs[trace_ran_side_slot(ct.window_size as usize)] = 0;
         let running = self.trace_step_enter(&*ct, true);
         // the links taken in this dispatch start at the end of the trail,

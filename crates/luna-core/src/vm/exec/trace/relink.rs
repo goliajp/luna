@@ -30,11 +30,13 @@ use list::{SideList, list_of};
 
 /// The typed exit of `parent`'s exit `exit` (as `exit_hit_counts` numbers
 /// them).
+#[inline(always)]
 fn typed_of(parent: &CompiledTrace, exit: usize) -> Option<u32> {
     Some(exit.checked_sub(parent.per_exit_inline.len())? as u32)
 }
 
 /// The cell of `parent`'s exit `exit`, once the parent made its cells.
+#[inline(always)]
 fn cell_of(parent: &CompiledTrace, exit: usize) -> Option<&SideCell> {
     parent.side_cell(typed_of(parent, exit)?)
 }

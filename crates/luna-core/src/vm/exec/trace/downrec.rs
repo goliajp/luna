@@ -6,6 +6,8 @@ impl Vm {
     /// The downrec trace returned through its close's stitch: count the hit
     /// (or, once the stitch budget is spent, a miss), block the next downrec
     /// admit, and pop frames the trace pushed.
+    #[cold]
+    #[inline(never)]
     pub(super) fn trace_downrec_classify(&mut self, pre_frames: usize) {
         // Cycle-safety checkpoint: decrement budget; on underflow,
         // reclassify as deopt + reset budget. `STITCH_DEPTH_DEFAULT = 32`
@@ -43,6 +45,8 @@ impl Vm {
     // mismatches the recorded `dr_return_pc != 0`
     // invariant (debug-asserted in the luna-jit trace
     // lowerer).
+    #[cold]
+    #[inline(never)]
     pub(super) fn downrec_saved_pc(&self, pre_frames: usize) -> i64 {
         if pre_frames >= 2 {
             match &self.frames[pre_frames - 2] {
@@ -58,6 +62,7 @@ impl Vm {
 /// Whether a downrec trace's return is its close's stitch: the stitch_blk
 /// DOWNREC sentinel (hit). A miss leaves through the deopt_blk, which
 /// stores the registers back and returns the head pc as a plain exit.
+#[inline(always)]
 pub(super) fn downrec_close_exit(continuation_pc: i64) -> bool {
     let raw_ret = continuation_pc as u64;
     (raw_ret >> 63) & 1 == 1

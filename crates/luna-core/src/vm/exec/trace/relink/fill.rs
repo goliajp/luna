@@ -79,6 +79,7 @@ fn plan_of(
 /// Points `cell`'s count at `child`'s move to the optimizing tier: the code
 /// leaves the child to the dispatcher once the count reaches the move's,
 /// and never once it has moved or cannot.
+#[inline(always)]
 fn count_for(cell: &SideCell, child: &CompiledTrace) {
     match &child.tier_up {
         Some(t) if !t.tried.get() => {
@@ -100,6 +101,7 @@ fn count_for(cell: &SideCell, child: &CompiledTrace) {
 /// After the dispatcher ran `child` from `parent`'s exit `exit` (the code
 /// left it the child at its move, or the cell is empty): the cell follows
 /// the child's entry and move.
+#[inline(always)]
 pub(in crate::vm::exec) fn relink_refresh(
     parent: &CompiledTrace,
     exit: usize,
