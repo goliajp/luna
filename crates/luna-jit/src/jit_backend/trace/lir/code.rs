@@ -97,7 +97,10 @@ impl CodeArena {
             if batch {
                 self.open = Some(self.next);
             }
-            return self.place_with(n, write);
+            // the piece is the chunk's first: placing it failed, so nothing
+            // in the chunk may run, and an arena dropped after a failed
+            // placement keeps nothing mapped
+            return self.place_with(n, write).inspect_err(|_| self.ungrow());
         }
         let p = self.next + pad;
         self.next = p + len;
@@ -129,6 +132,18 @@ impl CodeArena {
         Ok(())
     }
 
+    /// Unmaps the chunk [`CodeArena::grow`] mapped last, which holds no
+    /// code that was handed out, and leaves no room to place code in until
+    /// the next one. With no chunk left, the list's own buffer goes too.
+    fn ungrow(&mut self) {
+        self.chunks.pop();
+        if self.chunks.is_empty() {
+            *self.chunks = Vec::new();
+        }
+        self.next = 0;
+        self.left = 0;
+    }
+
     /// Has `write` write the `n` bytes at `p`, then, with `protect` =
     /// `(start, len, code)`, makes the `len` bytes from `start` executable,
     /// `code` of them code.
@@ -147,6 +162,10 @@ impl CodeArena {
         unsafe {
             write(std::slice::from_raw_parts_mut(p, n));
             if let Some((start, len, code)) = protect {
+                #[cfg(test)]
+                if tests::PROTECT_FAILS.with(std::cell::Cell::get) {
+                    return Err("protecting code memory");
+                }
                 region::protect(start as *const u8, len, region::Protection::READ_EXECUTE)
                     .map_err(|_| "protecting code memory")?;
                 crate::jit_backend::code_memory::sync_icache(start, code);
@@ -176,6 +195,9 @@ impl CodeArena {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(all(target_arch = "aarch64", not(windows)))]
 type Target = super::a64::A64;
