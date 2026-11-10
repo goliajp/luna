@@ -79,31 +79,22 @@ impl Vm {
         if self.jit.active_trace.is_some() {
             cold!(Vm::trace_link_at, self, cl.proto, pc);
         }
-        // `ct` is held across the dispatch, so its fields are borrowed
         // counted here, where it costs the least, and taken back if the
         // checks refuse the entry (`trace_refused`)
         let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
-        let head_pc_val = ct.head_pc;
-        let window_size = ct.window_size;
         let max_stack = cl.proto.max_stack as usize;
-        let window_size_us = window_size as usize;
-        let base_us = base as usize;
         // the Vm's buffers, taken for the dispatch and put back on every
         // way out; `reg_state` covers the trace's window, which may exceed
         // the frame
         let mem = self.heap.mem();
         let mut entry_tags = std::mem::replace(&mut self.jit.entry_tags_buf, LVec::new(mem));
-        // a trace that closes by down-recursion (whether or not it is also
-        // dispatchable) guards on the caller's saved pc, in the word just
-        // past the window
-        let is_downrec_entry = ct.downrec_link.is_some();
         let mut reg_state = std::mem::replace(&mut self.jit.reg_state_buf, LVec::new(mem));
-        let dispatch_ok = words::tags_in(&mut entry_tags, max_stack)
-            && words::frame_in(&mut reg_state, window_size_us, max_stack)
+        let ran = words::tags_in(&mut entry_tags, max_stack)
+            && words::frame_in(&mut reg_state, ct.window_size as usize, max_stack)
             && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
             && match self.trace_marshal_in(
                 &ct,
-                base_us,
+                base as usize,
                 &mut entry_tags[..max_stack],
                 &mut reg_state[..max_stack],
             ) {
@@ -124,57 +115,84 @@ impl Vm {
                     );
                 }
             };
-
-        let mut ran = false;
-        if dispatch_ok {
-            debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
-            self.trace_drop_at_compiled();
-            self.jit.clear_pending_err();
-            // an inline side exit pushes the inlined frames, which a deopt
-            // pops
-            let pre_frames = self.frames.len();
-            if is_downrec_entry {
-                reg_state[window_size_us] = cold!(Vm::downrec_saved_pc, self, pre_frames);
-            }
-            // `LUNA_AOT_PROBE`: one line at the first dispatch, for the AOT
-            // smoke test to see compiled code ran
-            if jit_probe_enabled() && self.jit.counters.dispatched == 0 {
-                cold!(aot_probe_line, head_pc_val);
-            }
-            self.jit_ghosts_enter();
-            words::count_in(&ct, &mut reg_state, window_size_us);
-            let (continuation_pc, ct) = self.trace_run(
-                cl,
-                ct,
-                entry_fn,
-                &mut reg_state,
-                &mut entry_tags[..max_stack],
-            );
-            debug_assert!(self.jit.blocked_agrees(self.unmade.any()));
-            words::count_out(&ct, &reg_state, ct.window_size as usize);
-            self.jit.ghost_depth -= 1;
-            self.trace_count_dispatch(&ct, is_downrec_entry);
-            if is_downrec_entry && downrec_close_exit(continuation_pc) {
-                // a due step leaves through an exit, never the close
-                debug_assert!(self.jit.gc_exit().is_none());
-                cold!(Vm::trace_downrec_classify, self, pre_frames);
-            } else {
-                self.trace_exit_restore(
-                    cl,
-                    base,
-                    &ct,
-                    continuation_pc,
-                    pre_frames,
-                    &mut reg_state,
-                    &entry_tags[..max_stack],
-                );
-            }
-            ran = true;
-            self.jit.clear_pending_err();
-            debug_assert!(!self.unmade.any(), "an exit left something unmade");
+        if ran {
+            self.trace_dispatch_run(cl, ct, entry_fn, pc, base, &mut reg_state, &mut entry_tags);
         }
         self.trace_dispatch_done(reg_state, entry_tags);
         ran
+    }
+
+    /// Runs `ct`, whose checks took the frame at `base` into the buffers
+    /// `reg_state` and `entry_tags`, at `entry_fn`, and resumes the
+    /// interpreter where it left.
+    #[inline(always)]
+    // the dispatch's state, as the dispatcher holds it
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn trace_dispatch_run(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        ct: crate::jit::send_compat::TArc<crate::jit::trace::CompiledTrace>,
+        entry_fn: crate::jit::trace::TraceFn,
+        pc: u32,
+        base: u32,
+        reg_state: &mut LVec<i64>,
+        entry_tags: &mut LVec<u8>,
+    ) {
+        debug_assert_eq!(ct.head_pc, pc, "trace cache hit's head_pc != pc");
+        let max_stack = cl.proto.max_stack as usize;
+        // a down-recursion trace guards on the caller's saved pc, just past
+        // the window
+        let is_downrec_entry = ct.downrec_link.is_some();
+        // an inline side exit pushes the inlined frames, a deopt pops them
+        let pre_frames = self.frames.len();
+        self.trace_dispatch_ready(&ct, pc, is_downrec_entry, reg_state);
+        let (continuation_pc, ct) =
+            self.trace_run(cl, ct, entry_fn, reg_state, &mut entry_tags[..max_stack]);
+        debug_assert!(self.jit.blocked_agrees(self.unmade.any()));
+        words::count_out(&ct, reg_state, ct.window_size as usize);
+        self.jit.ghost_depth -= 1;
+        self.trace_count_dispatch(&ct, is_downrec_entry);
+        if is_downrec_entry && downrec_close_exit(continuation_pc) {
+            // a due step leaves through an exit, never the close
+            debug_assert!(self.jit.gc_exit().is_none());
+            cold!(Vm::trace_downrec_classify, self, pre_frames);
+        } else {
+            self.trace_exit_restore(
+                cl,
+                base,
+                &ct,
+                continuation_pc,
+                pre_frames,
+                reg_state,
+                &entry_tags[..max_stack],
+            );
+        }
+        self.jit.clear_pending_err();
+        debug_assert!(!self.unmade.any(), "an exit left something unmade");
+    }
+
+    /// Readies the Vm and the buffer `reg_state` to run `ct` at head `pc`,
+    /// a down-recursion trace when `is_downrec_entry`.
+    #[inline(always)]
+    fn trace_dispatch_ready(
+        &mut self,
+        ct: &crate::jit::trace::CompiledTrace,
+        pc: u32,
+        is_downrec_entry: bool,
+        reg_state: &mut LVec<i64>,
+    ) {
+        let window_size_us = ct.window_size as usize;
+        self.trace_drop_at_compiled();
+        self.jit.clear_pending_err();
+        if is_downrec_entry {
+            reg_state[window_size_us] = cold!(Vm::downrec_saved_pc, self, self.frames.len());
+        }
+        // `LUNA_AOT_PROBE`: a line at the first dispatch for the AOT smoke test
+        if jit_probe_enabled() && self.jit.counters.dispatched == 0 {
+            cold!(aot_probe_line, pc);
+        }
+        self.jit_ghosts_enter();
+        words::count_in(ct, reg_state, window_size_us);
     }
 
     /// The rest of a dispatch whose trace `ct`, tried at head `pc` of `cl`
@@ -204,7 +222,7 @@ impl Vm {
     /// The end of every dispatch: the buffers `reg_state` and `entry_tags`
     /// back for the next one, then what the trace's exit left to do.
     #[inline(always)]
-    fn trace_dispatch_done(&mut self, reg_state: LVec<i64>, entry_tags: LVec<u8>) {
+    pub(super) fn trace_dispatch_done(&mut self, reg_state: LVec<i64>, entry_tags: LVec<u8>) {
         // the buffers back before a collection check runs code that may
         // dispatch
         self.jit.reg_state_buf = reg_state;
