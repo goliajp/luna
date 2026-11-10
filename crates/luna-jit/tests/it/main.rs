@@ -114,6 +114,7 @@ mod trace_dispatch_numeric_loops;
 mod trace_double_int_add;
 mod trace_entry_booleans;
 mod trace_entry_live_in;
+mod trace_entry_refused;
 mod trace_error_traceback;
 mod trace_error_unwind;
 mod trace_escape_analysis_sweep;
