@@ -165,6 +165,7 @@ pub(crate) fn define_aligned<M: Module>(
         .define_function_bytes(id, align, &bytes, &relocs)
         .ok()?;
     super::code_dump::note_len(bytes.len());
+    super::compile::note_code_bytes(bytes.len());
     note_sites(module, ctx, lead);
     Some(())
 }

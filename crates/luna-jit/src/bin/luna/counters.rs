@@ -12,20 +12,9 @@ pub(crate) fn append(vm: &Vm) {
         return;
     };
     let c = &vm.jit().counters;
-    // a 32-bit build has no JIT, so no code of its
-    #[cfg(target_pointer_width = "64")]
-    let (jt, baseline) = (
-        luna_jit::jit_backend::trace::trace_codegen_count(),
-        luna_jit::jit_backend::trace::baseline_codegen_count(),
-    );
-    #[cfg(not(target_pointer_width = "64"))]
-    let (jt, baseline) = (0, 0);
-    #[cfg(feature = "llvm-jit")]
-    let llvm = luna_jit::jit_backend::trace::llvm_codegen_count();
-    #[cfg(not(feature = "llvm-jit"))]
-    let llvm = 0;
+    let (jt, baseline, llvm, bytes) = codegen();
     let mut line = format!(
-        "closed={} compiled={} failed={} dispatched={} side_compiled={} codegen={} baseline={} llvm={} tiered_up={} retiered={} calls_compiled={} method={} method_replaced={} links={} links_by_vm={} links_by_stub={} links_left_by_stub={} relink={}",
+        "closed={} compiled={} failed={} dispatched={} side_compiled={} codegen={} baseline={} llvm={} code_bytes={} tiered_up={} retiered={} calls_compiled={} method={} method_replaced={} links={} links_by_vm={} links_by_stub={} links_left_by_stub={} relink={}",
         c.closed,
         c.compiled,
         c.compile_failed,
@@ -34,6 +23,7 @@ pub(crate) fn append(vm: &Vm) {
         jt,
         baseline,
         llvm,
+        bytes,
         c.tiered_up,
         c.retiered,
         c.calls_compiled,
@@ -57,4 +47,23 @@ pub(crate) fn append(vm: &Vm) {
         .expect("LUNA_JIT_COUNTERS names a file that can be appended to");
     f.write_all(line.as_bytes())
         .expect("writing the LUNA_JIT_COUNTERS line");
+}
+
+/// Traces this thread compiled into code, of them by the baseline tier and
+/// by LLVM, and the bytes of the code.
+fn codegen() -> (u64, u64, u64, u64) {
+    // a 32-bit build has no JIT, so no code of its
+    #[cfg(target_pointer_width = "64")]
+    let (jt, baseline, bytes) = (
+        luna_jit::jit_backend::trace::trace_codegen_count(),
+        luna_jit::jit_backend::trace::baseline_codegen_count(),
+        luna_jit::jit_backend::trace::trace_code_bytes(),
+    );
+    #[cfg(not(target_pointer_width = "64"))]
+    let (jt, baseline, bytes) = (0, 0, 0);
+    #[cfg(feature = "llvm-jit")]
+    let llvm = luna_jit::jit_backend::trace::llvm_codegen_count();
+    #[cfg(not(feature = "llvm-jit"))]
+    let llvm = 0;
+    (jt, baseline, llvm, bytes)
 }

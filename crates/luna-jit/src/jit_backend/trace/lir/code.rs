@@ -107,6 +107,7 @@ impl CodeArena {
         self.left -= pad + len;
         let protect = self.open.is_none().then_some((p - pad, pad + len, pad + n));
         self.write_sealing(p as *mut u8, n, write, protect)?;
+        crate::jit_backend::trace::compile::note_code_bytes(n);
         Ok(p as *const u8)
     }
 
