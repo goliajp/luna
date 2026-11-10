@@ -478,7 +478,9 @@ fn place_funcs(
             }
         }
     }
-    let base = arena.place(&code).ok()?;
+    // nothing may fail once the code is placed: an arena given up on
+    // leaves its pages mapped
     let e = funcs.iter().position(|f| f.id == entry)?;
+    let base = arena.place(&code).ok()?;
     Some(base.wrapping_add(at[e]))
 }
