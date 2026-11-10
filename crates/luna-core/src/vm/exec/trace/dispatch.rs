@@ -69,7 +69,7 @@ impl Vm {
         base: u32,
         downrec_admit_blocked: bool,
     ) -> bool {
-        let Some(mut ct) = ({
+        let Some(ct) = ({
             let traces = cl.proto.traces.borrow();
             traces
                 .iter()
@@ -83,7 +83,7 @@ impl Vm {
         }
         // counted here, where it costs the least, and taken back if the
         // checks refuse the entry (`trace_refused`)
-        let mut entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
+        let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
         let max_stack = cl.proto.max_stack as usize;
         // the Vm's buffers, taken for the dispatch and put back on every
         // way out; `reg_state` covers the trace's window, which may exceed
@@ -91,53 +91,32 @@ impl Vm {
         let mem = self.heap.mem();
         let mut entry_tags = std::mem::replace(&mut self.jit.entry_tags_buf, LVec::new(mem));
         let mut reg_state = std::mem::replace(&mut self.jit.reg_state_buf, LVec::new(mem));
-        // a refused entry may go to an entry side trace, which then takes
-        // the place of `ct`: one place runs the trace entered, so that its
-        // code is not made twice over
         let ran = words::tags_in(&mut entry_tags, max_stack)
-            && (ct.has_entry_side.get()
-                && match cold!(
-                    Vm::trace_side_first,
-                    self,
-                    cl,
-                    &ct,
-                    base,
-                    &mut reg_state,
-                    &mut entry_tags
-                ) {
-                    Some((es, entry)) => {
-                        (ct, entry_fn) = (es, entry);
-                        true
-                    }
-                    None => false,
+            && words::frame_in(&mut reg_state, ct.window_size as usize, max_stack)
+            && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
+            && match self.trace_marshal_in(
+                &ct,
+                base as usize,
+                &mut entry_tags[..max_stack],
+                &mut reg_state[..max_stack],
+            ) {
+                entry::ENTERS => true,
+                // the refused path finishes the dispatch itself: what it
+                // does is no part of this one's code
+                r => {
+                    return cold!(
+                        Vm::trace_refused,
+                        self,
+                        cl,
+                        ct,
+                        pc,
+                        base,
+                        r,
+                        reg_state,
+                        entry_tags
+                    );
                 }
-                || words::frame_in(&mut reg_state, ct.window_size as usize, max_stack)
-                    && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
-                    && match self.trace_marshal_in(
-                        &ct,
-                        base as usize,
-                        &mut entry_tags[..max_stack],
-                        &mut reg_state[..max_stack],
-                    ) {
-                        entry::ENTERS => true,
-                        r => match cold!(
-                            Vm::trace_refused,
-                            self,
-                            cl,
-                            &ct,
-                            pc,
-                            base,
-                            r,
-                            &mut reg_state,
-                            &mut entry_tags
-                        ) {
-                            Some((es, entry)) => {
-                                (ct, entry_fn) = (es, entry);
-                                true
-                            }
-                            None => false,
-                        },
-                    });
+            };
         if ran {
             self.trace_dispatch_run(cl, ct, entry_fn, pc, base, &mut reg_state, &mut entry_tags);
         }
