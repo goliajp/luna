@@ -59,7 +59,6 @@ impl Vm {
             self.trace_link_at(cl.proto, pc);
         }
         // `ct` is held across the dispatch, so its fields are borrowed
-        let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
         let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
         let max_stack = cl.proto.max_stack as usize;
@@ -88,6 +87,10 @@ impl Vm {
         let mut ran = false;
         if dispatch_ok {
             debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
+            // only an entry that runs counts towards the optimizing tier:
+            // one refused would have it compile code for entries that never
+            // come
+            let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
             self.trace_drop_at_compiled();
             self.jit.clear_pending_err();
             // an inline side exit pushes the inlined frames, which a deopt
