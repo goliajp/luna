@@ -80,6 +80,9 @@ impl Vm {
             self.trace_link_at(cl.proto, pc);
         }
         // `ct` is held across the dispatch, so its fields are borrowed
+        // counted here, where it costs the least, and taken back if the
+        // checks refuse the entry (`note_refusal`)
+        let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
         let head_pc_val = ct.head_pc;
         let window_size = ct.window_size;
         let max_stack = cl.proto.max_stack as usize;
@@ -98,23 +101,19 @@ impl Vm {
         let dispatch_ok = words::tags_in(&mut entry_tags, max_stack)
             && words::frame_in(&mut reg_state, window_size_us, max_stack)
             && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)
-            && self
-                .trace_marshal_in(
-                    &ct,
-                    base_us,
-                    &mut entry_tags[..max_stack],
-                    &mut reg_state[..max_stack],
-                )
-                .map_err(|r| note_refusal(&cl.proto, pc, r))
-                .is_ok();
+            && match self.trace_marshal_in(
+                &ct,
+                base_us,
+                &mut entry_tags[..max_stack],
+                &mut reg_state[..max_stack],
+            ) {
+                entry::ENTERS => true,
+                r => note_refusal(&ct, &cl.proto, pc, r),
+            };
 
         let mut ran = false;
         if dispatch_ok {
             debug_assert_eq!(head_pc_val, pc, "trace cache hit's head_pc != pc");
-            // only an entry that runs counts towards the optimizing tier:
-            // one refused would have it compile code for entries that never
-            // come
-            let entry_fn = self.trace_entry_counted(&ct, cl.proto.call_hot_count.get());
             self.trace_drop_at_compiled();
             self.jit.clear_pending_err();
             // an inline side exit pushes the inlined frames, which a deopt
@@ -185,13 +184,27 @@ impl Vm {
     }
 }
 
-/// Notes for the fast loop that the trace tried at head `pc` of `proto`
-/// refused an entry by `refusal` (see `Proto::trace_head_refused`). A head
-/// past those `trace_heads` lists is not watched for one by itself.
+/// After `ct`, tried at head `pc` of `proto`, refused an entry by `refusal`:
+/// takes back the count the entry made towards its move to the optimizing
+/// tier, so that entries that never run do not have it compile code for
+/// them, and notes the refusal for the fast loop (see
+/// `Proto::trace_head_refused`). `false`. A head past those `trace_heads`
+/// lists is not watched for one by itself.
 #[cold]
 #[inline(never)]
-fn note_refusal(proto: &crate::runtime::Proto, pc: u32, refusal: u32) {
+fn note_refusal(
+    ct: &crate::jit::trace::CompiledTrace,
+    proto: &crate::runtime::Proto,
+    pc: u32,
+    refusal: u32,
+) -> bool {
+    if let Some(t) = &ct.tier_up
+        && !t.tried.get()
+    {
+        t.count.set(t.count.get().saturating_sub(1));
+    }
     if let Some(at) = proto.trace_heads.get().iter().position(|&h| h == pc) {
         proto.trace_head_refused[at].set(refusal);
     }
+    false
 }
