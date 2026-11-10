@@ -85,16 +85,10 @@ fn meta_entry_keeps_its_own_trace_after_an_earlier_lowering_bail() {
     let bail_head_pc = 7;
     let good_hash = [0xbb; 16];
     let good_head_pc = 3;
+    let r = AotRole::Root;
     let installable: Vec<Installable> = vec![
-        (
-            0,
-            bail_hash,
-            bail_head_pc,
-            bailing,
-            ct.clone(),
-            AotRole::Root,
-        ),
-        (1, good_hash, good_head_pc, good, ct, AotRole::Root),
+        (0, bail_hash, bail_head_pc, bailing, ct.clone(), r),
+        (1, good_hash, good_head_pc, good, ct, r),
     ];
 
     let mut module = build_object_module(&target).expect("object module");

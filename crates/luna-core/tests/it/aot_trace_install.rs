@@ -140,39 +140,42 @@ fn install_then_lookup_via_collect_hashes() {
         .map(|(p, _)| *p)
         .expect("root proto must be present in collected pairs");
 
-    let n = root.max_stack as u32;
-    let park = |vm: &mut Vm, t: CompiledTrace, role: AotRole| {
-        // SAFETY: as above
-        unsafe { luna_core::__private::install_aot_trace(vm, matched, t, role) }
-    };
-    assert!(park(&mut vm, make_dummy_trace(3, n), AotRole::Root));
+    let trace = make_dummy_trace(3, root.max_stack as u32);
+    // SAFETY: as above
+    unsafe { luna_core::__private::install_aot_trace(&mut vm, matched, trace, AotRole::Root) };
 
     assert_eq!(
         root.traces().len(),
         1,
         "trace must end up on the matched proto"
     );
+}
 
-    // an entry side trace goes onto the root parked at its head before:
+#[test]
+fn aot_entry_side_traces_go_onto_the_root_at_their_head() {
+    let src = "local s = 0\nfor i = 1, 5 do s = s + 1 end\nreturn s";
+    let ast = parse(src.as_bytes(), LuaVersion::Lua55).expect("parse");
+    // SAFETY: the heap outlives every handle made from it here, and its objects stay in it
+    let mut heap = unsafe { luna_core::__private::new_heap() };
+    let root = compile_chunk(&ast, LuaVersion::Lua55, b"=test", &mut heap).expect("compile");
+    let mut vm = Vm::new(LuaVersion::Lua55);
+    let n = root.max_stack as u32;
+    let park = |vm: &mut Vm, t: CompiledTrace, role: AotRole| {
+        // SAFETY: the trace is never entered: nothing runs `root`
+        unsafe { luna_core::__private::install_aot_trace(vm, root, t, role) }
+    };
+    assert!(park(&mut vm, make_dummy_trace(3, n), AotRole::Root));
     // not at a head with none, when it cannot be dispatched, when it was
     // compiled for the entry tags the root or one there was, nor past three
-    assert!(!park(&mut vm, tagged(2, n, 4, true), AotRole::EntrySide));
-    assert!(!park(&mut vm, tagged(3, n, 4, false), AotRole::EntrySide));
-    assert!(!park(&mut vm, tagged(3, n, 0, true), AotRole::EntrySide));
+    let es = |vm: &mut Vm, head, tag, d| park(vm, tagged(head, n, tag, d), AotRole::EntrySide);
+    assert!(!es(&mut vm, 2, 4, true));
+    assert!(!es(&mut vm, 3, 4, false));
+    assert!(!es(&mut vm, 3, 0, true));
     for tag in [4, 5, 6] {
-        assert!(
-            park(&mut vm, tagged(3, n, tag, true), AotRole::EntrySide),
-            "{tag}"
-        );
+        assert!(es(&mut vm, 3, tag, true), "{tag}");
     }
-    assert!(
-        !park(&mut vm, tagged(3, n, 5, true), AotRole::EntrySide),
-        "a second of one type"
-    );
-    assert!(
-        !park(&mut vm, tagged(3, n, 7, true), AotRole::EntrySide),
-        "a fourth"
-    );
+    assert!(!es(&mut vm, 3, 5, true), "a second of one type");
+    assert!(!es(&mut vm, 3, 7, true), "a fourth");
     let traces = root.traces();
     assert_eq!(traces.len(), 1, "an entry side trace went onto the list");
     let sides = traces[0].entry_side_traces();
