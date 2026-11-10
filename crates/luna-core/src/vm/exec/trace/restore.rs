@@ -122,7 +122,9 @@ impl Vm {
     /// `for` variables to keep, whose untouched registers all lie in the
     /// frame (the stack holds them as they entered) and whose window the
     /// stack covers.
-    #[inline(always)]
+    // out of line: inlined, its loop shares the dispatch's registers, and
+    // what the dispatch keeps live across it moved in and out on every pass
+    #[inline(never)]
     pub(in crate::vm::exec) fn trace_restore_planned(
         &mut self,
         base_us: usize,
