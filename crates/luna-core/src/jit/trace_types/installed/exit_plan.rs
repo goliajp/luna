@@ -73,7 +73,7 @@ impl ExitPlan {
     }
 
     /// Exit `i`'s cell.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn cell(&self, i: usize) -> Option<&Once<Box<PlannedExit>>> {
         self.exits.get(i)
     }
