@@ -4,7 +4,9 @@
 use super::*;
 use crate::jit::send_compat::TArc;
 use crate::jit::trace::CompiledTrace;
-use crate::jit::trace_types::installed::entry_side::{ENTRY_SIDE_HEAT, MAX_MISSES, NO_LAST};
+use crate::jit::trace_types::installed::entry_side::{
+    ENTRY_SIDE_HEAT, ENTRY_SIDE_JUDGE, ENTRY_SIDE_MIN_ROUNDS, MAX_MISSES, NO_LAST,
+};
 
 impl Vm {
     /// The rest of a dispatch whose root `root`, tried at head `pc` of `cl`
@@ -48,7 +50,10 @@ impl Vm {
                 if sides.misses.get() < MAX_MISSES {
                     sides.last.set(k as u32);
                 }
-                let entry = self.trace_entry_counted(&es, cl.proto.call_hot_count.get());
+                let entry = match judge(&root, &es) {
+                    true => count_judged(&es),
+                    false => self.trace_entry_counted(&es, cl.proto.call_hot_count.get()),
+                };
                 drop(root);
                 self.trace_dispatch_run(cl, es, entry, pc, base, &mut reg_state, &mut entry_tags);
                 true
@@ -133,13 +138,18 @@ impl Vm {
             .get(sides.last.get() as usize)
             .cloned()?;
         let max_stack = cl.proto.max_stack as usize;
-        if self.es_check(&es, base, max_stack, reg_state, entry_tags) != entry::ENTERS {
+        if es.entry_sides.off.get()
+            || self.es_check(&es, base, max_stack, reg_state, entry_tags) != entry::ENTERS
+        {
             sides.last.set(NO_LAST);
             sides.misses.set(sides.misses.get() + 1);
             return None;
         }
         take_back_count(root);
-        let entry = self.trace_entry_counted(&es, cl.proto.call_hot_count.get());
+        let entry = match judge(root, &es) {
+            true => count_judged(&es),
+            false => self.trace_entry_counted(&es, cl.proto.call_hot_count.get()),
+        };
         Some((es, entry))
     }
 
@@ -162,7 +172,7 @@ impl Vm {
         let first = sides.list.borrow().get(tried).cloned();
         let first = first.map(|es| {
             (
-                self.es_check(&es, base, max_stack, reg_state, entry_tags),
+                self.side_word(&es, refusal, base, max_stack, reg_state, entry_tags),
                 es,
             )
         });
@@ -178,11 +188,31 @@ impl Vm {
             _ => {
                 let es = sides.list.borrow().get(k).cloned()?;
                 Some((
-                    self.es_check(&es, base, max_stack, reg_state, entry_tags),
+                    self.side_word(&es, refusal, base, max_stack, reg_state, entry_tags),
                     es,
                 ))
             }
         })
+    }
+
+    /// [`Self::es_check`] for the entry side trace `es` of a root that
+    /// refused the entry by `refusal`, the frame at `base` of `max_stack`
+    /// registers: one that is off refuses it by the
+    /// same word, so that a head whose entry side traces are all off is
+    /// noted for the fast loop as the root alone would be.
+    fn side_word(
+        &mut self,
+        es: &CompiledTrace,
+        refusal: u32,
+        base: u32,
+        max_stack: usize,
+        reg_state: &mut LVec<i64>,
+        entry_tags: &mut LVec<u8>,
+    ) -> u32 {
+        if es.entry_sides.off.get() {
+            return refusal;
+        }
+        self.es_check(es, base, max_stack, reg_state, entry_tags)
     }
 
     /// What the entry side trace `es` makes of the frame at `base` of
@@ -270,6 +300,64 @@ fn first_taken<T>(
         k += 1;
     }
     Err(same)
+}
+
+/// Counts an entry of the entry side trace `es` of `root`, before it is
+/// counted (`true`: counted only, as it is being judged; see
+/// [`count_judged`]). Its entries after the first (which often goes on with
+/// the long run its recording came from) are judged once
+/// [`ENTRY_SIDE_JUDGE`] of them ran, or sooner when its move up comes due:
+/// fewer than [`ENTRY_SIDE_MIN_ROUNDS`] times round its loop a time on
+/// average, entering it costs more than the interpreter, and it is turned
+/// off: the root records no more, and a root whose entry side traces are
+/// all off is no longer handed to the cold path. It is not moved up while
+/// judged: the optimizing tier's code does not count the times round. One
+/// that came moved up already is not judged.
+fn judge(root: &CompiledTrace, es: &CompiledTrace) -> bool {
+    let s = &es.entry_sides;
+    let n = s.entries.get();
+    let Some(t) =
+        (es.tier_up.as_ref()).filter(|t| n <= ENTRY_SIDE_JUDGE && t.optimized.get().is_null())
+    else {
+        return false;
+    };
+    let c = t.count.get();
+    if n == 1 {
+        s.count0.set(c);
+    }
+    s.entries.set(n + 1);
+    if n < ENTRY_SIDE_JUDGE && c < t.at {
+        return true;
+    }
+    s.entries.set(ENTRY_SIDE_JUDGE + 1);
+    // entries 2 to n ran: the count went up once at each and once a time round
+    if n >= 2 {
+        let k = n - 1;
+        let rounds = c.wrapping_sub(s.count0.get()).wrapping_sub(k);
+        if rounds < ENTRY_SIDE_MIN_ROUNDS * k {
+            s.off.set(true);
+            root.entry_sides.budget.set(0);
+            if root
+                .entry_sides
+                .list
+                .borrow()
+                .iter()
+                .all(|e| e.entry_sides.off.get())
+            {
+                root.has_entry_side.set(false);
+            }
+        }
+    }
+    false
+}
+
+/// The entry of `es` while it is judged ([`judge`]): its entry counted
+/// towards its move up, which waits.
+fn count_judged(es: &CompiledTrace) -> crate::jit::trace::TraceFn {
+    if let Some(t) = &es.tier_up {
+        t.count.set(t.count.get().wrapping_add(1));
+    }
+    es.current_entry()
 }
 
 /// Takes back the count an entry refused by `root` made towards its move to
