@@ -186,7 +186,7 @@ impl Vm {
                 cl,
                 base_us,
                 cont_pc,
-                ct.head_pc,
+                ct,
                 exit_hit_idx
             );
         }

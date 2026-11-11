@@ -17,7 +17,9 @@
 //! short-circuits with `Ok(0)`.
 
 use luna_core::__private::{CompiledTrace, PassCount, TracePlans};
-use luna_core::jit::aot_meta::{AotTraceIndexEntry, decode_meta_blob, unpack_tag_res_kind};
+use luna_core::jit::aot_meta::{
+    AotRole, AotTraceIndexEntry, decode_meta_blob, unpack_tag_res_kind,
+};
 use luna_core::jit::trace_types::TraceFn;
 use luna_core::vm::Vm;
 
@@ -230,24 +232,10 @@ unsafe fn walk_meta_section(
             }
             continue;
         };
-        // The per_exit_inline decode is load-bearing. Each wire entry's
-        // `chain_bytes` rebuilds into a fresh
-        // `Vec<FrameMaterializeInfo>` → `Rc<[...]>` for the
-        // dispatcher's `per_exit_inline[i].chain` field; the
-        // `tags_packed` array unpacks through `unpack_exit_tag`
-        // into `Rc<[ExitTag]>` (same shape as the v2
-        // per_exit_tags pattern above). A failing chain rebuild
-        // (length not a multiple of 12 — corruption) or an
-        // invalid packed tag (out-of-range byte) means the
-        // trace skips install; the trace then falls back to
-        // JIT at runtime via the recorder.
-        //
-        // The IR-baked chain pointer lives in a separate slot
-        // populated by `aot_inline_chain_resolver::resolve_all`
-        // (called from `run_inner` BEFORE this install path).
-        // The two chain owners (this Rc and the leaked Rc
-        // behind the slot) are independent allocations of the
-        // same byte content — neither side compares pointers.
+        // each inline exit's chain and tags rebuilt for the dispatcher; one
+        // that does not decode (corruption) skips the trace, left to the JIT.
+        // The code reads its chain from the slot `aot_inline_chain_resolver`
+        // filled before: another copy of the same bytes, never compared.
         let Some((per_exit_inline_decoded, inline_tags)) =
             decode::per_exit_inline(&decoded.per_exit_inline, entry.head_pc, probe_on)
         else {
@@ -284,9 +272,17 @@ unsafe fn walk_meta_section(
                 plans,
                 per_exit_inline_decoded,
             );
-            luna_core::__private::install_aot_trace(vm, proto, ct)
+            luna_core::__private::install_aot_trace(vm, proto, ct, decoded.role)
         };
         if !parked {
+            // an entry side trace whose root was not parked (no room, or
+            // its blob refused) is not either, nor made a root
+            if probe_on && decoded.role == AotRole::EntrySide {
+                eprintln!(
+                    "luna-runtime-helpers: aot_trace skip head_pc={} reason=entry_side_without_root",
+                    decoded.header.head_pc
+                );
+            }
             continue;
         }
         installed += 1;

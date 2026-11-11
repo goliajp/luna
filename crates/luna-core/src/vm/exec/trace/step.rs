@@ -192,11 +192,12 @@ impl Vm {
         proto: &crate::runtime::function::Proto,
     ) -> Option<crate::jit::send_compat::TArc<crate::jit::CompiledTrace>> {
         let ct_addr = self.trace_step_running();
-        let traces = proto.traces.borrow();
-        let t = traces
-            .iter()
-            .find(|t| crate::jit::send_compat::TArc::as_ptr(t) as usize == ct_addr);
-        t.cloned()
+        let is_it = |t: &crate::jit::send_compat::TArc<_>| {
+            crate::jit::send_compat::TArc::as_ptr(t) as usize == ct_addr
+        };
+        let on_list = proto.traces.borrow().iter().find(|t| is_it(t)).cloned();
+        // an entry side trace is on its root's list
+        on_list.or_else(|| super::entry_side::all_traces(proto).into_iter().find(is_it))
     }
 
     fn top_frame_raw_mut(&mut self) -> &mut CallFrame {

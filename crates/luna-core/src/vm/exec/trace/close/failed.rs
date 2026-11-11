@@ -18,19 +18,18 @@ impl Vm {
             jit.trace_compiler
                 .publish_failure(jit.storage.as_mut(), record, opts, version);
         }
+        use super::super::entry_side::{note_recording_failure, note_recording_never_entered};
         let head_proto = record.head_proto;
         if self.jit.trace_compiler.last_compile_checkpoint() == "bail:entry-tag-never-entered" {
-            note_trace_never_entered(
-                &mut self.jit.counters,
-                head_proto,
-                record.head_pc,
-                &record.entry_tags,
-            );
+            note_recording_never_entered(&mut self.jit.counters, record);
         } else {
-            let c = &mut self.jit.counters;
-            note_trace_compile_failure(c, head_proto, record.head_pc);
-            let m = self.jit.fail_memory.get_or_insert_default();
-            m.failed(&head_proto, record.head_pc);
+            note_recording_failure(&mut self.jit.counters, record);
+            // an entry side trace's failures are its root's (the fail
+            // memory would have the head skipped in code loaded later)
+            if !record.entry_side {
+                let m = self.jit.fail_memory.get_or_insert_default();
+                m.failed(&head_proto, record.head_pc);
+            }
         }
         self.jit
             .counters

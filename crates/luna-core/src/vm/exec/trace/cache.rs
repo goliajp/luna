@@ -20,10 +20,14 @@ impl Vm {
         &mut self,
         proto: crate::runtime::Gc<crate::runtime::function::Proto>,
         trace: crate::jit::trace::CompiledTrace,
+        role: crate::jit::aot_meta::AotRole,
     ) -> bool {
         if self.trace_room(trace.window_size as usize).is_err() {
             self.jit.counters.install_no_room += 1;
             return false;
+        }
+        if role == crate::jit::aot_meta::AotRole::EntrySide {
+            return self.trace_attach_aot_entry_side(proto, trace);
         }
         cache_trace(proto, trace);
         true

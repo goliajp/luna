@@ -78,8 +78,9 @@ impl Vm {
                 .position(|h| h[0].trace.head_pc == target)?;
             ahead.heads.swap_remove(i)
         };
-        // a side trace starting at the head came first: it keeps the head
-        if proto.traces.borrow().iter().any(|t| t.head_pc == target) {
+        // a trace recorded at the head meanwhile keeps it (a side trace
+        // starting there does not)
+        if (proto.traces.borrow().iter()).any(|t| t.head_pc == target && !t.is_side_trace()) {
             return None;
         }
         let admits = self
@@ -96,6 +97,6 @@ impl Vm {
             self.jit.counters.ahead_dropped += 1;
             return Some(false);
         }
-        Some(self.trace_install_adopted(proto, held))
+        Some(self.trace_install_adopted(proto, held, Vec::new()))
     }
 }

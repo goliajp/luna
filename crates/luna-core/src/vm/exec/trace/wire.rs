@@ -9,7 +9,7 @@ use crate::jit::trace::CompiledTrace;
 pub(in crate::vm::exec) type Wired = (TArc<CompiledTrace>, u32);
 
 /// The `dispatch_off_reason` of a side trace.
-const SIDE_TRACE: &str = "side-trace";
+use crate::jit::trace_types::side_exit::SIDE_TRACE;
 
 impl Vm {
     /// Whether the interpreter at `pc` enters trace `t`: one headed there
@@ -36,11 +36,11 @@ impl Vm {
     pub(in crate::vm::exec) fn wire_side_trace(
         &mut self,
         ct: &mut CompiledTrace,
-        side_trace_parent: Option<(Gc<crate::runtime::function::Proto>, u32, usize)>,
+        side_trace_parent: Option<(crate::jit::trace::ParentId, usize)>,
     ) -> Option<Wired> {
         // A side trace is entered only through its parent's exit, never by
         // the dispatcher's lookup at its head pc.
-        let (parent_proto, parent_head_pc, parent_exit_idx) = side_trace_parent?;
+        let (parent, parent_exit_idx) = side_trace_parent?;
         // a trace the lowerer would not dispatch (an untyped table read, an
         // inline abort) is no safer from the parent's exit, unless only the
         // length gate (overhead, not soundness; recorded last) refused it
@@ -50,8 +50,7 @@ impl Vm {
             (ct.dispatchable || ct.dispatch_off_reason == Some("length-gate")) && !ct.call_count;
         ct.dispatchable = false;
         ct.dispatch_off_reason = Some(SIDE_TRACE);
-        let parent_traces = parent_proto.traces.borrow();
-        let parent_ct = parent_traces.iter().find(|t| t.head_pc == parent_head_pc)?;
+        let parent_ct = parent.trace()?;
         // The child's registers are the parent's from the frame the exit
         // resumes in. Its entry tags must match what the exit leaves there,
         // or its code would misread the raw bits the parent wrote. A child
@@ -81,7 +80,7 @@ impl Vm {
             return None;
         }
         self.jit.counters.side_trace_compiled += 1;
-        Some((parent_ct.clone(), parent_exit_idx as u32))
+        Some((parent_ct, parent_exit_idx as u32))
     }
 }
 

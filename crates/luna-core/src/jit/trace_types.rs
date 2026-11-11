@@ -24,12 +24,13 @@ pub(crate) mod installed;
 pub(crate) mod link_fast;
 pub(crate) mod options;
 mod outcome;
+pub(crate) mod parent;
 pub(crate) mod record;
 pub(crate) mod self_link;
 pub(crate) mod side_cell;
 pub(crate) mod side_exit;
 pub(crate) mod tier_up;
-pub(crate) use adopt::{AdoptRequest, AdoptedTrace, TraceAhead};
+pub(crate) use adopt::{AdoptRequest, AdoptedParent, AdoptedTrace, TraceAhead};
 pub(crate) use compiled::CompiledTraceParts;
 pub use compiled::TraceFn;
 pub use exit::*;
@@ -40,6 +41,7 @@ pub(crate) use options::CompileOptions;
 pub use outcome::{
     CompileOutcome, INLINE_CLOSURE, INLINE_MULTI_RESULTS, INLINE_VAR_ARGS, INLINE_VARARG_CALLEE,
 };
+pub use parent::ParentId;
 pub use record::{
     FIELD_SLOT_UNKNOWN, INDEX_SLOTS_UNKNOWN, RESULT_TAG_UNKNOWN, RecordOutcome, field_ic_enabled,
 };

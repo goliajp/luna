@@ -9,7 +9,7 @@
 use crate::vm_storage;
 use luna_core::__private::VmJitState;
 use luna_jit::__private::raw;
-use luna_jit::__private::{CompileOptions, RecordedOp, TraceRecord};
+use luna_jit::__private::{CompileOptions, ParentId, RecordedOp, TraceRecord};
 use luna_jit::jit::trace::{
     last_compile_checkpoint, try_compile_trace, try_compile_trace_with_options,
 };
@@ -47,8 +47,12 @@ fn side_record(proto: Gc<Proto>, pcs: &[u32], last: Option<Inst>) -> TraceRecord
         proto,
         pcs[0],
         vec![raw::INT; proto.max_stack as usize],
-        proto,
-        0,
+        ParentId {
+            proto,
+            head_pc: 0,
+            root: 0,
+            side: 0,
+        },
         0,
     );
     for (k, &pc) in pcs.iter().enumerate() {

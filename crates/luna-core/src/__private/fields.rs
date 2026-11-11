@@ -151,6 +151,9 @@ pub trait ProtoTraceInternals {
     fn trace_heads(&self) -> Vec<u32>;
     /// Whether the call trigger is done with the prototype's entry.
     fn trace_call_head_settled(&self) -> bool;
+    /// Per slot of [`Self::trace_heads`]: what the fast loop notes about
+    /// entries the traces there refuse, `u32::MAX` when nothing.
+    fn trace_head_refusals(&self) -> Vec<u32>;
     /// The method JIT's state of the prototype.
     fn jit_state(&self) -> JitProtoState;
     /// The prototype's compiled traces. Nothing in them can be changed
@@ -181,6 +184,13 @@ impl ProtoTraceInternals for Proto {
 
     fn trace_call_head_settled(&self) -> bool {
         self.trace_call_head_settled.get()
+    }
+
+    fn trace_head_refusals(&self) -> Vec<u32> {
+        self.trace_head_refused
+            .iter()
+            .map(std::cell::Cell::get)
+            .collect()
     }
 
     fn jit_state(&self) -> JitProtoState {

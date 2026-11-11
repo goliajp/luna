@@ -69,6 +69,10 @@
 //!   traces never produce a v3 blob with inline data — they stay
 //!   JIT-only. The wire format below is forward-ready so the
 //!   lowerer / resolver work doesn't need a fresh version bump.
+//! - **v5** — after v4 (16-byte chain records): ends with a byte giving
+//!   the trace's role, its head's root trace or an entry side trace the
+//!   deploy Vm attaches to that root; both blocks and the byte are always
+//!   there.
 //!
 //! # Field summary
 //!
@@ -106,28 +110,14 @@ pub use blob::*;
 /// causing arbitrary deserialization.
 pub const AOT_META_MAGIC: u32 = 0xAA77_0001;
 
-/// Wire-format version. v1 = minimal format. v2 = appends
-/// trailing `per_exit_tags` block so typed-register side-exits
-/// (GetUpval-heavy traces) install at deploy time. v3 = appends a
-/// second trailing block carrying `per_exit_inline` data so
-/// depth>0 inlined cmp side-exits can be rebuilt at install time
-/// (the trace mcode side still needs a relocatable-slot scheme
-/// before non-empty inline entries can actually be emitted —
-/// see the module docs).
-///
-/// **Forward compatibility contract**: a v3 writer emits the same
-/// fixed-prefix header layout as v1/v2 plus the v2 tail (always
-/// present, count=0 if empty) plus the v3 tail (count=0 if empty).
-/// A v3 reader MUST accept v1 blobs (= header + tags only, no v2
-/// tail) and v2 blobs (= header + tags + v2 tail only, no v3 tail)
-/// as if the missing tails were empty — implementation lives in
-/// [`decode_meta_blob`]'s `bytes.len() > cur` predicate at each
-/// tail boundary. v2 readers on a v3 blob would mis-parse the v3
-/// tail as garbage; we bump `AOT_META_VERSION` so older readers
-/// hard-reject instead of silently mis-installing. Version 4 keeps the
-/// v3 layout with 16-byte chain records (`FrameMaterializeInfo` gained
-/// `n_varargs`).
-pub const AOT_META_VERSION: u32 = 4;
+/// Wire-format version, matched exactly by the reader: a blob of another
+/// version is refused, never read as this one. v1 had the header and the
+/// tags; v2 added the `per_exit_tags` block and v3 the `per_exit_inline`
+/// block; v4 has 16-byte chain records (`FrameMaterializeInfo` gained
+/// `n_varargs`); v5 ends with the trace's [`AotRole`] byte, and has both
+/// blocks and that byte always (a reader of v5 refuses a blob without
+/// them).
+pub const AOT_META_VERSION: u32 = 5;
 
 /// Fixed-size header at the top of every meta blob. All ints are
 /// little-endian.

@@ -9,6 +9,7 @@ use luna_core::__private::{
 };
 use luna_core::compiler::compile_chunk;
 use luna_core::frontend::parser::parse;
+use luna_core::jit::aot_meta::AotRole;
 use luna_core::jit::send_compat::{TArc, TCellU32};
 use luna_core::jit::trace::{ExitTag, ExitTagTable};
 use luna_core::version::LuaVersion;
@@ -108,7 +109,7 @@ fn install_aot_trace_pushes_onto_proto_traces() {
     let mut vm = Vm::new(LuaVersion::Lua55);
     let trace = make_dummy_trace(0, root.max_stack as u32);
     // SAFETY: the trace is never entered: nothing runs `root`
-    unsafe { luna_core::__private::install_aot_trace(&mut vm, root, trace) };
+    unsafe { luna_core::__private::install_aot_trace(&mut vm, root, trace, AotRole::Root) };
 
     let traces = root.traces();
     assert_eq!(traces.len(), 1, "install must push exactly one trace");
@@ -139,15 +140,45 @@ fn install_then_lookup_via_collect_hashes() {
         .map(|(p, _)| *p)
         .expect("root proto must be present in collected pairs");
 
-    let trace = make_dummy_trace(3, root.max_stack as u32);
-    // SAFETY: as above
-    unsafe { luna_core::__private::install_aot_trace(&mut vm, matched, trace) };
+    let n = root.max_stack as u32;
+    let park = |vm: &mut Vm, t: CompiledTrace, role: AotRole| {
+        // SAFETY: as above
+        unsafe { luna_core::__private::install_aot_trace(vm, matched, t, role) }
+    };
+    assert!(park(&mut vm, make_dummy_trace(3, n), AotRole::Root));
 
     assert_eq!(
         root.traces().len(),
         1,
         "trace must end up on the matched proto"
     );
+
+    // an entry side trace goes onto the root parked at its head before:
+    // not at a head with none, when it cannot be dispatched, when it was
+    // compiled for the entry tags the root or one there was, nor past three
+    assert!(!park(&mut vm, tagged(2, n, 4, true), AotRole::EntrySide));
+    assert!(!park(&mut vm, tagged(3, n, 4, false), AotRole::EntrySide));
+    assert!(!park(&mut vm, tagged(3, n, 0, true), AotRole::EntrySide));
+    for tag in [4, 5, 6] {
+        assert!(
+            park(&mut vm, tagged(3, n, tag, true), AotRole::EntrySide),
+            "{tag}"
+        );
+    }
+    assert!(
+        !park(&mut vm, tagged(3, n, 5, true), AotRole::EntrySide),
+        "a second of one type"
+    );
+    assert!(
+        !park(&mut vm, tagged(3, n, 7, true), AotRole::EntrySide),
+        "a fourth"
+    );
+    let traces = root.traces();
+    assert_eq!(traces.len(), 1, "an entry side trace went onto the list");
+    let sides = traces[0].entry_side_traces();
+    assert_eq!(sides.len(), 3);
+    assert!(sides.iter().all(|e| e.is_entry_side()));
+    assert_eq!(sides[0].entry_tags()[0], 4);
 }
 
 /// Plans made for more inline exits than the parts have are not of this
@@ -169,4 +200,20 @@ fn plans_of_other_code_are_caught_in_debug_builds() {
     );
     parts.plans = plans;
     let _ = install(parts);
+}
+
+/// A dummy trace at `head_pc` whose entry tags are `tag` in every register.
+fn tagged(head_pc: u32, max_stack: u32, tag: u8, dispatchable: bool) -> CompiledTrace {
+    let mut p = dummy_parts(head_pc, max_stack);
+    let entry_tags = vec![tag; max_stack as usize];
+    let exit_tags = vec![ExitTag::Untouched; max_stack as usize];
+    p.plans = TracePlans::new(
+        &entry_tags,
+        &exit_tags,
+        ExitTagTable::default(),
+        ExitTagTable::default(),
+        PassCount::Shared,
+    );
+    p.dispatchable = dispatchable;
+    install(p)
 }

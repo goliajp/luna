@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::jit_backend::trace::image::Optimized;
-use luna_core::__private::side_cells;
+use luna_core::__private::{AdoptedParent, side_cells};
 
 /// `img` as a trace of this Vm: its code copied into this Vm's code memory
 /// with this Vm's addresses written in. `None` when a function it inlined
@@ -63,16 +63,26 @@ pub(super) fn install(
         // `ct`, placed above with this Vm's addresses and `ct`'s cells; the
         // tier source is made above for it; no side-trace cell is set yet
         trace: TArc::new(unsafe { CompiledTrace::from_parts(ct) }),
-        side_parent: match (img.side_parent, req.side_parent) {
-            (None, _) => None,
-            // the side trace asked for: its parent is the one asked about
-            (Some(_), Some(p)) if img_is_asked => Some(p),
-            // one that comes with its parent starts in the same function
-            (Some((pc, exit, _)), _) => Some((req.proto, pc, exit)),
-        },
+        side_parent: adopted_parent(img, req, img_is_asked),
+        image: img.id,
         inlined: protos[1..].to_vec(),
         ahead: false,
     })
+}
+
+/// The parent of `img`'s trace, and its exit, when it is a side trace:
+/// asked for (`img_is_asked`), the one asked about; else taken up with its
+/// parent, after it, in the same function.
+fn adopted_parent(
+    img: &TraceImage,
+    req: &AdoptRequest<'_>,
+    img_is_asked: bool,
+) -> Option<(AdoptedParent, usize)> {
+    match (img.side_parent, req.side_parent) {
+        (None, _) => None,
+        (Some(_), Some((p, exit))) if img_is_asked => Some((AdoptedParent::Asked(p), exit)),
+        (Some((_, exit, parent)), _) => Some((AdoptedParent::Image(parent), exit)),
+    }
 }
 
 /// Gives the trace `ct` taken up from `img` the source to compile it from:

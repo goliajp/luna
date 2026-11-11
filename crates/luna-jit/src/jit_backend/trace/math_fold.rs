@@ -247,8 +247,12 @@ pub(super) fn try_match_trace_math_fold(
             return None;
         }
         let arg_reg = i2.b();
-        // Call R[A], B=2 (1 arg), C=2 (1 result).
+        // Call R[A], B=2 (1 arg), C=2 (1 result), not into a Lua function
+        // the recording went into (as `split_window`)
         if i3.a() != a || i3.b() != 2 || i3.c() != 2 {
+            return None;
+        }
+        if record.ops.get(i + 4).is_some_and(|o| o.inline_depth > 0) {
             return None;
         }
         return Some(TraceMathFold {
@@ -314,6 +318,11 @@ fn split_window(
         let inst_j = rop_j.inst;
         if matches!(inst_j.op(), Op::Call) {
             if inst_j.a() != a || !bs.contains(&inst_j.b()) || inst_j.c() != 2 {
+                return None;
+            }
+            // the field held a Lua function when recorded, whose body the
+            // recording went into: no library function to fold
+            if record.ops.get(j + 1).is_some_and(|o| o.inline_depth > 0) {
                 return None;
             }
             return Some((j, inst_j.b() - 1));

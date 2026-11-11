@@ -35,7 +35,7 @@ impl Vm {
             proto: crate::runtime::heap::Gc<crate::runtime::function::Proto>,
             out: &mut Vec<HotExitInfo>,
         ) {
-            for ct in proto.traces.borrow().iter() {
+            for ct in super::super::entry_side::all_traces(&proto).iter() {
                 debug_assert_eq!(
                     ct.exit_hit_counts.len(),
                     ct.plans.exit_count(),

@@ -59,16 +59,12 @@ pub struct TraceRecord {
     /// pointer → garbage. `None` for non-generic-for traces or
     /// when the snapshot slot isn't reachable.
     pub tfor_val_tag: Option<u8>,
-    /// If set, this trace is a SIDE TRACE: it was
-    /// triggered by a parent trace's hot side-exit, NOT by the
-    /// usual back-edge / call-trigger paths. The tuple is
-    /// `(parent_head_proto, parent_head_pc, parent_exit_idx)`,
-    /// uniquely identifying the parent's `CompiledTrace` and the
-    /// `exit_hit_counts` slot that crossed [`HOTEXIT_THRESHOLD`].
-    /// `None` for primary traces. Read to wire the parent's
-    /// exit-branch indirection pointer to the side trace's entry
-    /// once it compiles.
-    pub side_trace_parent: Option<(Gc<Proto>, u32, usize)>,
+    /// For a side trace, started at a parent trace's exit that became hot
+    /// (past [`HOTEXIT_THRESHOLD`]): the parent and the exit's index.
+    pub side_trace_parent: Option<(ParentId, usize)>,
+    /// Recorded from a root trace's head for an entry the root refused: an
+    /// entry side trace of that root.
+    pub entry_side: bool,
     /// Set by the recorder cycle catch when a same-proto
     /// ancestor count exceeds [`RECUNROLL_THRESHOLD`] at head_pc on
     /// head_proto. Drives the lowerer's `TraceEnd::SelfLink` close
@@ -193,6 +189,7 @@ impl TraceRecord {
             tfor_iter: None,
             tfor_val_tag: None,
             side_trace_parent: None,
+            entry_side: false,
             self_link_kind: None,
             retfs: Vec::new(),
             downrec_close: None,
@@ -223,8 +220,7 @@ impl TraceRecord {
         proto: Gc<Proto>,
         head_pc: u32,
         entry_tags: Vec<u8>,
-        parent_head_proto: Gc<Proto>,
-        parent_head_pc: u32,
+        parent: ParentId,
         parent_exit_idx: usize,
     ) -> Self {
         TraceRecord {
@@ -237,7 +233,8 @@ impl TraceRecord {
             is_call_triggered: false,
             tfor_iter: None,
             tfor_val_tag: None,
-            side_trace_parent: Some((parent_head_proto, parent_head_pc, parent_exit_idx)),
+            side_trace_parent: Some((parent, parent_exit_idx)),
+            entry_side: false,
             self_link_kind: None,
             retfs: Vec::new(),
             downrec_close: None,

@@ -33,17 +33,13 @@ pub(crate) fn publish(
         return;
     };
     let side_parent = match record.side_trace_parent {
-        Some((proto, pc, exit)) => {
-            let parent = proto
-                .traces()
-                .iter()
-                .find(|t| t.head_pc() == pc)
-                .map(|t| t.entry() as usize);
+        Some((p, exit)) => {
+            let parent = p.trace().map(|t| t.entry() as usize);
             // a parent that is not shared leaves its side traces unshared
             let Some(id) = parent.and_then(|e| cs.images.get(&e).copied()) else {
                 return;
             };
-            Some((pc, exit, id))
+            Some((p.head_pc, exit, id))
         }
         None => None,
     };
@@ -87,12 +83,8 @@ pub(crate) fn adopt(
         return Vec::new();
     };
     let parent_id = match req.side_parent {
-        Some((parent_proto, pc, _)) => {
-            let parent = parent_proto
-                .traces()
-                .iter()
-                .find(|t| t.head_pc() == pc)
-                .map(|t| t.entry() as usize);
+        Some((p, _)) => {
+            let parent = p.trace().map(|t| t.entry() as usize);
             match parent.and_then(|e| cs.images.get(&e).copied()) {
                 Some(id) => Some(id),
                 None => return Vec::new(),
@@ -117,7 +109,9 @@ pub(crate) fn adopt(
                 img.protos[0] == *head
                     && entry_tags_admit(img.meta.plans.entry_tags(), req.entry_tags)
                     && img.side_parent.map(|(pc, exit, id)| (pc, exit, Some(id)))
-                        == req.side_parent.map(|(_, pc, exit)| (pc, exit, parent_id))
+                        == req
+                            .side_parent
+                            .map(|(p, exit)| (p.head_pc, exit, parent_id))
             })
         }) else {
             return Vec::new();
@@ -128,7 +122,9 @@ pub(crate) fn adopt(
         if req.ahead {
             let traces = req.proto.traces();
             for root in cache.roots_of(settings, head, req.head_pc, |pc| {
-                traces.iter().any(|t| t.head_pc() == pc)
+                traces
+                    .iter()
+                    .any(|t| t.head_pc() == pc && !t.is_side_trace())
             }) {
                 let from = todo.len();
                 todo.push(root);

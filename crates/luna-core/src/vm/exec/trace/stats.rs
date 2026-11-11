@@ -233,7 +233,7 @@ impl Vm {
             proto: crate::runtime::heap::Gc<crate::runtime::function::Proto>,
             out: &mut Vec<(u32, Vec<u32>)>,
         ) {
-            for ct in proto.traces.borrow().iter() {
+            for ct in super::entry_side::all_traces(&proto).iter() {
                 let counts: Vec<u32> = ct.exit_hit_counts.iter().map(|c| c.get()).collect();
                 out.push((ct.head_pc, counts));
             }

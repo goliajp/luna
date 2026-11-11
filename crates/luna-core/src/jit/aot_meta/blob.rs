@@ -2,6 +2,17 @@
 
 use super::*;
 
+/// What a trace is to the deploy Vm, the last byte of a v5 blob.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AotRole {
+    /// The trace of its head, entered there.
+    Root = 0,
+    /// An entry side trace of the root at its head, which the root's
+    /// blob comes before.
+    EntrySide = 1,
+}
+
 /// Serialize a header + the two tag arrays + the v2 `per_exit_tags`
 /// tail + the v3 `per_exit_inline` tail into a fresh `Vec<u8>`. Pass
 /// empty slices to emit a "simple" trace (each tail then carries a
@@ -16,6 +27,7 @@ pub fn encode_meta_blob(
     exit_tags_packed: &[u8],
     per_exit_tags: &[PerExitTagsEntry],
     per_exit_inline: &[PerExitInlineEntry],
+    role: AotRole,
 ) -> Vec<u8> {
     assert_eq!(entry_tags.len(), header.entry_tags_len as usize);
     assert_eq!(exit_tags_packed.len(), header.exit_tags_len as usize);
@@ -53,11 +65,9 @@ pub fn encode_meta_blob(
         out.extend_from_slice(&(ent.tags_packed.len() as u32).to_le_bytes());
         out.extend_from_slice(&ent.tags_packed);
     }
-    // v3 tail: u32 count, then per entry
-    //   [cont_pc:u32, head_resume_pc:u32, tags_len:u32, tags:[u8; tags_len],
-    //    chain_bytes_len:u32, chain_bytes:[u8; chain_bytes_len]].
-    // chain_bytes_len is always a multiple of 12 (FrameMaterializeInfo
-    // wire size); the decoder rejects otherwise as a corruption signal.
+    // v3 tail: u32 count, then per entry cont_pc, head_resume_pc, the tags
+    // and the chain bytes (a multiple of the record size), each with its
+    // u32 length first
     out.extend_from_slice(&(per_exit_inline.len() as u32).to_le_bytes());
     for ent in per_exit_inline {
         out.extend_from_slice(&ent.cont_pc.to_le_bytes());
@@ -67,6 +77,7 @@ pub fn encode_meta_blob(
         out.extend_from_slice(&(ent.chain_bytes.len() as u32).to_le_bytes());
         out.extend_from_slice(&ent.chain_bytes);
     }
+    out.push(role as u8);
     out
 }
 
@@ -90,6 +101,8 @@ pub struct DecodedMeta {
     /// the field exists so the wire format is forward-ready for the
     /// relocatable-chain-slot lowerer work that flips the filter.
     pub per_exit_inline: Vec<PerExitInlineEntry>,
+    /// v5 — the trace's role.
+    pub role: AotRole,
 }
 
 /// Deserialize a blob produced by [`encode_meta_blob`]. Returns
@@ -135,13 +148,11 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
     let exit_end = entry_end + exit_tags_len as usize;
     let entry_tags = bytes[entry_start..entry_end].to_vec();
     let exit_tags = bytes[entry_end..exit_end].to_vec();
-    // v2 tail: optional per_exit_tags block. Absent (= empty) when
-    // the blob ends exactly at `exit_end` — covers v1-shaped
-    // producers (which never wrote a tail) and v2+ producers
-    // serializing a trace with zero typed-register side-exits.
+    // v2 tail: the per_exit_tags block, its count 0 for a trace with no
+    // typed-register side-exits
     let mut per_exit_tags: Vec<PerExitTagsEntry> = Vec::new();
     let mut cur = exit_end;
-    if bytes.len() > cur {
+    {
         if bytes.len() < cur + 4 {
             return Err("v2 tail truncated at count");
         }
@@ -171,18 +182,11 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
             });
         }
     }
-    // v3 tail: optional per_exit_inline block. Absent when the blob
-    // ends at the v2 tail boundary — covers v1 / v2 producers and
-    // v3 producers serializing a trace with zero inline cmp@d>0
-    // side-exits. Tail layout per entry:
-    //   cont_pc:u32, head_resume_pc:u32,
-    //   tags_len:u32, tags:[u8; tags_len],
-    //   chain_bytes_len:u32, chain_bytes:[u8; chain_bytes_len]
-    // chain_bytes_len validated as a multiple of 12
-    // (FrameMaterializeInfo wire size) — non-multiple = corruption,
-    // we Err so the deploy walker skips the entry cleanly.
+    // v3 tail: the per_exit_inline block, laid out as `encode_meta_blob`
+    // writes it; chain bytes not a multiple of the record size are a
+    // corruption, refused
     let mut per_exit_inline: Vec<PerExitInlineEntry> = Vec::new();
-    if bytes.len() > cur {
+    {
         if bytes.len() < cur + 4 {
             return Err("v3 tail truncated at count");
         }
@@ -228,11 +232,20 @@ pub fn decode_meta_blob(bytes: &[u8]) -> Result<DecodedMeta, &'static str> {
             });
         }
     }
+    // v5: the role byte, last
+    let role = match bytes[cur..] {
+        [0] => AotRole::Root,
+        [1] => AotRole::EntrySide,
+        [] => return Err("v5 role byte missing"),
+        [_] => return Err("v5 role byte invalid"),
+        _ => return Err("bytes past the v5 role byte"),
+    };
     Ok(DecodedMeta {
         header,
         entry_tags,
         exit_tags,
         per_exit_tags,
         per_exit_inline,
+        role,
     })
 }

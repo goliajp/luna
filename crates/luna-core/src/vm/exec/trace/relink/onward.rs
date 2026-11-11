@@ -43,6 +43,7 @@ pub(super) fn fill_link(
     let (Some(from), Some(to)) = (at, found) else {
         return Fill::NotHead;
     };
+    // never an entry side trace: none is on `proto.traces`
     let target = &traces[to];
     let typed = (exit - parent.per_exit_inline.len()) as u32;
     let call = [

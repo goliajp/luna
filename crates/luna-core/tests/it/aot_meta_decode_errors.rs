@@ -2,7 +2,7 @@
 //!
 //! Existing inline tests in `aot_meta.rs` cover round-trip happy
 //! paths + magic / version mismatch + payload truncation + v3
-//! chain misalignment + v1/v2 shape tolerance. The gap covered here
+//! chain misalignment + the v5 role byte. The gap covered here
 //! is **the per-tail truncation arms** — the v2 / v3 walkers
 //! each have multiple "shorter than X" return-points and the
 //! decoder is the load-bearing wire-format contract for deploy-side
@@ -199,8 +199,8 @@ fn decode_rejects_v3_tail_truncated_at_chain_bytes() {
     );
 }
 
-/// Negative-control sanity check: an empty-but-well-formed v3
-/// blob (header + v2 count=0 + v3 count=0) must decode cleanly.
+/// Negative-control sanity check: an empty-but-well-formed blob
+/// (header + v2 count=0 + v3 count=0 + role byte) must decode cleanly.
 /// Catches the case where adding stricter checks accidentally
 /// rejects the legit minimal shape.
 #[test]
@@ -208,6 +208,7 @@ fn decode_accepts_minimal_well_formed_blob() {
     let mut blob = empty_header();
     blob.extend_from_slice(&0u32.to_le_bytes()); // v2 count=0
     blob.extend_from_slice(&0u32.to_le_bytes()); // v3 count=0
+    blob.push(0); // v5 role: root
     let decoded = decode_meta_blob(&blob).expect("minimal blob decodes");
     assert!(decoded.entry_tags.is_empty());
     assert!(decoded.exit_tags.is_empty());

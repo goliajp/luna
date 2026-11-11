@@ -28,7 +28,6 @@
 use super::slots::rw_ranges;
 use super::*;
 use luna_core::__private::CompiledTraceInternals;
-use luna_core::__private::ProtoTraceInternals;
 
 /// The head frame's registers as the trace takes them on entry.
 pub(super) struct HeadRegs {
@@ -247,9 +246,8 @@ fn classify_written(scan: &mut Scan, regs: &mut HeadRegs, root: bool, split: boo
 /// as `exit_hit_counts`: inline exits, tagged exits, then the global one),
 /// or `None` for a trace that is not a side trace or whose parent is gone.
 pub(super) fn side_parent_exit_tags(record: &TraceRecord) -> Option<Vec<ExitTag>> {
-    let (parent_proto, parent_head_pc, idx) = record.side_trace_parent?;
-    let traces = parent_proto.traces();
-    let parent = traces.iter().find(|t| t.head_pc() == parent_head_pc)?;
+    let (parent, idx) = record.side_trace_parent?;
+    let parent = parent.trace()?;
     let tags = parent.exit_tags_of(idx);
     let off = parent.exit_frame_offset(idx).min(tags.len());
     Some(tags[off..].to_vec())

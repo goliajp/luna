@@ -102,7 +102,12 @@ macro_rules! lua_call {
                 let max_stack = cl.proto.max_stack as usize;
                 let base_us = f.base as usize;
                 let regs = &$vm.stack[base_us..base_us + max_stack];
-                if !trace_head_stuck(proto, 0, regs)
+                // calls the trace there refused came to be hot (see
+                // `trace_refused`): an entry side trace may be recorded
+                if let Some(root) = trace::entry_side::head_trace(&proto, 0) {
+                    proto.trace_call_head_settled.set(true);
+                    $vm.trace_start_call_entry_side(cl, frame_idx, base_us, &root);
+                } else if !trace_head_stuck(proto, 0, regs)
                     && !trace_head_forgone(&mut $vm.jit, proto, 0)
                     && !$vm.trace_try_adopt(proto, 0, base_us, None, true)
                 {

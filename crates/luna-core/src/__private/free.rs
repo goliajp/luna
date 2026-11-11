@@ -100,10 +100,15 @@ pub fn string_inlinable_builtin(name: &[u8]) -> Option<crate::runtime::Builtin> 
 
 /// Parks an AOT binary's precompiled `trace` on `proto`, for the deploy
 /// side's resolver: the dispatcher then enters it at its `head_pc` as it
-/// would a trace the JIT compiled. Nothing is checked or deduplicated; a
-/// second trace at the same `head_pc` is entered only if the first is not.
-/// `false` when the Vm has no memory for what running the trace needs:
-/// the trace is not parked then.
+/// would a trace the JIT compiled. As [`AotRole::EntrySide`], attaches it
+/// to the root trace parked at that pc before, as an entry side trace the
+/// dispatcher tries when the root refuses an entry, if it may be one (see
+/// the JIT's); `false` when there is no such root or it may not. A root is
+/// not deduplicated: a second at the same `head_pc` is entered only if the
+/// first is not. `false` when the Vm has no memory for what running the
+/// trace needs: the trace is not parked then.
+///
+/// [`AotRole::EntrySide`]: crate::jit::aot_meta::AotRole::EntrySide
 ///
 /// # Safety
 /// `trace` meets [`crate::jit::CompiledTrace::from_parts`]'s conditions,
@@ -114,8 +119,9 @@ pub unsafe fn install_aot_trace(
     vm: &mut Vm,
     proto: Gc<crate::runtime::function::Proto>,
     trace: crate::jit::CompiledTrace,
+    role: crate::jit::aot_meta::AotRole,
 ) -> bool {
-    vm.install_aot_trace(proto, trace)
+    vm.install_aot_trace(proto, trace, role)
 }
 
 /// Takes the source `trace` would be compiled from at the optimizing tier,
