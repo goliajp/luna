@@ -25,6 +25,7 @@ impl CompiledTrace {
     }
 
     /// The cell of typed exit `typed`, once the cells are made.
+    #[inline(always)]
     pub(crate) fn side_cell(&self, typed: u32) -> Option<&SideCell> {
         let n = self.side_cell_exits.iter().position(|&e| e == typed)?;
         self.side_cells.get()?.get(n)
