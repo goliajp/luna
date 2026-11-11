@@ -20,16 +20,16 @@ use crate::vm::error::LuaError;
 use crate::vm::isa::{Inst, Op};
 use native::call::NativeKind;
 
-/// Calls `f`, a function off the dispatch's hot path, through a pointer the
-/// optimizer cannot see through: nothing it could infer from `f`'s body
-/// (what it writes, whether it unwinds) reaches the caller's code, which so
-/// stays the same however `f` changes. `f` is `#[cold] #[inline(never)]`.
+/// Calls `f`, a function off the dispatch's hot path (`#[cold]
+/// #[inline(never)]`), as one: what the caller's code may take from `f` is
+/// its attributes alone, which a change to its body seldom moves (the
+/// dispatch's code is checked to stay the same when cold bodies change).
+/// Not through an opaque pointer: that pointer goes to the stack and back
+/// at every call, which made the dispatch's frame larger on aarch64.
 macro_rules! cold {
-    ($f:path, $($a:expr),* $(,)?) => {{
-        let f: fn($(cold!(@any $a)),*) -> _ = $f;
-        std::hint::black_box(f)($($a),*)
-    }};
-    (@any $a:expr) => { _ };
+    ($f:path, $($a:expr),* $(,)?) => {
+        $f($($a),*)
+    };
 }
 
 mod arith;
