@@ -39,7 +39,25 @@ pub(crate) struct EntrySides {
     /// round.
     pub(crate) heat_kind: TCellU32,
     pub(crate) heat: TCellU32,
+    /// For an entry side trace: the times it was entered while judged (past
+    /// [`ENTRY_SIDE_JUDGE`] once judged), and its move-up count at its
+    /// second entry (see `vm::exec::trace::dispatch::entry_side::judge`);
+    /// `off` once its entries ran too few times round to pay for entering
+    /// it.
+    pub(crate) entries: TCellU32,
+    pub(crate) count0: TCellU32,
+    pub(crate) off: TCellBool,
 }
+
+/// The entries of an entry side trace after which the times round its
+/// loop they ran are judged, once.
+pub(crate) const ENTRY_SIDE_JUDGE: u32 = 16;
+
+/// The times round per entry below which an entry side trace costs more
+/// than the interpreter: entering it costs about 1860 instructions more
+/// than interpreting the loop's fixed part, and it saves about 137 a time
+/// round (lx64, b85 `be.lua`).
+pub(crate) const ENTRY_SIDE_MIN_ROUNDS: u32 = 14;
 
 /// The times round a loop its trace refuses entries of one kind before an
 /// entry side trace is recorded for them: as many as make a loop hot by
@@ -63,6 +81,9 @@ impl Default for EntrySides {
             misses: TCellU32::new(0),
             heat_kind: TCellU32::new(0),
             heat: TCellU32::new(0),
+            entries: TCellU32::new(0),
+            count0: TCellU32::new(0),
+            off: TCellBool::new(false),
         }
     }
 }
