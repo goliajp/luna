@@ -58,7 +58,7 @@ impl Vm {
                     note_refusal(&cl.proto, pc, refusal);
                 }
                 if pc == 0 {
-                    self.count_refused_call(&cl.proto, &root);
+                    self.count_refused_call(&cl.proto, &root, base);
                 }
                 false
             }
@@ -212,17 +212,32 @@ impl Vm {
         )
     }
 
-    /// A call of `proto` refused by the trace `root` at its entry and each
-    /// of its entry side traces: once as many came as make a call hot (and
-    /// hot counting does not pause), the next call looks at recording an
-    /// entry side trace (`Proto::trace_call_head_settled` is cleared for
-    /// it). Calls taken pay nothing for it.
-    fn count_refused_call(&mut self, proto: &crate::runtime::Proto, root: &CompiledTrace) {
+    /// A call of `proto` (its frame at `base`) refused by the trace `root`
+    /// at its entry and each of its entry side traces: once as many of one
+    /// kind came in a row as make a call hot (and hot counting does not
+    /// pause), the next call looks at recording an entry side trace
+    /// (`Proto::trace_call_head_settled` is cleared for it). Calls taken
+    /// pay nothing for it.
+    fn count_refused_call(
+        &mut self,
+        proto: &crate::runtime::Proto,
+        root: &CompiledTrace,
+        base: u32,
+    ) {
         if self.jit.step.quiet.is_some() || !super::super::entry_side::may_have_more(root) {
             return;
         }
-        let n = &root.entry_sides.call_refusals;
-        n.set(n.get() + 1);
+        let at = base as usize;
+        // the frame the dispatcher just read in
+        let regs = &self.stack[at..at + proto.max_stack as usize];
+        let kind = super::super::entry_side::entry_kind(root, regs);
+        let (n, s) = (&root.entry_sides.call_refusals, &root.entry_sides);
+        if kind == s.heat_kind.get() {
+            n.set(n.get() + 1);
+        } else {
+            s.heat_kind.set(kind);
+            n.set(1);
+        }
         if n.get() >= self.jit.call_hot_threshold.max(ENTRY_SIDE_HEAT) {
             n.set(0);
             proto.trace_call_head_settled.set(false);
