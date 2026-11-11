@@ -91,6 +91,19 @@ impl Vm {
         let mem = self.heap.mem();
         let mut entry_tags = std::mem::replace(&mut self.jit.entry_tags_buf, LVec::new(mem));
         let mut reg_state = std::mem::replace(&mut self.jit.reg_state_buf, LVec::new(mem));
+        if ct.has_entry_side.get() {
+            return cold!(
+                Vm::trace_side_first,
+                self,
+                cl,
+                ct,
+                entry_fn,
+                pc,
+                base,
+                reg_state,
+                entry_tags
+            );
+        }
         let ran = words::tags_in(&mut entry_tags, max_stack)
             && words::frame_in(&mut reg_state, ct.window_size as usize, max_stack)
             && self.inlined_calls_fit(ct.inline_depth, base, ct.window_size)

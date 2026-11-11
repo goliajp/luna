@@ -78,6 +78,7 @@ fn heated(root: &CompiledTrace, proto: &crate::runtime::Proto, head: u32, thresh
 /// 1. A root holding as many as it may has no budget left for more.
 fn attach(root: &CompiledTrace, es: TArc<CompiledTrace>) -> u8 {
     es.entry_sides.is_one.set(true);
+    root.has_entry_side.set(true);
     let mut list = root.entry_sides.list.borrow_mut();
     list.push(es);
     if list.len() >= ENTRY_SIDE_CAP {

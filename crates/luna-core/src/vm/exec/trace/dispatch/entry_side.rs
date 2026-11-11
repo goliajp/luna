@@ -67,6 +67,82 @@ impl Vm {
         ran
     }
 
+    /// The dispatch at `pc` of `cl` (frame `base`) of a root that holds
+    /// entry side traces, counted with its entry `entry_fn` and the
+    /// buffers `reg_state` and `entry_tags` taken: the entry side trace that
+    /// took the last entry the root refused is tried first, as it is likely
+    /// to take this one too, then the root, then the rest
+    /// ([`Self::trace_refused`]). The dispatcher hands such a root here
+    /// after reading one byte, so that a root with none costs it nothing
+    /// more.
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn trace_side_first(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        root: TArc<CompiledTrace>,
+        entry_fn: crate::jit::trace::TraceFn,
+        pc: u32,
+        base: u32,
+        mut reg_state: LVec<i64>,
+        mut entry_tags: LVec<u8>,
+    ) -> bool {
+        let max_stack = cl.proto.max_stack as usize;
+        let (mut run, mut refused) = (None, None);
+        if words::tags_in(&mut entry_tags, max_stack) {
+            run = self.side_last_taking(cl, &root, base, &mut reg_state, &mut entry_tags);
+            if run.is_none() {
+                match self.es_check(&root, base, max_stack, &mut reg_state, &mut entry_tags) {
+                    // the root's window or inlined calls do not fit: as the
+                    // dispatcher's own checks, no entry and no refusal
+                    NO_ROOM => {}
+                    entry::ENTERS => run = Some((TArc::clone(&root), entry_fn)),
+                    r => refused = Some(r),
+                }
+            }
+        }
+        if let Some(r) = refused {
+            return self.trace_refused(cl, root, pc, base, r, reg_state, entry_tags);
+        }
+        drop(root);
+        let ran = run.is_some();
+        if let Some((t, entry)) = run {
+            self.trace_dispatch_run(cl, t, entry, pc, base, &mut reg_state, &mut entry_tags);
+        }
+        self.trace_dispatch_done(reg_state, entry_tags);
+        ran
+    }
+
+    /// The entry side trace of `root` that took the last entry the root
+    /// refused, counted, with its entry, when its checks take the frame at
+    /// `base` into the buffers `reg_state` and `entry_tags`; else none, and
+    /// it is not tried first again until it takes an entry.
+    fn side_last_taking(
+        &mut self,
+        cl: Gc<LuaClosure>,
+        root: &CompiledTrace,
+        base: u32,
+        reg_state: &mut LVec<i64>,
+        entry_tags: &mut LVec<u8>,
+    ) -> Option<(TArc<CompiledTrace>, crate::jit::trace::TraceFn)> {
+        let sides = &root.entry_sides;
+        let es = sides
+            .list
+            .borrow()
+            .get(sides.last.get() as usize)
+            .cloned()?;
+        let max_stack = cl.proto.max_stack as usize;
+        if self.es_check(&es, base, max_stack, reg_state, entry_tags) != entry::ENTERS {
+            sides.last.set(NO_LAST);
+            sides.misses.set(sides.misses.get() + 1);
+            return None;
+        }
+        take_back_count(root);
+        let entry = self.trace_entry_counted(&es, cl.proto.call_hot_count.get());
+        Some((es, entry))
+    }
+
     /// Which of the entry side traces of `root` takes the entry it refused
     /// by `refusal`, the frame at `base` of `max_stack` registers, as
     /// [`first_taken`] tells it; the one that took the last entry refused
