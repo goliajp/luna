@@ -50,21 +50,27 @@ pub(in crate::vm::exec) fn may_have_more(root: &CompiledTrace) -> bool {
         && !root.call_count
 }
 
-/// Counts the times round the loop at `head` of `proto` that `root` refused
-/// entries by the word the fast loop noted there (`Proto::trace_head_refused`),
-/// as the loop is hot again (`threshold` times round since it last was):
-/// whether that reached [`ENTRY_SIDE_HEAT`], the count then starting again.
-/// A head with no word noted counts as a new one each time.
-fn heated(root: &CompiledTrace, proto: &crate::runtime::Proto, head: u32, threshold: u32) -> bool {
-    let not = crate::runtime::function::TRACE_HEAD_NOT_REFUSED;
-    let word = (proto.trace_heads.get().iter().position(|&h| h == head))
-        .map_or(not, |at| proto.trace_head_refused[at].get());
+/// Counts the times round its loop that `root` refused entries of the
+/// kind the registers `regs` hold now (the tags of every register its
+/// entry checks), as the loop is hot again (`threshold` times round since
+/// it last was): whether that reached [`ENTRY_SIDE_HEAT`], the count then
+/// starting again. Only the kind seen at the hot back edges is known: one
+/// that changes in between starts the count again.
+fn heated(root: &CompiledTrace, regs: &[crate::runtime::Value], threshold: u32) -> bool {
+    let want = &root.plans.entry_tags;
+    // FNV-1a over the checked registers' places and tags
+    let mut kind = 0x811c_9dc5_u32;
+    for (i, v) in regs.iter().enumerate().take(want.len()) {
+        if want[i] != crate::jit::trace::ENTRY_TAG_ANY {
+            kind = (kind ^ (i as u32) << 8 ^ u32::from(v.unpack().0)).wrapping_mul(0x0100_0193);
+        }
+    }
     let s = &root.entry_sides;
     let round = threshold.saturating_add(1);
-    if word != not && word == s.heat_word.get() {
+    if kind == s.heat_kind.get() {
         s.heat.set(s.heat.get().saturating_add(round));
     } else {
-        s.heat_word.set(word);
+        s.heat_kind.set(kind);
         s.heat.set(round);
     }
     if s.heat.get() < ENTRY_SIDE_HEAT {
@@ -173,9 +179,7 @@ impl Vm {
         let Some(regs) = self.stack.get(base as usize..base as usize + max_stack) else {
             return false;
         };
-        if taken_by_regs(root, regs)
-            || !heated(root, &cl.proto, target, self.jit.trace_hot_threshold)
-        {
+        if taken_by_regs(root, regs) || !heated(root, regs, self.jit.trace_hot_threshold) {
             return false;
         }
         // one another Vm compiled for these registers first
