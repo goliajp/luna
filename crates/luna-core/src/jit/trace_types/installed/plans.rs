@@ -170,7 +170,7 @@ impl Plans {
     }
 
     /// Exit `i`'s plan, worked out from its tags the first time.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn exit(&self, i: usize) -> Option<&PlannedExit> {
         let cell = self.exit_plan.cell(i)?;
         Some(cell.get_or_init(|| Box::new(PlannedExit::of(self.exit_tags(i)))))

@@ -67,9 +67,8 @@ pub(in crate::vm::exec) fn count_in(ct: &CompiledTrace, regs: &mut [i64], window
         && let Some(t) = &ct.tier_up
     {
         let c = u64::from(t.count.get());
-        let w = &mut regs[trace_count_slot(window)..=trace_passed_slot(window)];
-        w[0] = (c << 32 | c) as i64;
-        w[1] = 0;
+        regs[trace_count_slot(window)] = (c << 32 | c) as i64;
+        regs[trace_passed_slot(window)] = 0;
     }
 }
 
