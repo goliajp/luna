@@ -57,14 +57,7 @@ pub(in crate::vm::exec) fn may_have_more(root: &CompiledTrace) -> bool {
 /// starting again. Only the kind seen at the hot back edges is known: one
 /// that changes in between starts the count again.
 fn heated(root: &CompiledTrace, regs: &[crate::runtime::Value], threshold: u32) -> bool {
-    let want = &root.plans.entry_tags;
-    // FNV-1a over the checked registers' places and tags
-    let mut kind = 0x811c_9dc5_u32;
-    for (i, v) in regs.iter().enumerate().take(want.len()) {
-        if want[i] != crate::jit::trace::ENTRY_TAG_ANY {
-            kind = (kind ^ (i as u32) << 8 ^ u32::from(v.unpack().0)).wrapping_mul(0x0100_0193);
-        }
-    }
+    let kind = entry_kind(root, regs);
     let s = &root.entry_sides;
     let round = threshold.saturating_add(1);
     if kind == s.heat_kind.get() {
@@ -78,6 +71,20 @@ fn heated(root: &CompiledTrace, regs: &[crate::runtime::Value], threshold: u32) 
     }
     s.heat.set(0);
     true
+}
+
+/// The kind of entry the registers `regs` make for `root`: a hash of the
+/// place and tag of each register its entry checks.
+pub(in crate::vm::exec) fn entry_kind(root: &CompiledTrace, regs: &[crate::runtime::Value]) -> u32 {
+    let want = &root.plans.entry_tags;
+    // FNV-1a
+    let mut kind = 0x811c_9dc5_u32;
+    for (i, v) in regs.iter().enumerate().take(want.len()) {
+        if want[i] != crate::jit::trace::ENTRY_TAG_ANY {
+            kind = (kind ^ (i as u32) << 8 ^ u32::from(v.unpack().0)).wrapping_mul(0x0100_0193);
+        }
+    }
+    kind
 }
 
 /// Attaches `es` to `root`'s entry side traces: its place in the list, from
