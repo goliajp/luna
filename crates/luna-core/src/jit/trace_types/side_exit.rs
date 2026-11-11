@@ -173,4 +173,14 @@ impl CompiledTrace {
             .get(exit_idx)
             .is_some_and(Option::is_some)
     }
+
+    /// Whether this is a side trace, entered only from its parent's exit.
+    /// A pc where a trace that is not one starts is recorded no more.
+    pub fn is_side_trace(&self) -> bool {
+        // a side trace is never dispatched: the common case reads one byte
+        !self.dispatchable && self.dispatch_off_reason == Some(SIDE_TRACE)
+    }
 }
+
+/// [`CompiledTrace::dispatch_off_reason`] of a side trace.
+pub(crate) const SIDE_TRACE: &str = "side-trace";

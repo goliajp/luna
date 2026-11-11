@@ -10,7 +10,7 @@ pub(super) fn recording_objects(rec: &TraceRecord) -> impl Iterator<Item = *cons
     let h = |p: Gc<crate::runtime::Proto>| p.as_ptr() as *const GcHeader;
     std::iter::once(rec.head_proto)
         .chain(rec.ops.iter().map(|o| o.proto))
-        .chain(rec.side_trace_parent.map(|p| p.0))
+        .chain(rec.side_trace_parent.map(|p| p.0.proto))
         .chain(rec.retfs.iter().map(|r| r.proto))
         .chain(rec.downrec_close.as_ref().map(|d| d.target_proto))
         .map(h)

@@ -5,6 +5,7 @@
 use super::*;
 use crate::jit::trace::CompiledTrace;
 
+mod already;
 mod failed;
 
 impl Vm {
@@ -30,6 +31,15 @@ impl Vm {
         // (even if partial) and caches the trace, which ends the storm;
         // dispatch may still be refused (length gate).
         const MAX_DISCARDS_PER_PROTO: u32 = 5;
+        // an entry side trace's leaves its root's head as it was
+        if rec.entry_side && rec.is_call_triggered && is_partial_coverage {
+            super::entry_side::note_partial_entry_side(rec);
+            self.jit
+                .counters
+                .bump_close_cause("partial-coverage-discard");
+            self.jit.active_trace = None;
+            return;
+        }
         let prior_discards = rec.head_proto.trace_discard_count.get();
         let cap_reached = prior_discards >= MAX_DISCARDS_PER_PROTO;
         // Flip `gave_up` the moment the cap is reached: the trigger gates
@@ -43,32 +53,20 @@ impl Vm {
             rec.head_proto.trace_gave_up.set(true);
         }
         if rec.is_call_triggered && is_partial_coverage && !cap_reached {
-            // Tally as closed (for visibility) but DROP
-            // without compile/cache. Use the existing
-            // closed-lens accumulator so probes can
-            // observe the discarded shape.
-            // Bump discard count BEFORE
-            // dropping the recording so the next
-            // close sees the updated counter.
+            // tallied as closed, with its length, but not compiled; the
+            // discard counted first, for the next close to see
             rec.head_proto.trace_discard_count.set(prior_discards + 1);
             self.jit.counters.closed += 1;
             self.jit
                 .counters
                 .closed_lens
                 .push((rec.is_call_triggered, rec.ops.len()));
-            // Partial-coverage discard close path.
-            // `closed` + `closed_lens` alone can't separate
-            // a real successful close from a discard tally,
-            // so tag explicitly to keep the recorder-side
-            // close-cause taxonomy single-source.
+            // `closed` alone does not tell a discard from a compile
             self.jit
                 .counters
                 .bump_close_cause("partial-coverage-discard");
+            // the interpreter runs the op at `pc`, not dispatched yet
             self.jit.active_trace = None;
-            // Continue with interp loop — don't
-            // fall through to compile path.
-            // The op at `pc` hasn't dispatched yet;
-            // the outer loop iteration handles it.
         } else {
             self.trace_compile_closed();
         }
@@ -95,11 +93,7 @@ impl Vm {
         // kept on the record's head proto, not `cl`'s: a call trace closes
         // after `Return1` popped the callee, so `cl` is the caller's
         let head_proto = closed_record.head_proto;
-        let already_cached = head_proto
-            .traces
-            .borrow()
-            .iter()
-            .any(|t| t.head_pc == head_pc_val);
+        let already_cached = already::there_already(&closed_record);
         if !already_cached && !native_stack::is_low(native_stack::COMPILE_RESERVE) {
             // an internal loop, run until a comparison exits, so one entry
             // pays for many iterations (one-shot without a comparison)
@@ -143,7 +137,7 @@ impl Vm {
                 jit.counters.shared_failures_known += 1;
                 jit.counters.shared_failures_counted += u64::from(known);
                 for _ in 0..known.min(u32::from(u8::MAX)) {
-                    note_trace_compile_failure(&mut jit.counters, head_proto, head_pc_val);
+                    super::entry_side::note_recording_failure(&mut jit.counters, &closed_record);
                 }
                 return;
             }
@@ -151,6 +145,9 @@ impl Vm {
             match result {
                 Some(ct) if self.trace_room(ct.window_size as usize).is_err() => {
                     self.trace_closed_no_room();
+                }
+                Some(ct) if closed_record.entry_side => {
+                    self.trace_attach_entry_side(ct, cut.as_ref().unwrap_or(&closed_record));
                 }
                 Some(mut ct) => {
                     if let Some(m) = &mut self.jit.fail_memory {

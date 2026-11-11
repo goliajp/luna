@@ -6,7 +6,7 @@ pub use crate::frontend::lexer::source::{Source, Whole};
 pub use crate::jit::abi::TraceCompiler;
 pub use crate::jit::rebind::JitVmRebindRestore;
 pub use crate::jit::storage::JitStorage;
-pub use crate::jit::trace_types::adopt::{AdoptRequest, AdoptedTrace};
+pub use crate::jit::trace_types::adopt::{AdoptRequest, AdoptedParent, AdoptedTrace};
 pub use crate::jit::trace_types::cell_plan::{
     CellPlan, LinkPlan, SlotStore, VALUE_PAYLOAD, VALUE_SIZE, slot_check, slot_store,
     slot_store_reference,
@@ -20,6 +20,7 @@ pub use crate::jit::trace_types::link_fast::{
     offsets as link_fast_offsets, store_items,
 };
 pub use crate::jit::trace_types::options::CompileOptions;
+pub use crate::jit::trace_types::parent::ParentId;
 pub use crate::jit::trace_types::record::{FieldIcSnapshot, RecordedOp, TraceRecord};
 pub use crate::jit::trace_types::self_link::{DownRecClose, RetfRecord};
 pub use crate::jit::trace_types::side_cell::{

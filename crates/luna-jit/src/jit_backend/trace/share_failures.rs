@@ -15,8 +15,8 @@ use crate::jit_backend::engine::HeadKey;
 pub(crate) struct Failure {
     head: Content,
     entry_tags: Box<[u8]>,
-    /// For a side trace: the parent's head pc and exit.
-    side: Option<(u32, usize)>,
+    /// For a side trace: the image of its parent and the parent's exit.
+    side: Option<(u64, usize)>,
     /// What the recording ran: [`path_of`].
     path: u64,
     /// The recordings that failed this way.
@@ -61,28 +61,30 @@ fn key_of(settings: Settings, head: &Content, head_pc: u32) -> HeadKey {
     }
 }
 
-/// The engine of `storage`'s Vm and the key and content of `record`'s
-/// head, when that Vm has an engine.
+/// The engine of `storage`'s Vm, the key and content of `record`'s head
+/// and, for a side trace, its parent's image and exit, when that Vm has an
+/// engine and a side trace's parent is shared.
 fn record_key(
     storage: &mut dyn luna_core::__private::JitStorage,
     record: &TraceRecord,
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,
-) -> Option<(crate::Engine, u64, HeadKey, Content)> {
+) -> Option<(crate::Engine, u64, HeadKey, Content, Option<(u64, usize)>)> {
     let cs = crate::jit_backend::storage::from_storage(storage).ok()?;
     let (engine, vm) = (cs.engine.clone()?, cs.engine_vm);
     // a Vm's own failures are its fail memory's
     if engine.is_private() {
         return None;
     }
+    // a parent of no image (not shared) shares none of its side traces
+    let side = match record.side_trace_parent {
+        None => None,
+        Some((p, exit)) => Some((*cs.images.get(&(p.trace()?.entry() as usize))?, exit)),
+    };
     let head = Content::of(&record.head_proto);
     let settings = Settings::new(version, opts, record.is_call_triggered, record.settings);
     let key = key_of(settings, &head, record.head_pc);
-    Some((engine, vm, key, head))
-}
-
-fn side_of(record: &TraceRecord) -> Option<(u32, usize)> {
-    record.side_trace_parent.map(|(_, pc, exit)| (pc, exit))
+    Some((engine, vm, key, head, side))
 }
 
 /// [`luna_core::__private::TraceCompiler::failure_known`].
@@ -92,14 +94,13 @@ pub(crate) fn failure_known(
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,
 ) -> u32 {
-    let Some((engine, vm, key, head)) = record_key(storage, record, opts, version) else {
+    let Some((engine, vm, key, head, side)) = record_key(storage, record, opts, version) else {
         return 0;
     };
     if !engine.cache().failures.contains_key(&key) {
         return 0;
     }
     let path = path_of(record);
-    let side = side_of(record);
     let cache = engine.cache();
     cache.failures.get(&key).map_or(0, |list| {
         list.iter()
@@ -122,13 +123,13 @@ pub(crate) fn publish_failure(
     opts: CompileOptions,
     version: luna_core::version::LuaVersion,
 ) {
-    let Some((engine, vm, key, head)) = record_key(storage, record, opts, version) else {
+    let Some((engine, vm, key, head, side)) = record_key(storage, record, opts, version) else {
         return;
     };
     let failure = Failure {
         head,
         entry_tags: record.entry_tags.clone().into(),
-        side: side_of(record),
+        side,
         path: path_of(record),
         times: 1,
         vm,

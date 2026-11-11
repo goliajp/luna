@@ -27,6 +27,7 @@ pub(super) fn copy_record(src: &TraceRecord) -> TraceRecord {
         tfor_iter,
         tfor_val_tag,
         side_trace_parent,
+        entry_side,
         self_link_kind,
         retfs,
         downrec_close,
@@ -49,7 +50,7 @@ pub(super) fn copy_record(src: &TraceRecord) -> TraceRecord {
     out.is_call_triggered = *is_call_triggered;
     out.tfor_iter = *tfor_iter;
     out.tfor_val_tag = *tfor_val_tag;
-    out.side_trace_parent = *side_trace_parent;
+    (out.side_trace_parent, out.entry_side) = (*side_trace_parent, *entry_side);
     out.self_link_kind = *self_link_kind;
     out.retfs.clone_from(retfs);
     out.downrec_close = *downrec_close;
@@ -59,9 +60,8 @@ pub(super) fn copy_record(src: &TraceRecord) -> TraceRecord {
     out.index_slots.clone_from(index_slots);
     out.index_key = *index_key;
     out.for_step_up = *for_step_up;
-    out.returned_from_head = *returned_from_head;
+    (out.returned_from_head, out.closed_at_head) = (*returned_from_head, *closed_at_head);
     out.link_pc = *link_pc;
-    out.closed_at_head = *closed_at_head;
     out
 }
 

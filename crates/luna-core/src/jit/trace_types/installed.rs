@@ -5,6 +5,7 @@ use super::*;
 
 mod cells;
 pub(crate) mod entry_plan;
+pub(crate) mod entry_side;
 pub(crate) mod exit_plan;
 pub(crate) mod plans;
 mod read;
@@ -141,6 +142,8 @@ pub struct CompiledTrace {
     /// `tier_up`'s cell: it has a `tier_up` and its plans count
     /// [`plans::PassCount::PerCall`] (see `frame::trace_count_slot`).
     pub(crate) call_count: bool,
+    /// Entry side traces of this root, or the note that this is one.
+    pub(crate) entry_sides: entry_side::EntrySides,
 }
 
 /// Moves each named field of a [`CompiledTraceParts`] into a
@@ -164,6 +167,7 @@ macro_rules! moved {
             plans: plans.0,
             $($f,)*
             has_any_side_wired: TCellBool::new(false),
+            entry_sides: entry_side::EntrySides::default(),
         }
     }};
 }

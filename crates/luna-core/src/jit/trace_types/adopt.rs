@@ -13,10 +13,9 @@ pub struct AdoptRequest<'a> {
     pub head_pc: u32,
     /// The raw tags of the frame's registers now.
     pub entry_tags: &'a [u8],
-    /// For a side trace: the head function and pc of the trace whose exit
-    /// became hot, and that exit's index (as
-    /// [`TraceRecord::side_trace_parent`]).
-    pub side_parent: Option<(Gc<Proto>, u32, usize)>,
+    /// For a side trace: the trace whose exit became hot, and that exit's
+    /// index (as [`TraceRecord::side_trace_parent`]).
+    pub side_parent: Option<(ParentId, usize)>,
     /// Recording would start at a call, rather than at a loop.
     pub call_triggered: bool,
     /// As [`TraceRecord::settings`] for a recording now.
@@ -41,8 +40,11 @@ pub struct AdoptedTrace {
     /// As the backend would return it right after compiling it, shared
     /// already, as the Vm caches it (no other holds it yet).
     pub trace: crate::jit::send_compat::TArc<CompiledTrace>,
-    /// For a side trace: as [`AdoptRequest::side_parent`].
-    pub side_parent: Option<(Gc<Proto>, u32, usize)>,
+    /// For a side trace: its parent and the parent's exit it runs from.
+    pub side_parent: Option<(AdoptedParent, usize)>,
+    /// The image the trace was taken up from, which a side trace taken up
+    /// with it names as [`AdoptedParent::Image`].
+    pub image: u64,
     /// The functions other than the head's that the trace inlined.
     pub inlined: Vec<Gc<Proto>>,
     /// The trace starts at a head other than [`AdoptRequest::head_pc`]
@@ -51,15 +53,30 @@ pub struct AdoptedTrace {
     pub ahead: bool,
 }
 
+/// The parent of a side trace taken up from another Vm.
+#[derive(Clone, Copy, Debug)]
+pub enum AdoptedParent {
+    /// The trace [`AdoptRequest::side_parent`] names.
+    Asked(ParentId),
+    /// The trace taken up, before it in the same batch, from the image of
+    /// this [`AdoptedTrace::image`].
+    Image(u64),
+}
+
 /// Whether a trace compiled for `compiled` entry tags admits registers whose
 /// tags are `now`, by the dispatcher's rule.
 pub(crate) fn entry_tags_admit(compiled: &[u8], now: &[u8]) -> bool {
+    entry_tags_admit_with(compiled, |i| now.get(i).copied())
+}
+
+/// [`entry_tags_admit`] for the tag of each register `now` gives.
+pub(crate) fn entry_tags_admit_with(compiled: &[u8], now: impl Fn(usize) -> Option<u8>) -> bool {
     use crate::runtime::value::raw;
     compiled.iter().enumerate().all(|(i, &want)| {
         if want == ENTRY_TAG_ANY {
             return true;
         }
-        let Some(&tag) = now.get(i) else {
+        let Some(tag) = now(i) else {
             return false;
         };
         if tag == want {

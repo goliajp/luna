@@ -16,7 +16,7 @@ fn a_tail_count_larger_than_the_blob_is_refused_before_allocating() {
         entry_tags_len: 0,
         exit_tags_len: 0,
     };
-    let blob = encode_meta_blob(&header, &[], &[], &[], &[]);
+    let blob = encode_meta_blob(&header, &[], &[], &[], &[], AotRole::Root);
     let v2 = AotTraceMetaHeader::SIZE;
     let mut bad = blob.clone();
     bad[v2..v2 + 4].copy_from_slice(&u32::MAX.to_le_bytes());
@@ -51,9 +51,10 @@ fn header_round_trip() {
         pack_exit_tag(ExitTag::Untouched),
         pack_exit_tag(ExitTag::Float),
     ];
-    let blob = encode_meta_blob(&header, &entry_tags, &exit_tags, &[], &[]);
+    let blob = encode_meta_blob(&header, &entry_tags, &exit_tags, &[], &[], AotRole::Root);
     // SIZE + entry_tags + exit_tags + v2-tail-count(4) + v3-tail-count(4)
-    assert_eq!(blob.len(), AotTraceMetaHeader::SIZE + 2 + 3 + 4 + 4);
+    // + role(1)
+    assert_eq!(blob.len(), AotTraceMetaHeader::SIZE + 2 + 3 + 4 + 4 + 1);
     let decoded = decode_meta_blob(&blob).expect("decode");
     assert!(decoded.per_exit_tags.is_empty());
     assert!(decoded.per_exit_inline.is_empty());
@@ -120,7 +121,7 @@ fn v2_per_exit_tags_round_trip() {
             ],
         },
     ];
-    let blob = encode_meta_blob(&header, &[], &[], &entries, &[]);
+    let blob = encode_meta_blob(&header, &[], &[], &entries, &[], AotRole::Root);
     let decoded = decode_meta_blob(&blob).expect("decode v2");
     assert_eq!(decoded.per_exit_tags.len(), 2);
     assert_eq!(decoded.per_exit_tags[0].cont_pc, 3);
@@ -185,7 +186,7 @@ fn v3_per_exit_inline_round_trip() {
             },
         },
     ];
-    let blob = encode_meta_blob(&header, &[], &[], &[], &inline);
+    let blob = encode_meta_blob(&header, &[], &[], &[], &inline, AotRole::Root);
     let decoded = decode_meta_blob(&blob).expect("decode v3");
     assert_eq!(decoded.per_exit_inline.len(), 2);
     assert_eq!(decoded.per_exit_inline[0].cont_pc, 5);
@@ -247,7 +248,7 @@ fn v3_per_exit_inline_round_trip_from_live() {
         entry_tags_len: 0,
         exit_tags_len: 0,
     };
-    let blob = encode_meta_blob(&header, &[], &[], &[], &[entry]);
+    let blob = encode_meta_blob(&header, &[], &[], &[], &[entry], AotRole::Root);
     let decoded = decode_meta_blob(&blob).expect("decode v3 from live");
     assert_eq!(decoded.per_exit_inline.len(), 1);
     let rebuilt = decoded.per_exit_inline[0].rebuild_chain().expect("rebuild");
@@ -302,44 +303,9 @@ fn decode_rejects_v3_chain_bytes_misaligned() {
     );
 }
 
-#[test]
-fn decode_tolerates_v1_blob_shape() {
-    // Emulate a v1-shaped blob: header + tags, NO trailing v2/v3
-    // tails. The v3 decoder should accept as empty everywhere.
-    let header = AotTraceMetaHeader {
-        magic: AOT_META_MAGIC,
-        version: AOT_META_VERSION,
-        head_pc: 0,
-        n_ops: 0,
-        window_size: 0,
-        dispatchable: 0,
-        tag_res_kind: 0,
-        entry_tags_len: 1,
-        exit_tags_len: 0,
-    };
-    let mut blob = Vec::new();
-    blob.extend_from_slice(&header.magic.to_le_bytes());
-    blob.extend_from_slice(&header.version.to_le_bytes());
-    blob.extend_from_slice(&header.head_pc.to_le_bytes());
-    blob.extend_from_slice(&header.n_ops.to_le_bytes());
-    blob.extend_from_slice(&header.window_size.to_le_bytes());
-    blob.push(header.dispatchable);
-    blob.push(header.tag_res_kind);
-    blob.extend_from_slice(&header.entry_tags_len.to_le_bytes());
-    blob.extend_from_slice(&header.exit_tags_len.to_le_bytes());
-    blob.push(0); // entry_tags[0]
-    // No v2/v3 tails.
-    let decoded = decode_meta_blob(&blob).expect("decode v1-shaped");
-    assert!(decoded.per_exit_tags.is_empty());
-    assert!(decoded.per_exit_inline.is_empty());
-}
-
-#[test]
-fn decode_tolerates_v2_blob_shape() {
-    // Emulate a v2-shaped blob: header + tags + v2 tail only,
-    // NO trailing v3 count u32. The v3 decoder should accept it
-    // as an empty per_exit_inline.
-    let header = AotTraceMetaHeader {
+/// A minimal header with no payload, as v5 blobs start.
+fn bare() -> AotTraceMetaHeader {
+    AotTraceMetaHeader {
         magic: AOT_META_MAGIC,
         version: AOT_META_VERSION,
         head_pc: 0,
@@ -349,26 +315,43 @@ fn decode_tolerates_v2_blob_shape() {
         tag_res_kind: 0,
         entry_tags_len: 0,
         exit_tags_len: 0,
-    };
-    let mut blob = Vec::new();
-    blob.extend_from_slice(&header.magic.to_le_bytes());
-    blob.extend_from_slice(&header.version.to_le_bytes());
-    blob.extend_from_slice(&header.head_pc.to_le_bytes());
-    blob.extend_from_slice(&header.n_ops.to_le_bytes());
-    blob.extend_from_slice(&header.window_size.to_le_bytes());
-    blob.push(header.dispatchable);
-    blob.push(header.tag_res_kind);
-    blob.extend_from_slice(&header.entry_tags_len.to_le_bytes());
-    blob.extend_from_slice(&header.exit_tags_len.to_le_bytes());
-    // v2 tail: count=1, one entry (cont_pc=3, tags_len=1, tags=[Int])
-    blob.extend_from_slice(&1u32.to_le_bytes());
-    blob.extend_from_slice(&3u32.to_le_bytes());
-    blob.extend_from_slice(&1u32.to_le_bytes());
-    blob.push(pack_exit_tag(ExitTag::Int));
-    // No v3 tail.
-    let decoded = decode_meta_blob(&blob).expect("decode v2-shaped");
-    assert_eq!(decoded.per_exit_tags.len(), 1);
-    assert!(decoded.per_exit_inline.is_empty());
+    }
+}
+
+#[test]
+fn the_role_comes_back_and_a_blob_without_it_or_its_blocks_is_refused() {
+    for role in [AotRole::Root, AotRole::EntrySide] {
+        let blob = encode_meta_blob(&bare(), &[], &[], &[], &[], role);
+        assert_eq!(decode_meta_blob(&blob).expect("decode").role, role);
+    }
+    let blob = encode_meta_blob(&bare(), &[], &[], &[], &[], AotRole::Root);
+    let n = blob.len();
+    // the role byte gone, or past its two values
+    assert_eq!(
+        decode_meta_blob(&blob[..n - 1]).err(),
+        Some("v5 role byte missing")
+    );
+    let mut bad = blob.clone();
+    bad[n - 1] = 2;
+    assert_eq!(decode_meta_blob(&bad).err(), Some("v5 role byte invalid"));
+    bad.push(0);
+    bad[n - 1] = 0;
+    assert_eq!(
+        decode_meta_blob(&bad).err(),
+        Some("bytes past the v5 role byte")
+    );
+    // shaped as v1 (no blocks) or v2 (no inline block): refused
+    let header_only = &blob[..AotTraceMetaHeader::SIZE];
+    assert!(decode_meta_blob(header_only).is_err());
+    let no_inline = &blob[..AotTraceMetaHeader::SIZE + 4];
+    assert!(decode_meta_blob(no_inline).is_err());
+    // another version's blob is refused, never read as this one's
+    let mut v4 = blob.clone();
+    v4[4..8].copy_from_slice(&4u32.to_le_bytes());
+    assert_eq!(
+        decode_meta_blob(&v4).err(),
+        Some("AOT_META_VERSION mismatch")
+    );
 }
 
 #[test]

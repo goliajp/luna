@@ -202,6 +202,9 @@ pub(in crate::vm::exec) fn relink_fill(
     }
     let f = match child.link_pc {
         Some(pc) if pc == parent.head_pc => fill_relink(parent, exit, child, cell, words),
+        // an entry side trace is entered by the dispatcher only: no link
+        // starts from it (the trail holds places on `proto.traces`)
+        Some(_) if parent.entry_sides.is_one.get() => Fill::NotHead,
         Some(pc) => onward::fill_link(parent, exit, child, cell, proto, pc, words),
         None => Fill::NoLinkPc,
     };

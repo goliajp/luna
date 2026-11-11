@@ -38,18 +38,20 @@ impl Vm {
             && !ct.has_side_trace(exit_hit_idx)
     }
 
-    /// Start recording a side trace at `cont_pc`, the exit of the trace at
-    /// `head_pc_val` that just became hot.
-    #[cold]
-    #[inline(never)]
+    /// Start recording a side trace at `cont_pc`, the exit of `parent` (a
+    /// root of `cl`'s prototype or an entry side trace of one) that just
+    /// became hot.
     pub(super) fn trace_start_side(
         &mut self,
         cl: Gc<LuaClosure>,
         base_us: usize,
         cont_pc: u32,
-        head_pc_val: u32,
+        parent: &crate::jit::trace::CompiledTrace,
         exit_hit_idx: usize,
     ) {
+        let Some(parent) = crate::jit::trace::ParentId::of(cl.proto, parent) else {
+            return;
+        };
         let (resume_base, resume_proto) = match self.frames.last() {
             Some(CallFrame::Lua(f)) => (f.base as usize, f.closure.proto),
             _ => (base_us, cl.proto),
@@ -64,8 +66,8 @@ impl Vm {
         if !self.jit_ensure_stack(resume_base + resume_max_stack) {
             return;
         }
-        let parent = Some((cl.proto, head_pc_val, exit_hit_idx));
-        if self.trace_try_adopt(resume_proto, cont_pc, resume_base, parent, false) {
+        let side_parent = Some((parent, exit_hit_idx));
+        if self.trace_try_adopt(resume_proto, cont_pc, resume_base, side_parent, false) {
             return;
         }
         for i in 0..resume_max_stack {
@@ -76,8 +78,7 @@ impl Vm {
             resume_proto,
             cont_pc,
             side_entry_tags,
-            cl.proto,
-            head_pc_val,
+            parent,
             exit_hit_idx,
         );
         rec.settings = self.jit.recording_settings();

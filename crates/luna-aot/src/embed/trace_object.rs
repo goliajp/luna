@@ -73,7 +73,7 @@ pub(super) fn lower_and_encode_meta(
     // not N), and emit one `luna_trace_meta_<idx>` entry per trace.
     let mut blob_payload: Vec<u8> = Vec::new();
     let mut per_trace_meta: Vec<TraceMeta> = Vec::new();
-    for (idx, hash, head_pc, record, ct) in installable.iter() {
+    for (idx, hash, head_pc, record, ct, role) in installable.iter() {
         let fn_name = format!("luna_aot_trace_{idx:08x}");
         let opts = CompileOptions {
             internal_loop: true,
@@ -144,8 +144,7 @@ pub(super) fn lower_and_encode_meta(
         // `Rc<[ExitTag]>` allocations whose contents match what the
         // JIT-time recorder produced; the IR's chain pointer is fed
         // from a separate `aot_inline_chain_resolver`-populated
-        // slot (no shared ownership with the dispatcher field —
-        // neither side compares pointers).
+        // slot (no shared ownership; neither side compares pointers).
         let per_exit_inline_entries: Vec<PerExitInlineEntry> = (ct.per_exit_inline().iter())
             .zip(ct.inline_exit_tags())
             .map(|(e, (_, tags))| PerExitInlineEntry::from_inline_side_exit(e, tags))
@@ -156,6 +155,7 @@ pub(super) fn lower_and_encode_meta(
             &exit_tags_vec,
             &per_exit_tags_entries,
             &per_exit_inline_entries,
+            *role,
         );
         let blob_offset = blob_payload.len() as u32;
         let blob_len = blob.len() as u32;

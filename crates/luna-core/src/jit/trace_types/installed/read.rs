@@ -83,6 +83,18 @@ impl CompiledTrace {
         &self.plans.pass_count
     }
 
+    /// The entry side traces this root holds, in the order the dispatcher
+    /// tries them.
+    pub fn entry_side_traces(&self) -> Vec<crate::jit::send_compat::TArc<CompiledTrace>> {
+        self.entry_sides.list.borrow().clone()
+    }
+
+    /// Whether this is an entry side trace of a root.
+    #[inline]
+    pub fn is_entry_side(&self) -> bool {
+        self.entry_sides.is_one.get()
+    }
+
     /// As [`CompiledTraceParts::tier_up`].
     #[inline]
     pub fn tier_up(&self) -> Option<&TierUp> {

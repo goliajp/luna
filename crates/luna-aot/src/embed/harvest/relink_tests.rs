@@ -28,7 +28,7 @@ fn an_aot_trace_has_no_side_cells() {
         let installable = select_installable(captured, false);
         assert!(!installable.is_empty(), "{version:?}: no AOT trace");
         let mut module = build_object_module(&TargetSpec::host()).expect("object module");
-        for (idx, _, _, record, ct) in &installable {
+        for (idx, _, _, record, ct, _) in &installable {
             assert!(
                 ct.side_cell_states().iter().any(|&(held, _)| held),
                 "{version:?}: the warmup's trace runs no side trace from its code"

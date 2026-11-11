@@ -88,7 +88,7 @@ impl Vm {
         let vm_ptr: *mut Vm = self;
         let _guard = self.jit.chunk_compiler.enter(vm_ptr, Some(cl));
         loop {
-            // SAFETY: `entry` is the entry of a compiled trace `cl.proto.traces` keeps alive (the one dispatched, or one of the same list `trace_link_again` entered after it), checked to take this frame's registers as they are; `regs` was sized to at least the trace's window and the three words past it (no narrower than the other's) and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
+            // SAFETY: `entry` is the entry of a compiled trace `cl.proto.traces`, or the entry side traces of one there, keep alive (the one dispatched, or one of `cl.proto.traces` that `trace_link_again` entered after it), checked to take this frame's registers as they are; `regs` was sized to at least the trace's window and the three words past it (no narrower than the other's) and filled by `trace_marshal_in`; the guard above pins this Vm and `cl` for the helpers the trace calls
             let r = unsafe { entry(regs.as_mut_ptr()) };
             let Some((ct, start)) = linked else {
                 break r;

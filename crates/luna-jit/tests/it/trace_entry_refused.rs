@@ -1,8 +1,7 @@
 //! A loop whose trace refuses the entry types it is reached with: the
-//! refused entries do not move the trace to the optimizing tier, the fast
-//! loop runs on past the head while entries keep failing the same way, and
-//! the trace is entered again once they pass, with the interpreter's
-//! results throughout.
+//! refused entries do not move the trace to the optimizing tier (an entry
+//! side trace takes them, `trace_entry_side`), and the trace is entered
+//! again once they pass, with the interpreter's results throughout.
 
 use luna_core::__private::VmJitState;
 use luna_jit::runtime::Value;
@@ -70,11 +69,16 @@ fn refused_entries_neither_dispatch_nor_move_the_trace_and_passing_ones_enter_ag
         assert_eq!(base.result, run(v, &prime, false).result, "{v:?}");
         assert_eq!(refused.result, run(v, &float, false).result, "{v:?}");
         assert_eq!(again.result, run(v, &back, false).result, "{v:?}");
-        // from 5.3 on a float is not an integer entry: every entry of the
-        // float call is refused
+        // from 5.3 on a float is not an integer entry: the root refuses
+        // every entry of the float call, which go to an entry side trace
+        // (moving to the optimizing tier on its own count); the refused
+        // entries move the root nowhere
         if v >= LuaVersion::Lua53 {
-            assert_eq!(refused.dispatched, base.dispatched, "{v:?}: {refused:?}");
-            assert_eq!(refused.tiered_up, base.tiered_up, "{v:?}: {refused:?}");
+            assert!(refused.dispatched > base.dispatched, "{v:?}: {refused:?}");
+            assert!(
+                refused.tiered_up <= base.tiered_up + 1,
+                "{v:?}: {refused:?}"
+            );
             assert!(again.dispatched > refused.dispatched, "{v:?}: {again:?}");
         }
     }

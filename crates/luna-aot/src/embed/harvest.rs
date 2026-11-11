@@ -21,11 +21,11 @@
 //   4. Bail-tolerantly: if no traces close (small / non-loopy source),
 //      return `HarvestedTraces::None` and the pipeline skips the trace .o.
 
-use luna_core::__private::ProtoTraceInternals;
 use std::fs;
 use std::path::Path;
 
 use luna_core::__private::{CompileOptions, CompiledTrace, TraceRecord};
+use luna_core::jit::aot_meta::AotRole;
 use luna_core::runtime::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::Vm;
@@ -35,13 +35,14 @@ use super::trace_object::{build_object_module, emit_meta_sections, lower_and_enc
 use super::{AotError, HarvestedTraces};
 
 /// A captured trace that passed the AOT filter:
-/// `(capture_index, head_proto_hash, head_pc, record, compiled_trace)`.
+/// `(capture_index, head_proto_hash, head_pc, record, compiled_trace, role)`.
 pub(super) type Installable = (
     usize,
     [u8; 16],
     u32,
     TraceRecord,
     luna_core::jit::send_compat::TArc<CompiledTrace>,
+    AotRole,
 );
 
 /// Records every `TraceRecord` the dispatcher tries to compile; forwards
@@ -84,8 +85,11 @@ unsafe impl luna_core::__private::TraceCompiler for RecordingTraceCompiler {
         record: &TraceRecord,
         opts: CompileOptions,
     ) -> Option<CompiledTrace> {
-        capture_record(record);
-        self.inner.try_compile_trace(storage, record, opts)
+        let ct = self.inner.try_compile_trace(storage, record, opts);
+        if ct.is_some() {
+            capture_record(record);
+        }
+        ct
     }
 
     fn try_compile_trace_for(
@@ -95,9 +99,14 @@ unsafe impl luna_core::__private::TraceCompiler for RecordingTraceCompiler {
         opts: CompileOptions,
         version: LuaVersion,
     ) -> Option<CompiledTrace> {
-        capture_record(record);
-        self.inner
-            .try_compile_trace_for(storage, record, opts, version)
+        // only what compiled: a recording that failed has no trace to pair
+        let ct = self
+            .inner
+            .try_compile_trace_for(storage, record, opts, version);
+        if ct.is_some() {
+            capture_record(record);
+        }
+        ct
     }
 
     fn last_compile_checkpoint(&self) -> &'static str {
@@ -218,80 +227,14 @@ fn warmup_and_capture(
     Some((vm, captured))
 }
 
-/// Pair each captured record with the `CompiledTrace` that landed in
-/// its proto and keep the AOT-installable ones.
-fn select_installable(
-    captured: Vec<([u8; 16], u32, TraceRecord)>,
-    probe_on: bool,
-) -> Vec<Installable> {
-    // Pair each captured record with the actual CompiledTrace that
-    // landed in the proto's traces vec — we need the post-lower fields
-    // (window_size, entry_tags, exit_tags, dispatchable,
-    // global_tag_res_kind) for the meta blob. The record-by-record
-    // lookup keys on (proto_ptr, head_pc); records that didn't survive
-    // compile (lowerer bailed, returned None) drop here.
-    //
-    // Filter to AOT-installable shapes. Wire format v2 carries
-    // `per_exit_tags` (typed-register side-exit guards — GetUpval-
-    // heavy traces). Wire format v3 carries `per_exit_inline`
-    // (depth>0 inlined cmp side-exits).
-    //
-    // The wire format also doesn't ship sunk-alloc materialize
-    // sites yet; `materialize_emit_count > 0` traces need that
-    // path too — JIT-only.
-    let mut installable: Vec<Installable> = Vec::new();
-    let mut filter_stats = (0usize, 0usize, 0usize, 0usize);
-    for (i, (hash, head_pc, record)) in captured.into_iter().enumerate() {
-        let proto = record.head_proto;
-        let traces_ref = proto.traces();
-        let Some(ct) = traces_ref.iter().find(|c| c.head_pc() == head_pc).cloned() else {
-            filter_stats.0 += 1;
-            continue;
-        };
-        drop(traces_ref);
-        if !ct.dispatchable() {
-            filter_stats.1 += 1;
-            continue;
-        }
-        if !ct.per_exit_inline().is_empty() {
-            // depth>0 inlined cmp side-exits are supported. The lowerer's
-            // `emit_chain_ptr_arg` routes the `FrameMaterializeInfo`
-            // chain pointer through a relocatable data slot the
-            // deploy-side `aot_inline_chain_resolver` populates at
-            // startup; the v3 wire format's `per_exit_inline` tail
-            // (cont_pc / head_resume_pc / packed exit_tags / packed
-            // chain bytes) round-trips into a fresh
-            // `Rc<[InlineSideExit]>` on the install side. The JIT path
-            // bakes that chain pointer as a raw `iconst`, which under
-            // AOT would be the warmup VM's heap address, invalid in the
-            // deploy binary. Stat counter for diagnostics: how many of
-            // the captured traces went through the v3 inline path.
-            filter_stats.2 += 1;
-        }
-        // per_exit_tags is supported by wire format v2 — accept.
-        // (Counter for diagnostics: how many of the captured traces
-        // went through the v2 path.)
-        if !ct.per_exit_tags().is_empty() {
-            filter_stats.3 += 1;
-        }
-        installable.push((i, hash, head_pc, record, ct));
-    }
-
-    if probe_on {
-        eprintln!(
-            "luna-aot harvest: installable={}, filtered: no_ct={}, undispatchable={}, accepted_with_per_exit_inline={}, accepted_with_per_exit_tags={}",
-            installable.len(),
-            filter_stats.0,
-            filter_stats.1,
-            filter_stats.2,
-            filter_stats.3,
-        );
-    }
-    installable
-}
+mod select;
+use select::select_installable;
 
 #[cfg(test)]
 mod strkey_section_tests;
 
 #[cfg(test)]
 mod relink_tests;
+
+#[cfg(test)]
+mod entry_side_tests;

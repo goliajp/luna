@@ -84,3 +84,32 @@ fn folded_math_call_left_with_a_non_number() {
         }
     }
 }
+
+/// A library field holding a Lua function when the loop is recorded: the
+/// recording goes into that function's body, so the call is not folded as
+/// the library's, in a root trace and in a side trace whose parent folds
+/// it.
+#[test]
+fn a_library_field_holding_a_lua_function_is_not_folded() {
+    let srcs = [
+        "local lib = math.min math.min = function(a, b) return a + b end \
+         local s = 0 for i = 1, 30000 do s = s + math.min(i, 3) end \
+         math.min = lib return tostring(s)",
+        "local lib, alt = math.min, function(a, b) return a + b end local s = 0 \
+         for i = 1, 30000 do s = s + math.min(i, 3) \
+           if i % 4 == 0 then if i % 8 == 0 then math.min = lib else math.min = alt end end \
+         end math.min = lib return tostring(s)",
+    ];
+    for v in DIALECTS {
+        for src in srcs {
+            let want = run(v, src, None);
+            for tier in [TraceTier::Baseline, TraceTier::Optimizing] {
+                assert_eq!(
+                    run(v, src, Some((tier, 64, 64))),
+                    want,
+                    "{v:?} {tier:?}: {src}"
+                );
+            }
+        }
+    }
+}

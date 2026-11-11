@@ -10,6 +10,7 @@ pub(in crate::vm::exec) mod close;
 mod counting;
 pub(in crate::vm::exec) mod dispatch;
 mod downrec;
+pub(in crate::vm::exec) mod entry_side;
 pub(in crate::vm::exec) mod exit;
 pub(in crate::vm::exec) mod fail_memory;
 pub(in crate::vm::exec) mod gc_quiet;

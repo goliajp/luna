@@ -25,15 +25,19 @@ impl Vm {
             return;
         }
         // the op at `pc` was recorded as the interpreter was about to run
-        // it, before the dispatcher looked: the trace runs it instead
-        if rec
-            .ops
-            .last()
-            .is_some_and(|o| o.pc == pc && o.inline_depth == 0 && o.proto.ptr_eq(proto))
-        {
-            **rec = rec.truncated(rec.ops.len() - 1);
-        }
-        if !rec.ops.is_empty() {
+        // it, before the dispatcher looked: the trace runs it instead. A
+        // recording that just began at `pc` (that op alone) keeps it and
+        // goes on: the trace may refuse the registers, and the interpreter
+        // then runs the op, which the recording must hold
+        let ops = &rec.ops;
+        let at_pc = |o: &crate::jit::trace::RecordedOp| {
+            o.pc == pc && o.inline_depth == 0 && o.proto.ptr_eq(proto)
+        };
+        if ops.len() > 1 && ops.last().is_some_and(at_pc) {
+            **rec = rec.truncated(ops.len() - 1);
+            rec.link_pc = Some(pc);
+            self.trace_close_recording();
+        } else if !ops.is_empty() && !ops.last().is_some_and(at_pc) {
             rec.link_pc = Some(pc);
             self.trace_close_recording();
         }
@@ -57,7 +61,7 @@ impl Vm {
         if let Some(rec) = self.jit.active_trace.take() {
             self.jit.counters.aborted += 1;
             self.jit.counters.bump_close_cause("reached-compiled-trace");
-            note_trace_compile_failure(&mut self.jit.counters, rec.head_proto, rec.head_pc);
+            super::entry_side::note_recording_failure(&mut self.jit.counters, &rec);
         }
     }
 }

@@ -2,6 +2,7 @@ use object::{Object, ObjectSection};
 
 use luna_core::__private::raw;
 use luna_core::__private::{CompileOptions, RecordedOp, TraceRecord};
+use luna_core::jit::aot_meta::AotRole;
 use luna_core::jit::send_compat::TArc;
 use luna_core::runtime::function::Proto;
 use luna_core::runtime::{Gc, Value};
@@ -85,8 +86,15 @@ fn meta_entry_keeps_its_own_trace_after_an_earlier_lowering_bail() {
     let good_hash = [0xbb; 16];
     let good_head_pc = 3;
     let installable: Vec<Installable> = vec![
-        (0, bail_hash, bail_head_pc, bailing, ct.clone()),
-        (1, good_hash, good_head_pc, good, ct),
+        (
+            0,
+            bail_hash,
+            bail_head_pc,
+            bailing,
+            ct.clone(),
+            AotRole::Root,
+        ),
+        (1, good_hash, good_head_pc, good, ct, AotRole::Root),
     ];
 
     let mut module = build_object_module(&target).expect("object module");

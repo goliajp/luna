@@ -1,5 +1,5 @@
 use super::*;
-use luna_core::__private::{CompiledTraceInternals, ProtoTraceInternals};
+use luna_core::__private::CompiledTraceInternals;
 
 /// The record's frame shape: per-op register-window offsets and the
 /// window size.
@@ -116,7 +116,7 @@ pub(super) fn side_trace_gate(
     // call branches that re-compute their inputs each iter) can
     // compile and
     // amortize the parent's hot-exit dispatch cost.
-    if let Some((parent_proto, parent_head_pc, parent_exit)) = record.side_trace_parent {
+    if let Some((parent, parent_exit)) = record.side_trace_parent {
         // Check 1: any back-edge op? (ForLoop / TForLoop / Jmp -bx)
         let has_back_edge = record.ops.iter().any(|op| match op.inst.op() {
             o if o.is_jump() => op.inst.jump_offset() < 0,
@@ -169,17 +169,13 @@ pub(super) fn side_trace_gate(
                 // the child's register `r` is the parent's `off + r` (the
                 // frame the parent's exit resumes in)
                 let parent_writes_opt = {
-                    let traces = parent_proto.traces();
-                    traces
-                        .iter()
-                        .find(|t| t.head_pc() == parent_head_pc)
-                        .map(|pct| {
-                            let off = pct.exit_frame_offset(parent_exit) as u32;
-                            pct.body_writes()
-                                .iter()
-                                .filter_map(|&w| w.checked_sub(off))
-                                .collect::<Vec<u32>>()
-                        })
+                    parent.trace().map(|pct| {
+                        let off = pct.exit_frame_offset(parent_exit) as u32;
+                        pct.body_writes()
+                            .iter()
+                            .filter_map(|&w| w.checked_sub(off))
+                            .collect::<Vec<u32>>()
+                    })
                 };
                 if let Some(parent_writes) = parent_writes_opt {
                     let mut i = 0;

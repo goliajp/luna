@@ -39,9 +39,24 @@ impl Vm {
         if let Some(entered) = self.trace_take_ahead(proto, target, base as usize) {
             return entered;
         }
-        // the cheap tests first, then the borrow and scan of the traces
-        if proto.traces.borrow().iter().any(|t| t.head_pc == target)
-            || trace_head_abandoned(proto, target)
+        // a trace there already (one the dispatcher cannot enter as well):
+        // the head is recorded no more, but for registers its root refuses
+        let here = {
+            let traces = proto.traces.borrow();
+            match traces
+                .iter()
+                .find(|t| t.head_pc == target && !t.is_side_trace())
+            {
+                // the common case, a loop hot again whose trace has all it
+                // may have, looked at in place
+                Some(t) if !super::entry_side::may_have_more(t) => return false,
+                t => t.cloned(),
+            }
+        };
+        if let Some(t) = here {
+            return self.trace_start_entry_side(cl, base, target, tfor, &t);
+        }
+        if trace_head_abandoned(proto, target)
             || trace_head_stuck(
                 proto,
                 target,
