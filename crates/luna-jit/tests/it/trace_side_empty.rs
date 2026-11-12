@@ -49,7 +49,14 @@ fn a_side_trace_that_only_returns_is_not_wired() {
         let mut jit = vm(v, true);
         assert_eq!(run(&mut jit, RETURNS), want, "{v:?}");
         let c = &jit.jit().counters;
-        assert_eq!(c.side_trace_empty, 1, "{v:?}: recorded once, not again");
+        assert_eq!(
+            c.close_cause_counts
+                .get("side-trace-empty")
+                .copied()
+                .unwrap_or(0),
+            1,
+            "{v:?}: recorded once, not again"
+        );
         assert_eq!(c.side_trace_compiled, 0, "{v:?}");
         assert_eq!(jit.trace_side_trace_run_count(), 0, "{v:?}");
         assert!(c.dispatched > 10_000, "{v:?}: the loop's trace runs");
@@ -63,7 +70,14 @@ fn a_side_trace_that_runs_ops_is_wired() {
         let mut jit = vm(v, true);
         assert_eq!(run(&mut jit, WORKS), want, "{v:?}");
         let c = &jit.jit().counters;
-        assert_eq!(c.side_trace_empty, 0, "{v:?}");
+        assert_eq!(
+            c.close_cause_counts
+                .get("side-trace-empty")
+                .copied()
+                .unwrap_or(0),
+            0,
+            "{v:?}"
+        );
         assert!(c.side_trace_compiled > 0, "{v:?}");
         assert!(jit.trace_side_trace_run_count() > 10_000, "{v:?}");
     }

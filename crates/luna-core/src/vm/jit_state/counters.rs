@@ -51,10 +51,6 @@ pub struct JitCounters {
     pub side_trace_started: u64,
     /// Side-trace recordings that closed and the lowerer compiled.
     pub side_trace_compiled: u64,
-    /// Side-trace recordings that closed at their first op, a return out of
-    /// the frame they began in: their code would only return the pc they
-    /// start at, so they are neither compiled nor wired.
-    pub side_trace_empty: u64,
     /// Side traces that compiled but failed the shape-match gate.
     pub side_trace_shape_mismatch: u64,
     /// Side traces wired to an exit, by what became of the exit's side

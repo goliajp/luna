@@ -92,7 +92,10 @@ fn binary_trees_d4_leaves_its_return_exit_alone() {
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(6200)));
     let empty = luna_core::__private::VmJitState::jit(&vm)
         .counters
-        .side_trace_empty;
+        .close_cause_counts
+        .get("side-trace-empty")
+        .copied()
+        .unwrap_or(0);
     assert!(
         vm.trace_side_trace_started_count() >= 1 && empty >= 1,
         "binary_trees_d4: started {}, empty {empty}",
