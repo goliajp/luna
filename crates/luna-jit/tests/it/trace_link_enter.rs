@@ -173,7 +173,7 @@ fn a_side_trace_ending_at_no_loop_head_is_counted_apart() {
     let bodies = [
         "local n = 0
          for i = 1, 300 do n = n + i end
-         return n",
+         return n * 1",
         "local n, buf = 0, ''
          for i = 1, 300 do
            local k = 'item:' .. i .. ':' .. (i % 7)

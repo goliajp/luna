@@ -7,6 +7,7 @@ fn vm_storage(vm: &mut luna_core::vm::Vm) -> &mut dyn luna_core::__private::JitS
     unsafe { vm.jit_mut() }.storage.as_mut()
 }
 
+mod calls_out;
 mod div_magic;
 mod drop_unused_block_params_tests;
 mod lir_primitives;
