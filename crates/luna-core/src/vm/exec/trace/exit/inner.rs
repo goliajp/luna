@@ -24,9 +24,9 @@ impl Vm {
         entry_tags: &[u8],
     ) -> Option<(LuaError, u32)> {
         let ExitSource {
-            held, body, off, ..
+            child, body, off, ..
         } = src;
-        let child = &held.expect("a side trace ran").child;
+        let child = child.expect("a side trace ran");
         let parent = ct.plans.decode(raw_ret);
         let own = child.plans.decode(body);
         bump(child.exit_hit_counts.get(own.exit_hit_idx));
@@ -54,7 +54,7 @@ impl Vm {
             &tags,
             reg_state,
             entry_tags,
-            None,
+            false,
         );
         self.trace_restore_back_edge_kinds(base_us, ct, &tags, keep, reg_state);
         let head_resume = site.head_resume_pc;

@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::jit::trace::CompiledTrace;
-use crate::jit::trace_types::installed::side_held::SideHeld;
 
 /// A side trace that passed the shape gate: the parent trace to hold it
 /// once it is cached, and the parent's exit it runs from.
@@ -109,9 +108,7 @@ pub(in crate::vm::exec) fn hold_side_trace(
         // an exit is wired once (`has_side_trace`): its cell never hands
         // over another child's code
         debug_assert!(held[exit].is_none(), "exit {exit} wired twice");
-        let at_exit = parent.exit_tags_of(exit);
-        let off = parent.exit_frame_offset(exit);
-        held[exit] = Some(TArc::new(SideHeld::new(TArc::clone(&child), at_exit, off)));
+        held[exit] = Some(TArc::clone(&child));
         drop(held);
         let f = super::relink::relink_fill(&parent, exit, &child, proto, words);
         counts[f as usize] += 1;

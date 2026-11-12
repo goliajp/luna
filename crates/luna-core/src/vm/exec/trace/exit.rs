@@ -84,16 +84,15 @@ impl Vm {
             return;
         }
         let ExitSource {
-            held,
+            child,
             body: decode_body,
             ran: child_ran,
             ..
         } = src;
-        let child = held.as_deref().map(|h| &*h.child);
-        let shapes: &CompiledTrace = child.unwrap_or(ct);
+        let shapes: &CompiledTrace = child.as_deref().unwrap_or(ct);
         let decode_inline = &shapes.per_exit_inline;
         let decode_hit_counts = &shapes.exit_hit_counts;
-        let shape_plans = child.map_or(plans, |c| &*c.plans);
+        let shape_plans = child.as_deref().map_or(plans, |c| &*c.plans);
         let decoded = shape_plans.decode(decode_body);
         let site_id = decoded.site_id;
         let cont_pc = decoded.cont_pc;
@@ -146,7 +145,7 @@ impl Vm {
                     exit_tags_for_pc,
                     reg_state,
                     entry_tags,
-                    held.as_deref().map(|h| (h, exit_hit_idx)),
+                    child_ran,
                 );
             }
             self.trace_restore_back_edge_kinds(base_us, ct, exit_tags_for_pc, keep, reg_state);

@@ -179,7 +179,7 @@ impl Vm {
             d.exit_tags_for_pc,
             regs,
             &[],
-            None,
+            false,
         );
         // the call's count is read, not put back: the trace goes on counting
         self.trace_restore_back_edge_kinds(base, ct, d.exit_tags_for_pc, keep, regs);
