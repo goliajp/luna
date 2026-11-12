@@ -65,6 +65,45 @@ fn fib_28_compiles_side_trace() {
     );
 }
 
+/// A recursion of three calls a level (tribonacci): its hot exits get side
+/// traces that compile and are wired to their parents' exits, and the
+/// result is the interpreter's. (A binary tree builder, the shape this test
+/// held before, leaves only at its `return`: the side trace there closes at
+/// its first op and is not compiled, see `trace_side_empty`.)
+#[test]
+fn three_calls_a_level_compile_side_traces() {
+    let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(true);
+
+    let cl = vm
+        .load(
+            b"local function t(n)
+                  if n < 3 then return n * 1 end
+                  return t(n-1) + t(n-2) + t(n-3)
+              end
+              return t(20)",
+            b"=trib20",
+        )
+        .unwrap();
+    let r = vm
+        .call_value(luna_jit::runtime::Value::Closure(cl), &[])
+        .unwrap();
+    assert!(
+        matches!(r[0], luna_jit::runtime::Value::Int(101902)),
+        "{r:?}"
+    );
+    assert!(
+        vm.trace_side_trace_compiled_count() >= 1,
+        "trib(20) must compile a side trace; started {}",
+        vm.trace_side_trace_started_count()
+    );
+    assert!(
+        walk_any_side_wired(cl),
+        "trib(20) must wire a side trace to a parent's exit"
+    );
+}
+
 /// binary_trees_d4: the trace of `make` ends at its `return`, and the side
 /// trace its tail exit starts there closes at that return as its first op:
 /// it is not compiled (`trace_side_empty`), and the results stay right.
