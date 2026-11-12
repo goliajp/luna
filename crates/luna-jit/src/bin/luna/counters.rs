@@ -34,7 +34,10 @@ pub(crate) fn append(vm: &Vm) {
         c.links_by_stub,
         c.links_left_by_stub.map(|n| n.to_string()).join("/"),
         c.relink.map(|n| n.to_string()).join("/"),
-        c.side_trace_empty,
+        c.close_cause_counts
+            .get("side-trace-empty")
+            .copied()
+            .unwrap_or(0),
         c.side_trace_runs,
         c.side_trace_runs_inlined,
     );
