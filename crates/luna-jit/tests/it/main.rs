@@ -181,6 +181,7 @@ mod trace_self_link_body;
 mod trace_seti_sunk_emit;
 mod trace_setlist_var_count_emit;
 mod trace_settable_const_key_sunk;
+mod trace_side_empty;
 mod trace_side_held_later;
 mod trace_side_payback;
 mod trace_side_trace_compile_link;

@@ -93,6 +93,10 @@ impl Vm {
         // kept on the record's head proto, not `cl`'s: a call trace closes
         // after `Return1` popped the callee, so `cl` is the caller's
         let head_proto = closed_record.head_proto;
+        if returns_at_start(&closed_record) {
+            self.jit.counters.side_trace_empty += 1;
+            return;
+        }
         let already_cached = already::there_already(&closed_record);
         if !already_cached && !native_stack::is_low(native_stack::COMPILE_RESERVE) {
             // an internal loop, run until a comparison exits, so one entry
@@ -278,4 +282,18 @@ impl Vm {
             self.jit.counters.multi_way_guard_emitted += 1;
         }
     }
+}
+
+/// Whether `record`, a side trace's, closed at its first op, a return out
+/// of the frame it began in: compiled, it would return the pc it starts at
+/// without running anything, and running it at its parent's exit would
+/// only cost the exit its plan. Its parent's exit is not recorded again
+/// (its count passed the threshold that starts a recording).
+fn returns_at_start(record: &crate::jit::trace::TraceRecord) -> bool {
+    use crate::vm::isa::Op;
+    record.side_trace_parent.is_some()
+        && matches!(
+            record.ops.first(),
+            Some(o) if o.inline_depth == 0 && matches!(o.inst.op(), Op::Return0 | Op::Return1)
+        )
 }
