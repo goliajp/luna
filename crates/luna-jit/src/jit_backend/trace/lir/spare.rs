@@ -32,6 +32,7 @@ impl Lir {
                 l.arg0 = NONE;
                 l.cur = NONE;
                 l.unsupported = None;
+                l.calls = false;
                 l.loop_entry = None;
                 l.relink = None;
                 l.relinks = None;
@@ -49,6 +50,13 @@ impl Lir {
 }
 
 impl Lir {
+    /// The function calls out: a helper, a function at an address, or a
+    /// side trace from a side cell (`Op::Call`, `Op::CallIndirect`,
+    /// `Op::CallingExit`, noted as each is emitted).
+    pub(crate) fn calls_out(&self) -> bool {
+        self.calls
+    }
+
     /// Bytes `self` takes, roughly.
     pub(crate) fn size(&self) -> usize {
         std::mem::size_of::<Lir>()
@@ -91,6 +99,7 @@ impl Lir {
             loop_entry: self.loop_entry.clone(),
             relink: self.relink,
             relinks: self.relinks.clone(),
+            calls: self.calls,
             ..Lir::new()
         }
     }

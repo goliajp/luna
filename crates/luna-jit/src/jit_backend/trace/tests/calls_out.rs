@@ -1,36 +1,50 @@
 //! `Lir::calls_out`: what makes a trace's code run in the compiler's scope
 //! when it runs from its parent's exit (`CompiledTraceParts::calls_helpers`).
+//! Each kind of call the lowerer emits sets it; nothing else does.
 
-use super::super::lir::{Inst, Lir, NONE, Op, Ty};
-use cranelift_codegen::ir::Value;
-use cranelift_codegen::packed_option::ReservedValue;
+use super::super::emit::{Emit, Ins};
+use super::super::lir::Lir;
+use cranelift_codegen::ir::{BlockArg, types};
+use cranelift_module::Linkage;
 
-fn with(ops: &[Op]) -> Lir {
-    let mut l = Lir::default();
-    for &op in ops {
-        l.insts.push(Inst {
-            op,
-            ty: Ty::I64,
-            dst: NONE,
-            a: 0,
-            b: 0,
-            c: 0,
-            args_at: 0,
-            n_args: 0,
-            next: NONE,
-            res: Value::reserved_value(),
-        });
-    }
+/// A function with a block of `iconst`s and a jump: no call.
+fn plain() -> Lir {
+    let mut l = Lir::new();
+    let b = l.create_block();
+    let c = l.create_block();
+    l.switch_to_block(b);
+    let x = l.iconst(types::I64, 3);
+    l.jump(c, &[BlockArg::Value(x)]);
     l
 }
 
 #[test]
 fn each_kind_of_call_calls_out() {
-    let plain = [Op::Jump, Op::VarRead, Op::VarWrite, Op::Return];
-    assert!(!with(&plain).calls_out());
-    for call in [Op::Call, Op::CallIndirect, Op::CallingExit(0)] {
-        let mut ops = plain.to_vec();
-        ops.insert(1, call);
-        assert!(with(&ops).calls_out(), "{call:?}");
-    }
+    assert!(!plain().calls_out());
+    // a helper, by its declared name
+    let mut l = plain();
+    let sig = l.make_signature();
+    let id = l
+        .declare_function("luna_jit_op_tforcall", Linkage::Import, &sig)
+        .unwrap();
+    let f = l.import_func(id);
+    l.call(f, &[]);
+    assert!(l.calls_out(), "call");
+    // a function at an address
+    let mut l = plain();
+    let sig = l.make_signature();
+    let s = l.import_signature(sig);
+    let at = l.iconst(types::I64, 0);
+    l.call_indirect(s, at, &[]);
+    assert!(l.calls_out(), "call_indirect");
+    // a side trace from a side cell
+    let mut l = plain();
+    let call = l.create_block();
+    let z = l.iconst(types::I64, 0);
+    let args = [BlockArg::Value(z), BlockArg::Value(z), BlockArg::Value(z)];
+    l.calling_exit(0, call, &args);
+    assert!(l.calls_out(), "calling_exit");
+    // taken again from the spare buffers: cleared
+    l.give();
+    assert!(!Lir::take().calls_out());
 }
