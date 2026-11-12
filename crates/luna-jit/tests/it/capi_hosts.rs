@@ -30,13 +30,25 @@ fn crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// `target/<profile>`, where cargo put the C API's shared library.
+/// `target/<profile>` (`target/<triple>/<profile>` when cross-compiled),
+/// where cargo put the C API's shared library: the ancestor of the test
+/// executable whose parent is the target directory, or the triple's in it.
+/// Cargo puts the executable at a depth below it that changed between
+/// releases (`deps/` before 1.100, a build directory of its own since).
 fn lib_dir() -> PathBuf {
-    let exe = std::env::current_exe().expect("test executable");
-    exe.parent()
-        .and_then(Path::parent)
-        .expect("tests run from target/<profile>/deps")
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let target = canonical(tmp.parent().expect("the target directory holds tmp"));
+    let cross = target.join(env!("LUNA_BUILD_TARGET"));
+    let exe = canonical(&std::env::current_exe().expect("test executable"));
+    exe.ancestors()
+        .find(|d| d.parent().is_some_and(|p| p == target || p == cross))
+        .expect("the test executable is under target/<profile>")
         .to_path_buf()
+}
+
+/// `p` with its links resolved, as the executable's path has them.
+fn canonical(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Build the C API's shared library next to the test executable once per
