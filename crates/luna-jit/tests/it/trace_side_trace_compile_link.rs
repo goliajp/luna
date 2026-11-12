@@ -2,7 +2,9 @@
 //! through the normal lowerer path. The compiled side trace is
 //! pinned `dispatchable=false` (entered only via the parent's exit
 //! exit, not via the back-edge / call-trigger lookup), and it is
-//! wired to the parent's exit it started from.
+//! wired to the parent's exit it started from. The functions return an
+//! expression, not a register: a side trace that would close at a return
+//! as its first op is not compiled (`trace_side_empty`).
 
 use luna_core::__private::VmHostInternals;
 use luna_jit::__private::{CompiledTraceInternals, ProtoTraceInternals};
@@ -19,7 +21,7 @@ fn fib_28_compiles_side_trace() {
     let cl = vm
         .load(
             b"local function f(n)
-                  if n < 2 then return n end
+                  if n < 2 then return n * 1 end
                   return f(n-1) + f(n-2)
               end
               return f(28)",
@@ -63,9 +65,11 @@ fn fib_28_compiles_side_trace() {
     );
 }
 
-/// binary_trees_d4 — counter ≥ 1 + at least one parent ptr written.
+/// binary_trees_d4: the trace of `make` ends at its `return`, and the side
+/// trace its tail exit starts there closes at that return as its first op:
+/// it is not compiled (`trace_side_empty`), and the results stay right.
 #[test]
-fn binary_trees_d4_compiles_side_trace() {
+fn binary_trees_d4_leaves_its_return_exit_alone() {
     let mut vm = luna_jit::new_with_jit(LuaVersion::Lua55);
     vm.set_jit_enabled(false);
     vm.set_trace_jit_enabled(true);
@@ -86,15 +90,13 @@ fn binary_trees_d4_compiles_side_trace() {
         .call_value(luna_jit::runtime::Value::Closure(cl), &[])
         .unwrap();
     assert!(matches!(r[0], luna_jit::runtime::Value::Int(6200)));
-
+    let empty = luna_core::__private::VmJitState::jit(&vm)
+        .counters
+        .side_trace_empty;
     assert!(
-        vm.trace_side_trace_compiled_count() >= 1,
-        "binary_trees_d4 must compile at least one side trace; got {}",
-        vm.trace_side_trace_compiled_count()
-    );
-    assert!(
-        walk_any_side_wired(cl),
-        "binary_trees_d4 must wire a side trace to at least one parent exit"
+        vm.trace_side_trace_started_count() >= 1 && empty >= 1,
+        "binary_trees_d4: started {}, empty {empty}",
+        vm.trace_side_trace_started_count()
     );
 }
 
@@ -140,7 +142,7 @@ fn side_trace_pinned_non_dispatchable() {
     let cl = vm
         .load(
             b"local function f(n)
-                  if n < 2 then return n end
+                  if n < 2 then return n * 1 end
                   return f(n-1) + f(n-2)
               end
               return f(28)",
@@ -255,7 +257,7 @@ fn no_side_trace_is_entered_at_its_head() {
     let cl = vm
         .load(
             b"local function f(n)
-                  if n < 2 then return n end
+                  if n < 2 then return n * 1 end
                   return f(n-1) + f(n-2)
               end
               local s = 0
