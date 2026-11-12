@@ -9,6 +9,7 @@ pub(crate) mod entry_side;
 pub(crate) mod exit_plan;
 pub(crate) mod plans;
 mod read;
+pub(crate) mod side_held;
 
 /// A trace compiled by a backend and ready to be dispatched into at its
 /// head pc: its [`CompiledTraceParts`], and the side traces wired to its
@@ -94,7 +95,7 @@ pub struct CompiledTrace {
     /// Held here rather than looked up on a proto: a side trace started at
     /// an exit inside a function the trace inlined is cached on that
     /// function's proto.
-    pub(crate) side_children: TRefLock<Box<[Option<TArc<CompiledTrace>>]>>,
+    pub(crate) side_children: TRefLock<Box<[Option<TArc<side_held::SideHeld>>]>>,
     /// Fast-path short-circuit hint for the
     /// dispatcher's tentative-decode + cell-load + check path. Set
     /// to `true` by the close handler when a side trace is first wired
@@ -147,13 +148,15 @@ pub struct CompiledTrace {
     /// This root holds an entry side trace: one byte next to the others the
     /// dispatcher reads, so that a root with none costs it nothing more.
     pub(crate) has_entry_side: TCellBool,
+    /// See [`CompiledTraceParts::calls_helpers`]: the code it runs now.
+    pub(crate) calls_helpers: TCellBool,
 }
 
 /// Moves each named field of a [`CompiledTraceParts`] into a
 /// [`CompiledTrace`], with no room for side traces yet.
 macro_rules! moved {
     ($parts:ident => $($f:ident),* $(,)?) => {{
-        let CompiledTraceParts { $($f,)* plans, side_cells, entry, calls_source } = $parts;
+        let CompiledTraceParts { $($f,)* plans, side_cells, entry, calls_source, calls_helpers } = $parts;
         let cells = super::side_cell::CellsOnce::new();
         let calls_compiled = TCellBool::new(side_cells.is_some());
         if let Some(c) = side_cells {
@@ -172,6 +175,7 @@ macro_rules! moved {
             has_any_side_wired: TCellBool::new(false),
             entry_sides: entry_side::EntrySides::default(),
             has_entry_side: TCellBool::new(false),
+            calls_helpers: TCellBool::new(calls_helpers),
         }
     }};
 }

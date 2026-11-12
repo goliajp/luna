@@ -57,7 +57,7 @@ impl CompiledTrace {
             .map(|(e, c)| {
                 let child = held.get(self.per_exit_inline.len() + *e as usize);
                 let optimized = child.cloned().flatten().and_then(|ch| {
-                    let o = ch.tier_up.as_ref()?.optimized.get();
+                    let o = ch.child.tier_up.as_ref()?.optimized.get();
                     (!o.is_null()).then_some(o)
                 });
                 let entry = c.entry.get();

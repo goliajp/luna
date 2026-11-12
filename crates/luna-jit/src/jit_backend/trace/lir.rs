@@ -287,6 +287,13 @@ impl Lir {
         &self.bparams[blk.params_at as usize..(blk.params_at + blk.n_params) as usize]
     }
 
+    /// The function calls out: a helper, a function at an address, or a
+    /// side trace from a side cell.
+    pub(crate) fn calls_out(&self) -> bool {
+        (self.insts.iter())
+            .any(|i| matches!(i.op, Op::Call | Op::CallIndirect | Op::CallingExit(_)))
+    }
+
     pub(crate) fn params(&self, c: &Callee) -> &[Ty] {
         &self.param_tys[c.params_at as usize..(c.params_at + c.n_params) as usize]
     }

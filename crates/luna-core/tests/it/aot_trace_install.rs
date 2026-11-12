@@ -64,6 +64,7 @@ fn dummy_parts(head_pc: u32, max_stack: u32) -> CompiledTraceParts {
         calls_source: None,
         link_pc: None,
         loop_tags: None,
+        calls_helpers: true,
     }
 }
 

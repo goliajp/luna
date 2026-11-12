@@ -84,15 +84,16 @@ impl Vm {
             return;
         }
         let ExitSource {
-            child,
+            held,
             body: decode_body,
             ran: child_ran,
             ..
         } = src;
-        let shapes: &CompiledTrace = child.as_deref().unwrap_or(ct);
+        let child = held.as_deref().map(|h| &*h.child);
+        let shapes: &CompiledTrace = child.unwrap_or(ct);
         let decode_inline = &shapes.per_exit_inline;
         let decode_hit_counts = &shapes.exit_hit_counts;
-        let shape_plans = child.as_deref().map_or(plans, |c| &*c.plans);
+        let shape_plans = child.map_or(plans, |c| &*c.plans);
         let decoded = shape_plans.decode(decode_body);
         let site_id = decoded.site_id;
         let cont_pc = decoded.cont_pc;
@@ -133,8 +134,20 @@ impl Vm {
             } else {
                 None
             };
+            // after a side trace ran, by the plan of its exit
+            let after = (held.as_deref())
+                .filter(|_| keep.is_empty())
+                .and_then(|h| h.after(exit_hit_idx, max_stack))
+                .filter(|a| base_us + a.len <= self.stack.len());
             if let Some(e) = planned {
                 self.trace_restore_planned(base_us, &e.written, reg_state);
+            } else if let Some(a) = after {
+                debug_assert_eq!(
+                    a.len,
+                    exit_tags_for_pc.len(),
+                    "a side exit's plan of other tags"
+                );
+                self.trace_restore_after_side(base_us, a, reg_state, entry_tags);
             } else {
                 self.trace_restore_slots(
                     base_us,

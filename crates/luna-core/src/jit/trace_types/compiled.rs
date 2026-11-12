@@ -234,4 +234,9 @@ pub struct CompiledTraceParts {
     /// loop the optimizing tier compiles, for a trace with such a loop: a
     /// side trace leaving them so may go on in that loop.
     pub loop_tags: Option<std::sync::Arc<[ExitTag]>>,
+    /// The code calls a helper, or may run a side trace from a side cell:
+    /// run from a parent's exit, it needs the compiler's scope (see
+    /// [`crate::jit::abi::IntChunkCompiler::enter`]). The optimizing tier
+    /// sets it again for its own code.
+    pub calls_helpers: bool,
 }

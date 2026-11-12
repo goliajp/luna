@@ -68,6 +68,7 @@ fn parts(entry: crate::jit::trace::TraceFn, pass: PassCount, tiered: bool) -> Co
         calls_source: None,
         link_pc: None,
         loop_tags: None,
+        calls_helpers: true,
     }
 }
 

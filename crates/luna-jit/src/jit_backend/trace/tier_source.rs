@@ -181,10 +181,16 @@ pub(crate) fn clif_tier_up(
                 .get(k)
                 .map_or(if k == n { cells } else { rw }, |r| r.1)
         };
-        return place::from_image(cs, at, at_loop, &o, ct);
+        let entry = place::from_image(cs, at, at_loop, &o, ct);
+        // the image does not say what its code calls
+        if entry.is_some() {
+            luna_core::__private::set_trace_calls_helpers(ct, true);
+        }
+        return entry;
     }
     let ex = expanded(src, ct, calls, cs.run_words);
     let (lir, relocs) = of(src, &ex);
+    let calls_out = lir.calls_out();
     // the loop first, each function in a module of its own
     let looped = match at_loop {
         true => Some(compile_loop(cs, lir, relocs, ct, calls)?),
@@ -208,6 +214,7 @@ pub(crate) fn clif_tier_up(
         };
         place::publish(cs, img, calls, (entry, looped), at_loop);
     }
+    luna_core::__private::set_trace_calls_helpers(ct, calls_out);
     // SAFETY: `define_clif` declares the `TraceFn` signature, `(i64) -> i64`
     // in the platform calling convention, and `storage` now owns the module
     Some(unsafe { std::mem::transmute::<*const u8, TraceFn>(ptr) })

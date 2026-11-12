@@ -95,6 +95,16 @@ impl<E: Emit> Lower<E> {
 }
 
 /// Builds the `CompiledTrace` from the emit pass's bookkeeping.
+/// The instructions `lir` and the trace `compiled` from them, which calls
+/// out as they do.
+pub(super) fn with_calls(
+    lir: super::super::lir::Lir,
+    mut compiled: CompiledTraceParts,
+) -> (super::super::lir::Lir, CompiledTraceParts) {
+    compiled.calls_helpers = lir.calls_out();
+    (lir, compiled)
+}
+
 pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
     let Emitted {
         current_kinds,
@@ -254,6 +264,8 @@ pub(super) fn build_compiled(pl: &Plan<'_>, em: Emitted) -> CompiledTraceParts {
         calls_source: None,
         link_pc: record.link_pc,
         loop_tags: loop_kinds.map(|k| kinds_to_exit_tags(&k[..max_stack]).into()),
+        // set from the instructions once they are made
+        calls_helpers: true,
     }
 }
 

@@ -150,8 +150,10 @@ pub(in crate::vm::exec) fn link_late(
             (p.side_cell_exits().iter())
                 .map(|e| p.per_exit_inline.len() + *e as usize)
                 .filter_map(|exit| Some((exit, held.get(exit)?.clone()?)))
-                .filter(|(_, c)| c.link_pc == Some(target.head_pc) && target.head_pc != p.head_pc)
-                .map(|(exit, c)| (TArc::clone(p), exit, c))
+                .filter(|(_, h)| {
+                    h.child.link_pc == Some(target.head_pc) && target.head_pc != p.head_pc
+                })
+                .map(|(exit, h)| (TArc::clone(p), exit, TArc::clone(&h.child)))
                 .collect::<Vec<_>>()
         })
         .collect();
