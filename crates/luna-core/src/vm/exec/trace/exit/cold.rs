@@ -21,6 +21,10 @@ impl Vm {
         reg_state: &mut crate::runtime::mem::LVec<i64>,
         entry_tags: &[u8],
     ) {
+        // the cold path that ran the side trace finished the exit
+        if src.off == super::after_side::EXIT_DONE {
+            return;
+        }
         let off = src.off;
         let failed = self.trace_exit_restore_inner(
             cl, base_us, ct, raw_ret, src, pre_frames, reg_state, entry_tags,

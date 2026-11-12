@@ -22,6 +22,10 @@ pub(crate) struct PlannedExit {
     pub(crate) written: Box<[ExitSlot]>,
     pub(crate) untouched_end: usize,
     pub(crate) len: usize,
+    // last, so that the fields the dispatcher reads keep their places
+    /// The registers it left untouched, in slot order: listed the first
+    /// time a write-back after a side trace asks (see `untouched`).
+    untouched: Once<Box<[u16]>>,
 }
 
 impl PlannedExit {
@@ -41,7 +45,20 @@ impl PlannedExit {
             written: written.into_boxed_slice(),
             untouched_end,
             len: tags.len(),
+            untouched: Once::new(),
         }
+    }
+
+    /// The registers the exit left untouched, in slot order, listed the
+    /// first time they are asked for.
+    pub(crate) fn untouched(&self) -> &[u16] {
+        self.untouched.get_or_init(|| {
+            let mut w = self.written.iter().map(|e| usize::from(e.slot)).peekable();
+            (0..self.len)
+                .filter(|&s| w.next_if_eq(&s).is_none())
+                .map(|s| s as u16)
+                .collect()
+        })
     }
 }
 

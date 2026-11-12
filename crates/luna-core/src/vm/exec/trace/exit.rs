@@ -6,6 +6,7 @@ use super::*;
 use crate::jit::trace::CompiledTrace;
 use cold::{set_head_resume, set_top_pc, v2c_set_pc_line};
 
+mod after_side;
 mod cold;
 pub(in crate::vm::exec) mod decode;
 pub(in crate::vm::exec) mod inner;
