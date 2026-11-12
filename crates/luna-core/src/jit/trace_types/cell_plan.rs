@@ -53,6 +53,8 @@ pub struct LinkPlan {
 }
 
 /// The pairs of a cell's list (`relink::list::list_of`'s layout).
+// out of line, for the same reason as `relink::onward::fast::fill`
+#[inline(never)]
 pub(crate) fn pairs_of(list: &[u32]) -> Box<[(u32, u8)]> {
     (list.get(3..).unwrap_or_default().iter())
         .map(|&e| (e >> 8, e as u8))
