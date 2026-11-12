@@ -55,6 +55,10 @@ pub(crate) struct Plans {
     pub(crate) per_exit_tags: ExitTagTable,
     pub(crate) pass_count: PassCount,
     pub(crate) entry_plan: EntryPlan,
+    /// The registers the entry tags leave unchecked (`ENTRY_TAG_ANY`), in
+    /// slot order: the ones a dispatch copies in for a side trace to read
+    /// once one is wired.
+    pub(crate) any_slots: Box<[u16]>,
     exit_plan: ExitPlan,
 }
 
@@ -79,6 +83,11 @@ impl TracePlans {
         let n_exits = inline_tags.len() + per_exit_tags.len() + 1;
         TracePlans(Arc::new(Plans {
             entry_plan: EntryPlan::of(entry_tags),
+            any_slots: (0u16..)
+                .zip(entry_tags)
+                .filter(|&(_, &t)| t == super::super::ENTRY_TAG_ANY)
+                .map(|(s, _)| s)
+                .collect(),
             exit_plan: ExitPlan::new(n_exits),
             entry_tags: entry_tags.into(),
             global_tag_res_kind: classify_exit_tags(exit_tags),
@@ -109,6 +118,7 @@ impl TracePlans {
         let table = |t: &ExitTagTable| t.iter().map(|(_, t)| 8 + t.len()).sum::<usize>();
         std::mem::size_of::<Plans>()
             + p.entry_tags.len()
+            + 2 * p.any_slots.len()
             + p.exit_tags.len()
             + table(&p.inline_tags)
             + table(&p.per_exit_tags)

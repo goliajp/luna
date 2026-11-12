@@ -35,15 +35,17 @@ impl Vm {
             return refusal(slot, tag);
         }
         if ct.has_any_side_wired.get() {
-            let want = &*ct.plans.entry_tags;
-            for s in 0..want.len().min(l) {
-                if want[s] == ENTRY_TAG_ANY {
-                    // not read before the trace writes it: any value
-                    // enters, and an exit that has not written it leaves
-                    // it as it is
-                    regs[s] = unpack_word(frame[s]).1;
-                    tags[s] = ENTRY_TAG_ANY;
-                }
+            // not read before the trace writes it: any value enters, and an
+            // exit that has not written it leaves it as it is
+            for &s in ct
+                .plans
+                .any_slots
+                .iter()
+                .take_while(|&&s| usize::from(s) < l)
+            {
+                let s = usize::from(s);
+                regs[s] = unpack_word(frame[s]).1;
+                tags[s] = ENTRY_TAG_ANY;
             }
         }
         let n = plan.len();
