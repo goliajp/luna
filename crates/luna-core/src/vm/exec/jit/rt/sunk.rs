@@ -28,7 +28,7 @@ impl Vm {
     pub(crate) fn jit_ghosts_enter(&mut self) {
         let d = self.jit.ghost_depth;
         if self.jit.ghosts.len() <= d {
-            cold!(Vm::jit_ghosts_grow, self);
+            cold!(direct Vm::jit_ghosts_grow, self);
         }
         self.jit.ghosts[d].sunk.fill(None);
         self.jit.ghosts[d].accum = None;
