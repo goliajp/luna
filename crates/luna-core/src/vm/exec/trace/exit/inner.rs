@@ -54,7 +54,7 @@ impl Vm {
             &tags,
             reg_state,
             entry_tags,
-            false,
+            None,
         );
         self.trace_restore_back_edge_kinds(base_us, ct, &tags, keep, reg_state);
         let head_resume = site.head_resume_pc;

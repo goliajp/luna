@@ -134,20 +134,8 @@ impl Vm {
             } else {
                 None
             };
-            // after a side trace ran, by the plan of its exit
-            let after = (held.as_deref())
-                .filter(|_| keep.is_empty())
-                .and_then(|h| h.after(exit_hit_idx, max_stack))
-                .filter(|a| base_us + a.len <= self.stack.len());
             if let Some(e) = planned {
                 self.trace_restore_planned(base_us, &e.written, reg_state);
-            } else if let Some(a) = after {
-                debug_assert_eq!(
-                    a.len,
-                    exit_tags_for_pc.len(),
-                    "a side exit's plan of other tags"
-                );
-                self.trace_restore_after_side(base_us, a, reg_state, entry_tags);
             } else {
                 self.trace_restore_slots(
                     base_us,
@@ -158,7 +146,7 @@ impl Vm {
                     exit_tags_for_pc,
                     reg_state,
                     entry_tags,
-                    child_ran,
+                    held.as_deref().map(|h| (h, exit_hit_idx)),
                 );
             }
             self.trace_restore_back_edge_kinds(base_us, ct, exit_tags_for_pc, keep, reg_state);
