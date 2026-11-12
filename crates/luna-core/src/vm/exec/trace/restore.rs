@@ -2,13 +2,10 @@
 //! tags the exit analysis gives them.
 
 use super::*;
-use crate::jit::trace_types::installed::side_held::SideHeld;
 
 impl Vm {
     /// Write the trace's registers back to the frame with the tags its exit
-    /// analysis gives them. `child`: the side trace that ran (starting at
-    /// the head frame's register 0) and its exit taken, whose plan, when it
-    /// applies, writes back instead (see [`SideHeld::after`]).
+    /// analysis gives them.
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
     pub(in crate::vm::exec) fn trace_restore_slots(
@@ -21,13 +18,8 @@ impl Vm {
         exit_tags_for_pc: &[crate::jit::trace::ExitTag],
         reg_state: &[i64],
         entry_tags: &[u8],
-        child: Option<(&SideHeld, usize)>,
+        child_ran: bool,
     ) {
-        let child_ran = child.is_some();
-        let at = (base_us, max_stack, exit_tags_for_pc.len());
-        if self.trace_restore_after(child, &keep_tfor, at, reg_state, entry_tags) {
-            return;
-        }
         // At an inline cmp@d>0
         // side-exit, the helper has pushed N frames on
         // top of the trace head's frame and
@@ -289,6 +281,5 @@ fn put(dst: &mut Value, tag: u8, r: i64) {
     unsafe { Value::pack_into(dst, tag, crate::runtime::value::RawVal { zero: r as u64 }) };
 }
 
-mod after_side;
 #[cfg(test)]
 mod tests;

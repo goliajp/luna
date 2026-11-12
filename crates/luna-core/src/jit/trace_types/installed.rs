@@ -9,7 +9,6 @@ pub(crate) mod entry_side;
 pub(crate) mod exit_plan;
 pub(crate) mod plans;
 mod read;
-pub(crate) mod side_held;
 
 /// A trace compiled by a backend and ready to be dispatched into at its
 /// head pc: its [`CompiledTraceParts`], and the side traces wired to its
@@ -95,7 +94,7 @@ pub struct CompiledTrace {
     /// Held here rather than looked up on a proto: a side trace started at
     /// an exit inside a function the trace inlined is cached on that
     /// function's proto.
-    pub(crate) side_children: TRefLock<Box<[Option<TArc<side_held::SideHeld>>]>>,
+    pub(crate) side_children: TRefLock<Box<[Option<TArc<CompiledTrace>>]>>,
     /// Fast-path short-circuit hint for the
     /// dispatcher's tentative-decode + cell-load + check path. Set
     /// to `true` by the close handler when a side trace is first wired
