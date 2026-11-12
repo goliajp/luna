@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::jit::trace::{ENTRY_TAG_ANY, PLAIN_ENTRY_TAGS};
-use crate::jit::trace_types::installed::entry_plan::{EntryPlan, EntrySlot};
+use crate::jit::trace_types::installed::entry_plan::EntrySlot;
 
 impl Vm {
     /// Copy the frame's registers, `entry_tags.len()` of them from `base_us`,
@@ -35,7 +35,16 @@ impl Vm {
             return refusal(slot, tag);
         }
         if ct.has_any_side_wired.get() {
-            unchecked_in(plan, frame, regs, tags);
+            let want = &*ct.plans.entry_tags;
+            for s in 0..want.len().min(l) {
+                if want[s] == ENTRY_TAG_ANY {
+                    // not read before the trace writes it: any value
+                    // enters, and an exit that has not written it leaves
+                    // it as it is
+                    regs[s] = unpack_word(frame[s]).1;
+                    tags[s] = ENTRY_TAG_ANY;
+                }
+            }
         }
         let n = plan.len();
         if n >= l {
@@ -46,29 +55,6 @@ impl Vm {
             Err((i, tag)) => refusal((n + i) as u16, tag),
         }
     }
-}
-
-/// The registers of a trace with a side trace wired that its entry plan
-/// `plan` leaves unchecked, copied in as they are: not read before the
-/// trace writes them, so any value enters, and an exit that has not
-/// written one leaves it as it is (a side trace may read it). The gaps
-/// between the checked registers, which the plan lists in slot order.
-#[inline(never)]
-fn unchecked_in(plan: &EntryPlan, frame: &[Value], regs: &mut [i64], tags: &mut [u8]) {
-    let n = plan.len().min(frame.len());
-    let mut copy = |from: usize, to: usize| {
-        for s in from..to {
-            regs[s] = unpack_word(frame[s]).1;
-            tags[s] = ENTRY_TAG_ANY;
-        }
-    };
-    let mut next = 0;
-    for e in plan.checked() {
-        let s = usize::from(e.slot);
-        copy(next, s.min(n));
-        next = s + 1;
-    }
-    copy(next.min(n), n);
 }
 
 /// What [`Vm::trace_marshal_in`] returns for an entry its checks pass: no
