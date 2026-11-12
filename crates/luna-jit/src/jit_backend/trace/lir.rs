@@ -273,6 +273,8 @@ pub(crate) struct Lir {
     pub(crate) inherited: Vec<(u32, (u32, u32))>,
     /// A primitive the backend does not implement was emitted.
     pub(crate) unsupported: Option<&'static str>,
+    /// A call was emitted (see [`Lir::calls_out`]).
+    pub(crate) calls: bool,
     /// The helpers declared by the first trace this `Lir` recorded, and how
     /// many [`Lir::funcs`] / [`Lir::param_tys`] entries they take: they stay
     /// declared for the next trace.
@@ -285,13 +287,6 @@ impl Lir {
     pub(crate) fn block_params(&self, b: u32) -> &[u32] {
         let blk = &self.blocks[b as usize];
         &self.bparams[blk.params_at as usize..(blk.params_at + blk.n_params) as usize]
-    }
-
-    /// The function calls out: a helper, a function at an address, or a
-    /// side trace from a side cell.
-    pub(crate) fn calls_out(&self) -> bool {
-        (self.insts.iter())
-            .any(|i| matches!(i.op, Op::Call | Op::CallIndirect | Op::CallingExit(_)))
     }
 
     pub(crate) fn params(&self, c: &Callee) -> &[Ty] {

@@ -328,12 +328,14 @@ impl Ins for Lir {
         let n = f.as_u32();
         let ret = self.funcs[n as usize].ret;
         let i = self.push(Op::Call, Ty::I64, NONE, n, NONE, NONE);
+        self.calls = true;
         self.with_args(i, args.iter().map(|x| v(*x)));
         self.call_result(i, ret);
         CInst::from_u32(i)
     }
     fn call_indirect(&mut self, sig: SigRef, callee: Value, args: &[Value]) -> CInst {
         let ret = self.sigs[sig.as_u32() as usize].ret;
+        self.calls = true;
         let i = self.push(
             Op::CallIndirect,
             Ty::I64,

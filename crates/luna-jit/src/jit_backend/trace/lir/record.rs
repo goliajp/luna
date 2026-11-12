@@ -269,6 +269,7 @@ impl Emit for Lir {
         self.pick_to(loop_fn, other);
     }
     fn calling_exit(&mut self, n: u32, call: Block, args: &[BlockArg; 3]) {
+        self.calls = true;
         self.jump_op(Op::CallingExit(n), call, args);
     }
     fn tier_count(&mut self, count: super::Count, at: u32, hot: Block, cont: Block) {
