@@ -124,6 +124,12 @@ pub unsafe fn install_aot_trace(
     vm.install_aot_trace(proto, trace, role)
 }
 
+/// Says whether the code `trace` is about to run, which the optimizing tier
+/// just made, calls out (see `CompiledTraceParts::calls_helpers`).
+pub fn set_trace_calls_helpers(trace: &crate::jit::CompiledTrace, calls: bool) {
+    trace.calls_helpers.set(calls);
+}
+
 /// Takes the source `trace` would be compiled from at the optimizing tier,
 /// which then stays at its tier until a source is put back.
 pub fn take_tier_source(

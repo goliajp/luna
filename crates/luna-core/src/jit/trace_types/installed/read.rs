@@ -100,4 +100,10 @@ impl CompiledTrace {
     pub fn tier_up(&self) -> Option<&TierUp> {
         self.tier_up.as_deref()
     }
+
+    /// As [`CompiledTraceParts::calls_helpers`], for the code it runs now.
+    #[inline]
+    pub fn calls_helpers(&self) -> bool {
+        self.calls_helpers.get()
+    }
 }

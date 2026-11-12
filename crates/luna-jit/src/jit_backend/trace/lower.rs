@@ -212,7 +212,7 @@ fn lower_trace_lir_split(
             return Some(Err(()));
         }
         e.relinks = emitted.relinks.take().map(std::sync::Arc::new);
-        Some(Ok((e, build_compiled(pl, emitted))))
+        Some(Ok(finish::with_calls(e, build_compiled(pl, emitted))))
     })?
 }
 

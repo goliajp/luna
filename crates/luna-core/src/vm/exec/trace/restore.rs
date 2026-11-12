@@ -281,5 +281,6 @@ fn put(dst: &mut Value, tag: u8, r: i64) {
     unsafe { Value::pack_into(dst, tag, crate::runtime::value::RawVal { zero: r as u64 }) };
 }
 
+mod after_side;
 #[cfg(test)]
 mod tests;

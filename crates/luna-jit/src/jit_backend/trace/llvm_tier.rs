@@ -87,7 +87,10 @@ fn install_tier(
         // SAFETY: LLVM's loop of this trace, kept mapped by the storage
         unsafe { super::tier_source::set_loop(ct, p as *const u8) };
     }
-    install(storage, t.1)
+    let entry = install(storage, t.1)?;
+    // LLVM's code may call what the instructions did not
+    luna_core::__private::set_trace_calls_helpers(ct, true);
+    Some(entry)
 }
 
 /// [`super::tiers::compile_trace_cranelift`] for the LLVM backend.

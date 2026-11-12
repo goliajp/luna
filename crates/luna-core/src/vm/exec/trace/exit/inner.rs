@@ -24,9 +24,9 @@ impl Vm {
         entry_tags: &[u8],
     ) -> Option<(LuaError, u32)> {
         let ExitSource {
-            child, body, off, ..
+            held, body, off, ..
         } = src;
-        let child = child.expect("a side trace ran");
+        let child = &held.expect("a side trace ran").child;
         let parent = ct.plans.decode(raw_ret);
         let own = child.plans.decode(body);
         bump(child.exit_hit_counts.get(own.exit_hit_idx));

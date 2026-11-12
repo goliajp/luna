@@ -79,6 +79,8 @@ impl CompiledTrace {
             calls_source: None,
             link_pc: None,
             loop_tags: None,
+            // the image does not say: as if it did
+            calls_helpers: true,
         };
         // SAFETY: `entry` is as the parts state and holds no address of
         // the cells made above (# Safety)

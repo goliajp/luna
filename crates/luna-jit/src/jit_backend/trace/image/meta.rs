@@ -32,6 +32,7 @@ pub(crate) struct Meta {
     side_cell_exits: std::sync::Arc<[u32]>,
     link_pc: Option<u32>,
     loop_tags: Option<std::sync::Arc<[ExitTag]>>,
+    calls_helpers: bool,
 }
 
 impl Meta {
@@ -69,6 +70,7 @@ impl Meta {
             side_cell_exits: ct.side_cell_exits.clone(),
             link_pc: ct.link_pc,
             loop_tags: ct.loop_tags.clone(),
+            calls_helpers: ct.calls_helpers,
         }
     }
 
@@ -126,6 +128,7 @@ impl Meta {
             calls_source: None,
             link_pc: self.link_pc,
             loop_tags: self.loop_tags.clone(),
+            calls_helpers: self.calls_helpers,
         }
     }
 

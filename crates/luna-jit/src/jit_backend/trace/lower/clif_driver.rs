@@ -71,7 +71,10 @@ pub(super) fn lower_clif<M: Module>(
     // `ObjectProduct::emit` to produce a `.o` file instead, and
     // resolves the trace symbol at static link time.
 
-    let compiled = build_compiled(pl, emitted);
+    let mut compiled = build_compiled(pl, emitted);
+    compiled.calls_helpers = (ctx.func.layout.blocks())
+        .flat_map(|b| ctx.func.layout.block_insts(b))
+        .any(|i| ctx.func.dfg.insts[i].opcode().is_call());
     // decided only now: the dispatch gates above run after the emit pass
     if always_codegen || trace_is_enterable(record, &compiled) {
         // `LUNA_TRACE_ASM_DUMP=1` requests cranelift to
