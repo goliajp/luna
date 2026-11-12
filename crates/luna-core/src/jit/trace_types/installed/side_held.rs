@@ -40,8 +40,13 @@ impl ChildExit {
     /// From a side trace's exit tags `tags`, in a parent whose frame has
     /// `max_stack` registers.
     pub(crate) fn of(tags: &[ExitTag], max_stack: usize) -> Self {
-        let mut written = Vec::new();
-        let mut entered = Vec::new();
+        // counted first, so each list is allocated once at its size
+        let n = tags.iter().enumerate();
+        let n_entered = n
+            .filter(|&(i, &k)| k == ExitTag::Untouched && i < max_stack)
+            .count();
+        let mut written = Vec::with_capacity(tags.len() - n_entered);
+        let mut entered = Vec::with_capacity(n_entered);
         for (slot, &kind) in (0u16..).zip(tags) {
             match kind {
                 ExitTag::Untouched if usize::from(slot) >= max_stack => {

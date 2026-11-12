@@ -186,7 +186,9 @@ impl<'s> Parser<'s> {
         }
     }
 
-    #[inline]
+    // every expression and statement level passes here: left to the
+    // inliner, whether it is inlined moved with unrelated code elsewhere
+    #[inline(always)]
     pub(super) fn enter(&mut self) -> Result<(), SyntaxError> {
         self.depth += 1;
         // 5.1-5.3 `enterlevel` fails past the limit; 5.4+ `luaE_incCstack`
