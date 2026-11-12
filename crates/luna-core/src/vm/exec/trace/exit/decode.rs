@@ -112,6 +112,7 @@ impl Vm {
         };
         let cent = child.current_entry();
         self.count_side_trace_run(off);
+        let pre_frames = self.frames.len();
         let child_raw_ret = {
             let vm_ptr: *mut Vm = self;
             // code that calls no helper finds nothing through the scope
@@ -120,13 +121,32 @@ impl Vm {
             // SAFETY: `cent` is the entry of a side trace compiled for this exit and held by `ct`, whose code lives as long as this Vm; from register `off` on, `reg_state` holds at least the child's window and the three words past it, and the registers the child reads carry the tags it was compiled for (checked when it was wired, and the stack-held ones just above); `child_cl` runs the frame the child starts in, and when the code calls helpers the guard pins it and this Vm for them
             unsafe { cent(reg_state.as_mut_ptr().add(off)) }
         };
-        ExitSource {
+        let src = ExitSource {
             child: Some(child),
             body: child_raw_ret as u64,
             ran: true,
             off,
             exit,
+        };
+        // on the head frame's registers, after an exit that made no step in
+        // place (one that did pauses hot counting): the rest of the exit is
+        // done here, and the dispatcher only ends it
+        if off == 0 && self.jit.step.quiet.is_none() {
+            self.count_side_pass(cl, ct, &src);
+            let child = src.child.as_deref().expect("a side trace ran");
+            let ran = (child, src.body);
+            self.trace_exit_after_side(
+                cl, base_us, ct, raw_ret, ran, pre_frames, reg_state, entry_tags,
+            );
+            return ExitSource {
+                child: None,
+                body: raw_ret,
+                ran: true,
+                off: super::after_side::EXIT_DONE,
+                exit,
+            };
         }
+        src
     }
 
     /// Whether the exit `ct` took runs no side trace: none is wired, or
