@@ -183,7 +183,7 @@ end
 /// JIT links side traces for).
 const SIDE_EXITS: &str = r#"
 local function f(n)
-    if n < 2 then return n end
+    if n < 2 then return n * 1 end
     return f(n - 1) + f(n - 2)
 end
 return function() return f(20) end

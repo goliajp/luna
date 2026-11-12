@@ -28,7 +28,7 @@ fn branch_taken_inside_a_callee() {
 
 #[test]
 fn branch_taken_two_calls_deep() {
-    let src = "local function g(x) if x % 3 == 0 then return -x end return x end
+    let src = "local function g(x) if x % 3 == 0 then x = -x end return x + 0 end
         local function f(x) return g(x) + 1 end
         return function()
           local s = 0
@@ -41,7 +41,7 @@ fn branch_taken_two_calls_deep() {
 #[test]
 fn side_trace_inlines_a_call_and_leaves_inside_it() {
     let src = "local function h(y)
-          if y > 1500 then return y end
+          if y > 1500 then return y * 2 end
           return y * 3
         end
         local function f(x)

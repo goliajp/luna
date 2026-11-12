@@ -14,7 +14,7 @@ pub(crate) fn append(vm: &Vm) {
     let c = &vm.jit().counters;
     let (jt, baseline, llvm, bytes) = codegen();
     let mut line = format!(
-        "closed={} compiled={} failed={} dispatched={} side_compiled={} codegen={} baseline={} llvm={} code_bytes={} tiered_up={} retiered={} calls_compiled={} method={} method_replaced={} links={} links_by_vm={} links_by_stub={} links_left_by_stub={} relink={} side_empty={}",
+        "closed={} compiled={} failed={} dispatched={} side_compiled={} codegen={} baseline={} llvm={} code_bytes={} tiered_up={} retiered={} calls_compiled={} method={} method_replaced={} links={} links_by_vm={} links_by_stub={} links_left_by_stub={} relink={} side_empty={} side_runs={} side_runs_inlined={}",
         c.closed,
         c.compiled,
         c.compile_failed,
@@ -35,6 +35,8 @@ pub(crate) fn append(vm: &Vm) {
         c.links_left_by_stub.map(|n| n.to_string()).join("/"),
         c.relink.map(|n| n.to_string()).join("/"),
         c.side_trace_empty,
+        c.side_trace_runs,
+        c.side_trace_runs_inlined,
     );
     for r in &c.compile_failed_reasons {
         line.push_str(" why=");
