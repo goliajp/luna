@@ -13,6 +13,9 @@ use crate::jit::trace_types::side_cell::SideCell;
 /// Sets `cell`'s words for the stub to take `link` (to `target`) itself,
 /// when it may: the linked trace inlines no calls (whose room only the Vm
 /// knows) and its window is within the frame's registers (none to clear).
+// out of line, as the linker of a side trace's cell has it: left to the
+// inliner, its placement moved with unrelated code
+#[inline(never)]
 pub(super) fn fill(
     cell: &SideCell,
     target: &CompiledTrace,

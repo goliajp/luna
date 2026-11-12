@@ -42,6 +42,9 @@ pub const CHECK_ITEMS: i32 = 16;
 
 /// The store triples of `stores` (`(slot, exit tag)`, as a cell plan's),
 /// the slots the exit leaves left out.
+// inlined into its callers, for the same reason as
+// `relink::onward::fast::fill`
+#[inline(always)]
 pub fn store_items(stores: &[(u32, u8)]) -> Vec<u32> {
     use super::cell_plan::{SlotStore, VALUE_SIZE, slot_store};
     let mut out = Vec::new();
