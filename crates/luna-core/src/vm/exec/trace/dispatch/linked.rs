@@ -27,7 +27,7 @@ impl Vm {
         if r as u64 & EXIT_RELINK == 0 {
             return None;
         }
-        cold!(Vm::trace_relink_again, self, proto, ct, start, r, regs)
+        cold!(direct Vm::trace_relink_again, self, proto, ct, start, r, regs)
     }
 
     /// [`Self::trace_link_again`] for a return that asks for the link.
@@ -106,7 +106,7 @@ impl Vm {
     pub(super) fn trace_count_dispatch(&mut self, ct: &CompiledTrace, downrec: bool) {
         self.jit.counters.dispatched += 1;
         if ct.inline_kinds != 0 {
-            cold!(Vm::count_inline_kinds, self, ct.inline_kinds);
+            cold!(direct Vm::count_inline_kinds, self, ct.inline_kinds);
         }
         // A helper that could not do its op (a metatable, no memory) parked
         // a deopt and the trace left at that op: the exit is where the

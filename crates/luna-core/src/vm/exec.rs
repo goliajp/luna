@@ -21,15 +21,27 @@ use crate::vm::isa::{Inst, Op};
 use native::call::NativeKind;
 
 /// Calls `f`, a function off the dispatch's hot path (`#[cold]
-/// #[inline(never)]`), as one: what the caller's code may take from `f` is
-/// its attributes alone, which a change to its body seldom moves (the
-/// dispatch's code is checked to stay the same when cold bodies change).
-/// Not through an opaque pointer: that pointer goes to the stack and back
-/// at every call, which made the dispatch's frame larger on aarch64.
+/// #[inline(never)]`), through a pointer the optimizer cannot see through:
+/// nothing it could infer from `f`'s body reaches the caller's code, which
+/// so stays the same however `f` changes, and the trace the dispatch runs
+/// keeps its register on x86 (called directly, the dispatch's cold paths
+/// cost it that register, and it went to the stack and back on every
+/// dispatch).
+///
+/// `cold!(direct f, ..)` calls `f` directly, where the pointer's stack slot
+/// costs more than it saves: the dispatch's buffer growth and link path
+/// (`trace::dispatch::{words, linked}`) and the two runtime helpers the
+/// dispatch inlines (`jit::tforcall`, `jit::rt::sunk`). Opaque, their slots
+/// made the dispatch's frame larger on aarch64.
 macro_rules! cold {
-    ($f:path, $($a:expr),* $(,)?) => {
+    (direct $f:path, $($a:expr),* $(,)?) => {
         $f($($a),*)
     };
+    ($f:path, $($a:expr),* $(,)?) => {{
+        let f: fn($(cold!(@any $a)),*) -> _ = $f;
+        std::hint::black_box(f)($($a),*)
+    }};
+    (@any $a:expr) => { _ };
 }
 
 mod arith;

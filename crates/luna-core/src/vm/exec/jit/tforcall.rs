@@ -119,7 +119,7 @@ pub(in crate::vm::exec) fn keep_tfor_vars(
     if decode_body & crate::jit::trace_types::exit_code::EXIT_KEEP_TFOR_VARS == 0 {
         return 0..0;
     }
-    cold!(tfor_vars, proto, cont_pc, off)
+    cold!(direct tfor_vars, proto, cont_pc, off)
 }
 
 /// [`keep_tfor_vars`] for an exit that keeps them.
