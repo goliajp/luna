@@ -39,16 +39,34 @@ fn lib_dir() -> PathBuf {
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
     let target = canonical(tmp.parent().expect("the target directory holds tmp"));
     let cross = target.join(env!("LUNA_BUILD_TARGET"));
-    let exe = canonical(&std::env::current_exe().expect("test executable"));
+    // the resolved paths only compare: on Windows they are verbatim
+    // (`\\?\C:\...`), which a linker's command line does not take, so the
+    // directory returned is the executable's own path's ancestor as deep
+    let exe = std::env::current_exe().expect("test executable");
+    let up = canonical(&exe)
+        .ancestors()
+        .position(|d| d.parent().is_some_and(|p| p == target || p == cross))
+        .expect("the test executable is under target/<profile>");
     exe.ancestors()
-        .find(|d| d.parent().is_some_and(|p| p == target || p == cross))
-        .expect("the test executable is under target/<profile>")
+        .nth(up)
+        .expect("as deep as its resolved path")
         .to_path_buf()
 }
 
 /// `p` with its links resolved, as the executable's path has them.
 fn canonical(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+#[test]
+fn the_library_directory_is_a_plain_path_that_exists() {
+    let dir = lib_dir();
+    assert!(dir.is_dir(), "{}", dir.display());
+    assert!(
+        !dir.to_string_lossy().starts_with(r"\\?\"),
+        "a verbatim path: {}",
+        dir.display()
+    );
 }
 
 /// Build the C API's shared library next to the test executable once per
