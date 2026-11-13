@@ -8,8 +8,10 @@
 //! Tests below pin:
 //! 1. `self-link-retf-r1` fires on fib(28) self-link on
 //!    (lowerer-side dispatch_off mirror).
-//! 2. `length-gate` fires on fib(28) self-link off
-//!    (lowerer-side dispatch_off mirror, ship-default path).
+//! 2. `length-gate` fires on a fib(28) whose base case does some work
+//!    before it returns, self-link off (lowerer-side dispatch_off mirror,
+//!    ship-default path); plain fib(28)'s base-case side traces only
+//!    return, and count as `side-trace-empty` instead.
 //! 3. The HashMap surface and the Vec surface stay paired on the
 //!    lowerer dispatch_off site.
 //! 4. The accessor returns a stable HashMap reference (empty on a
@@ -29,6 +31,16 @@ use luna_jit::version::LuaVersion;
 const FIB_SRC: &[u8] = b"
     local function fib(n)
         if n < 2 then return n end
+        return fib(n - 1) + fib(n - 2)
+    end
+    return fib(28)
+";
+
+/// fib(28) whose base case does an addition before it returns: the side
+/// traces at its exits run that much, and are short.
+const FIB_WORK_SRC: &[u8] = b"
+    local function fib(n)
+        if n < 2 then local r = n + 0 return r end
         return fib(n - 1) + fib(n - 2)
     end
     return fib(28)
@@ -92,11 +104,11 @@ fn self_link_on_fib_28_bumps_safety_pin_label_in_close_cause_counts() {
 }
 
 /// Pin: self-link off (ship-default trace path) close-cause bucket contains
-/// `length-gate` with a non-zero count. fib(28) under the trace JIT
-/// closes ~8 recordings; ~3 of those compile but the lowerer rejects
-/// them at the length-gate (their body is shorter than the
-/// dispatchable-trunc minimum). The HashMap surfaces these in O(1)
-/// without walking the `dispatch_off_reasons` Vec.
+/// `length-gate` with a non-zero count. The base-case side traces of
+/// [`FIB_WORK_SRC`] compile, but the lowerer rejects them at the
+/// length-gate (their body is shorter than the dispatchable-trunc
+/// minimum). The HashMap surfaces these in O(1) without walking the
+/// `dispatch_off_reasons` Vec.
 #[test]
 fn self_link_off_fib_28_bumps_length_gate_in_close_cause_counts() {
     let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
@@ -105,7 +117,9 @@ fn self_link_off_fib_28_bumps_length_gate_in_close_cause_counts() {
     vm.set_self_link_enabled(false);
     vm.open_base().expect("open the library");
 
-    let cl = vm.load(FIB_SRC, b"=fib28_selflink_off").expect("loads");
+    let cl = vm
+        .load(FIB_WORK_SRC, b"=fib28_selflink_off")
+        .expect("loads");
     let _ = vm
         .call_value(luna_jit::runtime::Value::Closure(cl), &[])
         .expect("runs");
@@ -130,6 +144,30 @@ fn self_link_off_fib_28_bumps_length_gate_in_close_cause_counts() {
         "HashMap count and Vec count for length-gate diverged — \
          bump_close_cause + dispatch_off_reasons.push must stay paired"
     );
+}
+
+/// Pin: plain fib(28)'s base-case side traces close at their first op, a
+/// return, and count as `side-trace-empty`: neither compiled nor wired,
+/// so none reaches the length-gate.
+#[test]
+fn self_link_off_fib_28_counts_its_return_only_side_traces_as_empty() {
+    let mut vm = luna_jit::new_minimal_with_jit(LuaVersion::Lua54);
+    vm.set_jit_enabled(false);
+    vm.set_trace_jit_enabled(true);
+    vm.set_self_link_enabled(false);
+    vm.open_base().expect("open the library");
+
+    let cl = vm.load(FIB_SRC, b"=fib28_selflink_off").expect("loads");
+    let _ = vm
+        .call_value(luna_jit::runtime::Value::Closure(cl), &[])
+        .expect("runs");
+
+    let counts = vm.trace_close_cause_counts();
+    assert!(
+        counts.get("side-trace-empty").copied().unwrap_or(0) >= 1,
+        "{counts:?}"
+    );
+    assert_eq!(counts.get("length-gate"), None, "{counts:?}");
 }
 
 /// Pin: the HashMap-Vec pairing invariant holds globally. Every
